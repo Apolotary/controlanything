@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>ControlEverything · Quest</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <div id="stage" aria-label="3D view"></div>
+
+    <aside id="side">
+      <header class="top">
+        <div class="brand"><strong>CONTROL<span>EVERYTHING</span></strong><small>QUEST</small></div>
+        <div class="badges">
+          <span id="b-mode" class="badge" title="server model mode">…</span>
+          <span id="b-ws" class="badge">offline</span>
+        </div>
+      </header>
+
+      <section id="pair-card" class="card" hidden>
+        <h2>Pair this headset</h2>
+        <div class="pair">
+          <canvas id="pair-qr" width="140" height="140" aria-label="Pairing QR code"></canvas>
+          <div>
+            <div id="pair-code" class="code">———-———</div>
+            <p id="pair-msg" class="muted small">Approve it on the Mac companion, or type y in the server terminal.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <button id="btn-enter" class="primary" type="button" disabled>Enter AR</button>
+        <div class="row">
+          <button id="btn-prepare" type="button">Camera + mic</button>
+          <button id="btn-scan" type="button">Scan</button>
+          <button id="btn-record" type="button">Record</button>
+          <button id="btn-save" type="button" disabled>Save take</button>
+        </div>
+        <p id="xr-msg" class="small muted"></p>
+      </section>
+
+      <section class="card">
+        <h2>Status</h2>
+        <dl id="status" class="kv"></dl>
+      </section>
+
+      <section id="approvals" class="card" hidden>
+        <h2>Waiting to join</h2>
+        <ul id="approval-list" class="list"></ul>
+      </section>
+
+      <section class="card">
+        <h2>Last frame</h2>
+        <div class="frame-wrap"><canvas id="frame" width="320" height="240" aria-label="last scan frame with detections"></canvas></div>
+        <p id="frame-msg" class="small muted">no frame yet</p>
+      </section>
+
+      <section class="card">
+        <h2>Replay</h2>
+        <div class="row">
+          <input id="take-file" type="file" accept=".zip,.jsonl" />
+          <select id="take-mode" aria-label="replay mode">
+            <option value="playback">playback</option>
+            <option value="pipeline">pipeline (live server)</option>
+          </select>
+        </div>
+        <p class="small muted">Or open <code>?replay=takes/&lt;take&gt;/session.jsonl</code>. Desktop: <a id="link-emulate" href="?emulate=1">emulator</a> · <a href="?emulate=1&amp;scan=fixture">emulator + fixture scan</a> · <a href="?emulate=1&amp;camera=sim">emulator + sim room</a> · <a href="?spike=camera">camera spike</a></p>
+      </section>
+
+      <section class="card">
+        <div class="row between"><h2>Log</h2><button id="btn-repair" type="button" class="secondary small">Forget pairing</button></div>
+        <pre id="log" class="log"></pre>
+      </section>
+
+      <footer class="small muted">
+        Keys: <kbd>S</kbd> scan · <kbd>L</kbd>/<kbd>Enter</kbd> lock · <kbd>Esc</kbd> release · <kbd>P</kbd> ping · <kbd>V</kbd> hold to talk · <kbd>U</kbd> undo ·
+        <kbd>X</kbd> stop all · <kbd>A</kbd> approve/arm · <kbd>R</kbd> record · click = pinch · right-drag = look · WASD/QE move
+      </footer>
+    </aside>
+    <script type="module" src="/src/app/main.ts"></script>
+  </body>
+</html>

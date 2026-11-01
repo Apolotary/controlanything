@@ -1,0 +1,251 @@
+{
+ "source": "sam-3.1 live run on scan-scene.jpg (muse-image-1.0), 8 prompts in parallel, 1280 px wide",
+ "modelId": "sam-3.1",
+ "imageWidth": 1280,
+ "imageHeight": 853,
+ "wallMs": 3550,
+ "detections": [
+  {
+   "prompt": "ceiling light",
+   "label": "ceiling light",
+   "box": [
+    1207,
+    343,
+    40,
+    16
+   ],
+   "score": 0.56
+  },
+  {
+   "prompt": "ceiling light",
+   "label": "ceiling light",
+   "box": [
+    279,
+    33,
+    111,
+    80
+   ],
+   "score": 0.93
+  },
+  {
+   "prompt": "ceiling light",
+   "label": "ceiling light",
+   "box": [
+    607,
+    13,
+    240,
+    147
+   ],
+   "score": 0.95
+  },
+  {
+   "prompt": "synthesizer",
+   "label": "synthesizer",
+   "box": [
+    358,
+    657,
+    292,
+    161
+   ],
+   "score": 0.93
+  },
+  {
+   "prompt": "laptop",
+   "label": "laptop",
+   "box": [
+    938,
+    645,
+    133,
+    113
+   ],
+   "score": 0.61
+  },
+  {
+   "prompt": "laptop",
+   "label": "laptop",
+   "box": [
+    621,
+    537,
+    304,
+    250
+   ],
+   "score": 0.97
+  },
+  {
+   "prompt": "phone",
+   "label": "phone",
+   "box": [
+    855,
+    749,
+    134,
+    88
+   ],
+   "score": 0.95
+  },
+  {
+   "prompt": "speaker",
+   "label": "speaker",
+   "box": [
+    837,
+    495,
+    116,
+    152
+   ],
+   "score": 0.96
+  },
+  {
+   "prompt": "speaker",
+   "label": "speaker",
+   "box": [
+    187,
+    528,
+    163,
+    241
+   ],
+   "score": 0.97
+  },
+  {
+   "prompt": "speaker",
+   "label": "speaker",
+   "box": [
+    546,
+    600,
+    82,
+    56
+   ],
+   "score": 0.7
+  },
+  {
+   "prompt": "air conditioner",
+   "label": "air conditioner",
+   "box": [
+    390,
+    191,
+    376,
+    153
+   ],
+   "score": 0.97
+  },
+  {
+   "prompt": "electronic device",
+   "label": "electronic device",
+   "box": [
+    0,
+    442,
+    97,
+    83
+   ],
+   "score": 0.55
+  },
+  {
+   "prompt": "electronic device",
+   "label": "electronic device",
+   "box": [
+    545,
+    600,
+    83,
+    56
+   ],
+   "score": 0.71
+  },
+  {
+   "prompt": "electronic device",
+   "label": "electronic device",
+   "box": [
+    837,
+    494,
+    116,
+    153
+   ],
+   "score": 0.78
+  },
+  {
+   "prompt": "electronic device",
+   "label": "electronic device",
+   "box": [
+    358,
+    656,
+    292,
+    162
+   ],
+   "score": 0.91
+  },
+  {
+   "prompt": "electronic device",
+   "label": "electronic device",
+   "box": [
+    938,
+    645,
+    133,
+    113
+   ],
+   "score": 0.88
+  },
+  {
+   "prompt": "electronic device",
+   "label": "electronic device",
+   "box": [
+    187,
+    528,
+    163,
+    241
+   ],
+   "score": 0.76
+  },
+  {
+   "prompt": "electronic device",
+   "label": "electronic device",
+   "box": [
+    855,
+    749,
+    134,
+    88
+   ],
+   "score": 0.91
+  },
+  {
+   "prompt": "electronic device",
+   "label": "electronic device",
+   "box": [
+    621,
+    537,
+    303,
+    250
+   ],
+   "score": 0.88
+  },
+  {
+   "prompt": "electronic device",
+   "label": "electronic device",
+   "box": [
+    390,
+    191,
+    377,
+    153
+   ],
+   "score": 0.72
+  },
+  {
+   "prompt": "electronic device",
+   "label": "electronic device",
+   "box": [
+    876,
+    649,
+    40,
+    25
+   ],
+   "score": 0.57
+  },
+  {
+   "prompt": "electronic device",
+   "label": "electronic device",
+   "box": [
+    430,
+    825,
+    465,
+    27
+   ],
+   "score": 0.55
+  }
+ ]
+}
