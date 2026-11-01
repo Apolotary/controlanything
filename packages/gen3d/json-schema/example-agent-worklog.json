@@ -1,0 +1,90 @@
+{
+  "spec": "ce.gen3d/1",
+  "specId": "ex_agent_worklog",
+  "rev": 1,
+  "title": "Agent",
+  "source": "hand",
+  "anchor": {
+    "mode": "floating",
+    "distance": 0.9,
+    "pitchDeg": 4,
+    "faceUser": true,
+    "grabbable": true
+  },
+  "controls": [],
+  "parts": [
+    {
+      "id": "log",
+      "kind": "archetype",
+      "archetype": "worklog",
+      "params": {
+        "title": "AGENT",
+        "subtitle": "OP-1 Field · USB",
+        "width": 0.36,
+        "logRows": [
+          {
+            "title": "SCAN",
+            "status": "ok",
+            "evidence": "camera says OP-1 Field",
+            "kind": "opinion"
+          },
+          {
+            "title": "PING",
+            "status": "ok",
+            "evidence": "USB says OP-1 Field ✓",
+            "kind": "proof"
+          },
+          {
+            "title": "LINK",
+            "status": "ok",
+            "evidence": "CC 1-4 echoed ✓ · try 2",
+            "kind": "proof"
+          },
+          {
+            "title": "HACK",
+            "status": "running",
+            "evidence": "writing 4 controls"
+          },
+          {
+            "title": "UPLOAD",
+            "status": "pending"
+          },
+          {
+            "title": "DAEMON",
+            "status": "pending"
+          }
+        ],
+        "models": [
+          {
+            "id": "muse-spark-1.3",
+            "state": "live"
+          },
+          {
+            "id": "sam-3.1",
+            "state": "done"
+          },
+          {
+            "id": "muse-voice-transcribe-1.0",
+            "state": "idle"
+          }
+        ]
+      }
+    },
+    {
+      "id": "reticle",
+      "kind": "archetype",
+      "archetype": "reticle",
+      "params": {
+        "reticleState": "working"
+      },
+      "transform": {
+        "position": [
+          0.23,
+          0.11,
+          0.02
+        ]
+      }
+    }
+  ],
+  "modelId": "muse-spark-1.3"
+}

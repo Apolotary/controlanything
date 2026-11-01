@@ -1,0 +1,17 @@
+{
+  "spec": "ce.gen3d/1",
+  "files": [
+    "gen3d-spec.json",
+    "gen3d-patch.json",
+    "control-event.json",
+    "tools.json",
+    "example-op1-knobs.json",
+    "example-ceiling-dimmer.json",
+    "example-resonance-lever.json",
+    "example-ir-link.json",
+    "example-scan-scene.json",
+    "example-agent-worklog.json",
+    "example-deck.json"
+  ],
+  "specDepth": 6
+}

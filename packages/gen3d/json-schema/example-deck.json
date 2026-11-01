@@ -1,0 +1,86 @@
+{
+  "spec": "ce.gen3d/1",
+  "specId": "ex_deck",
+  "rev": 1,
+  "title": "Deck",
+  "source": "hand",
+  "anchor": {
+    "mode": "hand",
+    "hand": "left",
+    "offset": [
+      0,
+      0.15,
+      0
+    ],
+    "faceUser": true,
+    "grabbable": false
+  },
+  "controls": [
+    {
+      "id": "scan",
+      "kind": "trigger",
+      "label": "SCAN",
+      "binding": {
+        "action": "hud.scan"
+      }
+    },
+    {
+      "id": "ping",
+      "kind": "trigger",
+      "label": "PING",
+      "binding": {
+        "action": "hud.ping"
+      }
+    },
+    {
+      "id": "daemons",
+      "kind": "toggle",
+      "label": "DAEMONS",
+      "default": false,
+      "binding": {
+        "action": "hud.daemons"
+      }
+    },
+    {
+      "id": "undo",
+      "kind": "trigger",
+      "label": "UNDO",
+      "binding": {
+        "action": "hud.undo"
+      }
+    }
+  ],
+  "parts": [
+    {
+      "id": "deck",
+      "kind": "archetype",
+      "archetype": "deck",
+      "params": {
+        "title": "DECK",
+        "items": [
+          {
+            "id": "k_scan",
+            "label": "SCAN",
+            "controlId": "scan"
+          },
+          {
+            "id": "k_ping",
+            "label": "PING",
+            "controlId": "ping"
+          },
+          {
+            "id": "k_daemons",
+            "label": "DAEMONS",
+            "controlId": "daemons",
+            "kind": "daemon"
+          },
+          {
+            "id": "k_undo",
+            "label": "UNDO",
+            "controlId": "undo"
+          }
+        ]
+      }
+    }
+  ]
+}

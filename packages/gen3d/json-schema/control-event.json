@@ -1,0 +1,66 @@
+{
+  "title": "ce.gen3d/1 control event",
+  "type": "object",
+  "properties": {
+    "controlId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "value": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "x",
+            "y"
+          ]
+        }
+      ]
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 127
+    },
+    "phase": {
+      "type": "string",
+      "enum": [
+        "start",
+        "move",
+        "end"
+      ]
+    },
+    "ts": {
+      "type": "number"
+    },
+    "specId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    }
+  },
+  "required": [
+    "controlId",
+    "value",
+    "phase",
+    "ts",
+    "specId"
+  ]
+}
