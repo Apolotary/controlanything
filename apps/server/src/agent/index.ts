@@ -27,6 +27,7 @@ import { macLocalInfo, type Roster } from './executors';
 import { fixtureDeviceCard } from './identify';
 import { runLoop } from './loop';
 import { MacLocalExecutor } from './maclocal';
+import { loadRecordedSpeech } from './recordedSpeech';
 import { ScanService } from './scan';
 import { StepLog } from './steps';
 import { TargetStore } from './targets';
@@ -90,7 +91,10 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const web = createWebSearcher(ctx.config.muse, { callLog: ctx.calls });
   const profiles = loadProfiles();
   const macEnabled = opts.macLocal ?? (process.platform === 'darwin' && !process.env.VITEST && process.env.CE_MAC_LOCAL !== '0');
-  const macLocal = new MacLocalExecutor(undefined, macEnabled);
+  // CE_MAC_SILENT=1: this Mac must stay silent; nothing audible runs and a recorded clip stands in for its voice
+  const macLocal = new MacLocalExecutor(undefined, macEnabled, process.env.CE_MAC_SILENT === '1');
+  const silentSpeech = macLocal.silent ? loadRecordedSpeech(undefined, log) : undefined;
+  if (macLocal.silent) log('[silent] CE_MAC_SILENT=1: say / Music are not run and the volume is kept in memory; acks and evidence say so');
   const roster: Roster = { devices: () => hub.devices(), macLocal: macLocal.available };
   const steps = new StepLog(hub, log);
   const targets = new TargetStore(hub, log);
@@ -133,7 +137,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const control = new ControlRouter({ targets, dispatcher, specs, steps, hub, log, onRoomHack });
   const daemons = new DaemonRunner({ hub, steps, log, drive: control });
   const roster0: Roster = { devices: () => hub.devices(), macLocal: macLocal.available };
-  const combos = new ComboRunner({ hub, targets, steps, dispatcher, sam, roster: roster0, arm, daemons, heard, readVolume: () => macLocal.currentVolume(), log });
+  const combos = new ComboRunner({ hub, targets, steps, dispatcher, sam, roster: roster0, arm, daemons, heard, readVolume: () => macLocal.currentVolume(), silentSpeech, log });
   const publishRoom = (): UiSpecPayload | undefined => {
     const built = buildRoomSpec(targets.list(), (id) => specs.get(id), roomRev + 1);
     if (!built) return room;
@@ -210,7 +214,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     },
   });
 
-  const loopDeps = { hub, targets, steps, dispatcher, roster, sam, spark: muse, wonder, web, profiles, forge, arm, heard, readVolume: () => macLocal.currentVolume(), log, companionWaitMs: opts.companionWaitMs, settleMs: opts.settleMs, learnIr: opts.learnIr };
+  const loopDeps = { hub, targets, steps, dispatcher, roster, sam, spark: muse, wonder, web, profiles, forge, arm, heard, readVolume: () => macLocal.currentVolume(), silentSpeech, log, companionWaitMs: opts.companionWaitMs, settleMs: opts.settleMs, learnIr: opts.learnIr };
 
   const select = (p: TargetSelectPayload, from: { deviceId: string; name?: string }): Target | undefined => {
     if (p.cardId) {
@@ -220,6 +224,12 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       if (existing.state === 'failed' || existing.state === 'needs-companion') {
         existing.runId = `run-${Date.now().toString(36)}`;
         void runLoop(loopDeps, existing, { userText: p.text, preferDeviceId: from.deviceId });
+      } else if (!existing.armed && !existing.armId && existing.driver && (existing.state === 'forged' || existing.state === 'verified') && existing.cardId !== ROOM_CARD_ID) {
+        // the ARM window closed without a pinch (or was declined): pinching the device again asks again
+        const driver = existing.driver;
+        void arm.request(existing, driver).then((r) => {
+          if (r.armed) hub.broadcast('driver.status', { driverId: driver.driverId, cardId: existing.cardId, phase: 'armed', actions: driver.actions.map((a) => ({ actionId: a.actionId, verified: existing.verification[a.actionId] ?? 'untested' })), modelId: driver.modelId });
+        });
       }
       return existing;
     }

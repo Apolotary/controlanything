@@ -192,6 +192,8 @@ export interface ComboDeps {
   heard?: VerifyDeps['heard'];
   /** read the Mac's output volume before muting it (osascript), for UNDO */
   readVolume?: () => Promise<number | undefined>;
+  /** CE_MAC_SILENT: a recorded clip stands in for the Mac's voice */
+  silentSpeech?: VerifyDeps['silentSpeech'];
   log?: (line: string) => void;
 }
 
@@ -240,7 +242,7 @@ export class ComboRunner {
       this.d.targets.setState(room, 'controlling', hack.name);
       const camera = pickSensor(this.d.roster, 'camera');
       const mic = pickSensor(this.d.roster, 'mic');
-      const vdeps: VerifyDeps = { dispatcher: this.d.dispatcher, sam: this.d.sam, heard: this.d.heard, log: this.d.log, settleMs: () => 1200 };
+      const vdeps: VerifyDeps = { dispatcher: this.d.dispatcher, sam: this.d.sam, heard: this.d.heard, silentSpeech: this.d.silentSpeech, log: this.d.log, settleMs: () => 1200 };
       for (const cmd of hack.commands) {
         const t = cmd.cardId ? this.d.targets.get(cmd.cardId) : undefined;
         const name = t?.card?.name ?? cmd.cardId ?? '?';

@@ -16,6 +16,7 @@ import { iou, polygonFor } from '../scan/polygon';
 import { decodeMask, type Sam } from '../scan/sam';
 import { Dispatcher, ExecError } from './dispatch';
 import { clipDurationMs, type HeardResult, TRANSCRIPT_THRESHOLD } from './heard';
+import type { RecordedSpeech } from './recordedSpeech';
 import type { Target } from './types';
 
 export interface VerifyDeps {
@@ -25,6 +26,11 @@ export interface VerifyDeps {
   heard?: (line: string, wav: Uint8Array, signal?: AbortSignal) => Promise<HeardResult>;
   /** the Mac's current output volume, so a volume probe can put it back afterwards */
   readVolume?: () => Promise<number | undefined>;
+  /**
+   * CE_MAC_SILENT=1: the Mac does not speak, so a recorded clip of a line stands in for its voice and is what the
+   * transcription oracle hears; the evidence names the recording instead of a microphone (recordedSpeech.ts).
+   */
+  silentSpeech?: (line: string) => RecordedSpeech | undefined;
   log?: (line: string) => void;
   /** wait after an action before the "after" measurement (IR lamps fade ~3 s; the sim is instant) */
   settleMs?: (t: Target, a: DriverAction) => number;
@@ -144,8 +150,25 @@ export async function verifyOnce(deps: VerifyDeps, t: Target, driver: Driver, a:
 
   // the Mac speaks: record it through a microphone client and let Muse Voice Transcribe hear it back
   const line = spokenLine(op);
-  if (line && sense === 'audio' && o.micDeviceId && deps.heard) {
+  if (line && sense === 'audio' && deps.heard && (o.micDeviceId || deps.silentSpeech)) {
     const ack = await d.exec(exec.deviceId, op, { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: a.actionId, waitForSlot: true, signal: o.signal, timeoutMs: 6000 });
+    const canned = deps.silentSpeech?.(line);
+    if (canned) {
+      // nothing may be audible on this machine: the recorded clip is what the model hears, and the evidence says so
+      const heard = await deps.heard(canned.line, canned.wav, o.signal);
+      const evidence: Evidence = {
+        ...base,
+        execId: ack.execId,
+        sent: { op, at: ack.sentAt },
+        observed: { sense: 'audio', metric: 'transcript', before: 0, after: heard.similarity, delta: heard.similarity, threshold: TRANSCRIPT_THRESHOLD, sensorDeviceId: exec.deviceId, note: `${canned.label}; ${heard.recordedFrom ?? heard.model}${heard.source === 'fixture' ? ' (FIXTURE replay)' : ''} heard "${heard.transcript.slice(0, 120)}"` },
+        pass: heard.pass,
+        note: heard.pass ? `recorded clip heard back by ${heard.recordedFrom ?? heard.model}: "${heard.transcript.slice(0, 80)}" (${canned.label})` : `expected "${canned.line.slice(0, 40)}", heard "${heard.transcript.slice(0, 40) || 'nothing'}" (${canned.label})`,
+      };
+      return { evidence };
+    }
+    if (!o.micDeviceId) {
+      return { evidence: { ...base, execId: ack.execId, sent: { op, at: ack.sentAt }, observed: { sense: 'ack', metric: 'ack', before: 0, after: 1, delta: 1, threshold: 1, sensorDeviceId: exec.deviceId, note: 'spoken; no microphone client online' }, pass: false, note: 'said, but no microphone could hear it' } };
+    }
     let clipResult: SenseResultPayload | undefined;
     try {
       [clipResult] = await d.sense(o.micDeviceId, 'audio-clip', { cardId: t.cardId, durationMs: clipDurationMs(line), signal: o.signal, timeoutMs: clipDurationMs(line) + 6000 });

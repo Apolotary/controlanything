@@ -59,9 +59,16 @@ export function planLocal(op: LocalOp): { file: string; args: string[] } | Local
 
 export class MacLocalExecutor {
   readonly deviceId = MAC_LOCAL_ID;
+  /** the output level the silent Mac pretends to have (0-100); read back by verify's volume restore and UNDO */
+  private silentVolume = 50;
   constructor(
     private readonly run: Runner = execFileRunner,
     private readonly enabled: boolean = process.platform === 'darwin',
+    /**
+     * CE_MAC_SILENT=1: this Mac must make no sound (user rule). Nothing audible is executed: `say` and Music are
+     * not run and the volume is only kept in memory. Every ack says so; the oracles judge what they can.
+     */
+    readonly silent: boolean = false,
   ) {}
 
   get available(): boolean {
@@ -71,6 +78,7 @@ export class MacLocalExecutor {
   /** The current output volume 0-100, or undefined when it cannot be read. */
   async currentVolume(): Promise<number | undefined> {
     if (!this.enabled) return undefined;
+    if (this.silent) return this.silentVolume;
     try {
       const out = await this.run('osascript', ['-e', 'output volume of (get volume settings)']);
       const v = Number(out.trim());
@@ -86,11 +94,27 @@ export class MacLocalExecutor {
     if ('ok' in plan) return plan;
     if (dryRun) return { ok: true, detail: `dry run: ${plan.file} ${plan.args.join(' ')}` };
     if (!this.enabled) return { ok: false, error: 'unsupported', detail: 'local execution is only available on macOS' };
+    if (this.silent) return this.silently(op);
     try {
       const out = await this.run(plan.file, plan.args);
       return { ok: true, detail: out || `${plan.file} ok` };
     } catch (e) {
       return { ok: false, error: 'device_error', detail: (e as Error).message.slice(0, 300) };
+    }
+  }
+
+  /** Silent mode: nothing runs; the ack states exactly what did not happen. */
+  private silently(op: LocalOp): LocalResult {
+    switch (op.op) {
+      case 'volume': {
+        const v = Math.round(Math.min(100, Math.max(0, Number(op.arg))));
+        this.silentVolume = v;
+        return { ok: true, detail: `silent mode (CE_MAC_SILENT): volume ${v} kept in memory, not applied` };
+      }
+      case 'say':
+        return { ok: true, detail: 'silent mode (CE_MAC_SILENT): not spoken; a recorded clip stands in for the voice' };
+      default:
+        return { ok: true, detail: `silent mode (CE_MAC_SILENT): ${op.op} not run` };
     }
   }
 }
