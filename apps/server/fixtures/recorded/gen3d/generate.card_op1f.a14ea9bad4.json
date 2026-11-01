@@ -1,0 +1,27 @@
+{
+  "kind": "gen3d-run",
+  "kit": "ce.hackset/1+ce.gen3d/1",
+  "task": "generate",
+  "cardId": "card_op1f",
+  "request": "four knobs matching the OP-1 Field's encoders for its synth parameters, plus a few one-shot hacks",
+  "mode": "json",
+  "recordedAt": "2026-11-01T20:47:05.856Z",
+  "calls": [
+    {
+      "label": "gen3d.forge",
+      "model": "muse-spark-1.3",
+      "effort": "low",
+      "text": "{\"hacks\": [{\"blurb\": \"blue encoder cutoff sweep\", \"commands\": [{\"action\": \"enc.blue\", \"delayMs\": 0, \"param\": \"p_cut\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"#2F6BFF\", \"archetype\": \"knob\", \"param\": \"p_cut\", \"size\": \"m\"}, \"id\": \"h_cutoff\", \"inverse\": {\"commands\": [], \"restore\": \"p_cut\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Open cutoff\", \"oracle\": {\"expect\": \"centroid_up\", \"reason\": \"filter opens and tone brightens\", \"type\": \"wire\"}, \"params\": [{\"default\": 80, \"id\": \"p_cut\", \"max\": 127, \"min\": 0, \"name\": \"Cutoff\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"green encoder resonance\", \"commands\": [{\"action\": \"enc.green\", \"delayMs\": 0, \"param\": \"p_res\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"#39C46A\", \"archetype\": \"knob\", \"param\": \"p_res\", \"size\": \"m\"}, \"id\": \"h_reso\", \"inverse\": {\"commands\": [], \"restore\": \"p_res\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Tweak reso\", \"oracle\": {\"expect\": \"centroid_up\", \"reason\": \"resonance peak sharpens tone\", \"type\": \"wire\"}, \"params\": [{\"default\": 20, \"id\": \"p_res\", \"max\": 127, \"min\": 0, \"name\": \"Reso\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"white encoder attack time\", \"commands\": [{\"action\": \"enc.white\", \"delayMs\": 0, \"param\": \"p_atk\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"#F2F4F0\", \"archetype\": \"knob\", \"param\": \"p_atk\", \"size\": \"m\"}, \"id\": \"h_attack\", \"inverse\": {\"commands\": [], \"restore\": \"p_atk\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Shape attack\", \"oracle\": {\"expect\": \"centroid_up\", \"reason\": \"attack shape changes note onset\", \"type\": \"wire\"}, \"params\": [{\"default\": 30, \"id\": \"p_atk\", \"max\": 127, \"min\": 0, \"name\": \"Attack\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"orange encoder release time\", \"commands\": [{\"action\": \"enc.orange\", \"delayMs\": 0, \"param\": \"p_rel\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"#FF7A1A\", \"archetype\": \"knob\", \"param\": \"p_rel\", \"size\": \"m\"}, \"id\": \"h_release\", \"inverse\": {\"commands\": [], \"restore\": \"p_rel\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Set release\", \"oracle\": {\"expect\": \"centroid_up\", \"reason\": \"release length changes tail tone\", \"type\": \"wire\"}, \"params\": [{\"default\": 64, \"id\": \"p_rel\", \"max\": 127, \"min\": 0, \"name\": \"Release\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"play middle C for 600 ms\", \"commands\": [{\"action\": \"note.play\", \"delayMs\": 0, \"param\": \"\", \"value\": 60}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_note\", \"inverse\": {\"commands\": [{\"action\": \"notes.off\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 2, \"name\": \"Play note\", \"oracle\": {\"expect\": \"louder\", \"reason\": \"single synth note sounds\", \"type\": \"wire\"}, \"params\": [], \"reversible\": true}, {\"blurb\": \"play C major triad\", \"commands\": [{\"action\": \"note.play\", \"delayMs\": 0, \"param\": \"\", \"value\": 60}, {\"action\": \"note.play\", \"delayMs\": 80, \"param\": \"\", \"value\": 64}, {\"action\": \"note.play\", \"delayMs\": 80, \"param\": \"\", \"value\": 67}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_chord\", \"inverse\": {\"commands\": [{\"action\": \"notes.off\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 1, \"name\": \"Strike chord\", \"oracle\": {\"expect\": \"louder\", \"reason\": \"three note chord sounds\", \"type\": \"wire\"}, \"params\": [], \"reversible\": true}], \"title\": \"OP-1 Field\"}",
+      "finishReason": "stop",
+      "latencyMs": 11675,
+      "ttftMs": 8664,
+      "usage": {
+        "promptTokens": 3082,
+        "completionTokens": 2650,
+        "reasoningTokens": 1429,
+        "cachedTokens": 113
+      }
+    }
+  ],
+  "ok": true
+}

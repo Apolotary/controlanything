@@ -7,7 +7,9 @@ import { CallLog } from '../muse/callLog';
 import { resolveMuseConfig } from '../muse/config';
 import type { EditSet } from './editPatch';
 import { createForge, ForgeInputError, type ForgeProgress } from './forge';
-import { FORGE_LIGHT_DEVICE, FORGE_LIGHT_DRIVER, FORGE_LIGHT_VERIFIED } from './sampleDevices';
+import { RECORDED_GEN3D_DIR } from './routes';
+import { FORGE_LIGHT_DEVICE, FORGE_LIGHT_DRIVER, FORGE_LIGHT_VERIFIED, FORGE_OP1_DEVICE, FORGE_OP1_DRIVER, FORGE_OP1_VERIFIED } from './sampleDevices';
+import { loadRecordedRuns } from './transport';
 import { contentEvents, LIGHT_DRAFT, mockFetch, sseResponse } from './testkit';
 
 const live = resolveMuseConfig({ MODEL_API_KEY: 'sk-test' });
@@ -197,5 +199,28 @@ describe('forge: record and replay (FIXTURE mode replays real recorded runs)', (
     const r = await createForge({ muse: fixture, replayDir: tmp(), replaySpeed: 0 }).forge(forgeReq());
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/FIXTURE: no recorded generate run/);
+  });
+});
+
+describe('committed recordings (what judges replay without a key)', () => {
+  const SAMPLE: Record<string, { device: typeof FORGE_LIGHT_DEVICE; driver: typeof FORGE_LIGHT_DRIVER; verification: typeof FORGE_LIGHT_VERIFIED }> = {
+    card_light: { device: FORGE_LIGHT_DEVICE, driver: FORGE_LIGHT_DRIVER, verification: FORGE_LIGHT_VERIFIED },
+    card_op1f: { device: FORGE_OP1_DEVICE, driver: FORGE_OP1_DRIVER, verification: FORGE_OP1_VERIFIED },
+  };
+  const runs = loadRecordedRuns(RECORDED_GEN3D_DIR);
+
+  it.each(runs.filter((r) => r.task === 'generate').map((r) => [r.cardId, r] as const))('%s: replays through the current checks', async (cardId, run) => {
+    const target = SAMPLE[cardId];
+    expect(target, `no sample driver for ${cardId}`).toBeDefined();
+    const forge = createForge({ muse: fixture, replayDir: RECORDED_GEN3D_DIR, replaySpeed: 0 });
+    const r = await forge.generate({ ...target, request: run.request });
+    expect(r.report.errors).toEqual([]);
+    expect(r).toMatchObject({ ok: true, source: 'fixture' });
+    expect(r.recordedFrom).toMatch(/^muse-/);
+    for (const edit of runs.filter((x) => x.task === 'edit' && x.cardId === cardId)) {
+      const e = await forge.edit({ specId: r.uiSpec!.specId, instruction: edit.request });
+      expect(e.report.errors).toEqual([]);
+      expect(e.ok && e.untouchedIdentical).toBe(true);
+    }
   });
 });
