@@ -38,6 +38,7 @@ pio run -e cardputer-adv -t upload        # Cardputer-Adv
 pio device monitor -e cardputer           # serial log (keeps DTR and RTS asserted)
 sh test/run_host_tests.sh                 # IR codec tests on the Mac
 python3 scripts/ir-spike.py selftest      # script codec check
+sh preview/build.sh                       # render every screen to preview/out/*.png (needs SDL2 headers)
 ```
 
 Both envs build the same code; the board is detected at runtime, so flashing the other

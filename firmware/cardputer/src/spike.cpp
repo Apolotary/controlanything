@@ -71,7 +71,7 @@ void nextLearn() {
     irnode::rxStop();
     P.replayIdx = 0;
     P.stage = store::slotCount() ? Stage::ReplayReady : Stage::Home;
-    say(store::slotCount() ? "learned: now replay each at the light" : "nothing learned");
+    say(store::slotCount() ? "now replay each at the lamp" : "nothing learned");
   } else {
     P.stage = Stage::LearnWait;
   }
@@ -85,7 +85,7 @@ void keepFirst() {
   app::S.cap.a = ir::analyze(firstUs, firstN);
   ir::describe(app::S.cap.a, app::S.cap.desc, sizeof(app::S.cap.desc));
   if (app::storeCapture(b.slot, b.ja)) {
-    say("saved %s: %s", b.slot, app::S.cap.desc);
+    say("saved %s", b.slot);
     proto::emitLearned(nullptr, b.slot, b.ja, true);
   } else {
     say("NVS full: %s not saved", b.slot);
@@ -100,7 +100,7 @@ bool wantsRx() { return P.stage == Stage::LearnWait || P.stage == Stage::LearnAg
 void enter() {
   P = State();
   P.stage = Stage::Home;
-  say("lamp ON first; aim the IR window at it");
+  say("lamp ON first, aim at it");
 }
 
 void leave() {
@@ -116,7 +116,7 @@ void onCapture() {
     firstN = app::S.cap.n;
     P.haveFirst = true;
     P.stage = Stage::LearnAgain;
-    say("got it. press %s again to confirm", b.ja);
+    say("got it: press it again");
     proto::emitLearned(nullptr, nullptr, b.ja, false);
     return;
   }
@@ -125,7 +125,7 @@ void onCapture() {
   } else {
     memcpy(firstUs, app::S.cap.us, app::S.cap.n * sizeof(uint16_t));
     firstN = app::S.cap.n;
-    say("no match. press %s again", b.ja);
+    say("no match: press it again");
     proto::emitLearned(nullptr, nullptr, b.ja, false);
   }
 }
@@ -152,7 +152,7 @@ void onKey(const keys::Press& p) {
       } else if (k == '2' || k == 'c') {
         P.cand = 0;
         P.stage = Stage::CandReady;
-        say("lamp ON first. Enter fires the OFF code");
+        say("lamp ON first, Enter fires");
       } else if (k == '3' || k == 'r') {
         if (store::slotCount()) {
           P.replayIdx = 0;
@@ -188,7 +188,7 @@ void onKey(const keys::Press& p) {
         store::putAnswer(cand::kList[P.cand].id, 0, 'y');
         logCand(P.cand, false, 'y');
         P.stage = Stage::ConfReady;
-        say("the light changed! Enter fires %s to confirm", cand::kList[P.cand].confirmWhat);
+        say("Enter: confirm with %s", cand::kList[P.cand].confirmWhat);
       } else if (k == 'n') {
         store::putAnswer(cand::kList[P.cand].id, 0, 'n');
         logCand(P.cand, false, 'n');

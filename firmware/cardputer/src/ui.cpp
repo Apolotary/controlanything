@@ -1,6 +1,10 @@
 #include "ui.h"
 
+#ifdef CE_PREVIEW
+#include "preview_shim.h"  // host build that renders screens to PNG (preview/)
+#else
 #include <M5Cardputer.h>
+#endif
 #include <lgfx/utility/lgfx_qrcode.h>
 #include <string.h>
 
@@ -61,6 +65,25 @@ int textW(const char* s, const lgfx::IFont* f) {
   if (!ascii(s)) f = (f == F12) ? FJA12 : FJA;
   canvas.setFont(f);
   return canvas.textWidth(s);
+}
+
+// Draws text cut to `maxW` pixels (".." marks the cut; UTF-8 safe).
+int textFit(const char* s, int x, int y, const lgfx::IFont* f, uint32_t color, int maxW, textdatum_t d = top_left) {
+  if (!s) return 0;
+  if (textW(s, f) <= maxW) return text(s, x, y, f, color, d);
+  char buf[96];
+  size_t n = strlen(s);
+  if (n > sizeof(buf) - 3) n = sizeof(buf) - 3;
+  memcpy(buf, s, n);
+  while (n > 0) {
+    n--;
+    while (n > 0 && ((uint8_t)buf[n] & 0xC0) == 0x80) n--;  // back to a character start
+    buf[n] = '.';
+    buf[n + 1] = '.';
+    buf[n + 2] = 0;
+    if (textW(buf, f) <= maxW) break;
+  }
+  return text(buf, x, y, f, color, d);
 }
 
 void dot(int x, int y, uint32_t c) { canvas.fillRect(x, y, 3, 3, c); }
@@ -244,23 +267,23 @@ void drawIdle(uint32_t now) {
   topBar("IR NODE", st, now);
   if (app::S.hostSeen) {
     text("LINKED", 10, 26, F18, kCyan);
-    if (app::S.hostName[0]) text(app::S.hostName, 10 + textW("LINKED", F18) + 10, 30, F12, kDim);
+    if (app::S.hostName[0]) textFit(app::S.hostName, 10 + textW("LINKED", F18) + 10, 30, F12, kDim, 140);
   } else {
     text("NO HOST", 10, 26, F18, kDim);
-    text("USB-C to the Mac companion", 10 + textW("NO HOST", F18) + 8, 30, F12, kDim);
+    textFit("USB-C to the Mac companion", 10 + textW("NO HOST", F18) + 8, 30, F12, kDim, 130);
   }
   char buf[64];
   const char* s = sentLine(now, buf, sizeof(buf));
   if (s) {
-    text(s, 10, 52, F12, kVolt);
+    textFit(s, 10, 52, F12, kVolt, 210);
   } else if (app::S.lastCmd[0]) {
     snprintf(buf, sizeof(buf), "last: %s", app::S.lastCmd);
-    text(buf, 10, 52, F12, kFg);
+    textFit(buf, 10, 52, F12, kFg, 210);
   } else {
     text("no IR sent yet", 10, 52, F12, kDim);
   }
-  snprintf(buf, sizeof(buf), "%s  codes %d  tx %s", app::S.board, store::slotCount(),
-           irnode::defaultTx() == irnode::kTxGrove ? "Grove G2" : "LED G44");
+  snprintf(buf, sizeof(buf), "codes %d  tx %s", store::slotCount(),
+           irnode::defaultTx() == irnode::kTxGrove ? "IR Unit G2" : "LED G44");
   text(buf, 10, 70, F12, kDim);
   sendBar(20, 90, 200, 8, now);
   int x = 6;
@@ -330,9 +353,9 @@ void drawPair(uint32_t now) {
   if (n > 3) memcpy(b, code + 3, n - 3 >= 3 ? 3 : n - 3);
   text(a, rx + cw / 2, 20, F40, kFg, top_center);
   text(b, rx + cw / 2, 60, F40, kFg, top_center);
-  text(cd, rx + cw / 2, 104, F18, kCyan, top_center);
-  if (blinkOn) canvas.fillRect(rx + 2, 110, 8, 8, kVolt);
-  text("c: code", rx + cw / 2, 124, F12, kDim, top_center);
+  text(cd, rx + cw / 2, 100, F18, kCyan, top_center);
+  if (blinkOn) canvas.fillRect(rx + 2, 106, 8, 8, kVolt);
+  text("c: code", rx + cw / 2, 121, F12, kDim, top_center);
 }
 
 void drawMenu(uint32_t now) {
@@ -355,11 +378,11 @@ void drawMenu(uint32_t now) {
     text(num, x0, 18, F72, kFg);
     text(big->unit[0] ? big->unit : "%", x0 + nw + 4, 56, F18, kCyan);
     text(big->label, 10, 24, F12, kDim);
-    valueBar(20, 82, 200, 8, big->value, kCyan);
-    y = 94;
+    valueBar(20, 80, 200, 8, big->value, kCyan);
+    y = 91;
   }
   // Step bars as dots ("WARM o o o . . COOL"), other bars as thin bars.
-  for (uint8_t i = 0; i < M.nBars && y < 112; i++) {
+  for (uint8_t i = 0; i < M.nBars && y < 104; i++) {
     const app::MenuBar& b = M.bars[i];
     if (&b == big) continue;
     if (b.steps) {
@@ -397,7 +420,7 @@ void drawMenu(uint32_t now) {
         x = 4;
       }
       const bool hot = M.hot == (int8_t)i && now - M.hotAt < 350;
-      x += chip(x, row ? 118 : 100, it.key, it.keyName, it.label, it.armed, hot);
+      x += chip(x, row ? 120 : 104, it.key, it.keyName, it.label, it.armed, hot);
     }
   } else {
     // No big value: the items are the screen, two columns.
@@ -413,17 +436,28 @@ void drawMenu(uint32_t now) {
   if (s && !legendOnly) text(s, 10, H - 14, F12, kVolt);
 }
 
+// Waveform (first frame) plus two lines: format summary, then the bytes.
 void drawCapture(int y) {
   const app::Capture& c = app::S.cap;
   if (!c.n) {
-    canvas.fillRect(20, y + 14, 200, 2, kLine);
+    canvas.fillRect(10, y + 12, 220, 2, kLine);
     return;
   }
-  wave(10, y, 220, 14, c.us, c.n, c.a.firstFrameLen);
-  char b[72];
-  snprintf(b, sizeof(b), "captured %u marks%s", c.a.marks, c.truncated ? " (cut)" : "");
-  text(b, 10, y + 20, F12, kFg);
-  text(c.desc, 10, y + 34, F12, kCyan);
+  wave(10, y, 220, 12, c.us, c.n, c.a.firstFrameLen);
+  const ir::Analysis& a = c.a;
+  char l1[64], l2[64];
+  const unsigned copies = 1u + a.sameFrames;
+  if (a.proto == ir::Proto::NEC || a.proto == ir::Proto::AEHA) {
+    snprintf(l1, sizeof(l1), "%s %ub T%u%s  %u marks", ir::protoName(a.proto), a.bits, a.unitUs,
+             copies > 1 ? (copies == 2 ? " x2" : " x3+") : "", a.marks);
+    ir::formatHex(a.bytes, a.nbytes, l2, sizeof(l2));
+  } else {
+    snprintf(l1, sizeof(l1), "RAW  %u marks  %lu ms%s", a.marks, (unsigned long)((a.durationUs + 500) / 1000),
+             c.truncated ? "  cut" : "");
+    snprintf(l2, sizeof(l2), "replays exactly as captured");
+  }
+  textFit(l1, 10, y + 18, F12, kCyan, 224);
+  textFit(l2, 10, y + 32, F12, kFg, 224);
 }
 
 void captureFill(uint32_t now, int y) {
@@ -447,7 +481,7 @@ void drawLearn(uint32_t now) {
   } else {
     snprintf(p, sizeof(p), "press the next button");
   }
-  text(p, 10, 24, F18, kFg);
+  textFit(p, 10, 24, F18, kFg, 224);
   captureFill(now, 48);
   drawCapture(62);
   const int32_t left = (int32_t)(L.deadline - now);
@@ -471,8 +505,12 @@ void drawOverlay(uint32_t now) {
   canvas.fillRoundRect(8, 30, W - 16, 78, 6, kPanel);
   canvas.drawRoundRect(8, 30, W - 16, 78, 6, tc);
   canvas.drawRoundRect(9, 31, W - 18, 76, 5, tc);
-  text(O.title, 18, 38, F12, tc);
-  text(O.text, 18, 56, F18, kFg);
+  textFit(O.title, 18, 38, F12, tc, W - 40);
+  if (textW(O.text, F18) <= W - 40) {
+    text(O.text, 18, 56, F18, kFg);
+  } else {
+    textFit(O.text, 18, 60, F12, kFg, W - 40);
+  }
   if (O.progress >= 0.f) valueBar(18, 88, W - 36, 8, O.progress, tc);
   (void)now;
 }
@@ -480,7 +518,7 @@ void drawOverlay(uint32_t now) {
 // ---- spike screens --------------------------------------------------------------------
 
 void spikeMsg(int y) {
-  if (spike::P.msg[0]) text(spike::P.msg, 6, y, F12, kVolt);
+  if (spike::P.msg[0]) textFit(spike::P.msg, 6, y, F12, kVolt, W - 12);
 }
 
 void drawSpikeHome(uint32_t now) {
@@ -492,15 +530,15 @@ void drawSpikeHome(uint32_t now) {
   };
   char learned[24];
   snprintf(learned, sizeof(learned), "%d learned", store::slotCount());
-  const Row rows[] = {{'1', "LEARN + REPLAY", "IR Unit on Grove"},
-                      {'2', "CANDIDATES", "11 codes, CH1-3"},
+  const Row rows[] = {{'1', "LEARN + REPLAY", "IR Unit"},
+                      {'2', "CANDIDATES", "11 codes"},
                       {'3', "REPLAY", learned},
-                      {'4', "REMOTE", "learned codes"}};
+                      {'4', "REMOTE", "dim, bright"}};
   for (int i = 0; i < 4; i++) {
     const int y = 24 + i * 19;
     char k[2] = {rows[i].k, 0};
     chip(6, y, (uint8_t)rows[i].k, k, rows[i].a, true, false);
-    text(rows[i].b, 150, y + 1, F12, kDim);
+    textFit(rows[i].b, 148, y + 1, F12, kDim, W - 150);
   }
   char t[40];
   snprintf(t, sizeof(t), "tx %s", irnode::defaultTx() == irnode::kTxGrove ? "IR Unit G2" : "LED G44");
@@ -531,8 +569,16 @@ void drawSpikeCand(uint32_t now) {
     snprintf(b, sizeof(b), "%s  %s%s  %s", confirm ? c.confirmWhat : c.what, cand::fmtName(c.fmt),
              c.repeats ? " x2" : "", c.confidence);
   }
-  text(b, 8, 44, F12, kCyan);
-  text(confirm ? c.confirmBytes : c.bytes, 8, 58, F12, kFg);
+  textFit(b, 8, 44, F12, kCyan, W - 16);
+  textFit(confirm ? c.confirmBytes : c.bytes, 8, 58, F12, kFg, 150);
+  {
+    const char a0 = store::getAnswer(c.id, 0), a1 = store::getAnswer(c.id, 1);
+    if (a0 || a1) {
+      char sv[24];
+      snprintf(sv, sizeof(sv), "saved %c/%c", a0 ? a0 : '-', a1 ? a1 : '-');
+      text(sv, W - 8, 58, F12, kDim, top_right);
+    }
+  }
 
   const char* prompt = "";
   uint32_t pc = kVolt;
@@ -550,11 +596,6 @@ void drawSpikeCand(uint32_t now) {
   }
   text(prompt, 8, 74, F18, pc);
   sendBar(20, 96, 200, 6, now);
-  const char a0 = store::getAnswer(c.id, 0), a1 = store::getAnswer(c.id, 1);
-  if (a0 || a1) {
-    snprintf(b, sizeof(b), "saved: %c / %c", a0 ? a0 : '-', a1 ? a1 : '-');
-    text(b, 150, 106, F12, kDim);
-  }
   char s[64];
   const char* sl = sentLine(now, s, sizeof(s));
   if (sl) {

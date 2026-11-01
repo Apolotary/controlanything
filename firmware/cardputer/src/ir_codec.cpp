@@ -155,7 +155,16 @@ static void decodeDistance(const uint16_t* us, size_t start, size_t end, Analysi
     }
   }
   const uint32_t t = cnt ? sum / cnt : minMark;
-  a.unitUs = (uint16_t)t;
+  // Receivers stretch marks and shrink spaces by ~50-150 us, so report T as the mean of
+  // (mark + space) / 2 over the zero bits, which cancels the stretch.
+  uint32_t zsum = 0, zcnt = 0;
+  for (size_t i = start + 2; i + 1 < end; i += 2) {
+    if (us[i + 1] <= 2 * t) {
+      zsum += (uint32_t)us[i] + us[i + 1];
+      zcnt++;
+    }
+  }
+  a.unitUs = (uint16_t)(zcnt ? zsum / (2 * zcnt) : t);
   uint16_t bits = 0;
   memset(a.bytes, 0, sizeof(a.bytes));
   for (size_t i = start + 2; i + 1 < end; i += 2) {

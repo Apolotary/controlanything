@@ -37,6 +37,7 @@ int main() {
   for (size_t i = 0; i < st.size(); i++) st[i] = (i & 1) ? st[i] - 120 : st[i] + 120;
   a = analyze(st.data(), st.size());
   CHECK(a.proto == Proto::AEHA && a.bits == 40 && a.checkOk);
+  CHECK(a.unitUs >= 428 && a.unitUs <= 436);  // stretch cancelled
   CHECK(sameCode(us, n, st.data(), st.size()));
   // Hitachi 88-bit
   CHECK(parseHex("01 10 30 50 AF 00 FF 03 FC C2 3D", b, 36) == 11);
