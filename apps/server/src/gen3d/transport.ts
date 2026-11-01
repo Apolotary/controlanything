@@ -40,7 +40,7 @@ export interface RunTarget {
   transport?: string;
   deviceName?: string;
   /** the driver's actions at recording time (ids + what they do), for remapping on replay */
-  actions?: { actionId: string; kind: string; sense?: string; effect?: string; msg?: string; number?: number }[];
+  actions?: { actionId: string; kind: string; label?: string; range?: { min: number; max: number; step?: number }; sense?: string; effect?: string; msg?: string; number?: number }[];
 }
 
 export interface RecordedRun extends RunTarget {

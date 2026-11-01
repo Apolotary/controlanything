@@ -316,6 +316,8 @@ function runContext(device: ForgeDevice, driver: ForgeDriver) {
     actions: driver.actions.map((a) => ({
       actionId: a.actionId,
       kind: a.kind,
+      label: a.label,
+      ...(a.range ? { range: a.range } : {}),
       ...(a.expect ? { sense: a.expect.sense, effect: a.expect.effect } : {}),
       ...(a.encode?.kind === 'midi' && a.encode.msg && a.encode.number !== undefined ? { msg: a.encode.msg, number: a.encode.number } : {}),
     })),

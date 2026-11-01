@@ -10,7 +10,7 @@ import { createForge, ForgeInputError, type ForgeProgress } from './forge';
 import { RECORDED_GEN3D_DIR } from './routes';
 import type { ForgeDevice, ForgeDriver } from './forgeTypes';
 import { allPass, FORGE_LIGHT_DEVICE, FORGE_LIGHT_DRIVER, FORGE_LIGHT_VERIFIED, FORGE_OP1_DEVICE, FORGE_OP1_DRIVER, FORGE_OP1_VERIFIED, LOOP_LIGHT_DEVICE, LOOP_LIGHT_DRIVER, LOOP_MAC_DEVICE, LOOP_MAC_DRIVER, LOOP_OP1_DEVICE, LOOP_OP1_DRIVER } from './sampleDevices';
-import { loadRecordedRuns } from './transport';
+import { loadRecordedRuns, type RecordedRun, ReplayTransport } from './transport';
 import { contentEvents, LIGHT_DRAFT, mockFetch, sseResponse } from './testkit';
 
 const live = resolveMuseConfig({ MODEL_API_KEY: 'sk-test' });
@@ -213,9 +213,27 @@ describe('committed recordings (what judges replay without a key)', () => {
   };
   const runs = loadRecordedRuns(RECORDED_GEN3D_DIR);
 
+  /** cards the discovery loop recorded: rebuild the driver from the recording's own action metadata */
+  const fromRecording = (run: RecordedRun) => {
+    expect(run.actions?.length, `${run.cardId}: recording has no driver metadata`).toBeGreaterThan(0);
+    const driver: ForgeDriver = {
+      driverId: `drv_${run.cardId}`,
+      cardId: run.cardId,
+      transport: (run.transport ?? 'local') as ForgeDriver['transport'],
+      actions: run.actions!.map((a) => ({
+        actionId: a.actionId,
+        label: a.label ?? a.actionId,
+        kind: a.kind as ForgeDriver['actions'][number]['kind'],
+        ...(a.range ? { range: a.range } : {}),
+        ...(a.sense ? { expect: { sense: a.sense as 'camera' | 'audio' | 'ack' | 'none', effect: a.effect ?? 'any' } } : {}),
+        ...(a.msg ? { encode: { kind: 'midi', msg: a.msg, number: a.number } } : {}),
+      })),
+    };
+    return { device: { cardId: run.cardId, name: run.deviceName ?? run.cardId, ...(run.category ? { category: run.category } : {}) }, driver, verification: allPass(driver) };
+  };
+
   it.each(runs.filter((r) => r.task === 'generate').map((r) => [r.cardId, r] as const))('%s: replays through the current checks', async (cardId, run) => {
-    const target = SAMPLE[cardId];
-    expect(target, `no sample driver for ${cardId}`).toBeDefined();
+    const target = SAMPLE[cardId] ?? fromRecording(run);
     const forge = createForge({ muse: fixture, replayDir: RECORDED_GEN3D_DIR, replaySpeed: 0 });
     const r = await forge.generate({ ...target, request: run.request });
     expect(r.report.errors).toEqual([]);
@@ -236,7 +254,10 @@ describe('replay for cards the discovery loop creates (no recording for that car
     cardId,
     actions: d.actions.map((a) => ({ ...a, actionId: map[a.actionId] ?? a.actionId, ...(encode[a.actionId] ? { encode: encode[a.actionId] } : {}), ...(a.inverseActionId ? { inverseActionId: map[a.inverseActionId] ?? a.inverseActionId } : {}) })),
   });
+  /** every committed recording: the real selection */
   const replay = () => createForge({ muse: fixture, replayDir: RECORDED_GEN3D_DIR, replaySpeed: 0 });
+  /** only the template recordings (card_tpl_*): deterministic remap assertions whatever else gets recorded */
+  const templates = () => createForge({ muse: fixture, transport: new ReplayTransport(loadRecordedRuns(RECORDED_GEN3D_DIR).filter((r) => r.cardId.startsWith('card_tpl_')), { speed: 0 }) });
   const boundOk = (ui: NonNullable<Awaited<ReturnType<ReturnType<typeof replay>['generate']>>['uiSpec']>, d: ForgeDriver) => {
     const ids = new Set(d.actions.map((a) => a.actionId));
     for (const c of ui.gen3d.controls) {
@@ -263,7 +284,7 @@ describe('replay for cards the discovery loop creates (no recording for that car
   it('remaps library-style light action ids (fullOn, nightLight) and replays the edit', async () => {
     const cardId = 'card-lib1';
     const driver = rename(LOOP_LIGHT_DRIVER, cardId, { full: 'fullOn', night: 'nightLight' });
-    const r = await replay().generate({ device: { ...LOOP_LIGHT_DEVICE, cardId }, driver, verification: allPass(driver) });
+    const r = await templates().generate({ device: { ...LOOP_LIGHT_DEVICE, cardId }, driver, verification: allPass(driver) });
     expect(r.ok).toBe(true);
     boundOk(r.uiSpec!, driver);
     expect(r.report.fixes.some((f) => f.includes('-> fullOn'))).toBe(true);
@@ -273,7 +294,7 @@ describe('replay for cards the discovery loop creates (no recording for that car
     const cardId = 'card-spk2';
     const names: Record<string, string> = { cc46: 'eng1', cc47: 'eng2', cc48: 'eng3', cc49: 'eng4', cc54: 'fx1', cc55: 'fxmix', note: 'note-c4' };
     const driver = rename(LOOP_OP1_DRIVER, cardId, names);
-    const f = replay();
+    const f = templates();
     const r = await f.generate({ device: { ...LOOP_OP1_DEVICE, cardId }, driver, verification: allPass(driver) });
     expect(r.report.errors).toEqual([]);
     expect(r.ok).toBe(true);
@@ -287,7 +308,7 @@ describe('replay for cards the discovery loop creates (no recording for that car
   it('drops recorded hacks whose actions this driver lacks instead of failing', async () => {
     const cardId = 'card-min1';
     const driver: ForgeDriver = { ...rename(LOOP_LIGHT_DRIVER, cardId), actions: LOOP_LIGHT_DRIVER.actions.filter((a) => ['full', 'off', 'level'].includes(a.actionId)).map((a) => ({ ...a, inverseActionId: undefined })) };
-    const r = await replay().generate({ device: { ...LOOP_LIGHT_DEVICE, cardId }, driver, verification: allPass(driver) });
+    const r = await templates().generate({ device: { ...LOOP_LIGHT_DEVICE, cardId }, driver, verification: allPass(driver) });
     expect(r.ok).toBe(true);
     boundOk(r.uiSpec!, driver);
     expect(r.report.fixes.some((f) => f.startsWith('replay: dropped'))).toBe(true);
