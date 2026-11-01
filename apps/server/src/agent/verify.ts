@@ -15,11 +15,14 @@ import { type DecodedImage, decodeJpeg } from '../oracle/image';
 import { iou, polygonFor } from '../scan/polygon';
 import { decodeMask, type Sam } from '../scan/sam';
 import { Dispatcher, ExecError } from './dispatch';
+import { clipDurationMs, type HeardResult, TRANSCRIPT_THRESHOLD } from './heard';
 import type { Target } from './types';
 
 export interface VerifyDeps {
   dispatcher: Dispatcher;
   sam: Sam;
+  /** hears a spoken line back (the "say" oracle: Muse Voice Transcribe) */
+  heard?: (line: string, wav: Uint8Array, signal?: AbortSignal) => Promise<HeardResult>;
   log?: (line: string) => void;
   /** wait after an action before the "after" measurement (IR lamps fade ~3 s; the sim is instant) */
   settleMs?: (t: Target, a: DriverAction) => number;
@@ -39,6 +42,8 @@ export interface VerifyOptions {
   onStep?: (title: string, detail?: string) => void;
   /** how many consecutive passes make a pass (default 2) */
   confirmations?: number;
+  /** "set" actions: the value to send (default: the range's max on odd attempts, min on even) */
+  value?: number;
 }
 
 export interface VerifySummary {
@@ -76,7 +81,9 @@ async function captureFrame(d: Dispatcher, sensorDeviceId: string, cardId: strin
 
 /** Re-find the target's outline on a fresh frame with SAM (nearest to the stored box); fall back to the stored polygon. */
 export async function refreshPolygon(sam: Sam, t: Target, jpeg: string, width: number, height: number, signal?: AbortSignal): Promise<{ polygon: Polygon; fresh: boolean; latencyMs: number; model: string }> {
-  const det = t.detection!;
+  const det = t.detection;
+  // no detection (a device the user pointed at without a scan): watch the middle of the frame
+  if (!det) return { polygon: polygonFor(null, [Math.round(width * 0.25), Math.round(height * 0.25), Math.round(width * 0.5), Math.round(height * 0.5)]), fresh: false, latencyMs: 0, model: 'none' };
   const fallback = det.polygon ?? polygonFor(null, det.box);
   try {
     const r = await sam.segment(det.prompt, jpeg, { width, height, signal, label: `sam:verify:${det.prompt}` });
@@ -102,10 +109,21 @@ async function audioWindow(d: Dispatcher, micDeviceId: string, cardId: string, o
   return r.audio;
 }
 
-/** The op to send for one verification of an action: set actions go to their max (then min on the second pass). */
-function opFor(a: DriverAction, pass: number): ExecOp {
-  if (a.kind === 'set' && a.range && a.encode.kind !== 'step') return resolveOp(a, pass % 2 === 0 ? a.range.max : a.range.min);
+/** The op to send for one verification of an action: set actions go to their max (then min on the second pass), or to `value`. */
+function opFor(a: DriverAction, pass: number, value?: number): ExecOp {
+  if (a.kind === 'set' && a.encode.kind !== 'step') {
+    if (value !== undefined) return resolveOp(a, value);
+    if (a.range) return resolveOp(a, pass % 2 === 0 ? a.range.max : a.range.min);
+  }
   return resolveOp(a);
+}
+
+/** The text a local "say" op speaks, if it is one. */
+export function spokenLine(op: ExecOp): string | undefined {
+  if (op.kind !== 'local' || op.op !== 'say') return undefined;
+  if (typeof op.arg === 'string') return op.arg;
+  if (op.arg && typeof op.arg === 'object' && 'text' in op.arg) return String((op.arg as Record<string, unknown>).text);
+  return undefined;
 }
 
 /**
@@ -117,9 +135,42 @@ export async function verifyOnce(deps: VerifyDeps, t: Target, driver: Driver, a:
   const expected = effectFor(a);
   const sense = a.expect?.sense ?? 'none';
   const exec = driver.executor;
-  const op = opFor(a, attempt);
+  const op = opFor(a, attempt, o.value);
   const base = { evidenceId: newId('ev'), cardId: t.cardId, driverId: driver.driverId, actionId: a.actionId, attempt, expected: { sense, effect: expected } } as const;
   const lightCap = driver.transport === 'ir';
+
+  // the Mac speaks: record it through a microphone client and let Muse Voice Transcribe hear it back
+  const line = spokenLine(op);
+  if (line && sense === 'audio' && o.micDeviceId && deps.heard) {
+    const ack = await d.exec(exec.deviceId, op, { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: a.actionId, waitForSlot: true, signal: o.signal, timeoutMs: 6000 });
+    let clipResult: SenseResultPayload | undefined;
+    try {
+      [clipResult] = await d.sense(o.micDeviceId, 'audio-clip', { cardId: t.cardId, durationMs: clipDurationMs(line), signal: o.signal, timeoutMs: clipDurationMs(line) + 6000 });
+    } catch (e) {
+      deps.log?.(`[verify] no audio clip for "${line.slice(0, 30)}": ${(e as Error).message}`);
+    }
+    if (clipResult?.clip?.wav) {
+      const heard = await deps.heard(line, new Uint8Array(Buffer.from(clipResult.clip.wav, 'base64')), o.signal);
+      const evidence: Evidence = {
+        ...base,
+        execId: ack.execId,
+        sent: { op, at: ack.sentAt },
+        observed: { sense: 'audio', metric: 'transcript', before: 0, after: heard.similarity, delta: heard.similarity, threshold: TRANSCRIPT_THRESHOLD, sensorDeviceId: o.micDeviceId, note: `${heard.recordedFrom ?? heard.model}${heard.source === 'fixture' ? ' (FIXTURE replay)' : ''} heard "${heard.transcript.slice(0, 120)}"` },
+        pass: heard.pass,
+        note: heard.pass ? `heard back by ${heard.recordedFrom ?? heard.model}: "${heard.transcript.slice(0, 80)}"` : `expected "${line.slice(0, 40)}", heard "${heard.transcript.slice(0, 40) || 'nothing'}"`,
+      };
+      return { evidence };
+    }
+    // no recording possible: fall through to the level check with the words already spoken
+    const after = await audioWindow(d, o.micDeviceId, t.cardId, -800, o.signal).catch(() => undefined);
+    const before = await audioWindow(d, o.micDeviceId, t.cardId, -3000, o.signal).catch(() => undefined);
+    if (before && after) {
+      const obs = observeAudio(before, after);
+      const pass = audioMatches(obs, 'louder');
+      return { evidence: { ...base, execId: ack.execId, sent: { op, at: ack.sentAt }, observed: { ...audioEvidence(obs, 'louder'), sensorDeviceId: o.micDeviceId }, pass, note: pass ? 'something was said (level only; no clip to transcribe)' : 'nothing heard' } };
+    }
+    return { evidence: { ...base, execId: ack.execId, sent: { op, at: ack.sentAt }, observed: { sense: 'ack', metric: 'ack', before: 0, after: 1, delta: 1, threshold: 1, sensorDeviceId: exec.deviceId, note: 'spoken; no microphone clip available' }, pass: false, note: 'said, but no microphone could hear it' } };
+  }
 
   if (sense === 'camera') {
     if (!o.cameraDeviceId) throw new ExecError('no camera sensor online', 'offline');

@@ -35,19 +35,31 @@ export class ArmService {
 
   /** Build and send the request; resolves with the result (approved, declined or expired). */
   request(target: Target, driver: Driver, summary?: string): Promise<ArmResultPayload> {
-    const armId = newId('arm');
     const irreversible = driver.actions.some((a) => a.confirm === 'hold');
     const actions = driver.actions.map((a) => ({ actionId: a.actionId, label: a.label.slice(0, 40), verified: target.verification[a.actionId] ?? a.verified ?? 'untested' }));
     const passed = actions.filter((a) => a.verified === 'pass').length;
-    const payload: ArmRequestPayload = {
-      armId,
-      cardId: target.cardId,
+    return this.ask(target, {
       driverId: driver.driverId,
-      specId: target.specId,
       title: `Arm ${target.card?.name ?? target.cardId}?`,
       summary: summary ?? `${passed} of ${actions.length} actions verified on the real device. Controls bound to unverified actions stay disarmed.`,
       actions,
-      irreversible: irreversible || undefined,
+      irreversible,
+    });
+  }
+
+  /** A one-tap question about any target (a device to arm, a room combo to run). */
+  ask(target: Target, q: { driverId?: string; title: string; summary: string; actions: ArmRequestPayload['actions']; irreversible?: boolean }): Promise<ArmResultPayload> {
+    const armId = newId('arm');
+    const driverId = q.driverId ?? target.driver?.driverId ?? 'room';
+    const payload: ArmRequestPayload = {
+      armId,
+      cardId: target.cardId,
+      driverId,
+      specId: target.specId,
+      title: q.title.slice(0, 120),
+      summary: q.summary.slice(0, 500),
+      actions: q.actions.slice(0, 64),
+      irreversible: q.irreversible || undefined,
       expiresAt: Date.now() + (this.d.timeoutMs ?? ARM_TIMEOUT_MS),
     };
     target.armId = armId;
@@ -56,11 +68,11 @@ export class ArmService {
     return new Promise<ArmResultPayload>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(armId);
-        const r: ArmResultPayload = { armId, cardId: target.cardId, driverId: driver.driverId, armed: false, reason: 'no confirmation in time' };
+        const r: ArmResultPayload = { armId, cardId: target.cardId, driverId, armed: false, reason: 'no confirmation in time' };
         this.finish(target, r);
         resolve(r);
       }, this.d.timeoutMs ?? ARM_TIMEOUT_MS);
-      this.pending.set(armId, { target, irreversible, resolve, timer });
+      this.pending.set(armId, { target, irreversible: Boolean(q.irreversible), resolve, timer });
     });
   }
 
@@ -95,7 +107,8 @@ export class ArmService {
     target.armId = undefined;
     this.d.hub.broadcast('arm.result', r);
     this.d.steps.note('arm', r.armed ? `armed by ${r.by ?? 'the owner'}` : `not armed: ${r.reason ?? 'declined'}`, { cardId: target.cardId, kind: 'proof', status: r.armed ? 'ok' : 'fail', evidence: r.armed ? 'human confirmed' : r.reason });
-    this.d.targets.setState(target, r.armed ? 'armed' : target.specId ? 'forged' : 'verified', r.armed ? `armed by ${r.by ?? 'the owner'}` : r.reason);
+    const isRoom = target.cardId === 'room';
+    this.d.targets.setState(target, r.armed && !isRoom ? 'armed' : target.specId ? 'forged' : 'verified', r.armed ? `${isRoom ? 'confirmed' : 'armed'} by ${r.by ?? 'the owner'}` : r.reason);
   }
 
   pendingIds(): string[] {

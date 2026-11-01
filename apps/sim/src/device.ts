@@ -6,6 +6,8 @@
  * camera oracle to find out); the lamp obeys only its own code set; frames are developed from the lamp's real
  * state, including its fade, with sensor noise.
  */
+import { recordClip } from './mic';
+import { tempoFromCc } from './synth/ccmap';
 import {
   type ExecAckPayload,
   type ExecCommandPayload,
@@ -240,6 +242,18 @@ export class SimDevice {
       this.log('sense', `frame for ${p.senseId.slice(-6)} (${this.room.view} view${off ? `, offset ${off} ms` : ''}) → server`);
       return;
     }
+    if (p.kind === 'audio-clip') {
+      // the "say line" oracle: record the laptop microphone so the server can hear the Mac speak
+      try {
+        const clip = await recordClip(Math.min(10_000, Math.max(1000, p.durationMs ?? 3000)));
+        this.sendSense({ senseId: p.senseId, kind: 'audio-clip', clip, at: Date.now(), ok: true });
+        this.log('sense', `recorded ${clip.durationMs} ms from "${clip.input ?? 'microphone'}" → server (Muse Voice Transcribe listens)`);
+      } catch (e) {
+        this.sendSense({ senseId: p.senseId, kind: 'audio-clip', at: Date.now(), ok: false, error: `microphone unavailable: ${(e as Error).message}`.slice(0, 300) });
+        this.log('warn', `audio clip requested but the microphone is unavailable (${(e as Error).message})`);
+      }
+      return;
+    }
     if (p.kind === 'audio-features') {
       if (!this.synth.running) {
         const audio = await this.meter.measure(0, 0);
@@ -274,6 +288,29 @@ export class SimDevice {
 
   private sendSense(payload: SenseResultPayload): boolean {
     return this.conn?.send('sense.result', payload, { to: 'server' }) ?? false;
+  }
+
+  // --- tempo signal (daemons: "breathe to tempo") ------------------------------------------------------
+
+  private lastClockBpm?: number;
+  private clockTimer?: ReturnType<typeof setInterval>;
+
+  /** Report the synth's tempo as a MIDI-clock signal every 2 s while the synth runs (device.signal clock_bpm). */
+  startClockSignal(): void {
+    if (this.clockTimer) return;
+    this.clockTimer = setInterval(() => {
+      if (!this.conn?.open || !this.synth.running) return;
+      const bpm = tempoFromCc(this.synth.cc.get(80) ?? 74);
+      if (bpm === this.lastClockBpm) return;
+      this.lastClockBpm = bpm;
+      this.conn.send('device.signal', { signal: 'clock_bpm', value: bpm, unit: 'bpm', at: Date.now() }, { to: 'server' });
+      this.log('midi', `clock: ${bpm} BPM → server (device.signal)`);
+    }, 2000);
+  }
+
+  stopClockSignal(): void {
+    if (this.clockTimer) clearInterval(this.clockTimer);
+    this.clockTimer = undefined;
   }
 
   // --- camera ------------------------------------------------------------------------------------------

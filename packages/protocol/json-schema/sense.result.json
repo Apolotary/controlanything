@@ -41,7 +41,8 @@
           "enum": [
             "frame",
             "audio-features",
-            "ir-capture"
+            "ir-capture",
+            "audio-clip"
           ]
         },
         "frame": {
@@ -402,6 +403,34 @@
           },
           "required": [
             "rawUs"
+          ],
+          "additionalProperties": false
+        },
+        "clip": {
+          "type": "object",
+          "properties": {
+            "wav": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8000000
+            },
+            "sampleRate": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "durationMs": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "input": {
+              "type": "string",
+              "maxLength": 120
+            }
+          },
+          "required": [
+            "wav"
           ],
           "additionalProperties": false
         },

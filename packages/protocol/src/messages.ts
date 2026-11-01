@@ -16,7 +16,9 @@ import {
   ArmRequestPayload,
   ArmResultPayload,
   ControlEventPayload,
+  DaemonStatusPayload,
   DeviceCardPayload,
+  DeviceSignalPayload,
   DriverDeployPayload,
   DriverSpecPayload,
   DriverStatusPayload,
@@ -103,6 +105,8 @@ export const PayloadSchemas = {
   'arm.confirm': ArmConfirmPayload,
   'arm.result': ArmResultPayload,
   panic: PanicPayload,
+  'device.signal': DeviceSignalPayload,
+  'daemon.status': DaemonStatusPayload,
   // generated controls
   'ui.spec': UiSpecPayload,
   'ui.partial': UiPartialPayload,
@@ -163,6 +167,8 @@ export const MessageSchemas = {
   'arm.confirm': message('arm.confirm'),
   'arm.result': message('arm.result'),
   panic: message('panic'),
+  'device.signal': message('device.signal'),
+  'daemon.status': message('daemon.status'),
   'ui.spec': message('ui.spec'),
   'ui.partial': message('ui.partial'),
   'control.event': message('control.event'),
@@ -205,6 +211,8 @@ export const Message = z.discriminatedUnion('type', [
   MessageSchemas['arm.confirm'],
   MessageSchemas['arm.result'],
   MessageSchemas.panic,
+  MessageSchemas['device.signal'],
+  MessageSchemas['daemon.status'],
   MessageSchemas['ui.spec'],
   MessageSchemas['ui.partial'],
   MessageSchemas['control.event'],
@@ -243,10 +251,11 @@ export const SERVER_ONLY_TYPES: readonly MessageType[] = [
   'arm.request',
   'arm.result',
   'ui.partial',
+  'daemon.status',
 ];
 
 /** Frequent or large client -> server payloads: the hub drops them for a backed-up receiver (latest wins). */
-export const DROPPABLE_TYPES: readonly MessageType[] = ['control.event', 'snapshot', 'scan.frame', 'voice.audio', 'ui.partial'];
+export const DROPPABLE_TYPES: readonly MessageType[] = ['control.event', 'snapshot', 'scan.frame', 'voice.audio', 'ui.partial', 'device.signal'];
 
 // --- ids ------------------------------------------------------------------------------------
 

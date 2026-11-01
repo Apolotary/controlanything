@@ -1,0 +1,106 @@
+{
+  "title": "daemon.status",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "daemon.status"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "daemonId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "specId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "cardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "proposed",
+            "running",
+            "paused",
+            "stopped",
+            "failed"
+          ]
+        },
+        "bpm": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "rateHz": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "midi-clock",
+            "voice",
+            "menu",
+            "default"
+          ]
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "at": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "daemonId",
+        "state",
+        "at"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

@@ -24,6 +24,8 @@ export interface ControlDeps {
   hub: Pick<Hub, 'broadcast'>;
   log?: (line: string) => void;
   now?: () => number;
+  /** room hacks (combos, daemons) are not fired here: the owner of the hook runs them */
+  onRoomHack?: (hack: Hack, spec: UiSpecPayload, value: number | boolean, from?: string) => RouteResult;
 }
 
 export interface RouteResult {
@@ -60,7 +62,12 @@ export class ControlRouter {
       const hack = spec.hackset?.hacks.find((h) => h.id === ev.widgetId) ?? spec.hackset?.hacks.find((h) => spec.gen3d?.controls.some((c) => c.id === ev.widgetId && (c.binding.args?.hack === h.id || c.id === h.id)));
       if (!hack) continue;
       const target = spec.cardId ? this.d.targets.get(spec.cardId) : this.d.targets.list().find((t) => t.specId === spec.specId);
-      if (!target?.driver) return { reason: `no driver for ${spec.cardId ?? spec.specId}` };
+      if (!target) return { reason: `no target for ${spec.cardId ?? spec.specId}` };
+      // room hacks have no driver of their own: their commands name the device per step
+      if (!target.driver) {
+        if (hack.commands.every((c) => c.cardId)) return { target, spec, hack, driver: { driverId: 'room', cardId: target.cardId, transport: 'local', executor: { deviceId: 'room' }, provenance: [], actions: [] } };
+        return { reason: `no driver for ${spec.cardId ?? spec.specId}` };
+      }
       return { target, spec, hack, driver: target.driver };
     }
     return { reason: `no hack or control "${ev.widgetId}"${ev.specId ? ` in spec ${ev.specId}` : ''}` };
@@ -71,6 +78,13 @@ export class ControlRouter {
     const r = this.resolve(ev);
     if ('reason' in r) return { ok: false, reason: r.reason, fired: 0, ms: performance.now() - t0 };
     const { target, spec, hack, driver } = r;
+    // combos and daemons: handed to their runner (they ask for their own tap)
+    if (hack.kind === 'daemon' || hack.commands.some((c) => c.cardId && c.cardId !== target.cardId)) {
+      if (!this.d.onRoomHack) return { ok: false, reason: 'no room hack runner', cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
+      if (ev.phase === 'start' || ev.phase === 'move') return { ok: true, cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
+      const v = typeof ev.value === 'number' || typeof ev.value === 'boolean' ? ev.value : (ev.value as { x: number }).x;
+      return { ...this.d.onRoomHack(hack, spec, v, from), ms: performance.now() - t0 };
+    }
     if (!target.armed) {
       const now = Date.now();
       if (now - this.lastDisarmedLog > 2000) {
@@ -79,7 +93,6 @@ export class ControlRouter {
       }
       return { ok: false, reason: 'not armed', cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
     }
-    if (hack.kind === 'daemon') return { ok: false, reason: 'daemons are not fired by controls', cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
     if (ev.phase === 'start') return { ok: true, cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
     // actions must have passed verification (controls bound to unverified actions stay disarmed)
     const unverified = hack.commands.filter((c) => target.verification[c.action] !== 'pass').map((c) => c.action);
@@ -119,7 +132,16 @@ export class ControlRouter {
   }
 
   /** One hack command -> op(s). Returns the number of ops fired now (steps may schedule more). */
-  private fireCommand(target: Target, driver: Driver, hack: Hack, cmd: HackCommand, value: number, delayMs: number): number {
+  private fireCommand(target0: Target, driver0: Driver, hack: Hack, cmd: HackCommand, value: number, delayMs: number): number {
+    // a command may name another device (room combos); it must be armed and verified there
+    let target = target0;
+    let driver = driver0;
+    if (cmd.cardId && cmd.cardId !== target0.cardId) {
+      const other = this.d.targets.get(cmd.cardId);
+      if (!other?.driver || !other.armed || other.verification[cmd.action] !== 'pass') return 0;
+      target = other;
+      driver = other.driver;
+    }
     const a = this.action(driver, cmd.action);
     if (!a) return 0;
     const v = cmd.param !== undefined ? (() => {
@@ -198,6 +220,12 @@ export class ControlRouter {
     };
     if (left > 0) this.stepTimers.set(key, setTimeout(tick, interval));
     return fired;
+  }
+
+  /** Daemons write a hack param on a device spec through the normal gate (arm, verification, rate limits, steps). */
+  setParam(specId: string, hackId: string, _paramId: string | undefined, value: number): boolean {
+    const r = this.onControlEvent({ widgetId: hackId, value, ts: Date.now(), specId, phase: 'end' }, 'daemon');
+    return r.ok && r.fired > 0;
   }
 
   /** Run a hack by id (voice, 2D menus). */

@@ -45,6 +45,7 @@ if (EMBED) {
 }
 const room = new RoomView(roomCanvas, overlayCanvas, animator);
 const device = new SimDevice(synth, meter, room, animator);
+device.startClockSignal(); // tempo -> device.signal clock_bpm for the "breathe to tempo" daemon
 const saved = loadLamp();
 if (saved) {
   device.state = saved;

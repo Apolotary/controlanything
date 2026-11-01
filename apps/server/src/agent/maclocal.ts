@@ -68,6 +68,18 @@ export class MacLocalExecutor {
     return this.enabled;
   }
 
+  /** The current output volume 0-100, or undefined when it cannot be read. */
+  async currentVolume(): Promise<number | undefined> {
+    if (!this.enabled) return undefined;
+    try {
+      const out = await this.run('osascript', ['-e', 'output volume of (get volume settings)']);
+      const v = Number(out.trim());
+      return Number.isFinite(v) ? v : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   async exec(op: ExecOp, dryRun = false): Promise<LocalResult> {
     if (op.kind !== 'local') return { ok: false, error: 'unsupported', detail: `mac-local only runs local ops, not ${op.kind}` };
     const plan = planLocal(op);

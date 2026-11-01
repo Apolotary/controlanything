@@ -46,7 +46,8 @@
           "enum": [
             "frame",
             "audio-features",
-            "ir-capture"
+            "ir-capture",
+            "audio-clip"
           ]
         },
         "durationMs": {

@@ -6,7 +6,7 @@
  *   exec.ack / sense.result -> Dispatcher · arm.confirm -> ArmService · control.event / panic -> ControlRouter
  *   voice.audio / voice.text -> VoiceRelay · gen3d.generate / gen3d.edit -> the forge
  */
-import { type DeviceCardPayload, EXPERIMENTAL_TYPE, type Message, type TargetSelectPayload } from '@ce/protocol';
+import { type DeviceCardPayload, EXPERIMENTAL_TYPE, type Hack, type Message, type TargetSelectPayload, type UiSpecPayload } from '@ce/protocol';
 import type { ServerContext } from '../context';
 import { loadProfiles, type Profiles } from '../devices/profiles';
 import { getForge } from '../gen3d';
@@ -17,8 +17,11 @@ import { createWebSearcher } from '../research/websearch';
 import { createSam, type Sam } from '../scan/sam';
 import { VoiceRelay } from '../voice/relay';
 import { ArmService } from './arm';
+import { BLACKOUT_ID, BREATHE_DAEMON_ID, BREATHE_ID, buildRoomSpec, ComboRunner, ROOM_CARD_ID, ROOM_SPEC_ID } from './combos';
 import { ControlRouter } from './control';
+import { DaemonRunner } from './daemons';
 import { Dispatcher } from './dispatch';
+import { hearBack } from './heard';
 import { fixtureDriverDraft, WONDER_MODEL } from './drive';
 import { macLocalInfo, type Roster } from './executors';
 import { fixtureDeviceCard } from './identify';
@@ -37,6 +40,12 @@ export interface Agent {
   control: ControlRouter;
   arm: ArmService;
   voice: VoiceRelay;
+  daemons: DaemonRunner;
+  combos: ComboRunner;
+  /** the room's combos + daemons spec, once two or more verified devices exist */
+  roomSpec(): UiSpecPayload | undefined;
+  /** rebuild and broadcast the room spec now */
+  publishRoom(): UiSpecPayload | undefined;
   profiles: Profiles;
   sam: Sam;
   roster: Roster;
@@ -88,11 +97,59 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const dispatcher = new Dispatcher({ hub, macLocal, log });
   const arm = new ArmService({ hub, targets, steps, log });
   const forge = opts.forge ?? (() => getForge(ctx));
+  let room: UiSpecPayload | undefined;
+  let roomRev = 0;
   const specs = {
-    get: (specId: string) => forge()?.get(specId),
-    list: () => forge()?.list() ?? [],
+    get: (specId: string) => (specId === ROOM_SPEC_ID ? room : forge()?.get(specId)),
+    list: () => [...(forge()?.list() ?? []), ...(room ? [room] : [])],
   };
-  const control = new ControlRouter({ targets, dispatcher, specs, steps, hub, log });
+  const heard = (line: string, wav: Uint8Array, signal?: AbortSignal) => hearBack({ transcriber: ctx.transcriber, recordDir: ctx.config.muse.recordDir, replayDir: ctx.config.muse.replayDir, log }, line, wav, signal);
+  // room hacks: daemons start after a tap, combos run with a tap of their own
+  const onRoomHack = (hack: Hack, spec: UiSpecPayload, value: number | boolean, from?: string) => {
+    if (hack.kind === 'daemon') {
+      const daemon = spec.hackset?.daemons?.find((dm) => dm.targets.some((t) => hack.commands.some((c) => c.action && t.hack)) && (dm.id === BREATHE_DAEMON_ID || dm.name === hack.name)) ?? spec.hackset?.daemons?.[0];
+      const light = hack.commands[0]?.cardId ? targets.get(hack.commands[0].cardId) : undefined;
+      if (!daemon || !light?.specId) return { ok: false, reason: 'daemon has no target spec', fired: 0, ms: 0 };
+      if (value === false || value === 0) {
+        daemons.stop(daemon.id, `stopped by ${from ?? 'the menu'}`);
+        return { ok: true, hackId: hack.id, fired: 0, ms: 0 };
+      }
+      const bpm = typeof value === 'number' && value > 1 ? value : undefined;
+      if (daemons.isRunning(daemon.id)) {
+        if (bpm) daemons.setBpm(daemon.id, bpm, from === 'voice' ? 'voice' : 'menu');
+        return { ok: true, hackId: hack.id, fired: 0, ms: 0 };
+      }
+      const roomT = combos.roomTarget(spec.specId);
+      void arm
+        .ask(roomT, { title: `Start ${daemon.name}?`, summary: `${daemon.blurb ?? daemon.name}; the light's brightness follows ${daemon.trigger.source.startsWith('device.') ? 'the synth tempo' : `${bpm ?? 120} bpm`} at <= 0.5 Hz`, actions: hack.commands.map((c) => ({ actionId: c.action, label: `${targets.get(c.cardId ?? '')?.card?.name ?? c.cardId}: ${c.action}`.slice(0, 40), verified: (targets.get(c.cardId ?? '')?.verification[c.action] ?? 'untested') as 'pass' | 'fail' | 'untested' | 'pending' })) })
+        .then((r) => {
+          if (r.armed) daemons.start(daemon, { specId: spec.specId, targetSpecId: light.specId!, cardId: light.cardId, bpm, source: from === 'voice' ? 'voice' : 'menu' });
+        });
+      return { ok: true, hackId: hack.id, fired: 0, ms: 0 };
+    }
+    void combos.run(hack, spec).catch((e) => log(`[combo] ${hack.id}: ${(e as Error).message}`));
+    return { ok: true, hackId: hack.id, fired: 0, ms: 0 };
+  };
+  const control = new ControlRouter({ targets, dispatcher, specs, steps, hub, log, onRoomHack });
+  const daemons = new DaemonRunner({ hub, steps, log, drive: control });
+  const roster0: Roster = { devices: () => hub.devices(), macLocal: macLocal.available };
+  const combos = new ComboRunner({ hub, targets, steps, dispatcher, sam, roster: roster0, arm, daemons, heard, readVolume: () => macLocal.currentVolume(), log });
+  const publishRoom = (): UiSpecPayload | undefined => {
+    const built = buildRoomSpec(targets.list(), (id) => specs.get(id), roomRev + 1);
+    if (!built) return room;
+    roomRev++;
+    room = built;
+    combos.roomTarget(ROOM_SPEC_ID);
+    hub.broadcast('ui.spec', built);
+    steps.note('forge', `room: ${built.hackset!.hacks.map((h) => h.name).join(' · ')}`, { cardId: ROOM_CARD_ID, kind: 'proof', evidence: 'assembled from verified drivers' });
+    return built;
+  };
+  let roomTimer: ReturnType<typeof setTimeout> | undefined;
+  targets.onChange((t) => {
+    if (t.cardId === ROOM_CARD_ID || !['armed', 'forged', 'verified'].includes(t.state)) return;
+    if (roomTimer) clearTimeout(roomTimer);
+    roomTimer = setTimeout(() => publishRoom(), 300);
+  });
   const scan = new ScanService({ sam, hub, pairing: ctx.pairing, targets, steps, dispatcher, log, prompts: opts.prompts });
 
   const latestSpecTarget = (cardId?: string): Target | undefined => {
@@ -107,12 +164,32 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     transcriber: ctx.transcriber,
     log,
     actions: {
-      panic: (reason) => void control.panic(reason),
+      panic: (reason) => {
+        daemons.stopAll(reason);
+        control.panic(reason);
+      },
       undo: (cardId) => {
+        // the newest thing that happened: a room combo or a device hack
         const t = latestSpecTarget(cardId);
+        const comboAt = combos.lastRun?.startedAt ?? 0;
+        if (comboAt && (!t || comboAt > t.since)) {
+          void combos.undo();
+          return true;
+        }
         return t ? control.undo(t).ok : false;
       },
       hack: (text, cardId) => {
+        const lower0 = text.toLowerCase();
+        if (room?.hackset) {
+          const blackout = room.hackset.hacks.find((h) => h.id === BLACKOUT_ID);
+          const breathe = room.hackset.hacks.find((h) => h.id === BREATHE_ID);
+          if (blackout && /black ?out|lights out everything|everything off/.test(lower0)) return onRoomHack(blackout, room, true, 'voice').ok;
+          if (breathe && /breath/.test(lower0)) {
+            if (/stop|pause|kill|end/.test(lower0)) return onRoomHack(breathe, room, false, 'voice').ok;
+            const bpm = /(\d{2,3})\s*(bpm|beats)?/.exec(lower0);
+            return onRoomHack(breathe, room, bpm ? Number(bpm[1]) : true, 'voice').ok;
+          }
+        }
         const t = latestSpecTarget(cardId);
         const spec = t?.specId ? forge()?.get(t.specId) : undefined;
         if (!t || !spec?.hackset) return false;
@@ -210,7 +287,11 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         return;
       }
       case 'panic':
+        daemons.stopAll(m.payload.reason ?? 'panic');
         control.panic(m.payload.reason ?? `panic from ${from.name}`, m.payload.cardId);
+        return;
+      case 'device.signal':
+        daemons.onSignal(m.payload, from.deviceId);
         return;
       case 'voice.audio':
         void voice.onAudio(m.payload);
@@ -244,6 +325,10 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     control,
     arm,
     voice,
+    daemons,
+    combos,
+    roomSpec: () => room,
+    publishRoom,
     profiles,
     sam,
     roster,
@@ -251,6 +336,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     select,
     close: () => {
       unsubscribe();
+      if (roomTimer) clearTimeout(roomTimer);
+      daemons.close();
       for (const t of targets.list()) t.abort?.abort();
       control.close();
       arm.close();

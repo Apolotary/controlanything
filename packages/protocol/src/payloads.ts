@@ -655,14 +655,15 @@ export const ExecAckPayload = z.object({
 });
 export type ExecAckPayload = z.infer<typeof ExecAckPayload>;
 
-export const SenseKind = z.enum(['frame', 'audio-features', 'ir-capture']);
+export const SenseKind = z.enum(['frame', 'audio-features', 'ir-capture', 'audio-clip']);
 export type SenseKind = z.infer<typeof SenseKind>;
 
 /**
  * S->sensor (targeted with `to`). frame: send one verify frame (sense.result.frame). audio-features: measure a
  * window of `durationMs` (default 600); `offsetMs` < 0 = take it from the sensor's rolling buffer (e.g. -500 =
  * the 500 ms before now, a free "before"). ir-capture: listen for remote presses for `durationMs`, one
- * sense.result per frame seen; `prompt` is shown to the user ("press 全灯 once").
+ * sense.result per frame seen; `prompt` is shown to the user ("press 全灯 once"). audio-clip: record the
+ * microphone for `durationMs` and return the WAV (the server transcribes it to hear a device speak).
  */
 export const SenseRequestPayload = z.object({
   senseId: Id,
@@ -698,6 +699,17 @@ export const AudioFeatures = z.object({
 });
 export type AudioFeatures = z.infer<typeof AudioFeatures>;
 
+/** A short recording (kind "audio-clip"): mono 16-bit PCM WAV, 16 or 24 kHz, as Muse Voice Transcribe wants it. */
+export const AudioClip = z.object({
+  /** base64 WAV bytes */
+  wav: z.string().min(1).max(8_000_000),
+  sampleRate: z.number().int().positive().optional(),
+  durationMs: z.number().int().min(0).optional(),
+  /** input label, e.g. "MacBook Pro Microphone" */
+  input: z.string().max(120).optional(),
+});
+export type AudioClip = z.infer<typeof AudioClip>;
+
 /** sensor->S, send with `to: "server"`. */
 export const SenseResultPayload = z.object({
   senseId: Id,
@@ -705,6 +717,7 @@ export const SenseResultPayload = z.object({
   frame: ScanFramePayload.optional(),
   audio: AudioFeatures.optional(),
   ir: IrCapture.optional(),
+  clip: AudioClip.optional(),
   /** sensor clock, epoch ms, when the measurement was taken */
   at: z.number(),
   ok: z.boolean().optional(),
@@ -715,6 +728,47 @@ export type SenseResultPayload = z.infer<typeof SenseResultPayload>;
 /** S->all. One verification attempt: sent / expected / observed (SPEC §3.3). */
 export const VerifyResultPayload = Evidence;
 export type VerifyResultPayload = z.infer<typeof VerifyResultPayload>;
+
+// --- signals and daemons --------------------------------------------------------------------
+
+/**
+ * C->S, droppable, send with `to: "server"`. Something a client measured about a device, for daemons:
+ * "clock_bpm" (tempo from incoming MIDI clock), "note_on", "level" (0..1). `cardId` when the client knows
+ * which identified device it is about; otherwise the server maps the sender to its linked targets.
+ */
+export const DeviceSignalPayload = z.object({
+  cardId: Id.optional(),
+  /** the paired client that measured it (defaults to the sender) */
+  deviceId: Id.optional(),
+  signal: z.string().min(1).max(64),
+  value: z.number(),
+  unit: z.string().max(16).optional(),
+  /** sender clock, epoch ms */
+  at: z.number(),
+});
+export type DeviceSignalPayload = z.infer<typeof DeviceSignalPayload>;
+
+export const DaemonState = z.enum(['proposed', 'running', 'paused', 'stopped', 'failed']);
+export type DaemonState = z.infer<typeof DaemonState>;
+
+/** S->all. A persistent automation changed state (the HUD's daemon-link chip). */
+export const DaemonStatusPayload = z.object({
+  daemonId: Id,
+  specId: Id.optional(),
+  /** the device(s) it drives */
+  cardId: Id.optional(),
+  name: z.string().max(40).optional(),
+  state: DaemonState,
+  /** tempo it follows, if any */
+  bpm: z.number().positive().optional(),
+  /** how often it writes its target, per second (<= 3) */
+  rateHz: z.number().min(0).max(3).optional(),
+  /** where the tempo comes from */
+  source: z.enum(['midi-clock', 'voice', 'menu', 'default']).optional(),
+  detail: z.string().max(300).optional(),
+  at: z.number(),
+});
+export type DaemonStatusPayload = z.infer<typeof DaemonStatusPayload>;
 
 // --- human confirmation (ARM) and panic -----------------------------------------------------
 

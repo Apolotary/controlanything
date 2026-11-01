@@ -10,6 +10,9 @@
  *   POST /api/agent/select             {frameId, detId} | {cardId} | {deviceId}  approver or localhost
  *   POST /api/agent/arm                {armId, approve, hold?}                  approver or localhost
  *   POST /api/agent/panic              {reason?, cardId?}                       paired device or localhost
+ *   GET  /api/agent/daemons            running daemons + the room hack set
+ *   POST /api/agent/room/run           {hackId, value?}  run a room combo / start-stop a daemon (approver or localhost)
+ *   POST /api/agent/room/undo          undo the last combo (approver or localhost)
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -98,6 +101,34 @@ export function agentRouter(ctx: ServerContext): express.Router {
     }
     const ok = agent.arm.onConfirm(body.data, { deviceId: c.device?.deviceId, name: c.device?.name ?? 'localhost', canApprove: true, local: c.local });
     res.status(ok ? 200 : 404).json({ ok, pending: agent.arm.pendingIds() });
+  });
+  r.get('/daemons', (_req, res) => {
+    res.json({ daemons: agent.daemons.list(), room: agent.roomSpec()?.hackset ?? null });
+  });
+  r.post('/room/run', (req, res) => {
+    const c = caller(req);
+    if (!c.canApprove) {
+      res.status(403).json({ error: 'forbidden', message: 'Running a room hack needs an approver token or localhost.' });
+      return;
+    }
+    const room = agent.roomSpec() ?? agent.publishRoom();
+    const hackId = typeof req.body?.hackId === 'string' ? req.body.hackId : '';
+    const hack = room?.hackset?.hacks.find((h) => h.id === hackId);
+    if (!room || !hack) {
+      res.status(404).json({ error: 'not_found', message: `No room hack "${hackId}" (have ${room?.hackset?.hacks.map((h) => h.id).join(', ') ?? 'none yet'}).` });
+      return;
+    }
+    const value = typeof req.body?.value === 'number' || typeof req.body?.value === 'boolean' ? req.body.value : true;
+    const r2 = agent.control.onControlEvent({ widgetId: hack.id, value, ts: Date.now(), specId: room.specId, phase: 'end' }, c.device?.name ?? 'localhost');
+    res.status(202).json(r2);
+  });
+  r.post('/room/undo', async (req, res) => {
+    const c = caller(req);
+    if (!c.canApprove) {
+      res.status(403).json({ error: 'forbidden', message: 'Undo needs an approver token or localhost.' });
+      return;
+    }
+    res.json(await agent.combos.undo());
   });
   r.post('/panic', (req, res) => {
     const c = caller(req);

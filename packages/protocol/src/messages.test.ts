@@ -120,7 +120,7 @@ describe('protocol v1: discovery loop', () => {
     for (const t of [
       'scan.frame', 'scan.result', 'target.select', 'target.status', 'link.request', 'link.result', 'driver.spec', 'driver.status',
       'exec.command', 'exec.ack', 'sense.request', 'sense.result', 'verify.result', 'arm.request', 'arm.confirm', 'arm.result',
-      'panic', 'voice.audio', 'voice.text', 'ui.spec', 'ui.partial', 'gen3d.generate', 'gen3d.edit',
+      'panic', 'voice.audio', 'voice.text', 'ui.spec', 'ui.partial', 'gen3d.generate', 'gen3d.edit', 'device.signal', 'daemon.status',
     ]) {
       expect(MESSAGE_TYPES).toContain(t);
     }
@@ -176,6 +176,10 @@ describe('protocol v1: discovery loop', () => {
     expect(PayloadSchemas['sense.result'].safeParse({ senseId: 's3', kind: 'ir-capture', ir: { rawUs: [9000, 4500, 560, 560], khz: 38, protocol: 'UNKNOWN' }, at: 4 }).success).toBe(true);
     expect(PayloadSchemas['sense.request'].safeParse({ senseId: 's2', sensorDeviceId: 'mac-1', kind: 'audio-features', durationMs: 600, offsetMs: -500 }).success).toBe(true);
     expect(PayloadSchemas['sense.request'].safeParse({ senseId: 's4', sensorDeviceId: 'card-1', kind: 'ir-capture', durationMs: 15000, prompt: 'press 全灯 once' }).success).toBe(true);
+    expect(PayloadSchemas['sense.result'].safeParse({ senseId: 's5', kind: 'audio-clip', clip: { wav: 'UklGRg==', sampleRate: 16000, durationMs: 3000 }, at: 5 }).success).toBe(true);
+    expect(PayloadSchemas['device.signal'].safeParse({ signal: 'clock_bpm', value: 120, at: 1, cardId: 'synth' }).success).toBe(true);
+    expect(PayloadSchemas['daemon.status'].safeParse({ daemonId: 'd_breathe', state: 'running', bpm: 120, rateHz: 1, source: 'midi-clock', at: 1 }).success).toBe(true);
+    expect(PayloadSchemas['daemon.status'].safeParse({ daemonId: 'd', state: 'running', rateHz: 4, at: 1 }).success).toBe(false);
   });
 
   it('ui.spec v1 accepts a gen3d spec + hack set, and still accepts a v0 widget list', () => {

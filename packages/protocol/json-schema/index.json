@@ -32,6 +32,8 @@
     "arm.confirm": "arm.confirm.json",
     "arm.result": "arm.result.json",
     "panic": "panic.json",
+    "device.signal": "device.signal.json",
+    "daemon.status": "daemon.status.json",
     "ui.spec": "ui.spec.json",
     "ui.partial": "ui.partial.json",
     "control.event": "control.event.json",

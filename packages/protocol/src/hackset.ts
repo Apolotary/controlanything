@@ -77,7 +77,10 @@ export const HackParam = z.object({
 });
 export type HackParam = z.infer<typeof HackParam>;
 
-/** One driver action call. `param` = take the live value of that param (clamped to the action range). */
+/**
+ * One driver action call. `param` = take the live value of that param (clamped to the action range).
+ * `cardId` = the device whose driver holds the action (room combos span devices; omitted = the hack set's device).
+ */
 export const HackCommand = z.object({
   /** driver actionId */
   action: Id,
@@ -85,6 +88,7 @@ export const HackCommand = z.object({
   param: Id.optional(),
   /** wait before this command, ms */
   delayMs: z.number().int().min(0).max(10_000).optional(),
+  cardId: Id.optional(),
 });
 export type HackCommand = z.infer<typeof HackCommand>;
 

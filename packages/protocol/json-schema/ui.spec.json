@@ -2179,6 +2179,11 @@
                           "type": "integer",
                           "minimum": 0,
                           "maximum": 10000
+                        },
+                        "cardId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
                         }
                       },
                       "required": [
@@ -2280,6 +2285,11 @@
                               "type": "integer",
                               "minimum": 0,
                               "maximum": 10000
+                            },
+                            "cardId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
                             }
                           },
                           "required": [
