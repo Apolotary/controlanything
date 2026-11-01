@@ -12,7 +12,7 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "concurrently -k -i --default-input-target server -n server,companion -c blue,green \"npm run dev -w @ce/server\" \"npm run dev -w @ce/companion\"",
+    "dev": "concurrently -k -i --default-input-target server -n server,companion,quest -c blue,green,magenta \"npm run dev -w @ce/server\" \"npm run dev -w @ce/companion\" \"npm run dev -w @ce/quest\"",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "vitest run",
