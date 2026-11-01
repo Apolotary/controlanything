@@ -5,7 +5,7 @@
  */
 import type { Driver, DriverDraft } from '@ce/protocol';
 import { newId } from '@ce/protocol';
-import { allowedCcs, type Profiles } from '../devices/profiles';
+import { allowedCcs, matchMidiProfile, type Profiles } from '../devices/profiles';
 import { formatIssues, validateDriver } from '../devices/validate';
 import type { Forge } from '../gen3d/forge';
 import type { Hub } from '../hub';
@@ -142,6 +142,17 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       step.ok(`${learned.length} codes learned`, { evidence: learned.map((l) => l.button).join(' ') });
     }
     const rstep = d.steps.begin('research', cap === 'midi' ? 'looking up the MIDI chart' : cap === 'ir' ? 'looking up IR codes' : 'local actions', { ...base, kind: 'proof' });
+    // the cable knows the model when the camera does not: a USB port name that matches a stored chart's hint
+    if (cap === 'midi' && executor.port && !matchMidiProfile(d.profiles, card)) {
+      const byPort = [...d.profiles.midi.values()].find((p) => p.usb?.portNameHint && executor.port!.name.toLowerCase().includes(p.usb.portNameHint.toLowerCase()));
+      if (byPort) {
+        card.maker = byPort.manufacturer;
+        card.model = byPort.device.replace(byPort.manufacturer, '').trim() || byPort.device;
+        card.evidence = [...card.evidence, `USB port "${executor.port.name}" matches the ${byPort.device} chart`].slice(0, 12);
+        d.hub.broadcast('device.card', card);
+        d.steps.note('research', `USB says ${byPort.device}: using its chart`, { ...base, kind: 'proof', evidence: executor.port.name.slice(0, 64) });
+      }
+    }
     const research = await doResearch({ profiles: d.profiles, web: d.web }, card, cap, { learned, signal });
     t.research = research;
     rstep.ok(research.provenance.map((p) => `${p.source}: ${p.ref}`).join('; ').slice(0, 400), {

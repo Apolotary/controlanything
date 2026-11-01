@@ -65,7 +65,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     http: { host: env.HTTP_HOST?.trim() || '0.0.0.0', port: httpPort, enabled: httpPort !== 0 },
     publicHost: env.PUBLIC_HOST?.trim() || undefined,
     certDir: join(SERVER_ROOT, '.certs'),
-    dataDir: join(SERVER_ROOT, '.data'),
+    dataDir: env.CE_DATA_DIR?.trim() || join(SERVER_ROOT, '.data'),
     staticDirs: { companion: join(REPO_ROOT, 'apps/companion/dist'), quest: join(REPO_ROOT, 'apps/quest/dist'), sim: join(REPO_ROOT, 'apps/sim/dist') },
     trustFirstDevice: env.CE_TRUST_FIRST_DEVICE === '1',
     trustLoopback: env.CE_TRUST_LOOPBACK !== '0',

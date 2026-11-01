@@ -25,9 +25,20 @@ export class TargetStore {
     return () => this.listeners.delete(fn);
   }
 
+  private counters = new Map<string, number>();
+
+  /** "ceiling-light-1", "synthesizer-2": stable across runs for the same path, so recorded runs replay. */
+  nextCardId(label: string): string {
+    const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'device';
+    const n = (this.counters.get(slug) ?? 0) + 1;
+    this.counters.set(slug, n);
+    const id = `${slug}-${n}`;
+    return this.targets.has(id) ? newId(`${slug}-`) : id;
+  }
+
   create(partial: Partial<Target> & { cardId?: string } = {}): Target {
     const t: Target = {
-      cardId: partial.cardId ?? newId('card-'),
+      cardId: partial.cardId ?? this.nextCardId(partial.detection?.label ?? partial.card?.category ?? 'device'),
       runId: partial.runId ?? newId('run-'),
       state: 'scanned',
       since: Date.now(),

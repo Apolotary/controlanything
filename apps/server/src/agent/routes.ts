@@ -3,6 +3,7 @@
  *
  *   GET  /api/agent/targets            every target with state, card, link, driver, verification, evidence
  *   GET  /api/agent/targets/:cardId    one target
+ *   GET  /api/agent/scan/latest        the newest scan result per camera client (pick a detection without a HUD)
  *   GET  /api/agent/steps[?cardId]     the work log (agent.step history)
  *   GET  /api/agent/exec               the black-box monitor: every op sent and its ack
  *   GET  /api/agent/profiles[/:id]     curated device data (apps/server/data/devices)
@@ -42,6 +43,11 @@ export function agentRouter(ctx: ServerContext): express.Router {
       return;
     }
     res.json(agent.targets.summary(t));
+  });
+  r.get('/scan/latest', (req, res) => {
+    const sender = typeof req.query.deviceId === 'string' ? req.query.deviceId : undefined;
+    const frames = sender ? [agent.scan.latest(sender)].filter(Boolean) : ctx.hub.devices().map((d) => agent.scan.latest(d.deviceId)).filter(Boolean);
+    res.json({ frames: frames.map((f) => ({ frameId: f!.frame.frameId, deviceId: f!.deviceId, width: f!.frame.width, height: f!.frame.height, capturedAt: f!.frame.capturedAt, detections: f!.detections })) });
   });
   r.get('/steps', (req, res) => {
     res.json({ steps: agent.steps.list(typeof req.query.cardId === 'string' ? req.query.cardId : undefined) });
