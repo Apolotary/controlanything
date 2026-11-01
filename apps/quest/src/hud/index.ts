@@ -400,6 +400,12 @@ class HudImpl implements Hud {
       m.history = new SpecHistory(m.spec);
       m.obj.emitter.on('control', (e: ControlEvent) => this.events.emit('control', e));
     } else m.history.push(m.spec);
+    // a Muse Image skin lights its model chip while it fades in, then marks it done
+    if (spec.skin && spec.skin.source !== 'hand') {
+      const model = spec.skin.source;
+      this.setModelChips(this.chips.some((c) => c.id === model) ? this.chips.map((c) => (c.id === model ? { ...c, state: 'live' } : c)) : [...this.chips, { id: model, state: 'live' }]);
+      m.obj.onSkinReady = () => this.setModelChips(this.chips.map((c) => (c.id === model ? { ...c, state: 'done' } : c)));
+    }
   }
 
   patchSpec(specId: string, patch: Patch): { ok: boolean; errors?: string[] } {

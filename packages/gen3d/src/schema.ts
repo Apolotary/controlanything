@@ -587,6 +587,32 @@ export const DeviceRef = z.object({
 });
 export type DeviceRef = z.infer<typeof DeviceRef>;
 
+// --- skins (Muse Image at FORGE) ------------------------------------------------------------------------
+
+/**
+ * A generated image painted onto the object's backplates (or knob faces) as a subtle textured layer under
+ * the text plates. Attached server-side after FORGE; every key is required or nullable so a constrained
+ * decoder cannot skip it. Legibility rules are unchanged: text plates stay >= 0.9 alpha above the skin.
+ */
+export const Skin = z.object({
+  /** https:// or data: URL of the image (PNG/JPEG/WebP) */
+  url: z.string().min(1).max(4_000_000),
+  /** panel = plates with role "base"; knob-face = caps of knob archetypes; both */
+  kind: z.enum(['panel', 'knob-face', 'both']),
+  /** final opacity of the layer (default 0.55; keep <= 0.7 so plates stay dark) */
+  opacity: z.number().min(0.05).max(1),
+  /** how the image maps onto each plate */
+  fit: z.enum(['cover', 'contain', 'tile']),
+  /** model that painted it, e.g. "muse-image-1.0"; "hand" for stand-ins */
+  source: z.string().min(1).max(40),
+  prompt: z.string().max(400).nullable(),
+  /** restrict to these part ids; empty = every eligible part */
+  partIds: z.array(Id).max(16),
+  /** seconds the layer takes to fade in after the controls have built (default 2.5) */
+  fadeS: z.number().min(0).max(10).nullable(),
+});
+export type Skin = z.infer<typeof Skin>;
+
 // --- the spec ----------------------------------------------------------------------------------------
 
 export const Gen3dSpec = z.object({
@@ -607,6 +633,8 @@ export const Gen3dSpec = z.object({
   source: z.enum(['live', 'fixture', 'hand']).optional(),
   /** the Meta model that generated it, shown on screen */
   modelId: z.string().max(60).optional(),
+  /** optional generated image skin (Muse Image) */
+  skin: Skin.optional(),
 });
 export type Gen3dSpec = z.infer<typeof Gen3dSpec>;
 
@@ -633,6 +661,7 @@ export const PatchOp = z.object({
   state: ArmState.optional(),
   device: DeviceRef.optional(),
   notes: z.string().max(400).optional(),
+  skin: Skin.nullable().optional(),
 });
 export type PatchOp = z.infer<typeof PatchOp>;
 

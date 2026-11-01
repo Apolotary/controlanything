@@ -190,6 +190,28 @@ describe('patches and history', () => {
   });
 });
 
+describe('skins', () => {
+  it('a spec with a Muse Image skin validates and stays within the schema depth budget', () => {
+    const s: Spec = { ...op1Knobs, skin: { url: 'https://example.test/skin.png', kind: 'panel', opacity: 0.55, fit: 'cover', source: 'muse-image-1.0', prompt: null, partIds: ['plate'], fadeS: null } };
+    const r = validateSpec(s);
+    expect(r.ok).toBe(true);
+    expect(jsonSchemaDepth(toJsonSchema(Gen3dSpec))).toBeLessThanOrEqual(7);
+    const bad = validateSpec({ ...s, skin: { ...s.skin!, partIds: ['nope'], opacity: 0.9 } });
+    expect(bad.ok).toBe(true);
+    expect(bad.warnings.map((w) => w.code)).toEqual(expect.arrayContaining(['skin.part', 'skin.opacity']));
+  });
+
+  it('a patch can set and clear the skin', () => {
+    const r = applyPatch(op1Knobs, { specId: op1Knobs.specId, baseRev: 1, ops: [{ op: 'set', skin: { url: 'https://example.test/s.png', kind: 'both', opacity: 0.5, fit: 'contain', source: 'muse-image-1.0', prompt: 'faceplate', partIds: [], fadeS: 2 } }] });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.spec.skin?.kind).toBe('both');
+    const r2 = applyPatch(r.spec, { specId: op1Knobs.specId, baseRev: 2, ops: [{ op: 'set', skin: null }] });
+    expect(r2.ok).toBe(true);
+    if (r2.ok) expect(r2.spec.skin).toBeUndefined();
+  });
+});
+
 describe('edit sets', () => {
   it('converts an EditSet into a valid patch and applies it', async () => {
     const { editSetToPatch, editResponseFormat } = await import('./index');

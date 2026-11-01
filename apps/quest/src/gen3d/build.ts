@@ -7,8 +7,8 @@
  * - renders the armed / disarmed states and the streaming build-up
  * - emits ControlEvents to a sink; never talks to a socket itself
  */
-import { Camera, Color, DoubleSide, EdgesGeometry, Euler, Group, LineSegments, Mesh, MeshBasicMaterial, MeshStandardMaterial, Object3D, Quaternion, RingGeometry, Vector3, type Material as ThreeMaterial } from 'three';
-import type { Behavior, Control, ControlEvent, ControlValue, Feedback, Gen3dSpec, Part, PartialSpec } from '@ce/gen3d';
+import { Camera, CircleGeometry, Color, DoubleSide, EdgesGeometry, Euler, Group, LineSegments, Mesh, MeshBasicMaterial, MeshStandardMaterial, Object3D, PlaneGeometry, Quaternion, RingGeometry, SRGBColorSpace, Texture, TextureLoader, Vector3, type Material as ThreeMaterial } from 'three';
+import type { Behavior, Control, ControlEvent, ControlValue, Feedback, Gen3dSpec, Part, PartialSpec, Skin } from '@ce/gen3d';
 import { NEON, expandSpec, repairSpec, validateSpec, type ExpandedSpec } from '@ce/gen3d';
 import { OneEuro3, Tweens, damp, ease } from './anim';
 import type { UiAudio } from './audio';
@@ -126,6 +126,11 @@ export class SpecObject extends Group {
   private ghosted = new Map<Mesh, { material: ThreeMaterial | ThreeMaterial[]; edges?: LineSegments }>();
   private hoverArchetype = new Map<string, number>();
   private now = 0;
+  private skinLayers: Mesh<PlaneGeometry | CircleGeometry, MeshBasicMaterial>[] = [];
+  private skinTexture?: Texture;
+  private skinUrl?: string;
+  /** fired once the skin layer has finished fading in */
+  onSkinReady?: (skin: Skin) => void;
   /** while a hand holds a control, the shell should not re-anchor or re-face the object */
   get interacting(): boolean {
     return this.grabs.size > 0 || this.runs.some((r) => r.pressedBy);
@@ -247,6 +252,12 @@ export class SpecObject extends Group {
     this.hoverArchetype.clear();
     this.reasonLabel = undefined;
     this.tweens.clear();
+    for (const l of this.skinLayers) {
+      l.geometry.dispose();
+      l.material.map?.dispose();
+      l.material.dispose();
+    }
+    this.skinLayers.length = 0;
   }
 
   private makeNode(p: Part): Object3D {
@@ -426,7 +437,7 @@ export class SpecObject extends Group {
         mesh.add(edges);
         this.ghosted.set(mesh, { material: mesh.material, edges });
         mesh.material = ghostMaterial();
-        for (const child of mesh.children) if (child.name !== '_ghostEdges') child.visible = false;
+        for (const child of mesh.children) if (child.name !== '_ghostEdges' && child.name !== '_skin') child.visible = false;
       } else if (!shouldGhost && g) {
         mesh.material = g.material;
         if (g.edges) mesh.remove(g.edges);
@@ -1070,6 +1081,24 @@ function colorForValue(c: ControlState): string {
   // hue by normalised value (wheel)
   const h = Math.round(c.t * 360) % 360;
   return `hsl(${h}, 90%, 55%)`;
+}
+
+/** Map an image onto a plate: cover crops, contain letterboxes (transparent edges), tile repeats. */
+function fitTexture(tex: Texture, fit: Skin['fit'], plateAspect: number, image: { width: number; height: number } | undefined): void {
+  const imgAspect = image && image.height ? image.width / image.height : plateAspect;
+  tex.wrapS = tex.wrapT = fit === 'tile' ? 1000 : 1001; // RepeatWrapping : ClampToEdgeWrapping
+  if (fit === 'tile') {
+    tex.repeat.set(Math.max(1, Math.round(plateAspect / imgAspect)), 1);
+    return;
+  }
+  const ratio = plateAspect / imgAspect;
+  if (fit === 'cover') {
+    if (ratio > 1) tex.repeat.set(1, 1 / ratio), tex.offset.set(0, (1 - 1 / ratio) / 2);
+    else tex.repeat.set(ratio, 1), tex.offset.set((1 - ratio) / 2, 0);
+  } else {
+    if (ratio > 1) tex.repeat.set(ratio, 1), tex.offset.set((1 - ratio) / 2, 0);
+    else tex.repeat.set(1, 1 / ratio), tex.offset.set(0, (1 - 1 / ratio) / 2);
+  }
 }
 
 /** Tags, model chips and handles stay solid while the controls are ghosts: they are the HUD, not the device's controls. */

@@ -250,6 +250,13 @@ export function validateSpec(input: unknown): ValidationResult {
     if (!handled.has(c.id)) warn('control.unhandled', `controls[${i}]`, `control "${c.id}" has no archetype or behaviour operating it`);
   });
 
+  // skin
+  if (spec.skin) {
+    for (const id of spec.skin.partIds) if (!partIds.has(id)) warn('skin.part', 'skin.partIds', `skin targets missing part "${id}"`);
+    if (spec.skin.opacity > 0.7) warn('skin.opacity', 'skin.opacity', `skin opacity ${spec.skin.opacity} may hurt legibility; keep <= 0.7`);
+    if (!/^(https?:|data:image\/|\/|\.)/.test(spec.skin.url)) warn('skin.url', 'skin.url', `skin url should be https, data:image or a site-relative path`);
+  }
+
   // anchor
   if (spec.anchor.mode === 'device' && !spec.anchor.cardId && !spec.device?.cardId) warn('anchor.card', 'anchor.cardId', `device anchor without a cardId; the renderer will fall back to floating`);
   if (spec.anchor.mode === 'world' && !spec.anchor.position) err('anchor.pose', 'anchor.position', `world anchor needs a position`);

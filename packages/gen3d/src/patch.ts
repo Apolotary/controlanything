@@ -60,7 +60,12 @@ export function applyOp(spec: Gen3dSpec, op: PatchOp, index = 0): string | null 
       if (op.state !== undefined) (spec.state = op.state), (touched = true);
       if (op.device !== undefined) (spec.device = op.device), (touched = true);
       if (op.notes !== undefined) (spec.notes = op.notes), (touched = true);
-      return touched ? null : `${path}: set needs one of title, anchor, state, device, notes`;
+      if (op.skin !== undefined) {
+        if (op.skin === null) delete spec.skin;
+        else spec.skin = op.skin;
+        touched = true;
+      }
+      return touched ? null : `${path}: set needs one of title, anchor, state, device, notes, skin`;
     }
   }
   return `${path}: unknown op`;

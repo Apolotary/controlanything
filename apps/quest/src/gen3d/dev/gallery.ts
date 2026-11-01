@@ -9,6 +9,16 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { EXAMPLES, scanPartialSpec, validateSpec, repairSpec, type ControlEvent, type Gen3dSpec } from '@ce/gen3d';
 import { ConsoleSink, Emitter, MaterialClock, MouseCursor, MultiSink, SpecObject, UiAudio, newCursor, type Cursor, type GenEvents } from '../index';
 import { createHud, type Hud, type HudFrame } from '../../hud/index';
+import skinUrl from './skins/op1-panel-skin.jpg';
+
+/** The OP-1 example with a stand-in Muse Image skin (a crop of a concept frame) on its backplate. */
+const op1Skinned: Gen3dSpec = {
+  ...EXAMPLES['op1-knobs']!,
+  specId: 'ex_op1_knobs_skin',
+  title: 'OP-1 Field · skinned',
+  skin: { url: skinUrl, kind: 'panel', opacity: 0.55, fit: 'cover', source: 'muse-image-1.0', prompt: 'holographic control deck faceplate in the OP-1 Field\'s grey and four encoder colours', partIds: [], fadeS: 2.5 },
+};
+const GALLERY: Record<string, Gen3dSpec> = { ...EXAMPLES, 'op1-knobs · skin': op1Skinned };
 
 const stage = document.getElementById('stage')!;
 const renderer = new WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
@@ -108,7 +118,7 @@ function show(spec: Gen3dSpec, animate: 'none' | 'buildup' = 'buildup'): void {
 
 // --- panel --------------------------------------------------------------------------------------------------
 const select = document.getElementById('examples') as HTMLSelectElement;
-for (const name of Object.keys(EXAMPLES)) {
+for (const name of Object.keys(GALLERY)) {
   const o = document.createElement('option');
   o.value = name;
   o.textContent = name;
@@ -138,7 +148,7 @@ for (const [name, url] of Object.entries(LIVE_SPECS)) {
     .catch(() => {});
 }
 const params = new URLSearchParams(location.search);
-const initial = params.get('spec') && EXAMPLES[params.get('spec')!] ? params.get('spec')! : 'op1-knobs';
+const initial = params.get('spec') && GALLERY[params.get('spec')!] ? params.get('spec')! : 'op1-knobs';
 select.value = initial;
 select.addEventListener('change', () => {
   const live = liveCache.get(select.value);
@@ -146,8 +156,8 @@ select.addEventListener('change', () => {
     show(live);
     return;
   }
-  history.replaceState(null, '', `?spec=${select.value}`);
-  show(EXAMPLES[select.value]!);
+  history.replaceState(null, '', `?spec=${encodeURIComponent(select.value)}`);
+  show(GALLERY[select.value]!);
 });
 
 const armBtn = document.getElementById('arm') as HTMLButtonElement;
@@ -379,6 +389,6 @@ window.addEventListener('resize', () => {
 });
 renderer.domElement.addEventListener('pointerdown', () => audio.unlock(), { once: true });
 
-show(EXAMPLES[initial]!);
+show(GALLERY[initial]!);
 // expose for debugging and screenshots
-(window as unknown as { gallery: unknown }).gallery = { show, EXAMPLES, get current() { return current; }, scene, camera, renderer, Color, mouse };
+(window as unknown as { gallery: unknown }).gallery = { show, EXAMPLES: GALLERY, get current() { return current; }, scene, camera, renderer, Color, mouse };
