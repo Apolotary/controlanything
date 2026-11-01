@@ -1,0 +1,14 @@
+{
+  "name": "device_card:electronic-device",
+  "model": "muse-spark-1.3",
+  "recordedAt": "2026-11-01T21:58:27.980Z",
+  "latencyMs": 4057,
+  "usage": {
+    "promptTokens": 2221,
+    "completionTokens": 852,
+    "totalTokens": 3073,
+    "reasoningTokens": 610,
+    "cachedTokens": 0
+  },
+  "text": "{\"alternatives\": [{\"confidence\": 0.6, \"maker\": \"Teenage Engineering\", \"model\": \"OP-1 Field\"}], \"category\": \"synthesizer\", \"companion\": \"computer_usb\", \"confidence\": 0.82, \"evidence\": [\"mini silver keyboard with black keys and small OLED display on top edge\", \"four color-coded encoders: blue, yellow, grey/white, orange on right side\", \"matches unmistakable OP-1 layout with display left, keys center, 4 knobs right\", \"scene shows portable synth on desk next to laptop\"], \"followUp\": [\"close photo of front branding text\", \"photo of rear label and ports\"], \"maker\": \"Teenage Engineering\", \"model\": \"OP-1\", \"name\": \"OP-1 portable synthesizer\", \"notes\": \"CGI-style render, no legible text, but knob colors and form factor are distinctive to OP-1 series. OP-1 Field is near-identical successor.\", \"protocols\": [\"midi\"], \"requires\": [\"midi\"], \"visibleText\": []}"
+}

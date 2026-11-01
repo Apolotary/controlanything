@@ -1,0 +1,13 @@
+{
+  "kind": "sam",
+  "name": "sam.ceiling-light.1280x960.2b9dc7d197af",
+  "prompt": "ceiling light",
+  "width": 1280,
+  "height": 960,
+  "frameHash": "2b9dc7d197af",
+  "model": "sam-3.1",
+  "recordedAt": "2026-11-01T21:45:54.959Z",
+  "latencyMs": 2127,
+  "billed": 1,
+  "text": "<0f>0<|box;x1=623;y1=9;x2=943;y2=171;w=1280;h=960;c=0.8827838897705078|><|mask;x=0;y=0;c=0.8827838897705078;data=163,321,!!!!#hATrW'`N8TGlX!EcISEoqVJl(80bHQe_[HEbt5?BjLACoZ:'!.te6*^w9Z[m!nQ/:0F[6ioxl^G_5OiSL3jJrOr0Q'M@!azVl{d1%?.BTziUTZ#.vqXwfOB-G.{chkH:7$d-V64@uUp!gW0HUmxxjUut%E`vxTGJ6T/+aj#GAyPZyiEJL=]KfZK!.k!!!|>\n"
+}

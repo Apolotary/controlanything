@@ -1,0 +1,13 @@
+{
+  "kind": "sam",
+  "name": "sam.synthesizer.1280x960.50a995786ff3",
+  "prompt": "synthesizer",
+  "width": 1280,
+  "height": 960,
+  "frameHash": "50a995786ff3",
+  "model": "sam-3.1",
+  "recordedAt": "2026-11-01T21:51:10.177Z",
+  "latencyMs": 1441,
+  "billed": 1,
+  "text": ""
+}

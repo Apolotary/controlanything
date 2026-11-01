@@ -1,0 +1,13 @@
+{
+  "kind": "sam",
+  "name": "sam.ceiling-light.1280x960.9965b97459dd",
+  "prompt": "ceiling light",
+  "width": 1280,
+  "height": 960,
+  "frameHash": "9965b97459dd",
+  "model": "sam-3.1",
+  "recordedAt": "2026-11-01T21:58:08.567Z",
+  "latencyMs": 2032,
+  "billed": 1,
+  "text": ""
+}

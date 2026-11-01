@@ -1,0 +1,13 @@
+{
+  "kind": "sam",
+  "name": "sam.electronic-device.1280x960.0fddd2be64b4",
+  "prompt": "electronic device",
+  "width": 1280,
+  "height": 960,
+  "frameHash": "0fddd2be64b4",
+  "model": "sam-3.1",
+  "recordedAt": "2026-11-01T21:54:16.161Z",
+  "latencyMs": 2104,
+  "billed": 1,
+  "text": "<0f>0<|box;x1=922;y1=252;x2=1279;y2=571;w=1280;h=960;c=0.8476190567016602|><|mask;x=0;y=0;c=0.8476190567016602;data=320,358,!!!!#[BQm+FgNf?lLA91:_{5@GMtRp=w8iN&-EHJaT=x]$B@^xhc3:2TwgEZ#uSLjb)c0L'AQ(H2WN.+pQfl96&6PFaTK%*%1Wjzvw])5mxBGy0p?*&v_ZJ1Ay3OkEq78Tar-J5yY1+&I1(t)FT?e1hJ]4VRQo0+8+.94Ul#yFlc0$xcs1W|>,1<|box;x1=141;y1=498;x2=231;y2=603;w=1280;h=960;c=0.7538461089134216|><|mask;x=0;y=0;c=0.7538461089134216;data=106,91,!!!!!^CH8mR'#sXcE@MmCK/vky?Yma0oRTSp_W`t(vmeaN::t{dhO2&apf{S`F!YtvuK]qNUpXR|>,2<|box;x1=427;y1=441;x2=761;y2=557;w=1280;h=960;c=0.8632478713989258|><|mask;x=0;y=0;c=0.8632478713989258;data=117,335,!!!!#'Dg179f?k0.v&c(GT]%ew+9`KAr(zKk/JV`%YIHKGXAb)`rcXVs0enISx_v*vuJg6y'UneQ_OU^$6cUWqO@...UIC&@3HXgi=2^EEcr=OWrad9duk8|>\n"
+}

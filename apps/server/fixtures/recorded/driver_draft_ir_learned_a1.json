@@ -1,0 +1,14 @@
+{
+  "name": "driver_draft:ir:learned:a1",
+  "model": "muse-spark-1.3",
+  "recordedAt": "2026-11-01T21:52:43.866Z",
+  "latencyMs": 7807,
+  "usage": {
+    "promptTokens": 1757,
+    "completionTokens": 2033,
+    "totalTokens": 3790,
+    "reasoningTokens": 1337,
+    "cachedTokens": 0
+  },
+  "text": "{\"actions\": [{\"actionId\": \"full-on\", \"encode\": {\"kind\": \"ir\", \"protocol\": \"RAW\", \"ref\": \"learned:ir1\"}, \"expect\": {\"effect\": \"on\", \"sense\": \"camera\"}, \"inverseActionId\": \"off\", \"kind\": \"trigger\", \"label\": \"Full On\"}, {\"actionId\": \"off\", \"encode\": {\"kind\": \"ir\", \"protocol\": \"RAW\", \"ref\": \"learned:ir2\"}, \"expect\": {\"effect\": \"off\", \"sense\": \"camera\"}, \"inverseActionId\": \"full-on\", \"kind\": \"trigger\", \"label\": \"Off\"}, {\"actionId\": \"brighter\", \"encode\": {\"kind\": \"ir\", \"protocol\": \"RAW\", \"ref\": \"learned:ir3\"}, \"expect\": {\"effect\": \"brighter\", \"sense\": \"camera\"}, \"inverseActionId\": \"dimmer\", \"kind\": \"trigger\", \"label\": \"Brighter\"}, {\"actionId\": \"dimmer\", \"encode\": {\"kind\": \"ir\", \"protocol\": \"RAW\", \"ref\": \"learned:ir4\"}, \"expect\": {\"effect\": \"dimmer\", \"sense\": \"camera\"}, \"inverseActionId\": \"brighter\", \"kind\": \"trigger\", \"label\": \"Dimmer\"}, {\"actionId\": \"night-light\", \"encode\": {\"kind\": \"ir\", \"protocol\": \"RAW\", \"ref\": \"learned:ir5\"}, \"expect\": {\"effect\": \"on\", \"sense\": \"camera\"}, \"inverseActionId\": \"full-on\", \"kind\": \"trigger\", \"label\": \"Night Light\"}, {\"actionId\": \"warmer\", \"encode\": {\"kind\": \"ir\", \"protocol\": \"RAW\", \"ref\": \"learned:ir6\"}, \"expect\": {\"effect\": \"warmer\", \"sense\": \"camera\"}, \"inverseActionId\": \"cooler\", \"kind\": \"trigger\", \"label\": \"Warmer\"}, {\"actionId\": \"cooler\", \"encode\": {\"kind\": \"ir\", \"protocol\": \"RAW\", \"ref\": \"learned:ir7\"}, \"expect\": {\"effect\": \"cooler\", \"sense\": \"camera\"}, \"inverseActionId\": \"warmer\", \"kind\": \"trigger\", \"label\": \"Cooler\"}, {\"actionId\": \"brightness\", \"encode\": {\"downActionId\": \"dimmer\", \"kind\": \"step\", \"steps\": 10, \"upActionId\": \"brighter\"}, \"expect\": {\"effect\": \"any\", \"sense\": \"camera\"}, \"kind\": \"set\", \"label\": \"Brightness\", \"range\": {\"max\": 100, \"min\": 0, \"step\": 10}}], \"cardId\": \"ceiling-light-1\", \"name\": \"Ceiling Light\", \"notes\": \"Generic round LED flush-mount ceiling light. Learned IR remote only.\", \"provenance\": [{\"ref\": \"learned:ir1 fullOn, learned:ir2 off, learned:ir3 brighter, learned:ir4 dimmer, learned:ir5 nightLight, learned:ir6 warmer, learned:ir7 cooler\", \"source\": \"learned\"}], \"transport\": \"ir\"}"
+}
