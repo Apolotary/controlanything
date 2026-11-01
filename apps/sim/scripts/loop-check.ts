@@ -9,9 +9,12 @@
  *
  *   npx tsx apps/sim/scripts/loop-check.ts       then open http://localhost:8899/sim/ and click once (audio);
  *                                                tick "auto-press" on the remote for an unattended run
+ *   ... loop-check.ts --samples <dir>            instead, save the sim's own JPEG frames (exactly what a
+ *                                                sense.request gets): room-off.jpg, room-on.jpg, then desk.jpg
+ *                                                once the page is switched to the DESK view
  */
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type AnyMessage, type ExecOp, newId, type PayloadOf, PairStartRequest, type Polygon } from '@ce/protocol';
@@ -118,6 +121,8 @@ async function main(): Promise<void> {
   }
   console.log(`sim online: ${simId}`);
   await sleep(1500);
+  const samplesAt = process.argv.indexOf('--samples');
+  if (samplesAt >= 0) return samples(process.argv[samplesAt + 1] ?? join(here, '../public/room/samples'));
 
   // 1. MIDI identity (non-commercial ID, never TE)
   const id = await exec({ kind: 'midi', msg: 'sysex-identity', channel: 1 });
@@ -188,6 +193,38 @@ async function main(): Promise<void> {
   server.close();
   hub.close();
   process.exit(fails ? 1 : 0);
+}
+
+/** Save real sim frames (the page's own JPEG encoder) for recording SAM answers and for docs. */
+async function samples(dir: string): Promise<void> {
+  mkdirSync(dir, { recursive: true });
+  const ir = (b3: number) => exec({ kind: 'ir', protocol: 'AEHA', rawUs: encodePress({ proto: 'AEHA', bytes: [0xce, 0x51, 0x06, b3, 0x06 ^ b3], unitUs: 420 }, 1) });
+  const save = async (name: string, wantView?: string) => {
+    for (;;) {
+      const r = await sense('frame');
+      const pose = r.frame?.camera?.cameraPose?.position;
+      const view = Object.entries(meta.views as Record<string, { pose: { position: { x: number; y: number; z: number } } }>).find(
+        ([, v]) => pose && Math.hypot(v.pose.position.x - pose.x, v.pose.position.y - pose.y, v.pose.position.z - pose.z) < 0.01,
+      )?.[0];
+      if (!wantView || view === wantView) {
+        writeFileSync(join(dir, name), Buffer.from(r.frame!.jpeg, 'base64'));
+        console.log(`  saved ${join(dir, name)} (${view} view, ${Math.round((r.frame!.jpeg.length * 3) / 4 / 1024)} KB)`);
+        return;
+      }
+      console.log(`  …  switch the sim page to the ${wantView.toUpperCase()} view (it shows the ${view} view)`);
+      await sleep(3000);
+    }
+  };
+  await ir(0x13); // SIM-KZ CH1 off
+  await sleep(2500);
+  await save('room-off.jpg', 'room');
+  await ir(0x11); // SIM-KZ CH1 full on (level 10)
+  await sleep(2500);
+  await save('room-on.jpg', 'room');
+  await save('desk.jpg', 'desk');
+  server.close();
+  hub.close();
+  process.exit(0);
 }
 
 main().catch((e) => {
