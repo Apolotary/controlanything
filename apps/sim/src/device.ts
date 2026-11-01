@@ -371,15 +371,22 @@ export function describeLamp(s: LampState): string {
   return `ON · level ${s.level}/10 · ${s.cctK} K · ${ch}`;
 }
 
-/** Which remote button a learn prompt asks for ("press 全灯 once", "press Off"...). */
+/**
+ * Which remote button a learn prompt asks for ("Press 全灯 (full on) once", "press 暖色 (warm)", "press Off"...).
+ * Japanese remotes label the same keys differently (暖色 / 暖かい光 / 電球色), so match on families of words.
+ */
+const PROMPT_WORDS: [LampCmd, RegExp][] = [
+  ['fullOn', /全灯|full[\s-]*on|\bfull\b|max(imum)? bright/i],
+  ['night', /常夜灯|night/i],
+  ['off', /消灯|\boff\b/i],
+  ['warmer', /暖|電球色|warm/i],
+  ['cooler', /白色|白い|昼光色|昼白色|cool|cold|daylight/i],
+  ['brighter', /明るく|bright/i],
+  ['dimmer', /暗く|\bdim/i],
+  ['on', /点灯|\bon\b/i],
+];
+
 export function promptedButton(prompt?: string): LampCmd | undefined {
   if (!prompt) return undefined;
-  const p = prompt.toLowerCase();
-  const order: LampCmd[] = ['fullOn', 'night', 'off', 'on', 'brighter', 'dimmer', 'warmer', 'cooler'];
-  for (const cmd of order) {
-    const b = BUTTONS[cmd];
-    if (prompt.includes(b.ja) || new RegExp(`\\b${b.en.toLowerCase()}\\b`).test(p)) return cmd;
-  }
-  if (/full|全灯/.test(p)) return 'fullOn';
-  return undefined;
+  return PROMPT_WORDS.find(([, re]) => re.test(prompt))?.[0];
 }
