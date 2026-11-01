@@ -248,6 +248,28 @@ export async function verifyDriver(deps: VerifyDeps, t: Target, driver: Driver, 
   }
 
   const wanted = new Set(o.actionIds ?? current.actions.map((a) => a.actionId));
+  // what the camera has told us about the lamp so far: brightness and colour probes need it lit
+  let lamp: 'on' | 'off' | 'unknown' = 'unknown';
+  const needsLight = (a: DriverAction) => a.expect?.sense === 'camera' && ['brighter', 'dimmer', 'warmer', 'cooler'].includes(a.expect.effect);
+  const relight = async (): Promise<boolean> => {
+    const candidates = current.actions.filter((a) => a.expect?.sense === 'camera' && (a.expect.effect === 'on' || a.expect.effect === 'brighter') && verification[a.actionId] !== 'fail');
+    for (const a of candidates) {
+      try {
+        const { evidence: e, polygon: p } = await verifyOnce(deps, t, current, a, 1, o, polygon);
+        polygon = p ?? polygon;
+        push(e);
+        if (e.pass) {
+          verification[a.actionId] = 'pass';
+          lamp = 'on';
+          return true;
+        }
+        if (verification[a.actionId] === 'untested') verification[a.actionId] = 'fail';
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  };
   // most visible first: off, then on (which also undoes off, leaving the lamp at full), then dimmer (so that
   // brighter has room to show), then brighter, then the rest; audio: notes before sweeps
   const rank = (a: DriverAction) => {
@@ -275,6 +297,15 @@ export async function verifyDriver(deps: VerifyDeps, t: Target, driver: Driver, 
       verification[a.actionId] = 'untested';
       continue;
     }
+    // a lamp that was switched off cannot show a brighter/dimmer/warmer/cooler step: light it again first
+    if (lamp === 'off' && needsLight(a)) {
+      o.onStep?.('the light is off: switching it on before the next probe');
+      if (!(await relight())) {
+        o.onStep?.(`${a.label}: not tested (the light is off and nothing switched it on)`);
+        verification[a.actionId] = 'untested';
+        continue;
+      }
+    }
     // one real attempt (with its built-in double confirmation); a miss gets one retry
     let passed = false;
     try {
@@ -286,6 +317,7 @@ export async function verifyDriver(deps: VerifyDeps, t: Target, driver: Driver, 
         if (!passed && a.expect.sense === 'ack') break;
       }
       verification[a.actionId] = passed ? 'pass' : 'fail';
+      if (passed && a.expect.sense === 'camera') lamp = a.expect.effect === 'off' ? 'off' : a.expect.effect === 'none' ? lamp : 'on';
     } catch (e) {
       if (!(e instanceof ExecError)) throw e;
       deps.log?.(`[verify] ${a.actionId}: ${e.message}`);

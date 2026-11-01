@@ -47,9 +47,11 @@ export async function research(
         ...opts.learned.map((l) => `  learned:${l.learnId}: button "${l.button}" (hypothesis ${l.hypothesis}${l.seen ? `, camera saw ${l.seen}` : ''}); ${l.protocol ?? 'UNKNOWN'}${l.bytes ? ` bytes ${l.bytes.map((b) => b.toString(16).padStart(2, '0')).join(' ')}` : ''}, ${l.rawUs.length} timings`),
       );
     }
-    if (lib) {
+    if (lib && !opts.learned?.length) {
       provenance.push({ source: 'curated', ref: 'apps/server/data/devices/jp-ceiling-light-ir.json' });
       parts.push(irBrief(lib));
+    } else if (opts.learned?.length) {
+      parts.push('Use ONLY the learned codes above (one action per learned code, plus a "set" brightness action over brighter/dimmer when both exist). Do not add codes from any brand library: this remote is not in it.');
     }
     if (/koizumi/i.test(`${card.maker} ${card.model} ${card.notes ?? ''}`)) parts.push(KOIZUMI_NOTE);
     return { brief: parts.join('\n'), provenance, irLibrary: lib, learned: opts.learned };
