@@ -171,6 +171,13 @@
                 "handheld"
               ]
             },
+            "exposure": {
+              "type": "string",
+              "enum": [
+                "locked",
+                "auto"
+              ]
+            },
             "cameraPose": {
               "type": "object",
               "properties": {
