@@ -10,6 +10,7 @@
  *   POST /api/gen3d/edit      {specId, instruction, model?, effort?}   ("undo" / "redo" need no model call)
  *                             -> EditResult (JSON), or SSE with ?stream=1
  *   GET  /api/gen3d/specs     current specs;  GET /api/gen3d/specs/:specId  one ui.spec
+ *   GET  /api/skins/<id>.webp a painted panel skin (public; see skinsRouter)
  *
  * Callers: a paired device (Authorization: Bearer <deviceToken>) or localhost.
  */
@@ -74,10 +75,30 @@ export function getForge(ctx: ServerContext, opts: { broadcast?: boolean } = {})
     recordDir: m.recordDir ? RECORDED_GEN3D_DIR : undefined,
     replayDir: m.mode === 'fixture' ? RECORDED_GEN3D_DIR : undefined,
     replaySpeed: Number.isFinite(replaySpeed) && replaySpeed >= 0 ? replaySpeed : 1,
+    // muse-image-1.0 panel skins, painted after the controls arm (GEN3D_SKIN=0 turns them off)
+    skin: process.env.GEN3D_SKIN !== '0',
   });
   if (opts.broadcast !== false) bridge(ctx, f);
   forges.set(ctx, f);
   return f;
+}
+
+/**
+ * GET /api/skins/<id>.webp: painted panel skins. Public on purpose: the headset's texture loader cannot send a
+ * Bearer token, ids are unguessable, and the images are decorative.
+ */
+export function skinsRouter(ctx: ServerContext): express.Router {
+  const r = express.Router();
+  r.get('/:file', (req, res) => {
+    const m = /^(skn_[A-Za-z0-9]+)\.webp$/.exec(String(req.params.file));
+    const s = m ? getForge(ctx).skins?.get(m[1]) : undefined;
+    if (!s) {
+      res.status(404).json({ error: 'not_found', message: 'No such skin.' });
+      return;
+    }
+    res.set({ 'Content-Type': s.mime, 'Cache-Control': 'public, max-age=31536000, immutable', 'Access-Control-Allow-Origin': '*' }).send(Buffer.from(s.bytes));
+  });
+  return r;
 }
 
 const SAMPLES: Record<string, { device: ForgeDevice; driver: ForgeDriver; verification: Record<string, VerifyState> }> = {
@@ -96,6 +117,8 @@ const GenerateBody = z.object({
   request: z.string().max(500).optional(),
   model: z.string().max(64).optional(),
   effort: Effort.optional(),
+  /** base64 JPEG of the device (scan crop), for the Muse Image panel skin */
+  crop: z.object({ jpegBase64: z.string().min(1).max(12_000_000), width: z.number().int().positive().optional(), height: z.number().int().positive().optional() }).optional(),
 });
 
 const EditBody = z.object({
@@ -155,7 +178,7 @@ export function gen3dRouter(ctx: ServerContext): express.Router {
     const out = responder(req, res);
     const { signal, dispose } = requestCancellation(req, res);
     try {
-      const result = await forge().generate({ ...target, verification: b.verification ?? target.verification, room: b.room, request: b.request, model: b.model, effort: b.effort, signal, onProgress: out.onProgress });
+      const result = await forge().generate({ ...target, verification: b.verification ?? target.verification, room: b.room, request: b.request, model: b.model, effort: b.effort, crop: b.crop, signal, onProgress: out.onProgress });
       out.finish(result.ok ? 200 : 422, result);
     } catch (e) {
       if (e instanceof RequestCancelledError) return;

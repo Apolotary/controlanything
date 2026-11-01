@@ -31,6 +31,7 @@ export {
 export { ForgeAction, ForgeDevice, ForgeDriver, verificationOf, VerifyState } from './forgeTypes';
 export { draftIssues } from './forgeVerify';
 export { ForgeDraft, HackDraft } from './hackset';
-export { gen3dRouter, getForge, RECORDED_GEN3D_DIR, toAgentStep, useForge } from './routes';
+export { gen3dRouter, getForge, RECORDED_GEN3D_DIR, skinsRouter, toAgentStep, useForge } from './routes';
+export { LiveSkinPainter, ReplaySkinPainter, SKIN_MODEL, type SkinCrop, type SkinPainter, type SkinResult, SkinStore, skinPrompt } from './skin';
 export { FORGE_LIGHT_DEVICE, FORGE_LIGHT_DRIVER, FORGE_LIGHT_VERIFIED, FORGE_OP1_DEVICE, FORGE_OP1_DRIVER, FORGE_OP1_VERIFIED } from './sampleDevices';
 export { LiveTransport, loadRecordedRuns, type ModelTransport, ReplayTransport } from './transport';

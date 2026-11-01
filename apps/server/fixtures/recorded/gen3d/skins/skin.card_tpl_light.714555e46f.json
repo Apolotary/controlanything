@@ -1,0 +1,15 @@
+{
+  "kind": "gen3d-skin",
+  "cardId": "card_tpl_light",
+  "category": "lighting",
+  "transport": "ir",
+  "deviceName": "Ceiling light",
+  "mode": "edit",
+  "model": "muse-image-1.0",
+  "promptVersion": 2,
+  "latencyMs": 9680,
+  "width": 2560,
+  "height": 960,
+  "recordedAt": "2026-11-01T22:35:51.890Z",
+  "file": "skin.card_tpl_light.714555e46f.webp"
+}

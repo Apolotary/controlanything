@@ -10,14 +10,14 @@ import { resolveMuseConfig } from '../muse';
 import type { EditSet } from './editPatch';
 import { createForge } from './forge';
 import { useForge } from './routes';
-import { contentEvents, LIGHT_DRAFT, mockFetch, sseResponse } from './testkit';
+import { contentEvents, fakeWebp, imageResponse, LIGHT_DRAFT, mockFetch, routeFetch, sseResponse } from './testkit';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
   for (const c of cleanups.splice(0).reverse()) await c();
 });
 
-async function start(): Promise<{ ctx: ServerContext; base: string; local: { v: boolean }; calls: ReturnType<typeof mockFetch>['calls'] }> {
+async function start(opts: { skin?: boolean } = {}): Promise<{ ctx: ServerContext; base: string; local: { v: boolean }; calls: ReturnType<typeof mockFetch>['calls'] }> {
   const tmp = mkdtempSync(join(tmpdir(), 'ce-gen3d-http-'));
   const companion = join(tmp, 'companion');
   mkdirSync(companion);
@@ -38,8 +38,10 @@ async function start(): Promise<{ ctx: ServerContext; base: string; local: { v: 
   } as unknown as ServerConfig;
   const ctx = createContext(config, { log: () => {}, registryFile: null, isLocal: () => local.v });
   const edit: EditSet = { behaviors: [], controls: [], feedback: [], parts: [{ id: 'p_h_dim', kind: 'archetype', archetype: 'lever', controlId: 'h_dim', params: { length: 0.22, accent: '#FF2020' } }], remove: [], summary: 'big red lever', title: '' };
-  const f = mockFetch([() => sseResponse(contentEvents(JSON.stringify(LIGHT_DRAFT))), () => sseResponse(contentEvents(JSON.stringify(edit)))]);
-  useForge(ctx, createForge({ muse: resolveMuseConfig({ MODEL_API_KEY: 'sk-test' }), fetchImpl: f.impl, callLog: ctx.calls }));
+  const f = opts.skin
+    ? routeFetch({ '/chat/completions': [() => sseResponse(contentEvents(JSON.stringify(LIGHT_DRAFT)))], '/images/': [imageResponse(fakeWebp())] })
+    : mockFetch([() => sseResponse(contentEvents(JSON.stringify(LIGHT_DRAFT))), () => sseResponse(contentEvents(JSON.stringify(edit)))]);
+  useForge(ctx, createForge({ muse: resolveMuseConfig({ MODEL_API_KEY: 'sk-test' }), fetchImpl: f.impl, callLog: ctx.calls, skin: opts.skin }));
   const servers: RunningServers = await startServers(ctx, createApp(ctx));
   cleanups.push(async () => {
     await servers.close();
@@ -103,5 +105,19 @@ describe('gen3d HTTP routes', () => {
     expect((await post(`${base}/api/gen3d/edit`, { specId: 'x' })).status).toBe(400);
     local.v = false;
     expect((await post(`${base}/api/gen3d/generate`, { cardId: 'card_light' })).status).toBe(401);
+  });
+
+  it('serves painted skins publicly at /api/skins/<id>.webp', async () => {
+    const { ctx, base, local } = await start({ skin: true });
+    const g = (await (await post(`${base}/api/gen3d/generate`, { cardId: 'card_light', crop: { jpegBase64: '/9j/AAAA' } })).json()) as any;
+    expect(g.ok).toBe(true);
+    const ui = await (await import('./routes')).getForge(ctx).whenSkin!(g.uiSpec.specId);
+    const url = ui!.gen3d.skin!.url;
+    local.v = false; // no token, not localhost: the headset's texture loader
+    const res = await fetch(`${base}${url}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/webp');
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(fakeWebp());
+    expect((await fetch(`${base}/api/skins/skn_nope.webp`)).status).toBe(404);
   });
 });

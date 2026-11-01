@@ -125,3 +125,38 @@ export const LIGHT_DRAFT: ForgeDraft = {
     },
   ],
 };
+
+/** fetch routed by URL substring (e.g. "/chat/completions", "/images/edits"); records every request body. */
+export function routeFetch(routes: Record<string, (() => Response | Promise<Response>)[]>) {
+  const calls: MockCall[] = [];
+  const seen = new Map<string, number>();
+  const impl = (async (url: string, init: RequestInit) => {
+    const u = String(url);
+    calls.push({ url: u, body: JSON.parse(String(init.body)) });
+    const key = Object.keys(routes).find((k) => u.includes(k));
+    if (!key) return new Response('{"error":{"message":"no route"}}', { status: 404 });
+    const i = seen.get(key) ?? 0;
+    seen.set(key, i + 1);
+    const list = routes[key];
+    return list[Math.min(i, list.length - 1)]();
+  }) as unknown as typeof fetch;
+  return { impl, calls };
+}
+
+/** A tiny RIFF/WEBP (VP8X) header for a 1920x720 image, enough for size parsing and serving. */
+export function fakeWebp(width = 1920, height = 720): Uint8Array {
+  const b = new Uint8Array(40);
+  b.set([...'RIFF'].map((c) => c.charCodeAt(0)), 0);
+  b.set([32, 0, 0, 0], 4);
+  b.set([...'WEBPVP8X'].map((c) => c.charCodeAt(0)), 8);
+  b.set([10, 0, 0, 0], 16);
+  const w = width - 1;
+  const h = height - 1;
+  b.set([w & 255, (w >> 8) & 255, (w >> 16) & 255, h & 255, (h >> 8) & 255, (h >> 16) & 255], 24);
+  return b;
+}
+
+export const imageResponse = (bytes: Uint8Array, delayMs = 0) => async () => {
+  if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+  return new Response(JSON.stringify({ created: 1, data: [{ b64_json: Buffer.from(bytes).toString('base64') }], output_format: 'webp', background: 'opaque' }), { status: 200 });
+};

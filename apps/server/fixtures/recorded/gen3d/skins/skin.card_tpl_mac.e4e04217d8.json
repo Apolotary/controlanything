@@ -1,0 +1,15 @@
+{
+  "kind": "gen3d-skin",
+  "cardId": "card_tpl_mac",
+  "category": "computer",
+  "transport": "local",
+  "deviceName": "This Mac",
+  "mode": "edit",
+  "model": "muse-image-1.0",
+  "promptVersion": 1,
+  "latencyMs": 11818,
+  "width": 2560,
+  "height": 960,
+  "recordedAt": "2026-11-01T22:35:09.284Z",
+  "file": "skin.card_tpl_mac.e4e04217d8.webp"
+}

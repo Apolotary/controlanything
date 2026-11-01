@@ -1,6 +1,8 @@
 /**
  * Opt-in LIVE test of the gen3d forge (real Meta Model API calls, a few cents; hard cap $0.60):
  *   npx tsx apps/server/scripts/gen3d-live.ts [--only light|op1|edit|loop] [--record] [--out DIR]
+ * --only skins --crops DIR paints a muse-image-1.0 panel skin per loop device from DIR/{light,op1,mac}.jpg
+ * (recorded under fixtures/recorded/gen3d/skins/ with --record; copies land in research/gen3d-live/skins/).
  * --only loop forges the three loop-shaped template drivers (light, OP-1 Field, this Mac) with the loop's
  * default request plus the resonance edit, so a recording exists per device category for the judge path.
  * Forges hack sets for the ceiling light and the OP-1 Field from the sample verified drivers, then edits the
@@ -9,11 +11,12 @@
  * fixtures (apps/server/fixtures/recorded/gen3d/), which FIXTURE mode plays back without a key.
  * Reads MODEL_API_KEY from the repo-root .env; never prints it.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { REPO_ROOT, SERVER_ROOT, loadDotEnv } from '../src/config';
 import { CallLog, resolveMuseConfig } from '../src/muse';
 import { createForge, type ForgeProgress, type ForgeResult } from '../src/gen3d/forge';
+import { LiveSkinPainter, SkinStore } from '../src/gen3d/skin';
 import { allPass, FORGE_LIGHT_DEVICE, FORGE_LIGHT_DRIVER, FORGE_LIGHT_VERIFIED, FORGE_OP1_DEVICE, FORGE_OP1_DRIVER, FORGE_OP1_VERIFIED, LOOP_LIGHT_DEVICE, LOOP_LIGHT_DRIVER, LOOP_MAC_DEVICE, LOOP_MAC_DRIVER, LOOP_OP1_DEVICE, LOOP_OP1_DRIVER } from '../src/gen3d/sampleDevices';
 
 loadDotEnv();
@@ -79,6 +82,22 @@ if (!only || only === 'op1' || only === 'edit') {
     console.log(`-- undo: ok=${u.ok} rev=${u.uiSpec?.rev} (same content as rev ${r.uiSpec.rev}: ${JSON.stringify(u.uiSpec?.gen3d.parts) === JSON.stringify(r.uiSpec.gen3d.parts)})`);
   }
 }
+if (only === 'skins') {
+  const crops = arg('crops');
+  const store = new SkinStore();
+  const painter = new LiveSkinPainter({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, store, recordDir: record ? join(SERVER_ROOT, 'fixtures/recorded/gen3d/skins') : undefined, log: (l) => console.log(l) });
+  mkdirSync(join(out, 'skins'), { recursive: true });
+  const pick = arg('skin');
+  for (const [name, device, driver] of [['light', LOOP_LIGHT_DEVICE, LOOP_LIGHT_DRIVER], ['op1', LOOP_OP1_DEVICE, LOOP_OP1_DRIVER], ['mac', LOOP_MAC_DEVICE, LOOP_MAC_DRIVER]] as const) {
+    if (pick && pick !== name) continue;
+    const crop = crops ? { jpegBase64: readFileSync(join(crops, `${name}.jpg`)).toString('base64') } : undefined;
+    const r = await painter.paint({ device, transport: driver.transport, crop });
+    spent += r.ok ? 0.01 : 0;
+    console.log(`== skin ${name}: ok=${r.ok} ${r.mode} ${(r.latencyMs / 1000).toFixed(1)}s ${r.width}x${r.height} ${Math.round((r.bytes ?? 0) / 1024)}KB${r.error ? ` ERROR ${r.error}` : ''} (total $${spent.toFixed(2)})`);
+    if (r.ok && r.skinId) writeFileSync(join(out, 'skins', `${name}.webp`), store.get(r.skinId)!.bytes);
+  }
+}
+void copyFileSync;
 if (only === 'loop') {
   for (const [name, device, driver] of [['loop.light', LOOP_LIGHT_DEVICE, LOOP_LIGHT_DRIVER], ['loop.op1', LOOP_OP1_DEVICE, LOOP_OP1_DRIVER], ['loop.mac', LOOP_MAC_DEVICE, LOOP_MAC_DRIVER]] as const) {
     console.log(`-- forge (loop template ids): ${device.name}`);

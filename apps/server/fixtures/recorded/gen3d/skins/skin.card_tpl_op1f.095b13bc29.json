@@ -1,0 +1,15 @@
+{
+  "kind": "gen3d-skin",
+  "cardId": "card_tpl_op1f",
+  "category": "synthesizer",
+  "transport": "midi",
+  "deviceName": "OP-1 Field",
+  "mode": "edit",
+  "model": "muse-image-1.0",
+  "promptVersion": 1,
+  "latencyMs": 12155,
+  "width": 2560,
+  "height": 960,
+  "recordedAt": "2026-11-01T22:34:57.463Z",
+  "file": "skin.card_tpl_op1f.095b13bc29.webp"
+}

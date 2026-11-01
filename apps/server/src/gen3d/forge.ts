@@ -14,7 +14,7 @@
  * every progress event carries the model id, effort and latency.
  */
 import { museResponseFormat, newId, type UiSpecPayload } from '@ce/protocol';
-import type { Control, Gen3dSpec, HackItem, Part } from '@ce/gen3d';
+import type { Control, Gen3dSpec, HackItem, Part, Skin } from '@ce/gen3d';
 import type { CallLog } from '../muse/callLog';
 import { RequestCancelledError } from '../muse/cancellation';
 import type { MuseConfig, ReasoningEffort } from '../muse/config';
@@ -26,6 +26,7 @@ import { ForgeDevice, ForgeDriver, verificationOf, type VerifyState } from './fo
 import { draftIssues, isStepper } from './forgeVerify';
 import { draftAccent, draftToHack, ForgeDraft, type Hack, HackDraft, HACKSET_VERSION, type HackSet } from './hackset';
 import { TopLevelItemScanner } from './partial';
+import { LiveSkinPainter, ReplaySkinPainter, SKIN_MODEL, type SkinCrop, type SkinPainter, type SkinResult, SkinStore } from './skin';
 import { costUsd, type StreamMessage, StreamClient, type StreamUsage } from './stream';
 import { LiveTransport, loadRecordedRuns, type ModelTransport, ReplayTransport, type RunTarget, type TransportResult, type TransportSession } from './transport';
 
@@ -99,6 +100,10 @@ export interface ForgeRequest {
   device: ForgeDevice;
   driver: ForgeDriver;
   verification?: Record<string, VerifyState>;
+  /** the device's scan crop (base64 JPEG): Muse Image paints the panel skin from it; reused for regenerations */
+  crop?: SkinCrop;
+  /** paint a new skin even if this device already has one */
+  repaintSkin?: boolean;
   room?: { device: ForgeDevice; driver: ForgeDriver }[];
   request?: string;
   model?: string;
@@ -173,6 +178,10 @@ export interface Forge {
   list(): UiSpec[];
   /** every progress event and every published ui.spec (for the WebSocket bridge); returns unsubscribe */
   subscribe(fn: (e: ForgeEvent) => void): () => void;
+  /** painted skins (served at /api/skins/<id>.webp); optional so callers' fakes stay valid */
+  readonly skins?: SkinStore;
+  /** resolves when the skin of the latest generate for this spec is attached (undefined if none or it failed) */
+  whenSkin?(specId: string): Promise<UiSpec | undefined>;
 }
 
 export interface ForgeDeps {
@@ -188,6 +197,10 @@ export interface ForgeDeps {
   /** replay pace: 1 = recorded timing, 0 = instant */
   replaySpeed?: number;
   model?: string;
+  /** paint panel skins with muse-image-1.0 (default off here; getForge turns it on unless GEN3D_SKIN=0) */
+  skin?: boolean;
+  /** override the skin painter (tests) */
+  skinPainter?: SkinPainter;
 }
 
 // --- helpers ----------------------------------------------------------------------------------------
@@ -410,6 +423,9 @@ interface Entry {
   verification: Record<string, VerifyState>;
   revs: UiSpec[];
   cursor: number;
+  crop?: SkinCrop;
+  /** the device's painted skin, reused when the hack set is regenerated */
+  skin?: Skin;
 }
 
 const MAX_REVS = 30;
@@ -426,6 +442,15 @@ export function createForge(deps: ForgeDeps): Forge {
   const defaultModel = deps.model ?? DEFAULT_FORGE_MODEL;
   const store = new Map<string, Entry>();
   const listeners = new Set<(e: ForgeEvent) => void>();
+  const skins = new SkinStore();
+  const skinWaits = new Map<string, Promise<UiSpec | undefined>>();
+  const painter: SkinPainter | undefined =
+    deps.skinPainter ??
+    (deps.skin
+      ? deps.muse.mode === 'live'
+        ? new LiveSkinPainter({ apiKey: deps.muse.apiKey, baseUrl: deps.muse.baseUrl, fetchImpl: deps.fetchImpl, store: skins, recordDir: deps.recordDir ? `${deps.recordDir}/skins` : undefined, log })
+        : new ReplaySkinPainter({ dir: deps.replayDir ? `${deps.replayDir}/skins` : undefined, store: skins, speed: deps.replaySpeed ?? 1 })
+      : undefined);
 
   const publish = (e: ForgeEvent) => {
     for (const fn of listeners) {
@@ -534,6 +559,15 @@ export function createForge(deps: ForgeDeps): Forge {
     const step = stepper(runId, device.cardId, req.onProgress);
     const session = transport.session({ kit: FORGE_KIT, task: 'generate', cardId: device.cardId, request, mode: 'json', ...runContext(device, driver) });
     const fallback = session.match === 'category' || session.match === 'transport';
+    // the panel skin: painted in parallel, attached as a later revision; it never gates the controls
+    const crop = req.crop ?? existing?.crop;
+    const reuseSkin = !req.repaintSkin && existing?.skin && existing.device.name === device.name ? existing.skin : undefined;
+    const skinStep = `${runId}.skin`;
+    let skinJob: Promise<SkinResult> | undefined;
+    if (painter && !reuseSkin) {
+      step({ stepId: skinStep, phase: 'forge', status: 'running', title: `Painting a panel skin for ${device.name}`, detail: crop ? 'from the scan crop (images/edits)' : 'from a prompt (images/generations)', model: SKIN_MODEL, effort: 'low', source: painter.source });
+      skinJob = painter.paint({ device, transport: driver.transport, crop, signal: req.signal }).catch((e) => ({ ok: false, mode: crop ? 'edit' : 'generate', model: SKIN_MODEL, source: painter.source, latencyMs: 0, error: (e as Error).message }) as SkinResult);
+    }
     const rf = museResponseFormat('ce_hackset', ForgeDraft, { description: 'The hack set for one device: hacks bound to its driver actions.' });
     const started = Date.now();
     let usage = emptyUsage();
@@ -631,7 +665,7 @@ export function createForge(deps: ForgeDeps): Forge {
           fixes.push(...compiled.fixes);
           warnings.push(...compiled.warnings.map((w) => issue('geometry', w.code, w.path, w.message, 'warn')));
           if (!compiled.ok) errors.push(...compiled.errors.map((e) => issue('geometry', e.code, e.path, e.message)));
-          else result = { hackset, gen3d: compiled.spec, title: draft.title };
+          else result = { hackset, gen3d: reuseSkin ? { ...compiled.spec, skin: reuseSkin } : compiled.spec, title: draft.title };
         }
         history.push({ attempt, effort, latencyMs: res.latencyMs, errors: errors.length, codes: [...new Set(errors.map((e) => e.code))] });
         const r = report(errors, warnings, fixes, history);
@@ -649,6 +683,7 @@ export function createForge(deps: ForgeDeps): Forge {
       return { ok: false, report: report([issue('schema', 'model_call', '(root)', msg)], [], fixes, history), model, effort: firstEffort, source: transport.source, latencyMs: Date.now() - started, usage, costUsd: costUsd(model, usage), error: msg };
     }
     session.finish(Boolean(result));
+    if (!result && skinJob) void skinJob.then((r) => log(`[gen3d] skin for ${device.cardId} ${r.ok ? 'painted' : 'failed'} but the hack set failed; not attached`));
     const rep = report(result ? [] : errors, warnings, fixes, history);
     const base = { report: rep, model: modelUsed, effort: firstEffort, source: last?.source ?? transport.source, recordedFrom: last?.recordedFrom, recordedRequest: session.recordedRequest, latencyMs: Date.now() - started, usage, costUsd: costUsd(modelUsed, usage) };
     if (!result) return { ok: false, ...base, error: `verification failed after ${history.length} attempt(s)` };
@@ -666,11 +701,48 @@ export function createForge(deps: ForgeDeps): Forge {
       check: { ok: true, attempts: rep.attempts, errors: 0, warnings: rep.warnings.length },
     };
     const entry: Entry = existing ?? { specId, device, driver, room: req.room ?? [], verification, revs: [], cursor: -1 };
-    Object.assign(entry, { device, driver, room: req.room ?? entry.room, verification });
+    Object.assign(entry, { device, driver, room: req.room ?? entry.room, verification, ...(crop ? { crop } : {}) });
     commit(entry, ui);
+    if (skinJob) {
+      const wait = skinJob.then((r) => attachSkin(entry, r, runId, skinStep));
+      skinWaits.set(specId, wait);
+    } else skinWaits.delete(specId);
     const controls = result.hackset.hacks.filter((h) => h.kind === 'control').length;
     step({ phase: 'deploy', status: 'ok', title: `Hack set ready: ${result.hackset.hacks.length} hacks (${controls} controls)`, evidence: `${result.gen3d.controls.filter((c) => c.armed).length}/${result.gen3d.controls.length} armed · rev ${ui.rev}`, detail: `${result.gen3d.controls.filter((c) => c.armed).length}/${result.gen3d.controls.length} armed · rev ${ui.rev}${rep.attempts > 1 ? ` · repaired ${rep.attempts - 1}×` : ''}`, model: modelUsed, effort: firstEffort, latencyMs: base.latencyMs, source: base.source, recordedFrom: base.recordedFrom, endedAt: Date.now() });
     return { ok: true, uiSpec: ui, ...base };
+  }
+
+  /** Log the skin call, then publish it on the current revision (and keep it on every stored one). */
+  function attachSkin(entry: Entry, r: SkinResult, runId: string, stepId: string): UiSpec | undefined {
+    deps.callLog?.add({ at: Date.now() - r.latencyMs, label: 'gen3d.skin', model: r.source === 'fixture' ? 'fixture' : SKIN_MODEL, source: r.source, ok: r.ok, latencyMs: r.latencyMs, format: 'image/webp', recordedFrom: r.recordedFrom, error: r.error });
+    const emit = (status: 'ok' | 'fail', title: string, detail?: string) => {
+      const p: ForgeProgress = { stepId, runId, cardId: entry.device.cardId, phase: 'forge', status, title, ...(detail ? { detail } : {}), kind: 'opinion', model: r.recordedFrom ?? SKIN_MODEL, effort: 'low', latencyMs: r.latencyMs, source: r.source, ...(r.recordedFrom ? { recordedFrom: r.recordedFrom } : {}), startedAt: Date.now() - r.latencyMs, endedAt: Date.now() };
+      publish({ type: 'progress', progress: p });
+    };
+    if (!r.ok || !r.url) {
+      log(`[gen3d] skin failed for ${entry.device.cardId}: ${r.error ?? 'no image'}`);
+      emit('fail', 'Panel skin failed (controls unaffected)', r.error?.slice(0, 300));
+      return undefined;
+    }
+    const skin: Skin = {
+      url: r.url,
+      kind: 'panel',
+      opacity: 0.5,
+      fit: 'cover',
+      source: SKIN_MODEL,
+      prompt: `${r.mode === 'edit' ? 'From the scan crop' : 'From a prompt'}: a dark, text-free panel texture in the ${entry.device.name}'s own materials and colours`.slice(0, 400),
+      partIds: [],
+      fadeS: 2.5,
+    };
+    entry.skin = skin;
+    // a skin is not an edit: every stored revision gets it, so undo/redo keep it
+    for (const v of entry.revs) v.gen3d = { ...v.gen3d, skin };
+    const cur = entry.revs[entry.cursor];
+    if (!cur) return undefined;
+    const rev = latestRev(entry) + 1;
+    const ui = commit(entry, { ...cur, rev, gen3d: { ...cur.gen3d, rev, skin } });
+    emit('ok', `Panel skin painted by ${SKIN_MODEL}`, `${r.width && r.height ? `${r.width}×${r.height} ` : ''}webp · ${Math.round((r.bytes ?? 0) / 1024)} KB · ${r.url} · rev ${rev}`);
+    return ui;
   }
 
   function getEntry(specId: string): Entry {
@@ -826,5 +898,7 @@ export function createForge(deps: ForgeDeps): Forge {
       listeners.add(fn);
       return () => listeners.delete(fn);
     },
+    skins,
+    whenSkin: (specId) => skinWaits.get(specId) ?? Promise.resolve(undefined),
   };
 }

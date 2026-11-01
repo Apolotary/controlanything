@@ -16,6 +16,7 @@
  *   POST   /api/gen3d/generate            {device, driver, verification?} | {cardId} -> hack set + ce.gen3d/1 ui.spec (?stream=1 SSE)
  *   POST   /api/gen3d/edit                {specId, instruction}  -> patched ui.spec (rev+1; "undo"/"redo")
  *   GET    /api/gen3d/specs[/:specId]     current generated specs
+ *   GET    /api/skins/<id>.webp           Muse Image panel skin (public)
  *   GET    /p/:pairingId                  QR target -> /companion/?approve=<id> (the #code fragment is kept)
  *   /companion/, /quest/, /sim/           built apps (apps/companion/dist, apps/quest/dist, apps/sim/dist)
  *
@@ -28,7 +29,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { SERVER_NAME, SERVER_VERSION } from './config';
 import type { ServerContext } from './context';
 import { agentRouter } from './agent/routes';
-import { gen3dRouter } from './gen3d';
+import { gen3dRouter, skinsRouter } from './gen3d';
 import { MAX_AUDIO_BYTES, requestCancellation, RequestCancelledError, TranscribeInputError, TranscribeUpstreamError } from './muse';
 import { type Approver, PairingError } from './pairing/manager';
 import type { DeviceRecord } from './pairing/registry';
@@ -196,6 +197,7 @@ export function createApp(ctx: ServerContext): express.Express {
 
   // generated hack sets + 3D controls (POST /api/gen3d/generate, POST /api/gen3d/edit, GET /api/gen3d/specs[/:id])
   api.use('/gen3d', gen3dRouter(ctx));
+  api.use('/skins', skinsRouter(ctx));
   // the discovery loop: targets, work log, exec monitor, curated profiles, select / arm / panic (see agent/routes.ts)
   api.use('/agent', agentRouter(ctx));
 
