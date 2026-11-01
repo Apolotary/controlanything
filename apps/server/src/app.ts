@@ -13,6 +13,9 @@
  *   DELETE /api/devices/:id               approver only (revoke)
  *   GET    /api/me                        the device a Bearer token belongs to
  *   POST   /api/transcribe                audio/wav body (paired device or localhost)
+ *   POST   /api/gen3d/generate            {device, driver, verification?} | {cardId} -> hack set + ce.gen3d/1 ui.spec (?stream=1 SSE)
+ *   POST   /api/gen3d/edit                {specId, instruction}  -> patched ui.spec (rev+1; "undo"/"redo")
+ *   GET    /api/gen3d/specs[/:specId]     current generated specs
  *   GET    /p/:pairingId                  QR target -> /companion/?approve=<id> (the #code fragment is kept)
  *   /companion/, /quest/, /sim/           built apps (apps/companion/dist, apps/quest/dist, apps/sim/dist)
  *
@@ -24,6 +27,7 @@ import { PairApproveRequest, PairDenyRequest, PairStartRequest, PROTOCOL_VERSION
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { SERVER_NAME, SERVER_VERSION } from './config';
 import type { ServerContext } from './context';
+import { gen3dRouter } from './gen3d';
 import { MAX_AUDIO_BYTES, requestCancellation, RequestCancelledError, TranscribeInputError, TranscribeUpstreamError } from './muse';
 import { type Approver, PairingError } from './pairing/manager';
 import type { DeviceRecord } from './pairing/registry';
@@ -188,6 +192,9 @@ export function createApp(ctx: ServerContext): express.Express {
       }
     },
   );
+
+  // generated hack sets + 3D controls (POST /api/gen3d/generate, POST /api/gen3d/edit, GET /api/gen3d/specs[/:id])
+  api.use('/gen3d', gen3dRouter(ctx));
 
   api.use((req, res) => {
     res.status(404).json({ error: 'not_found', message: `No route ${req.method} ${req.originalUrl}` });
