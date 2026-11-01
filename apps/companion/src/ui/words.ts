@@ -85,3 +85,9 @@ export function linkProof(r: LinkResultPayload): { proven: boolean; text: string
   const channel = r.channel ? r.channel.toUpperCase() : 'LINK';
   return { proven, text: `${channel} · ${r.verdict}${r.port ? ` · ${r.port.name}` : ''}${parts.length ? ` · ${parts.join(' · ')}` : ''}` };
 }
+
+/** Development clients (simulators, mocks, emulators, test nodes) stay out of stage-mode takes. */
+const DEV_NAME = /\(sim\)|\bsim\b|mock|emulator|\btest\b/i;
+export function isDevDevice(d: { kind: string; name: string }): boolean {
+  return d.kind === 'sim' || DEV_NAME.test(d.name);
+}

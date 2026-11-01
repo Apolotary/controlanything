@@ -1,7 +1,7 @@
 import { Evidence } from '@ce/protocol';
 import { describe, expect, it } from 'vitest';
 import { describeOp } from '../executor';
-import { evidenceSentence, observedPhrase, opSummary } from './words';
+import { evidenceSentence, isDevDevice, observedPhrase, opSummary } from './words';
 
 const ev = (over: Record<string, unknown>) =>
   Evidence.parse({
@@ -49,5 +49,13 @@ describe('evidence words', () => {
     expect(opSummary({ kind: 'ir', protocol: 'AEHA', bytes: [0x2c, 0x52] })).toBe('AEHA 2C 52');
     expect(opSummary({ kind: 'local', op: 'say', arg: 'blackout armed' })).toBe('say blackout armed');
     expect(describeOp({ execId: 'e', executorDeviceId: 'd', op: { kind: 'midi', msg: 'cc', channel: 1, number: 46, value: 69 }, port: 'OP-1' })).toEqual({ what: 'CC 46 → 69 · ch 1', target: 'OP-1' });
+  });
+});
+
+describe('stage mode filter', () => {
+  it('hides simulators, mocks, emulators and test nodes, keeps real devices', () => {
+    for (const name of ['Test node (iPhone lane)', 'iPhone 18 Pro (sim)', 'mock-brain', 'Quest (desktop emulator)']) expect(isDevDevice({ kind: 'web', name })).toBe(true);
+    expect(isDevDevice({ kind: 'sim', name: 'Sim room' })).toBe(true);
+    for (const name of ['Cardputer', 'Quest 3', 'MacBook Pro', 'DevTerm (demo)', 'iPhone']) expect(isDevDevice({ kind: 'mac', name })).toBe(false);
   });
 });

@@ -38,7 +38,7 @@ import { CardputerLink } from './serial/cardputer';
 import { $, ago, appendLine, button, clock, el, scheduler, secs, untilText } from './ui/dom';
 import { jsonView } from './ui/json';
 import { pulseTrain, sparkline } from './ui/spark';
-import { evidenceSentence, linkProof, opSummary } from './ui/words';
+import { evidenceSentence, isDevDevice, linkProof, opSummary } from './ui/words';
 import { replayArmResult, runReplay } from './replay';
 
 const APP = 'companion@0.2.0';
@@ -334,10 +334,6 @@ function proofChip(lr: LinkResultPayload | undefined): HTMLElement {
   return chip(`${(lr.channel ?? 'link').toUpperCase()} linked ✓`, 'ok');
 }
 
-/** Development clients (simulators, mocks, emulators) stay out of stage-mode takes. */
-function isDevDevice(d: DeviceInfo): boolean {
-  return d.kind === 'sim' || /\(sim\)|\bsim\b|mock|emulator/i.test(d.name);
-}
 
 function setTab(t: typeof mainTab, byUser = false): void {
   mainTab = t;
@@ -711,6 +707,7 @@ function renderApprove(): void {
   const box = $('pending');
   box.replaceChildren();
   for (const p of pending.values()) {
+    if (stage && isDevDevice(p)) continue;
     box.append(
       el(
         'div',
