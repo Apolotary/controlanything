@@ -54,6 +54,9 @@ extension AppModel {
                 show("PANIC · local effects stopped", tone: .fail)
             }
         default:
+            #if DEBUG
+            if t == "x.debug" { handleDebugFrame(f); return }
+            #endif
             if MsgType.matches(t, MsgType.execCommand) { handleExec(f) }
             else if MsgType.matches(t, MsgType.senseRequest) { handleSense(f) }
             else if MsgType.matches(t, MsgType.scanResult) { handleScanResult(f) }
@@ -220,7 +223,12 @@ extension AppModel {
 
     private func handleScanResult(_ f: InboundFrame) {
         guard let r = try? f.payload(ScanResultPayload.self) else { return }
-        guard r.frameId == scan.frameId else { return }
+        #if DEBUG
+        let matches = r.frameId == scan.frameId || (f.head.type.hasPrefix("x.") && r.frameId == "*" && scan.frameId != nil)
+        #else
+        let matches = r.frameId == scan.frameId
+        #endif
+        guard matches else { return }
         scan.detections = r.detections
         scan.modelId = r.modelId
         scan.latencyMs = r.latencyMs

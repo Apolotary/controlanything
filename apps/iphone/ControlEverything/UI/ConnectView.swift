@@ -34,6 +34,7 @@ struct ConnectView: View {
                         .submitLabel(.go).focused($focused)
                         .onSubmit { Task { await model.connect() } }
                         .padding(12).plate(edge: focused ? Neon.volt : Neon.cyan, cut: 8)
+                        .accessibilityIdentifier("serverField")
                     Text("THIS PHONE'S NAME").hudLabel(10, color: Neon.dim).padding(.top, 4)
                     TextField("", text: $model.deviceName, prompt: Text("iPhone").foregroundStyle(Neon.dim.opacity(0.6)))
                         .font(Typo.mono(15)).foregroundStyle(Neon.bone)
@@ -64,6 +65,7 @@ struct ConnectView: View {
                 .buttonStyle(.plain)
                 .disabled(model.busy || model.serverInput.isEmpty)
                 .accessibilityLabel("Link to server")
+                .accessibilityIdentifier("linkButton")
 
                 Text("Same Wi-Fi as the Mac. Plain http on port 8787; https on 8443 also works.")
                     .font(Typo.mono(10)).foregroundStyle(Neon.dim.opacity(0.8))
@@ -99,6 +101,7 @@ struct PairingView: View {
                         .font(Typo.mono(54, weight: .bold)).tracking(4).monospacedDigit().foregroundStyle(Neon.volt)
                         .padding(.horizontal, 18).padding(.vertical, 6).plate(edge: Neon.volt, cut: 10)
                         .accessibilityLabel("Passcode \(p.start.display.map { String($0) }.joined(separator: " "))")
+                        .accessibilityIdentifier("pairCode")
 
                     VStack(spacing: 6) {
                         Text("Look at this code from the headset,").font(Typo.mono(13)).foregroundStyle(Neon.bone)

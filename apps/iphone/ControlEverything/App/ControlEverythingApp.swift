@@ -58,6 +58,9 @@ struct RootView: View {
         }
         .animation(.easeOut(duration: 0.2), value: model.screen)
         .task {
+            #if DEBUG
+            model.applyLaunchArguments()
+            #endif
             if model.credentials != nil, model.socketState == .idle { model.connectSocket() }
         }
         .onChange(of: model.screen) { _, s in

@@ -10,8 +10,8 @@ struct SurfaceView: View {
             header
             if !surface.armed { armingBanner }
             controlsGrid
-            if !surface.hacks.isEmpty { hackMenu }
-            if !surface.daemons.isEmpty { daemonList }
+            if !surface.hacks.isEmpty { hackMenu.id("hacks") }
+            if !surface.daemons.isEmpty { daemonList.id("daemons") }
             if surface.isDemo {
                 Text("DEMO SURFACE · bundled example · nothing is sent to a device")
                     .font(Typo.mono(10)).foregroundStyle(Neon.dim)
@@ -144,6 +144,7 @@ struct SurfaceView: View {
     private func cell(_ c: Control) -> some View {
         let armed = surface.isArmed(c)
         return widget(c)
+            .accessibilityIdentifier("control." + c.id)
             .padding(12)
             .frame(maxWidth: .infinity)
             .plate(edge: armed ? Color(hex: surface.accent(for: c)) : Neon.dim, cut: 8, edgeOpacity: armed ? 0.5 : 0.4, dashed: !armed)
@@ -260,6 +261,7 @@ struct HackRowView: View {
             if hack.needsHold { holding = pressing }
         })
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("hack." + hack.id)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint(hack.needsHold ? "Hold to run; this cannot be undone" : "Runs this hack on your device")
     }

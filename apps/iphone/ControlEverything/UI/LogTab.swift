@@ -29,11 +29,11 @@ struct LogTab: View {
                     }
                     ForEach(model.steps) { s in StepRow(step: s).id(s.stepId) }
                     if !model.evidence.isEmpty {
-                        SectionTitle(title: "EVIDENCE", subtitle: "sent · expected · observed")
+                        SectionTitle(title: "EVIDENCE", subtitle: "sent · expected · observed").id("evidence")
                         ForEach(model.evidence) { e in EvidenceRow(e: e) }
                     }
                     if !model.execLog.isEmpty {
-                        SectionTitle(title: "RAN ON THIS PHONE", subtitle: "exec.command → exec.ack")
+                        SectionTitle(title: "RAN ON THIS PHONE", subtitle: "exec.command → exec.ack").id("exec")
                         ForEach(model.execLog) { r in
                             HStack(alignment: .top, spacing: 8) {
                                 Pip(color: r.ok ? Neon.ok : Neon.fail)
@@ -56,6 +56,11 @@ struct LogTab: View {
                     }
                 }
                 .padding(14)
+            }
+            .onChange(of: model.scrollTarget) { _, t in
+                guard let t else { return }
+                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(t, anchor: .top) }
+                model.scrollTarget = nil
             }
             .onChange(of: model.steps.count) { _, _ in
                 if let last = model.steps.last { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.stepId, anchor: .bottom) } }

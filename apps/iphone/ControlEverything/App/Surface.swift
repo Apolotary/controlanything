@@ -144,7 +144,10 @@ extension Surface {
                     hacks.append(h)
                 }
             }
-            for d in moreDaemons where !daemons.contains(where: { $0.id == d.id }) { daemons.append(d) }
+            for var d in moreDaemons where !daemons.contains(where: { $0.id == d.id }) {
+                if d.controlId == nil, controlIds.contains(d.id) { d.controlId = d.id }
+                daemons.append(d)
+            }
             if channel == nil { channel = hs.device?.channel?.type }
         }
         self.init(id: specId ?? g.specId, title: g.title, deviceName: g.device?.name ?? g.title, cardId: cardId ?? g.device?.cardId,

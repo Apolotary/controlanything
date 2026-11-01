@@ -10,6 +10,7 @@
 		03AF32B5DF1A600CF1C1DE03 /* LogTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = F88392930D1E969B5B030FD1 /* LogTab.swift */; };
 		06CF62E2C24A7E69F5A6E885 /* ServerEndpoint.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F7A79DD302D5D4013499D64 /* ServerEndpoint.swift */; };
 		0A9F497FCE46397E6086F3E4 /* Haptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 944C7E1F144877B8B14543D4 /* Haptics.swift */; };
+		0D4C620C20B14A1CC8E8D03B /* DebugHooks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 719D5095E5CBC4F3FB9AA325 /* DebugHooks.swift */; };
 		0E2686F0F58C1AB83045740C /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 974AF66454855D0C1D8B3805 /* Theme.swift */; };
 		1027CD5386C369D62FE0DE4A /* LocalExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79D64D14054B46DFF182D2AD /* LocalExecutor.swift */; };
 		1B64F4DC890C1457F9BBDE32 /* ConnectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E43C424726C291731C6C5B8A /* ConnectView.swift */; };
@@ -53,6 +54,7 @@
 		5F592ADE03C1FF734A7E94C1 /* HubSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubSocket.swift; sourceTree = "<group>"; };
 		61848E6F406CDBC8211A5E97 /* Gen3d.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Gen3d.swift; sourceTree = "<group>"; };
 		6F4F73B07270437D1C7FB86A /* ControlEverything.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ControlEverything.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		719D5095E5CBC4F3FB9AA325 /* DebugHooks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugHooks.swift; sourceTree = "<group>"; };
 		74560CF2B04597D478090231 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		79D64D14054B46DFF182D2AD /* LocalExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalExecutor.swift; sourceTree = "<group>"; };
 		7CD305193A5C03B934A6C070 /* SurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceView.swift; sourceTree = "<group>"; };
@@ -191,6 +193,7 @@
 				852785EA6BEAB8552AF5FA14 /* AppModel.swift */,
 				305CD16539311536AE6D5696 /* AppModel+Inbound.swift */,
 				1A49BB48F4D38168A469CDDA /* ControlEverythingApp.swift */,
+				719D5095E5CBC4F3FB9AA325 /* DebugHooks.swift */,
 				18B730744ABF8A83F895E4D8 /* Surface.swift */,
 			);
 			path = App;
@@ -286,6 +289,7 @@
 				AE221FCD373C3161C49D9C7D /* ControlEverythingApp.swift in Sources */,
 				85578C39E2264029C8B35816 /* ControlWidgets.swift in Sources */,
 				AFB844269BA541588E5BFE6D /* CredentialStore.swift in Sources */,
+				0D4C620C20B14A1CC8E8D03B /* DebugHooks.swift in Sources */,
 				9A97EB07E1B6FAC075459213 /* DeckView.swift in Sources */,
 				419AB6BE7A5A4C97125D2E6E /* Envelope.swift in Sources */,
 				999E789C1FC38D917A1F7F2F /* Gen3d.swift in Sources */,

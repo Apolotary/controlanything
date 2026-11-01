@@ -103,6 +103,7 @@ struct ModeBar: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
+        .accessibilityIdentifier("tab." + title.lowercased())
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
@@ -113,15 +114,17 @@ struct HacksTab: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                Color.clear.frame(height: 0).id("top")
                 if model.surfaces.isEmpty {
                     emptyState
                 } else {
                     if model.surfaces.count > 1 { deviceStrip }
                     if let s = model.selectedSurface {
                         SurfaceView(surface: s).id(s.id)
-                        if !s.isDemo { CommandBox() }
+                        if !s.isDemo { CommandBox().id("command") }
                     }
                 }
                 if let l = model.linkRequest {
@@ -134,6 +137,12 @@ struct HacksTab: View {
                 }
             }
             .padding(14)
+        }
+        .onChange(of: model.scrollTarget) { _, t in
+            guard let t else { return }
+            withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(t, anchor: .top) }
+            model.scrollTarget = nil
+        }
         }
     }
 
@@ -174,6 +183,7 @@ struct HacksTab: View {
                     .frame(maxWidth: .infinity, minHeight: 48).plate(cut: 8)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("loadDemo")
             Text("Demo surfaces are bundled examples; they never send anything.").font(Typo.mono(10)).foregroundStyle(Neon.dim.opacity(0.8))
         }
         .padding(16)

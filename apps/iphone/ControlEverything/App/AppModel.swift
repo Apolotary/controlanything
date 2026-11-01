@@ -59,6 +59,8 @@ final class AppModel {
     var banner: Banner?
     var scan = ScanState()
     var tab: DeckTab = .control
+    /// an anchor id the current tab should scroll to (then cleared)
+    var scrollTarget: String?
     var approveCodeInput = ""
     var undoLabel: String? { undoStack.last.map { "UNDO \($0.label)" } }
 
@@ -433,6 +435,9 @@ final class AppModel {
     // MARK: - deep links
 
     func open(url: URL) {
+        #if DEBUG
+        if handleDebugURL(url) { return }
+        #endif
         let text = url.absoluteString
         if credentials != nil {
             handleScannedQR(text)

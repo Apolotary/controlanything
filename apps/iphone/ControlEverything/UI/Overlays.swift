@@ -117,6 +117,7 @@ struct ArmCard: View {
                         }, onPressingChanged: { holding = $0 })
                 } else {
                     Button("ARM") { model.confirmArm(arm, approve: true) }
+                        .accessibilityIdentifier("arm.approve")
                         .font(Typo.label(14)).tracking(1.5).foregroundStyle(Neon.void)
                         .frame(maxWidth: .infinity, minHeight: 50).background(Chamfer(cut: 8).fill(Neon.volt))
                 }

@@ -10,16 +10,23 @@ struct PingTab: View {
 
     var body: some View {
         @Bindable var model = model
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if !model.pending.isEmpty { pendingSection }
-                approveByCode(model: model)
-                devicesSection
-                clientsSection
-                ThisPhoneSection()
-                serverSection
+                if !model.pending.isEmpty { pendingSection.id("pending") }
+                approveByCode(model: model).id("link")
+                devicesSection.id("devices")
+                clientsSection.id("clients")
+                ThisPhoneSection().id("phone")
+                serverSection.id("server")
             }
             .padding(14)
+        }
+        .onChange(of: model.scrollTarget) { _, t in
+            guard let t else { return }
+            withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(t, anchor: .top) }
+            model.scrollTarget = nil
+        }
         }
         .sheet(isPresented: $scanningApproval) {
             VStack(spacing: 14) {
@@ -60,6 +67,7 @@ struct PingTab: View {
                     Text("Check this code matches the one on its screen.").font(Typo.mono(11)).foregroundStyle(Neon.dim)
                     HStack(spacing: 10) {
                         Button("APPROVE") { model.approve(p) }
+                            .accessibilityIdentifier("approve." + p.pairingId)
                             .font(Typo.label(13)).foregroundStyle(Neon.void)
                             .frame(maxWidth: .infinity, minHeight: 46).background(Chamfer(cut: 8).fill(Neon.volt))
                         Button("DENY") { model.deny(p) }
