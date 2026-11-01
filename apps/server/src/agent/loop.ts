@@ -5,6 +5,7 @@
  */
 import type { Driver, DriverDraft } from '@ce/protocol';
 import { newId } from '@ce/protocol';
+import { resolveOp } from '../devices/encode';
 import { allowedCcs, matchMidiProfile, type Profiles } from '../devices/profiles';
 import { formatIssues, validateDriver } from '../devices/validate';
 import type { Forge } from '../gen3d/forge';
@@ -266,6 +267,19 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
     if (!verified) return;
     const summary = verified;
     check(signal);
+    // VERIFY may leave a light off or in its night-light mode, where dimmer steps do nothing: put it back on for the controls
+    if (cap === 'ir') {
+      const lit = (a: Driver['actions'][number]) => summary.verification[a.actionId] === 'pass' && a.expect?.sense === 'camera' && a.expect.effect === 'on' && !/night/i.test(`${a.actionId} ${a.label}`);
+      const on = summary.driver.actions.find((a) => lit(a) && /full/i.test(`${a.actionId} ${a.label}`)) ?? summary.driver.actions.find(lit);
+      if (on) {
+        try {
+          await d.dispatcher.exec(executor.deviceId, resolveOp(on), { port: executor.port?.id, cardId: t.cardId, driverId, actionId: on.actionId, lightCap: true, waitForSlot: true, signal, timeoutMs: 4000 });
+          d.steps.note('verify', `left the ${card.name} on (${on.label}) for the controls`, { ...base, kind: 'proof' });
+        } catch (e) {
+          log(`[verify] could not relight the ${card.name}: ${(e as Error).message}`);
+        }
+      }
+    }
 
     // ---------------------------------------------------------------- FORGE
     const forge = d.forge();
