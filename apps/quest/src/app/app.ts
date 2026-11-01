@@ -859,6 +859,7 @@ export class QuestApp {
     this.poses.push(time, f.head.position, f.head.quaternion);
     this.recorder.pose(f.head);
     if (inXr && xrFrame) this.xrHit.onFrame(xrFrame);
+    if (inXr && this.camera instanceof LiveCamera) this.camera.pollFromXr(time);
     this.room?.update(time);
     this.deckGesture(f, time);
     for (const m of this.handheld.update(this.wrists(f), time)) {

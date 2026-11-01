@@ -43,6 +43,8 @@ export interface CameraStats {
   lastFrameAt: number;
   /** requestVideoFrameCallback metadata carried captureTime */
   captureTime: boolean;
+  /** new video frames seen by polling currentTime from the XR loop (when rVFC is throttled in a session) */
+  polledFps?: number;
 }
 
 export interface CameraSource {
@@ -195,14 +197,29 @@ export class LiveCamera implements CameraSource {
     this.element.srcObject = null;
   }
 
+  private lastCt = -1;
+  private polled: number[] = [];
+
+  /** Call from the XR frame loop: counts new video frames even when requestVideoFrameCallback is throttled. */
+  pollFromXr(now: number): void {
+    const ct = this.element.currentTime;
+    if (ct === this.lastCt) return;
+    this.lastCt = ct;
+    this.polled.push(now);
+    while (this.polled.length && now - this.polled[0] > 1000) this.polled.shift();
+    this.stats.polledFps = this.polled.length;
+  }
+
   async grab(): Promise<GrabbedFrame | null> {
     const v = this.element;
     if (!this.running || v.readyState < 2 || !v.videoWidth) return null;
     const bitmap = await createImageBitmap(v);
     const m = this.meta;
     const now = performance.now();
-    // Chromium exposes captureTime for camera tracks; otherwise presentation time minus the measured latency
-    const tCapture = m?.captureTime ?? (m ? m.presentationTime - this.latencyMs : now - this.latencyMs);
+    // Chromium exposes captureTime for camera tracks; otherwise presentation time minus the measured latency.
+    // Metadata older than 200 ms means rVFC stalled (e.g. throttled in XR): estimate from now instead.
+    const fresh = m && now - this.stats.lastFrameAt < 200;
+    const tCapture = fresh ? (m.captureTime ?? m.presentationTime - this.latencyMs) : now - this.latencyMs;
     return { bitmap, width: bitmap.width, height: bitmap.height, tCapture };
   }
 

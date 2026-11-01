@@ -244,6 +244,7 @@ export async function runCameraSpike(params: URLSearchParams): Promise<void> {
       head = h;
       poses.push(time, h.position, h.quaternion);
     }
+    if (camera instanceof LiveCamera && refSpace) camera.pollFromXr(time);
     if (camera instanceof SyntheticCamera && time - lastPanel > 200) void camera.grab().then((g) => g?.bitmap.close());
     if (camTex && camera instanceof SyntheticCamera) camTex.needsUpdate = true;
     room?.update(time);
@@ -251,9 +252,11 @@ export async function runCameraSpike(params: URLSearchParams): Promise<void> {
       lastPanel = time;
       const secs = (time - sessionStart) / 1000;
       inSessionFps = secs > 0.5 ? (camera.stats.frames - framesAtStart) / secs : 0;
+      // rVFC may be throttled inside XR while the video still updates: count polled frames too
+      if (camera.stats.polledFps !== undefined) inSessionFps = Math.max(inSessionFps, camera.stats.polledFps);
       if (secs > 2 && !sent) void postOne();
       const fpsOk = camera.kind !== 'passthrough' || inSessionFps >= 10;
-      setCheck('frames in session', camera.kind === 'passthrough' ? fpsOk : true, camera.kind === 'passthrough' ? `${inSessionFps.toFixed(1)} fps · captureTime ${camera.stats.captureTime ? 'yes' : 'no'}` : 'synthetic source');
+      setCheck('frames in session', camera.kind === 'passthrough' ? fpsOk : true, camera.kind === 'passthrough' ? `${inSessionFps.toFixed(1)} fps (rVFC ${((camera.stats.frames - framesAtStart) / Math.max(0.5, secs)).toFixed(1)} · polled ${camera.stats.polledFps ?? 0}) · captureTime ${camera.stats.captureTime ? 'yes' : 'no'}` : 'synthetic source');
       const verdict = fpsOk && Boolean(posted);
       panel.draw((_c, p) => {
         p.text(`SPIKE · CAMERA IN AR · ${verdict ? 'PASS' : 'running…'}`, 6, 14, { size: 6, color: verdict ? PALETTE.ok : PALETTE.volt });
