@@ -481,8 +481,6 @@ class Tui(object):
             self.put(y0 + 2, x0 + 2, "Scan a device from the headset: its generated hacks appear here.", t["dim"], maxw=w - 4)
             return
         y = y0
-        head = s.device_name
-        self.put(y, x0 + 1, head[:w - 2], t["bone"] | curses.A_BOLD)
         meta = []
         if s.channel:
             meta.append(s.channel.upper())
@@ -492,7 +490,13 @@ class Tui(object):
             meta.append(s.model_id + (" (replay)" if s.source == "fixture" else ""))
         if s.rev:
             meta.append("rev %s" % s.rev)
-        self.put(y, x0 + 2 + len(head[:w - 2]), ("  " + ("  %s  " % g.dot).join(meta)) if meta else "", t["cyan"], maxw=w - len(head) - 3)
+        meta_text = ("  " + ("  %s  " % g.dot).join(meta)) if meta else ""
+        head = s.device_name
+        room = max(12, w - 3 - len(meta_text))
+        if len(head) > room:
+            head = head[:room - 1] + g.ellipsis
+        self.put(y, x0 + 1, head, t["bone"] | curses.A_BOLD)
+        self.put(y, x0 + 1 + len(head), meta_text, t["cyan"], maxw=w - len(head) - 2)
         y += 1
         if getattr(s, "provisional", False):
             self.put(y, x0 + 1, "forging %s hacks appear as the model writes them" % g.dot, t["cyan"], maxw=w - 2)

@@ -162,10 +162,10 @@ class Identity(object):
 
 
 def default_device_name(demo=False):
-    host = socket.gethostname().split(".")[0] or "devterm"
     if demo:
-        return "DevTerm (demo on %s)" % host[:40]
-    return "DevTerm" if host.lower() in ("devterm", "clockworkpi", "raspberrypi") else "DevTerm %s" % host[:40]
+        return "DevTerm (demo)"
+    host = socket.gethostname().split(".")[0] or "devterm"
+    return "DevTerm" if host.lower() in ("devterm", "clockworkpi", "raspberrypi") else "DevTerm %s" % host[:24]
 
 
 def now_ms():

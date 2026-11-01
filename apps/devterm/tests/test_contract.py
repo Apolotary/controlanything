@@ -142,6 +142,9 @@ class ContractTest(unittest.TestCase):
         self.check(fx.env("verify.result", fx.evidence()))
         self.check(fx.exec_command({"kind": "local", "op": "print", "arg": {"title": "RECEIPT", "lines": ["a"], "models": ["muse-spark-1.3"]}}))
         self.check(fx.exec_command({"kind": "local", "op": "beep", "arg": {"freq": 2000, "count": 3, "ms": 120}}))
+        self.check(fx.exec_command({"kind": "local", "op": "print", "arg": {
+            "title": "LINK VERIFIED", "device": "light", "rows": ["1|全灯|FULL|+61% lum|ok", "3||?|no change|fail"],
+            "contour": "0.1,0.1 0.9,0.1 0.9,0.6", "verdict": "ok", "qr": "https://example.test/x", "models": ["muse-spark-1.3"]}}))
         self.check(fx.env("ui.partial", {"specId": "spec_light", "cardId": "card_light", "runId": "r1", "seq": 0,
                                          "control": fx.light_gen3d()["controls"][0], "hack": fx.light_hackset()["hacks"][0]}))
 

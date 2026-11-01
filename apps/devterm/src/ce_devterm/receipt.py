@@ -69,6 +69,8 @@ class Text(Block):
         for line in self.lines():
             if unicode_ok and not font.all_supported(line):
                 out.append(("text", line, self.align))  # e.g. Japanese button labels, via the daemon's TTF font
+            elif not unicode_ok and line.strip() and not any(font.supported(ch) for ch in line if not ch.isspace()):
+                continue  # nothing printable without a TTF (a Japanese-only label): leave it off the paper
             else:
                 out.append(("raster", raster.text_bitmap(line, scale=self.scale, align=self.align, bold=self.bold)))
         return out
@@ -252,12 +254,40 @@ def pairing_ticket(display_code, qr_url, device_name="DevTerm", server="", expir
     return r
 
 
+def _row_from_string(s):
+    """"3|明るく|BRIGHTER|+38% lum|ok" -> {n, jp, label, measure, verdict} (LocalOp args are flat: strings only)."""
+    parts = [p.strip() for p in str(s).split("|")]
+    if len(parts) < 2:
+        return str(s)
+    parts += [""] * (5 - len(parts))
+    return {"n": parts[0] or None, "jp": parts[1], "label": parts[2] or "?", "measure": parts[3], "verdict": parts[4] or None}
+
+
+def _contour_points(c):
+    """[[x, y], ...] (local), ["x,y", ...] or "x,y x,y ..." (protocol-flat) -> [(x, y), ...]."""
+    if isinstance(c, str):
+        c = c.replace(";", " ").split()
+    pts = []
+    for p in c or []:
+        if isinstance(p, (list, tuple)) and len(p) >= 2:
+            pts.append((p[0], p[1]))
+        elif isinstance(p, str) and "," in p:
+            try:
+                x, y = p.split(",")[:2]
+                pts.append((float(x), float(y)))
+            except ValueError:
+                continue
+    return pts
+
+
 def from_print_arg(arg, now=None, device_name=None):
     """Build a receipt from an exec.command `print` LocalOp argument.
 
-    Accepts a string (the body) or a flat object:
+    Accepts a string (the body) or a flat object (protocol LocalArgs: string | number | boolean | string[]):
       {title, lines[] | text, device, hack, oracle, verdict, measure, rows[], models[], qr, contour, footer}
-    rows (learned codes on a LINK receipt): [{n, jp, label, measure, verdict}]
+    rows (learned codes on a LINK receipt): "n|jp|label|measure|verdict" strings, e.g. "3|明るく|BRIGHTER|+38% lum|ok"
+      (dicts {n, jp, label, measure, verdict} work too when called locally)
+    contour (the device silhouette, normalised 0..1): "x,y x,y ..." or ["x,y", ...]
     """
     now = time.time() if now is None else now
     if isinstance(arg, dict):
@@ -288,9 +318,13 @@ def from_print_arg(arg, now=None, device_name=None):
     for line in (body or [])[:40]:
         r.add(Text(_clean(line, 200)))
     rows = a.get("rows") or []
+    if isinstance(rows, str):
+        rows = [rows]
     if rows:
         r.add(Rule())
         for row in rows[:24]:
+            if isinstance(row, str):
+                row = _row_from_string(row)
             if not isinstance(row, dict):
                 r.add(Text(_clean(row, 80)))
                 continue
@@ -302,8 +336,9 @@ def from_print_arg(arg, now=None, device_name=None):
             r.add(Text(("%s%s %s %s" % (head, label, meas, g)).strip()))
             if row.get("jp"):
                 r.add(Text("   " + _clean(row.get("jp"), 24), style="dim"))
-    if a.get("contour"):
-        r.add(Contour(a.get("contour")))
+    pts = _contour_points(a.get("contour"))
+    if len(pts) >= 3:
+        r.add(Contour(pts))
     if a.get("qr"):
         r.add(Qr(a.get("qr")))
     models = a.get("models")

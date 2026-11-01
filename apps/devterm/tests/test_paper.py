@@ -142,6 +142,19 @@ class ReceiptTest(unittest.TestCase):
         segs_plain = r.segments(unicode_ok=False)
         self.assertTrue(all(s[0] == "raster" for s in segs_plain))
 
+    def test_link_receipt_from_protocol_flat_args(self):
+        # LocalArgs only allow string | number | boolean | string[]: rows and contour travel as strings
+        arg = {"title": "LINK VERIFIED", "device": "light", "hack": "Learn remote",
+               "rows": ["1|全灯|FULL|+61% lum|ok", "2|明るく|BRIGHTER|+38% lum|ok", "3||?|no change|fail"],
+               "contour": "0.1,0.1 0.9,0.1 0.9,0.6 0.1,0.6", "models": ["muse-spark-1.3", "sam-3.1"]}
+        r = receipt.from_print_arg(arg)
+        text = r.text()
+        self.assertIn("#1 FULL +61% lum ✓", text)
+        self.assertIn("#3 ? no change ✗", text)
+        self.assertIn("明るく", text)
+        self.assertIn("contour", [b.kind for b in r.blocks])
+        self.assertGreater(r.bitmap().height, 300)
+
     def test_height_cap(self):
         r = receipt.from_print_arg({"lines": ["line %d" % i for i in range(40)], "rows": [{"n": i, "label": "x"} for i in range(24)]})
         bm = r.bitmap(max_height=600)
