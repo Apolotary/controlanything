@@ -55,8 +55,14 @@ export async function tryLink(
         const ack = await deps.dispatcher.exec(pick.deviceId, { kind: 'midi', msg: 'sysex-identity', channel: 1 }, { port: pick.port?.id, cardId: card.cardId, timeoutMs: 2500, signal: opts.signal, waitForSlot: true });
         const reply = ack.reply ? parseIdentityReply(ack.reply) : null;
         if (reply) {
-          const ok = card.maker.toLowerCase() === 'unknown' ? true : makerMatches(reply.manufacturer, card.maker);
-          result.evidence.push({ kind: 'midi-identity', ok, detail: `identity reply: ${reply.manufacturer}, family ${reply.family}, model ${reply.model}${ok ? '' : ` (camera said ${card.maker})`}` });
+          // a generic id (7D non-commercial, or one not in the table) names no maker: it can neither confirm nor refute
+          const generic = /^unknown|non-commercial/i.test(reply.manufacturer);
+          const cameraKnows = card.maker.trim() !== '' && card.maker.toLowerCase() !== 'unknown';
+          if (generic) result.evidence.push({ kind: 'midi-identity', ok: true, detail: `identity reply: ${reply.manufacturer} id, family ${reply.family}, model ${reply.model} (names no maker; port name decides)` });
+          else {
+            const ok = !cameraKnows || makerMatches(reply.manufacturer, card.maker);
+            result.evidence.push({ kind: 'midi-identity', ok, detail: `identity reply: ${reply.manufacturer}, family ${reply.family}, model ${reply.model}${ok ? '' : ` (camera said ${card.maker})`}` });
+          }
         } else result.evidence.push({ kind: 'midi-identity', ok: false, detail: ack.reply?.length ? 'reply was not an identity message' : 'no identity reply (many devices stay silent; port name used instead)' });
       } catch (e) {
         result.evidence.push({ kind: 'midi-identity', ok: false, detail: `identity probe: ${(e as Error).message.slice(0, 120)}` });
@@ -64,7 +70,7 @@ export async function tryLink(
     }
     const identity = result.evidence.find((e) => e.kind === 'midi-identity');
     const port = result.evidence.find((e) => e.kind === 'port-name');
-    if (identity?.ok && /identity reply/.test(identity.detail)) result.verdict = 'confirmed';
+    if (identity?.ok && /identity reply/.test(identity.detail) && !/names no maker/.test(identity.detail)) result.verdict = 'confirmed';
     else if (identity && !identity.ok && /camera said/.test(identity.detail)) result.verdict = 'mismatch';
     else if (port?.ok && portHint) result.verdict = 'consistent';
     else result.verdict = 'unknown';
