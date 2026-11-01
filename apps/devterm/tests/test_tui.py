@@ -153,6 +153,13 @@ class TuiTest(unittest.TestCase):
         text = screens.render(self.tui(40, 60))
         self.assertIn("type this code on the Mac", text)
 
+    def test_pairing_qr_payloads(self):
+        s = pairing_session()
+        self.assertEqual(s.qr_payload("short"), "CE1:K7Q4M2")  # a version-1 QR: readable from far away
+        self.assertEqual(s.qr_payload("url"), "https://192.168.1.4:8443/p/pid1#K7Q4M2")
+        from ce_devterm import qr
+        self.assertEqual(len(qr.matrix(s.qr_payload("short"))), 21)
+
     def test_first_run_asks_for_the_mac_and_starts_pairing(self):
         from helpers import FakeApi, wait_for
         from ce_devterm import app as app_mod

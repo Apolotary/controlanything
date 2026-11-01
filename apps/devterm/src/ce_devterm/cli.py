@@ -25,7 +25,7 @@ def _color_ok(stream=sys.stdout):
 DEFAULTS = {
     "server": None, "demo": False, "pair_via_lan": False, "name": None, "headless": False, "printer": "auto",
     "print_dir": None, "open_receipts": False, "ticket": "auto", "density": None, "identity": None, "ascii": False,
-    "mono": False, "no_self_test": False,
+    "mono": False, "no_self_test": False, "qr": "short",
 }
 
 
@@ -44,6 +44,8 @@ def _common():
     c.add_argument("--open-receipts", action="store_true", default=S, help="open each preview PNG in the desktop viewer")
     c.add_argument("--ticket", choices=["auto", "always", "never"], default=S, help="print the LINK REQUEST ticket when pairing (auto: on paper only)")
     c.add_argument("--density", type=int, default=S, help="printer density 0-15 (default: the daemon's)")
+    c.add_argument("--qr", choices=["short", "url"], default=S,
+                   help="pairing QR: short = CE1:<code> (default, reads from far away), url = the server's pairing link (phones)")
     c.add_argument("--identity", default=S, help="token file (default ~/.config/controleverything/device.json)")
     c.add_argument("--ascii", action="store_true", default=S, help="ASCII only (no box drawing or block characters)")
     c.add_argument("--mono", action="store_true", default=S, help="no colours")
@@ -93,7 +95,7 @@ def _options(args):
     return Options(server=server, name=args.name, demo=args.demo, printer=args.printer, print_dir=args.print_dir,
                    open_receipts=args.open_receipts, ticket=args.ticket,
                    identity_path=args.identity or config.identity_path(args.demo), density=args.density,
-                   self_test=not args.no_self_test)
+                   self_test=not args.no_self_test, qr=args.qr)
 
 
 def _lan_server(local):
@@ -234,7 +236,8 @@ def _pair_cli(app, args):
             time.sleep(3)
             continue
         if sess.status != "approved":
-            m = qrmod.matrix(sess.qr or sess.display)
+            payload = sess.qr_payload(args.qr)
+            m = qrmod.matrix(payload)
             lines = qrmod.lines_ansi(m) if color else (qrmod.lines_unicode(m) if unicode_ok() else qrmod.lines_ascii(m))
             print()
             for line in lines:
@@ -244,9 +247,9 @@ def _pair_cli(app, args):
             for line in big or [sess.display]:
                 print("  " + ansi("volt", line, color))
             print()
-            print("  type this code on the Mac or look at it from the headset (%s)" % sess.qr)
+            print("  type this code on the Mac or look at it from the headset (QR: %s; link: %s)" % (payload, sess.qr))
             if app._want_ticket():
-                r = receipt.pairing_ticket(sess.display, sess.qr, app.state.name, app.server.display, sess.expires_at)
+                r = receipt.pairing_ticket(sess.display, payload, app.state.name, app.server.display, sess.expires_at)
                 try:
                     res = app.printer.print_receipt(r)
                     print("  ticket: %s" % res.detail)
@@ -304,8 +307,8 @@ def cmd_print_test(args):
             arg = args.json
         r = receipt.from_print_arg(arg, device_name=name)
     elif args.sample_ticket:
-        r = receipt.pairing_ticket("K7Q-4M2", "https://192.168.1.14:8443/p/sample#K7Q4M2", name, "192.168.1.14:8787",
-                                   (time.time() + 300) * 1000)
+        sample = "CE1:K7Q4M2" if args.qr == "short" else "https://192.168.1.14:8443/p/sample#K7Q4M2"
+        r = receipt.pairing_ticket("K7Q-4M2", sample, name, "192.168.1.14:8787", (time.time() + 300) * 1000)
     else:
         r = receipt.test_receipt(name)
     print(r.text(), end="")

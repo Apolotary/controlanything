@@ -678,7 +678,7 @@ class Tui(object):
                 self.put(4, 2, "retrying %s check the Mac address (s to change) and that npm run dev is running" % g.dot, t["dim"], maxw=w - 4)
             self.put(h - 1, 1, "s server  q quit", t["dim"])
             return
-        m = qrmod.matrix(sess.qr or sess.display)
+        m = qrmod.matrix(sess.qr_payload(app.opts.qr))
         cells = qrmod.cells(m, quiet=2)
         qr_w, qr_h = len(cells[0]), len(cells)
         code = sess.display or sess.code

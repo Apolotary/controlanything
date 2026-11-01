@@ -22,7 +22,7 @@ END_AFTER = 0.4  # 'end' after this long without a key press
 
 class Options(object):
     def __init__(self, server=None, name=None, demo=False, printer="auto", print_dir=None, open_receipts=False,
-                 ticket="auto", identity_path=None, role=None, density=None, self_test=True):
+                 ticket="auto", identity_path=None, role=None, density=None, self_test=True, qr="short"):
         self.server = server  # ServerAddress or None
         self.name = name
         self.demo = demo
@@ -34,6 +34,7 @@ class Options(object):
         self.role = role
         self.density = density
         self.self_test = self_test
+        self.qr = qr  # short = "CE1:<code>" (far-readable), url = the server's pairing link
 
 
 def self_test_surface(device_name):
@@ -182,8 +183,8 @@ class App(object):
         self.ticket_printed = True
 
         def job():
-            r = receipt.pairing_ticket(sess.display, sess.qr, self.state.name, self.server.display if self.server else "",
-                                       sess.expires_at)
+            r = receipt.pairing_ticket(sess.display, sess.qr_payload(self.opts.qr), self.state.name,
+                                       self.server.display if self.server else "", sess.expires_at)
             try:
                 res = self.printer.print_receipt(r)
             except printer_mod.PrinterError as e:

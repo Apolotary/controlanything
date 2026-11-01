@@ -236,7 +236,7 @@ def pairing_ticket(display_code, qr_url, device_name="DevTerm", server="", expir
     r.add(Text("· LINK REQUEST ·", align="center", bold=True))
     r.add(Rule())
     if qr_url:
-        r.add(Qr(qr_url))
+        r.add(Qr(qr_url, max_module=12))  # "CE1:<code>" is a 21-module QR: 12-dot modules read from across a room
     r.add(Big(display_code))
     r.add(Text("type this code on the Mac", align="center"))
     r.add(Text("or look at it from the headset", align="center"))

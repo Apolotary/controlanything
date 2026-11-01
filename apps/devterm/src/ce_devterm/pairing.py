@@ -158,6 +158,13 @@ class PairingSession(object):
             self.device_id = r["deviceId"]
             self.status = "approved"
 
+    def qr_payload(self, mode="short"):
+        """What the QR encodes. short: "CE1:<code>" (a version-1 QR the headset reads from far away; the server
+        resolves it like the typed passcode). url: the server's https://<lan>:8443/p/<id>#<code> link (phones)."""
+        if mode == "short" and self.code:
+            return "CE1:" + "".join(ch for ch in self.code.upper() if ch.isalnum())
+        return self.qr or (("CE1:" + self.code) if self.code else "")
+
     def seconds_left(self):
         now = self.clock()
         if self.expires_at:

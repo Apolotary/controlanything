@@ -37,7 +37,9 @@ LAN only.
 On first run the client asks the server for a device code (`POST /api/pair/start`, kind `devterm`,
 capabilities `display speaker wifi local printer`). It then shows:
 
-- a QR code (black on white half-blocks) that the Quest approves by looking at it;
+- a QR code (black on white half-blocks) that the Quest approves by looking at it. By default it
+  encodes `CE1:<code>`, a version-1 QR that reads from across the room. The server resolves it
+  like a typed passcode. `--qr url` encodes the server's pairing link instead, for phones;
 - the passcode in big letters, which you can type on the Mac or the iPhone instead (or press `y` in
   the server terminal);
 - on a DevTerm, a printed **pairing ticket** with the QR, the code and "CONTROL EVERYTHING · LINK
@@ -77,7 +79,7 @@ The client runs `exec.command` messages whose `executorDeviceId` is this device.
 
 | op | arg | On the DevTerm | On a Mac (`--demo`) |
 |---|---|---|---|
-| `print` | text, or `{title, lines[], device, hack, oracle, measure, verdict, rows[], models[], qr, contour, footer}` | a 32-column thermal receipt | a PNG of exactly those dots plus a `.txt`, shown as an overlay |
+| `print` | text, or `{title, lines[], device, hack, oracle, measure, verdict, rows[], models[], qr, contour, footer}`; flat, as LocalArgs require: `rows` = `"n\|jp\|label\|measure\|verdict"` strings (learned codes on a LINK receipt), `contour` = `"x,y x,y …"` (normalised silhouette) | a 32-column thermal receipt | a PNG of exactly those dots plus a `.txt`, shown as an overlay |
 | `beep` | Hz, or `{freq, count, ms}` (≤ 3 Hz) | a WAV played through `aplay` | `afplay` |
 | `say` | text | `espeak`, if installed | `say` |
 | `screen` | `invert` · `#rrggbb` · `off` · `{text}` | one inversion (never flashing), a colour wash or a big word | same |
