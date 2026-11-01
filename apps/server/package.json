@@ -1,0 +1,26 @@
+{
+  "name": "@ce/server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ControlEverything malleable server: HTTPS + WebSocket hub, pairing, Muse adapters.",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch-path=src --watch-path=../../packages/protocol/src --watch-preserve-output --import tsx src/index.ts",
+    "start": "node --import tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "smoke": "tsx scripts/smoke.ts",
+    "smoke:muse": "tsx scripts/smoke-muse.ts"
+  },
+  "dependencies": {
+    "@ce/protocol": "*",
+    "express": "^5.3.0",
+    "selfsigned": "^5.5.0",
+    "ws": "^8.22.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/ws": "^8.18.2"
+  }
+}

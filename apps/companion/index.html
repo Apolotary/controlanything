@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>ControlEverything Companion</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand"><strong>ControlEverything</strong><span>Companion</span></div>
+      <div class="badges">
+        <span id="mode" class="badge">…</span>
+        <span id="status" class="badge">offline</span>
+      </div>
+    </header>
+
+    <main>
+      <section id="pair-self" class="card" hidden>
+        <h2>Pair this browser</h2>
+        <p class="muted">Approve it from a paired Quest, iPhone or Mac (scan the code or type it), or type <kbd>y</kbd> in the server terminal.</p>
+        <div class="pair-self">
+          <div id="self-qr" class="qr" aria-label="Pairing QR code"></div>
+          <div>
+            <div id="self-code" class="code">———-———</div>
+            <p id="self-expiry" class="muted"></p>
+            <p id="self-msg" class="small"></p>
+            <button id="self-retry" type="button" hidden>Start again</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="intent" class="card banner" hidden>
+        <p id="intent-text"></p>
+        <div class="row">
+          <button id="intent-approve" type="button">Approve</button>
+          <button id="intent-deny" type="button" class="secondary">Deny</button>
+        </div>
+      </section>
+
+      <section id="approvals" class="card" hidden>
+        <h2>Devices waiting to join</h2>
+        <ul id="pending" class="list"></ul>
+        <form id="code-form" class="row" autocomplete="off">
+          <label for="code-input">Enter the code shown on your device</label>
+          <input id="code-input" placeholder="K7Q-4M2" maxlength="9" spellcheck="false" />
+          <button type="submit">Approve</button>
+        </form>
+        <p id="code-msg" class="small"></p>
+      </section>
+
+      <section id="open-elsewhere" class="card" hidden>
+        <h2>Open on another device</h2>
+        <div class="pair-self">
+          <div id="lan-qr" class="qr small-qr" aria-label="QR code for the Quest app URL"></div>
+          <div class="small">
+            <p>Quest Browser: <span id="lan-quest" class="mono"></span></p>
+            <p>Phone or laptop: <span id="lan-companion" class="mono"></span></p>
+            <p class="muted">Self-signed certificate: accept the warning once per device. Over USB: <code>adb reverse tcp:8787 tcp:8787</code>, then open <span class="mono">http://localhost:8787/quest/</span>.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Space</h2>
+        <ul id="devices" class="list"><li class="muted">Not connected yet.</li></ul>
+        <p id="control-last" class="muted small"></p>
+      </section>
+
+      <section class="card">
+        <h2>MIDI</h2>
+        <div class="row">
+          <button id="midi-enable" type="button">Enable MIDI</button>
+          <span id="midi-msg" class="muted small"></span>
+        </div>
+        <div class="grid2">
+          <div>
+            <h3>Outputs</h3>
+            <ul id="midi-outs" class="list"><li class="muted">—</li></ul>
+          </div>
+          <div>
+            <h3>Inputs</h3>
+            <ul id="midi-ins" class="list"><li class="muted">—</li></ul>
+          </div>
+        </div>
+        <div class="row">
+          <label for="midi-out">Output</label>
+          <select id="midi-out"></select>
+          <label for="midi-ch">Channel</label>
+          <select id="midi-ch"></select>
+          <button id="midi-test" type="button" disabled>Send test note</button>
+        </div>
+        <div class="row between">
+          <h3>MIDI in</h3>
+          <div class="row">
+            <label><input id="midi-clock" type="checkbox" /> show clock</label>
+            <button id="midi-clear" type="button" class="secondary">Clear</button>
+          </div>
+        </div>
+        <pre id="midi-monitor" class="monitor"></pre>
+      </section>
+
+      <section class="card">
+        <div class="row between">
+          <h2>Log</h2>
+          <button id="log-clear" type="button" class="secondary">Clear</button>
+        </div>
+        <pre id="log" class="monitor"></pre>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

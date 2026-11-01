@@ -1,0 +1,110 @@
+{
+  "title": "pair.pending",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "pair.pending"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "pairingId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "quest",
+            "mac",
+            "iphone",
+            "devterm",
+            "cardputer",
+            "web"
+          ]
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "midi",
+              "serial",
+              "ble",
+              "ir",
+              "camera",
+              "mic",
+              "hands",
+              "display",
+              "speaker",
+              "gpio",
+              "wifi"
+            ]
+          }
+        },
+        "code": {
+          "type": "string"
+        },
+        "display": {
+          "type": "string"
+        },
+        "requestedAt": {
+          "type": "number"
+        },
+        "expiresAt": {
+          "type": "number"
+        },
+        "origin": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pairingId",
+        "name",
+        "kind",
+        "capabilities",
+        "code",
+        "display",
+        "requestedAt",
+        "expiresAt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

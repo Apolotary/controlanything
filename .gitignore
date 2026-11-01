@@ -1,0 +1,21 @@
+# dependencies and build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# secrets and local certificates (never commit)
+.env
+.env.*
+!.env.example
+.certs/
+.data/
+
+# internal planning notes (kept out of the public repo)
+research/
+notes/
+BRIEF.md
+
+# misc
+*.log
+.DS_Store

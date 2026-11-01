@@ -1,0 +1,59 @@
+/** Entry point: `npm run dev` (watch) or `npm start`. */
+import { createApp } from './app';
+import { loadConfig, loadDotEnv, SERVER_VERSION } from './config';
+import { startConsoleApprovals } from './console';
+import { createContext, startServers } from './context';
+
+const envFiles = loadDotEnv();
+const config = loadConfig(process.env);
+const ctx = createContext(config);
+const app = createApp(ctx);
+
+let servers: Awaited<ReturnType<typeof startServers>>;
+try {
+  servers = await startServers(ctx, app);
+} catch (e) {
+  console.error(`[server] could not start: ${(e as Error).message}`);
+  process.exit(1);
+}
+
+const u = ctx.urls();
+const m = config.muse;
+const lines = [
+  '',
+  `ControlEverything server ${SERVER_VERSION}`,
+  `  mode      ${m.mode === 'live' ? `LIVE (Meta Model API, key from ${envFiles.length ? 'env/.env' : 'env'})` : 'FIXTURE (no MODEL_API_KEY; replies are canned and labelled FIXTURE)'}`,
+  `  models    chat=${m.model} transcribe=${m.transcribeModel}${m.reasoningEffort ? ` effort=${m.reasoningEffort}` : ''}`,
+  `  space     ${ctx.registry.spaceId} · ${ctx.registry.size} paired device(s)`,
+];
+if (u.local) lines.push(`  local     ${u.local}/companion/   (this Mac is the owner here)`);
+if (u.https) {
+  lines.push(`  LAN https ${u.https}/companion/   ${u.https}/quest/`);
+  for (const ip of u.lan.slice(1)) lines.push(`            https://${ip}:${ctx.bound.https}/`);
+  lines.push('            self-signed cert: open the https URL once on each device and accept the warning');
+}
+if (u.http) lines.push(`  LAN http  ${u.http}  (no TLS: for ESP32/CLI clients with a device token; trusted LAN only)`);
+lines.push(`  websocket ${u.https ? u.https.replace('https', 'wss') : ''}/ws · ws://localhost:${ctx.bound.http ?? config.http.port}/ws`);
+lines.push(`  Quest/USB adb reverse tcp:${ctx.bound.http ?? config.http.port} tcp:${ctx.bound.http ?? config.http.port}  then open ${u.local ?? ''}/quest/`);
+if (m.recordDir) lines.push(`  recording keyed live responses to ${m.recordDir} (MUSE_RECORD=1)`);
+const replayed = 'recordedKeys' in ctx.muse ? (ctx.muse as { recordedKeys(): string[] }).recordedKeys() : [];
+if (replayed.length) lines.push(`  replaying ${replayed.length} recorded real response(s) as FIXTURE: ${replayed.join(', ')}`);
+if (config.trustFirstDevice) lines.push('  CE_TRUST_FIRST_DEVICE=1: the first device to pair is approved automatically');
+if (servers.certRegenerated) lines.push(`  generated a new dev certificate for ${servers.certAltNames?.join(', ')}`);
+for (const w of m.warnings) lines.push(`  warning   ${w}`);
+if (config.consoleApprove) lines.push('  pairing   new requests print here with their code; type "y" to approve, "n" to deny');
+console.log(lines.join('\n'));
+
+const stopConsole = config.consoleApprove ? startConsoleApprovals(ctx) : () => {};
+
+let closing = false;
+async function shutdown(signal: string): Promise<void> {
+  if (closing) return;
+  closing = true;
+  console.log(`\n[server] ${signal}: shutting down`);
+  stopConsole();
+  await servers.close();
+  process.exit(0);
+}
+process.on('SIGINT', () => void shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));

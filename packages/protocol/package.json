@@ -1,0 +1,19 @@
+{
+  "name": "@ce/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ControlEverything wire protocol: zod schemas, TS types and JSON Schema for every WebSocket message.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./json-schema/*": "./json-schema/*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsx scripts/gen-json-schema.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "gen:schema": "tsx scripts/gen-json-schema.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  }
+}

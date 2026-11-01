@@ -1,0 +1,83 @@
+{
+  "title": "pair.status",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "pair.status"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "pairingId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "approved",
+            "denied",
+            "expired"
+          ]
+        },
+        "pollSecret": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "code": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "display": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "qr": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "expiresAt": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "pairingId"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

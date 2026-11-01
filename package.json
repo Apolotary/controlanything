@@ -1,0 +1,30 @@
+{
+  "name": "controleverything",
+  "private": true,
+  "version": "0.1.0",
+  "description": "ControlEverything: connect an AI agent to the physical world from a Quest 3 in passthrough.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -i --default-input-target server -n server,companion -c blue,green \"npm run dev -w @ce/server\" \"npm run dev -w @ce/companion\"",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "start": "npm run start -w @ce/server",
+    "smoke": "npm run smoke -w @ce/server"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "concurrently": "^10.0.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

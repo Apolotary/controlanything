@@ -1,0 +1,23 @@
+{
+  "protocol": 1,
+  "messages": {
+    "hello": "hello.json",
+    "welcome": "welcome.json",
+    "presence": "presence.json",
+    "pair.start": "pair.start.json",
+    "pair.status": "pair.status.json",
+    "pair.approve": "pair.approve.json",
+    "pair.deny": "pair.deny.json",
+    "pair.pending": "pair.pending.json",
+    "pair.approved": "pair.approved.json",
+    "pair.denied": "pair.denied.json",
+    "snapshot": "snapshot.json",
+    "agent.step": "agent.step.json",
+    "device.card": "device.card.json",
+    "ui.spec": "ui.spec.json",
+    "control.event": "control.event.json",
+    "driver.deploy": "driver.deploy.json",
+    "driver.status": "driver.status.json",
+    "log": "log.json"
+  }
+}
