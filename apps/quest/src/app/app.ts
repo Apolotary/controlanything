@@ -652,6 +652,8 @@ export class QuestApp {
       return;
     }
     if (p.cardId) r.payload.cardId = p.cardId;
+    // tells the camera oracle whether absolute luma is comparable across the before/after pair
+    if (r.payload.camera && this.camera instanceof LiveCamera) r.payload.camera.exposure = this.exposureLocked ? 'locked' : 'auto';
     this.ws.send('sense.result', { senseId: p.senseId, kind: 'frame', frame: r.payload, at: Date.now(), ok: true }, { to: 'server' });
     this.lastShown = { frameId: r.payload.frameId, dets: [] };
     this.showLastFrame(r.payload.jpeg, r.payload.width, r.payload.height, [], `verify frame${p.cardId ? ` · ${p.cardId.slice(-6)}` : ''}`);
