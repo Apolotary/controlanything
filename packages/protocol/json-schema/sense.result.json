@@ -359,6 +359,11 @@
             },
             "repeats": {
               "type": "integer",
+              "minimum": 0,
+              "maximum": 5
+            },
+            "frames": {
+              "type": "integer",
               "minimum": 1,
               "maximum": 8
             },

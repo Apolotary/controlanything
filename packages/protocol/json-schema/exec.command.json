@@ -146,8 +146,8 @@
                 },
                 "repeats": {
                   "type": "integer",
-                  "minimum": 1,
-                  "maximum": 8
+                  "minimum": 0,
+                  "maximum": 5
                 },
                 "frameGapUs": {
                   "type": "integer",
@@ -155,12 +155,13 @@
                   "maximum": 500000
                 },
                 "rawUs": {
+                  "minItems": 2,
                   "maxItems": 1024,
                   "type": "array",
                   "items": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 200000
+                    "maximum": 65000
                   }
                 },
                 "khz": {

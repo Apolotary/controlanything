@@ -62,9 +62,12 @@ export type IrProtocol = z.infer<typeof IrProtocol>;
  * One infrared frame (or burst). `bytes` are in send order, each byte LSB-first (native NEC/AEHA notation:
  * Panasonic CH1 off = [0x2C, 0x52, 0x09, 0x2F, 0x26]). The server always fills `rawUs` (alternating mark/space
  * microseconds, starting with a mark) before sending, so an executor that only knows RAW + khz works; the
- * protocol/bytes stay for logs, decoding and the allowlist. `repeats` = frames per press (default 1),
- * `frameGapUs` between them. `ref` names the library entry the bytes came from ("lib:<brand>/<model>/<key>"
- * or "learned:<id>") so the allowlist check is a lookup, not a guess.
+ * protocol/bytes stay for logs, decoding and the allowlist. `repeats` = EXTRA full frames after the first
+ * (IRremoteESP8266 convention: 0 = sent once, 1 = twice as Panasonic lighting remotes do), `frameGapUs` =
+ * the space after a frame's last mark before the next frame's leader. A learned capture that already holds
+ * two frames and their gap in `rawUs` is replayed with repeats 0. `ref` names the library entry the bytes
+ * came from ("lib:<brand>/<model>/<key>" or "learned:<id>") so the allowlist check is a lookup, not a guess.
+ * Firmware limits: rawUs 2..1024 entries of 1..65000 us, <= 0.5 s per frame, repeats <= 5, gap <= 500 ms.
  */
 export const IrOp = z.object({
   kind: z.literal('ir'),
@@ -76,21 +79,27 @@ export const IrOp = z.object({
   command: z.number().int().min(0).max(0xff).optional(),
   /** unit time T in microseconds (default per protocol: NEC 562.5, AEHA 425) */
   unitUs: z.number().min(200).max(1000).optional(),
-  repeats: z.number().int().min(1).max(8).optional(),
+  /** extra frames after the first (0 = once) */
+  repeats: z.number().int().min(0).max(5).optional(),
   frameGapUs: z.number().int().min(1000).max(500_000).optional(),
   /** alternating mark/space durations in microseconds, starting with a mark */
-  rawUs: z.array(z.number().int().min(1).max(200_000)).max(1024).optional(),
+  rawUs: z.array(z.number().int().min(1).max(65_000)).min(2).max(1024).optional(),
   /** carrier in kHz (default 38) */
   khz: z.number().min(30).max(60).optional(),
   ref: z.string().max(120).optional(),
 });
 export type IrOp = z.infer<typeof IrOp>;
 
-/** A captured IR frame (learning): what a receiver saw, decoded when the protocol is recognisable. */
+/**
+ * A captured IR frame (learning): what a receiver saw during one press (may hold several frames and their
+ * gaps in `rawUs`), decoded when the protocol is recognisable. `frames` = how many frames the capture holds.
+ */
 export const IrCapture = z.object({
   rawUs: z.array(z.number().int().min(1).max(200_000)).min(2).max(1024),
   khz: z.number().min(30).max(60).optional(),
-  repeats: z.number().int().min(1).max(8).optional(),
+  /** extra frames after the first, if the capture was split (0 = the whole press is in rawUs) */
+  repeats: z.number().int().min(0).max(5).optional(),
+  frames: z.number().int().min(1).max(8).optional(),
   frameGapUs: z.number().int().min(1000).max(500_000).optional(),
   protocol: z.enum([...IrProtocol.options, 'UNKNOWN']).optional(),
   bytes: z.array(z.number().int().min(0).max(255)).max(16).optional(),

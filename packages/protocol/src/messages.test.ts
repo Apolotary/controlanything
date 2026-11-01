@@ -158,7 +158,7 @@ describe('protocol v1: discovery loop', () => {
   it('exec.command takes only executor ops (no step composites) and exec.ack carries reply bytes', () => {
     const base = { execId: 'e1', executorDeviceId: 'mac-1', port: 'OP-1' };
     expect(PayloadSchemas['exec.command'].safeParse({ ...base, op: { kind: 'midi', msg: 'cc', channel: 1, number: 46, value: 100 } }).success).toBe(true);
-    expect(PayloadSchemas['exec.command'].safeParse({ ...base, op: { kind: 'ir', protocol: 'AEHA', bytes: [0x2c, 0x52, 0x09, 0x2f, 0x26], rawUs: [3456, 1728, 432, 432], khz: 38, repeats: 2, frameGapUs: 75000 } }).success).toBe(true);
+    expect(PayloadSchemas['exec.command'].safeParse({ ...base, op: { kind: 'ir', protocol: 'AEHA', bytes: [0x2c, 0x52, 0x09, 0x2f, 0x26], rawUs: [3456, 1728, 432, 432], khz: 38, repeats: 1, frameGapUs: 75000 } }).success).toBe(true);
     expect(PayloadSchemas['exec.command'].safeParse({ ...base, op: { kind: 'local', op: 'volume', arg: 40 } }).success).toBe(true);
     expect(PayloadSchemas['exec.command'].safeParse({ ...base, op: { kind: 'local', op: 'print', arg: { title: 'LINK', lines: ['light: ok'], verdict: 'ok' } } }).success).toBe(true);
     expect(PayloadSchemas['exec.command'].safeParse({ ...base, op: { kind: 'step', upActionId: 'a', downActionId: 'b', steps: 10 } }).success).toBe(false);
