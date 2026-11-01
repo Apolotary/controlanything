@@ -23,6 +23,8 @@ export const ForgeAction = z.object({
     .optional(),
   /** the action that undoes this one */
   inverseActionId: z.string().max(64).optional(),
+  /** only the identifying part of the encode is kept (MIDI message + number), to remap recorded runs */
+  encode: z.object({ kind: z.string().max(16), msg: z.string().max(24).optional(), number: z.number().optional() }).optional(),
   /** "hold" = irreversible on the device */
   confirm: z.enum(['tap', 'hold']).optional(),
   /** optional per-action verification (otherwise taken from ForgeRequest.verification) */

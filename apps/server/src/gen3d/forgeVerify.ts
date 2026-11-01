@@ -73,9 +73,9 @@ export function isStepper(h: HackDraft, byId: Map<string, ForgeAction>): boolean
 
 function admits(a: ForgeAction, type: string, expect: string): boolean | undefined {
   if (!a.expect || a.expect.sense === 'none' || a.expect.effect === 'none') return undefined;
-  if (type === 'none') return true;
+  // "any": the driver only knows the action does something; any physical check is a valid (stronger) proof
+  if (type === 'none' || a.expect.effect === 'any') return true;
   if (!(SENSE_ORACLE[a.expect.sense] ?? []).includes(type)) return false;
-  if (a.expect.effect === 'any') return true;
   return (EFFECT_ADMITS[a.expect.effect] ?? [a.expect.effect]).includes(expect);
 }
 

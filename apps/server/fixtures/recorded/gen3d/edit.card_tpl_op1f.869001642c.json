@@ -1,0 +1,88 @@
+{
+  "kind": "gen3d-run",
+  "kit": "ce.hackset/1+ce.gen3d/1",
+  "task": "edit",
+  "cardId": "card_tpl_op1f",
+  "request": "make the resonance control a big red lever",
+  "mode": "json",
+  "category": "synthesizer",
+  "transport": "midi",
+  "deviceName": "OP-1 Field",
+  "actions": [
+    {
+      "actionId": "cc46",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 46
+    },
+    {
+      "actionId": "cc47",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 47
+    },
+    {
+      "actionId": "cc48",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 48
+    },
+    {
+      "actionId": "cc49",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 49
+    },
+    {
+      "actionId": "cc54",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 54
+    },
+    {
+      "actionId": "cc55",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 55
+    },
+    {
+      "actionId": "note",
+      "kind": "trigger",
+      "sense": "audio",
+      "effect": "louder",
+      "msg": "note",
+      "number": 60
+    }
+  ],
+  "recordedAt": "2026-11-01T21:43:46.289Z",
+  "calls": [
+    {
+      "label": "gen3d.edit",
+      "model": "muse-spark-1.3",
+      "effort": "low",
+      "text": "{\"behaviors\": [], \"controls\": [{\"accent\": \"#FF0000\", \"armed\": true, \"binding\": {\"action\": \"cc47\", \"args\": {\"hack\": \"h_green\"}, \"driverId\": \"drv_tpl_op1f\"}, \"default\": 64, \"description\": \"synth engine green dial\", \"id\": \"h_green\", \"kind\": \"continuous\", \"label\": \"TWIST GREEN\", \"range\": {\"max\": 127, \"min\": 0, \"step\": 1}}], \"feedback\": [], \"parts\": [{\"archetype\": \"lever\", \"controlId\": \"h_green\", \"id\": \"p_h_green\", \"kind\": \"archetype\", \"params\": {\"accent\": \"#FF0000\", \"length\": 0.22, \"showLabel\": true, \"showValue\": true}, \"transform\": {\"position\": [-0.045, 0, 0]}}], \"remove\": [], \"summary\": \"Made TWIST GREEN a big red lever.\", \"title\": \"\"}",
+      "finishReason": "stop",
+      "latencyMs": 8542,
+      "ttftMs": 7821,
+      "usage": {
+        "promptTokens": 6551,
+        "completionTokens": 1314,
+        "reasoningTokens": 1085,
+        "cachedTokens": 0
+      }
+    }
+  ],
+  "ok": true
+}

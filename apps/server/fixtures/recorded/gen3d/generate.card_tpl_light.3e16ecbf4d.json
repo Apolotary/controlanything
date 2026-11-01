@@ -1,0 +1,80 @@
+{
+  "kind": "gen3d-run",
+  "kit": "ce.hackset/1+ce.gen3d/1",
+  "task": "generate",
+  "cardId": "card_tpl_light",
+  "request": "generate a hack set for the Ceiling light",
+  "mode": "json",
+  "category": "lighting",
+  "transport": "ir",
+  "deviceName": "Ceiling light",
+  "actions": [
+    {
+      "actionId": "full",
+      "kind": "trigger",
+      "sense": "camera",
+      "effect": "on"
+    },
+    {
+      "actionId": "off",
+      "kind": "trigger",
+      "sense": "camera",
+      "effect": "off"
+    },
+    {
+      "actionId": "brighter",
+      "kind": "trigger",
+      "sense": "camera",
+      "effect": "brighter"
+    },
+    {
+      "actionId": "dimmer",
+      "kind": "trigger",
+      "sense": "camera",
+      "effect": "dimmer"
+    },
+    {
+      "actionId": "night",
+      "kind": "trigger",
+      "sense": "camera",
+      "effect": "dimmer"
+    },
+    {
+      "actionId": "warmer",
+      "kind": "trigger",
+      "sense": "camera",
+      "effect": "warmer"
+    },
+    {
+      "actionId": "cooler",
+      "kind": "trigger",
+      "sense": "camera",
+      "effect": "cooler"
+    },
+    {
+      "actionId": "level",
+      "kind": "set",
+      "sense": "camera",
+      "effect": "any"
+    }
+  ],
+  "recordedAt": "2026-11-01T21:43:13.765Z",
+  "calls": [
+    {
+      "label": "gen3d.forge",
+      "model": "muse-spark-1.3",
+      "effort": "low",
+      "text": "{\"hacks\": [{\"blurb\": \"brightness 0 to 100 percent\", \"commands\": [{\"action\": \"level\", \"delayMs\": 0, \"param\": \"p_lvl\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"slider\", \"param\": \"p_lvl\", \"size\": \"m\"}, \"id\": \"h_level\", \"inverse\": {\"commands\": [], \"restore\": \"p_lvl\"}, \"kind\": \"control\", \"max_rate_hz\": 2, \"name\": \"Set brightness\", \"oracle\": {\"expect\": \"luminance_tracks_param\", \"reason\": \"\", \"type\": \"camera\"}, \"params\": [{\"default\": 80, \"id\": \"p_lvl\", \"max\": 100, \"min\": 0, \"name\": \"Brightness\", \"step\": 10, \"unit\": \"%\"}], \"reversible\": true}, {\"blurb\": \"step warmer or cooler tone\", \"commands\": [{\"action\": \"warmer\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}, {\"action\": \"cooler\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"slider\", \"param\": \"p_warm\", \"size\": \"m\"}, \"id\": \"h_warmth\", \"inverse\": {\"commands\": [], \"restore\": \"p_warm\"}, \"kind\": \"control\", \"max_rate_hz\": 1, \"name\": \"Shift warmth\", \"oracle\": {\"expect\": \"colour_shift\", \"reason\": \"\", \"type\": \"camera\"}, \"params\": [{\"default\": 50, \"id\": \"p_warm\", \"max\": 100, \"min\": 0, \"name\": \"Warmth\", \"step\": 20, \"unit\": \"%\"}], \"reversible\": true}, {\"blurb\": \"switch ceiling light to full\", \"commands\": [{\"action\": \"full\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_full\", \"inverse\": {\"commands\": [{\"action\": \"off\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 1, \"name\": \"Turn full on\", \"oracle\": {\"expect\": \"on\", \"reason\": \"\", \"type\": \"camera\"}, \"params\": [], \"reversible\": true}, {\"blurb\": \"switch ceiling light off\", \"commands\": [{\"action\": \"off\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_off\", \"inverse\": {\"commands\": [{\"action\": \"full\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 1, \"name\": \"Turn light off\", \"oracle\": {\"expect\": \"off\", \"reason\": \"\", \"type\": \"camera\"}, \"params\": [], \"reversible\": true}, {\"blurb\": \"soft night light mode\", \"commands\": [{\"action\": \"night\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_night\", \"inverse\": {\"commands\": [{\"action\": \"full\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 1, \"name\": \"Glow night\", \"oracle\": {\"expect\": \"dimmer\", \"reason\": \"\", \"type\": \"camera\"}, \"params\": [], \"reversible\": true}, {\"blurb\": \"dim plus warm evening scene\", \"commands\": [{\"action\": \"dimmer\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}, {\"action\": \"warmer\", \"delayMs\": 400, \"param\": \"\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_cozy\", \"inverse\": {\"commands\": [{\"action\": \"brighter\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}, {\"action\": \"cooler\", \"delayMs\": 400, \"param\": \"\", \"value\": 0}], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 1, \"name\": \"Make cozy\", \"oracle\": {\"expect\": \"dimmer+warmer\", \"reason\": \"\", \"type\": \"camera\"}, \"params\": [], \"reversible\": true}], \"title\": \"Ceiling light\"}",
+      "finishReason": "stop",
+      "latencyMs": 13435,
+      "ttftMs": 9847,
+      "usage": {
+        "promptTokens": 3007,
+        "completionTokens": 2464,
+        "reasoningTokens": 1339,
+        "cachedTokens": 2545
+      }
+    }
+  ],
+  "ok": true
+}

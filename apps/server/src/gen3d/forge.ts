@@ -27,7 +27,7 @@ import { draftIssues, isStepper } from './forgeVerify';
 import { draftAccent, draftToHack, ForgeDraft, type Hack, HackDraft, HACKSET_VERSION, type HackSet } from './hackset';
 import { TopLevelItemScanner } from './partial';
 import { costUsd, type StreamMessage, StreamClient, type StreamUsage } from './stream';
-import { LiveTransport, loadRecordedRuns, type ModelTransport, ReplayTransport, type TransportResult, type TransportSession } from './transport';
+import { LiveTransport, loadRecordedRuns, type ModelTransport, ReplayTransport, type RunTarget, type TransportResult, type TransportSession } from './transport';
 
 export const FORGE_KIT = 'ce.hackset/1+ce.gen3d/1';
 export const DEFAULT_FORGE_MODEL = 'muse-spark-1.3';
@@ -306,6 +306,98 @@ function canonicalHackset(draft: ForgeDraft, device: ForgeDevice, driver: ForgeD
   return withStatus(hs, verification);
 }
 
+// --- replaying a run recorded for another device of the same kind ---------------------------------
+
+function runContext(device: ForgeDevice, driver: ForgeDriver) {
+  return {
+    category: device.category,
+    transport: driver.transport,
+    deviceName: device.name,
+    actions: driver.actions.map((a) => ({
+      actionId: a.actionId,
+      kind: a.kind,
+      ...(a.expect ? { sense: a.expect.sense, effect: a.expect.effect } : {}),
+      ...(a.encode?.kind === 'midi' && a.encode.msg && a.encode.number !== undefined ? { msg: a.encode.msg, number: a.encode.number } : {}),
+    })),
+  };
+}
+
+const ALIASES: Record<string, string[]> = {
+  full: ['fullOn', 'full_on', 'on'],
+  fullOn: ['full', 'full_on', 'on'],
+  night: ['nightLight', 'night_light'],
+  nightLight: ['night', 'night_light'],
+  dimmer: ['darker'],
+  darker: ['dimmer'],
+};
+
+type RecordedAction = NonNullable<RunTarget['actions']>[number];
+
+/**
+ * Map an action id from the recorded driver onto the live one: the same id, a known alias, the same MIDI
+ * message and number (cc46 -> "eng1" when both send CC 46), or the one action of the same kind and effect.
+ */
+export function mapAction(id: string, driver: ForgeDriver, recorded?: RecordedAction[]): string | undefined {
+  const live = new Map(driver.actions.map((a) => [a.actionId, a]));
+  if (live.has(id)) return id;
+  for (const alias of ALIASES[id] ?? []) if (live.has(alias)) return alias;
+  const r = recorded?.find((a) => a.actionId === id);
+  if (!r) return undefined;
+  if (r.msg && r.number !== undefined) {
+    const midi = driver.actions.filter((a) => a.encode?.kind === 'midi' && a.encode.msg === r.msg && a.encode.number === r.number);
+    if (midi.length === 1) return midi[0].actionId;
+  }
+  if (!r.effect || r.effect === 'any') return undefined;
+  const same = driver.actions.filter((a) => a.kind === r.kind && a.expect?.effect === r.effect);
+  return same.length === 1 ? same[0].actionId : undefined;
+}
+
+/** Remap a replayed draft's actions onto this driver; drop hacks that need an action it does not have. */
+function adaptDraft(draft: ForgeDraft, driver: ForgeDriver, recorded?: RecordedAction[]): { draft?: ForgeDraft; fixes: string[] } {
+  const fixes: string[] = [];
+  const hacks: HackDraft[] = [];
+  for (const h of draft.hacks) {
+    const next = structuredClone(h);
+    let missing: string | undefined;
+    for (const c of next.commands) {
+      const to = mapAction(c.action, driver, recorded);
+      if (!to) missing ??= c.action;
+      else if (to !== c.action) {
+        fixes.push(`replay: ${h.id} ${c.action} -> ${to}`);
+        c.action = to;
+      }
+    }
+    if (missing) {
+      fixes.push(`replay: dropped ${h.id} (this driver has no "${missing}")`);
+      continue;
+    }
+    next.inverse.commands = next.inverse.commands.flatMap((c) => {
+      const to = mapAction(c.action, driver, recorded);
+      return to ? [{ ...c, action: to }] : [];
+    });
+    hacks.push(next);
+  }
+  if (!hacks.length) return { fixes };
+  const params = new Set(hacks.flatMap((h) => h.params.map((p) => p.id)));
+  for (const h of hacks) if (h.inverse.restore && !params.has(h.inverse.restore)) h.inverse.restore = h.kind === 'control' ? (h.params[0]?.id ?? '') : '';
+  return { draft: { ...draft, hacks }, fixes };
+}
+
+/** The same for a replayed edit: remap control bindings, drop controls (and their parts) this driver cannot run. */
+function adaptEdit(set: EditSet, driver: ForgeDriver, recorded?: RecordedAction[]): EditSet {
+  const dropped = new Set<string>();
+  const controls = set.controls.flatMap((c) => {
+    const to = mapAction(c.binding.action, driver, recorded);
+    if (!to) {
+      dropped.add(c.id);
+      return [];
+    }
+    const yTo = c.yBinding ? mapAction(c.yBinding.action, driver, recorded) : undefined;
+    return [{ ...c, binding: { ...c.binding, action: to, driverId: driver.driverId }, ...(c.yBinding ? { yBinding: { ...c.yBinding, action: yTo ?? to, driverId: driver.driverId } } : {}) }];
+  });
+  return { ...set, controls, parts: set.parts.filter((p) => !(p.controlId && dropped.has(p.controlId))) };
+}
+
 // --- store ---------------------------------------------------------------------------------------
 
 interface Entry {
@@ -438,7 +530,8 @@ export function createForge(deps: ForgeDeps): Forge {
     const specId = specIdFor(device.cardId);
     const existing = store.get(specId);
     const step = stepper(runId, device.cardId, req.onProgress);
-    const session = transport.session({ kit: FORGE_KIT, task: 'generate', cardId: device.cardId, request, mode: 'json' });
+    const session = transport.session({ kit: FORGE_KIT, task: 'generate', cardId: device.cardId, request, mode: 'json', ...runContext(device, driver) });
+    const fallback = session.match === 'category' || session.match === 'transport';
     const rf = museResponseFormat('ce_hackset', ForgeDraft, { description: 'The hack set for one device: hacks bound to its driver actions.' });
     const started = Date.now();
     let usage = emptyUsage();
@@ -510,11 +603,20 @@ export function createForge(deps: ForgeDeps): Forge {
           }
         }
         // 2-5. bindings, presentation, safety, composition
+        if (draft && fallback) {
+          // a recording made for another device of the same kind: map its actions onto this driver
+          const a = adaptDraft(draft, driver, session.recordedActions);
+          draft = a.draft;
+          fixes = [...a.fixes];
+          if (!draft) errors.push(issue('bindings', 'replay_mismatch', 'hacks', `FIXTURE: the recorded run (${session.match} match) uses no action this driver has`));
+        }
         if (draft) {
           const n = normalizeDraft(draft, driver);
           draft = n.draft;
-          fixes = n.fixes;
+          fixes = [...fixes, ...n.fixes];
           const all = draftIssues(draft, driver);
+          // a replayed run cannot be repaired: the recorded set may be smaller than this driver allows
+          if (fallback) for (const i of all) if (i.stage === 'composition') i.severity = 'warn';
           errors = all.filter((i) => i.severity === 'error');
           warnings = all.filter((i) => i.severity === 'warn');
         }
@@ -605,7 +707,8 @@ export function createForge(deps: ForgeDeps): Forge {
     const model = req.model ?? defaultModel;
     const firstEffort = req.effort ?? DEFAULT_EFFORT;
     const step = stepper(runId, e.device.cardId, req.onProgress);
-    const session = transport.session({ kit: FORGE_KIT, task: 'edit', cardId: e.device.cardId, request: instruction, mode: 'json' });
+    const session = transport.session({ kit: FORGE_KIT, task: 'edit', cardId: e.device.cardId, request: instruction, mode: 'json', ...runContext(e.device, e.driver) });
+    const fallback = session.match === 'category' || session.match === 'transport';
     const rf = museResponseFormat('ce_gen3d_edit', EditSet, { description: 'Changed items of a ce.gen3d/1 object, by id.' });
     const started = Date.now();
     let usage = emptyUsage();
@@ -638,6 +741,7 @@ export function createForge(deps: ForgeDeps): Forge {
             errors.push(issue('schema', 'not_json', '(root)', 'the answer is not valid JSON'));
           }
         }
+        if (set && fallback) set = adaptEdit(set, e.driver, session.recordedActions);
         if (set) {
           const a = applyEdit(current.gen3d, set, e.driver);
           errors.push(...a.issues.filter((i) => i.severity === 'error'));

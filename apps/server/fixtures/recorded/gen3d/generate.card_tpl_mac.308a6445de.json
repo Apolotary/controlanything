@@ -1,0 +1,50 @@
+{
+  "kind": "gen3d-run",
+  "kit": "ce.hackset/1+ce.gen3d/1",
+  "task": "generate",
+  "cardId": "card_tpl_mac",
+  "request": "generate a hack set for the This Mac",
+  "mode": "json",
+  "category": "computer",
+  "transport": "local",
+  "deviceName": "This Mac",
+  "actions": [
+    {
+      "actionId": "volume",
+      "kind": "set",
+      "sense": "ack",
+      "effect": "any"
+    },
+    {
+      "actionId": "playpause",
+      "kind": "toggle",
+      "sense": "audio",
+      "effect": "any"
+    },
+    {
+      "actionId": "say",
+      "kind": "trigger",
+      "sense": "audio",
+      "effect": "louder"
+    }
+  ],
+  "recordedAt": "2026-11-01T21:44:02.060Z",
+  "calls": [
+    {
+      "label": "gen3d.forge",
+      "model": "muse-spark-1.3",
+      "effort": "low",
+      "text": "{\"hacks\": [{\"blurb\": \"system volume 0-100\", \"commands\": [{\"action\": \"volume\", \"delayMs\": 0, \"param\": \"p_vol\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"ring\", \"param\": \"p_vol\", \"size\": \"m\"}, \"id\": \"h_vol\", \"inverse\": {\"commands\": [], \"restore\": \"p_vol\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Ride volume\", \"oracle\": {\"expect\": \"serial_ack\", \"reason\": \"volume reports ack\", \"type\": \"serial\"}, \"params\": [{\"default\": 40, \"id\": \"p_vol\", \"max\": 100, \"min\": 0, \"name\": \"Volume\", \"step\": 5, \"unit\": \"%\"}], \"reversible\": true}, {\"blurb\": \"play or pause audio\", \"commands\": [{\"action\": \"playpause\", \"delayMs\": 0, \"param\": \"p_play\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"toggle\", \"param\": \"p_play\", \"size\": \"m\"}, \"id\": \"h_play\", \"inverse\": {\"commands\": [], \"restore\": \"p_play\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Toggle play\", \"oracle\": {\"expect\": \"louder\", \"reason\": \"audio starts or stops\", \"type\": \"mic\"}, \"params\": [{\"default\": 1, \"id\": \"p_play\", \"max\": 1, \"min\": 0, \"name\": \"Play\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"silence the Mac\", \"commands\": [{\"action\": \"volume\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_mute\", \"inverse\": {\"commands\": [{\"action\": \"volume\", \"delayMs\": 0, \"param\": \"\", \"value\": 50}], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 3, \"name\": \"Mute Mac\", \"oracle\": {\"expect\": \"serial_ack\", \"reason\": \"volume reports ack\", \"type\": \"serial\"}, \"params\": [], \"reversible\": true}, {\"blurb\": \"the Mac speaks hello\", \"commands\": [{\"action\": \"say\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_say\", \"inverse\": {\"commands\": [{\"action\": \"volume\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 1, \"name\": \"Say hello\", \"oracle\": {\"expect\": \"heard_text\", \"reason\": \"hello heard in room\", \"type\": \"mic\"}, \"params\": [], \"reversible\": true}], \"title\": \"This Mac\"}",
+      "finishReason": "stop",
+      "latencyMs": 15761,
+      "ttftMs": 13270,
+      "usage": {
+        "promptTokens": 2805,
+        "completionTokens": 2434,
+        "reasoningTokens": 1700,
+        "cachedTokens": 2545
+      }
+    }
+  ],
+  "ok": true
+}

@@ -1,0 +1,88 @@
+{
+  "kind": "gen3d-run",
+  "kit": "ce.hackset/1+ce.gen3d/1",
+  "task": "generate",
+  "cardId": "card_tpl_op1f",
+  "request": "generate a hack set for the OP-1 Field",
+  "mode": "json",
+  "category": "synthesizer",
+  "transport": "midi",
+  "deviceName": "OP-1 Field",
+  "actions": [
+    {
+      "actionId": "cc46",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 46
+    },
+    {
+      "actionId": "cc47",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 47
+    },
+    {
+      "actionId": "cc48",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 48
+    },
+    {
+      "actionId": "cc49",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 49
+    },
+    {
+      "actionId": "cc54",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 54
+    },
+    {
+      "actionId": "cc55",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 55
+    },
+    {
+      "actionId": "note",
+      "kind": "trigger",
+      "sense": "audio",
+      "effect": "louder",
+      "msg": "note",
+      "number": 60
+    }
+  ],
+  "recordedAt": "2026-11-01T21:43:37.725Z",
+  "calls": [
+    {
+      "label": "gen3d.forge",
+      "model": "muse-spark-1.3",
+      "effort": "low",
+      "text": "{\"hacks\": [{\"blurb\": \"synth engine blue dial\", \"commands\": [{\"action\": \"cc46\", \"delayMs\": 0, \"param\": \"p_blue\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"knob\", \"param\": \"p_blue\", \"size\": \"m\"}, \"id\": \"h_blue\", \"inverse\": {\"commands\": [], \"restore\": \"p_blue\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Twist blue\", \"oracle\": {\"expect\": \"centroid_up\", \"reason\": \"engine timbre shifts\", \"type\": \"wire\"}, \"params\": [{\"default\": 64, \"id\": \"p_blue\", \"max\": 127, \"min\": 0, \"name\": \"Blue\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"synth engine green dial\", \"commands\": [{\"action\": \"cc47\", \"delayMs\": 0, \"param\": \"p_green\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"knob\", \"param\": \"p_green\", \"size\": \"m\"}, \"id\": \"h_green\", \"inverse\": {\"commands\": [], \"restore\": \"p_green\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Twist green\", \"oracle\": {\"expect\": \"centroid_up\", \"reason\": \"engine timbre shifts\", \"type\": \"wire\"}, \"params\": [{\"default\": 64, \"id\": \"p_green\", \"max\": 127, \"min\": 0, \"name\": \"Green\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"synth engine white dial\", \"commands\": [{\"action\": \"cc48\", \"delayMs\": 0, \"param\": \"p_white\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"knob\", \"param\": \"p_white\", \"size\": \"m\"}, \"id\": \"h_white\", \"inverse\": {\"commands\": [], \"restore\": \"p_white\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Shift white\", \"oracle\": {\"expect\": \"centroid_up\", \"reason\": \"engine tone shifts\", \"type\": \"wire\"}, \"params\": [{\"default\": 64, \"id\": \"p_white\", \"max\": 127, \"min\": 0, \"name\": \"White\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"patch effect depth control\", \"commands\": [{\"action\": \"cc54\", \"delayMs\": 0, \"param\": \"p_fx\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"slider\", \"param\": \"p_fx\", \"size\": \"m\"}, \"id\": \"h_fx\", \"inverse\": {\"commands\": [], \"restore\": \"p_fx\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Widen space\", \"oracle\": {\"expect\": \"centroid_up\", \"reason\": \"effect tone changes\", \"type\": \"wire\"}, \"params\": [{\"default\": 40, \"id\": \"p_fx\", \"max\": 127, \"min\": 0, \"name\": \"Effect\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"play three notes in a row\", \"commands\": [{\"action\": \"cc49\", \"delayMs\": 0, \"param\": \"\", \"value\": 100}, {\"action\": \"note\", \"delayMs\": 100, \"param\": \"\", \"value\": 0}, {\"action\": \"note\", \"delayMs\": 400, \"param\": \"\", \"value\": 0}, {\"action\": \"note\", \"delayMs\": 400, \"param\": \"\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_chord\", \"inverse\": {\"commands\": [{\"action\": \"cc49\", \"delayMs\": 0, \"param\": \"\", \"value\": 64}], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 1, \"name\": \"Strike chord\", \"oracle\": {\"expect\": \"louder\", \"reason\": \"\", \"type\": \"wire\"}, \"params\": [], \"reversible\": true}, {\"blurb\": \"big washed effect plus note\", \"commands\": [{\"action\": \"cc54\", \"delayMs\": 0, \"param\": \"\", \"value\": 127}, {\"action\": \"cc55\", \"delayMs\": 100, \"param\": \"\", \"value\": 90}, {\"action\": \"note\", \"delayMs\": 200, \"param\": \"\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_wash\", \"inverse\": {\"commands\": [{\"action\": \"cc54\", \"delayMs\": 0, \"param\": \"\", \"value\": 40}, {\"action\": \"cc55\", \"delayMs\": 100, \"param\": \"\", \"value\": 40}], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 1, \"name\": \"Wash sound\", \"oracle\": {\"expect\": \"louder\", \"reason\": \"\", \"type\": \"wire\"}, \"params\": [], \"reversible\": true}], \"title\": \"OP-1 Field\"}",
+      "finishReason": "stop",
+      "latencyMs": 23949,
+      "ttftMs": 19774,
+      "usage": {
+        "promptTokens": 3062,
+        "completionTokens": 3911,
+        "reasoningTokens": 2637,
+        "cachedTokens": 2545
+      }
+    }
+  ],
+  "ok": true
+}

@@ -8,7 +8,8 @@ import { resolveMuseConfig } from '../muse/config';
 import type { EditSet } from './editPatch';
 import { createForge, ForgeInputError, type ForgeProgress } from './forge';
 import { RECORDED_GEN3D_DIR } from './routes';
-import { FORGE_LIGHT_DEVICE, FORGE_LIGHT_DRIVER, FORGE_LIGHT_VERIFIED, FORGE_OP1_DEVICE, FORGE_OP1_DRIVER, FORGE_OP1_VERIFIED } from './sampleDevices';
+import type { ForgeDevice, ForgeDriver } from './forgeTypes';
+import { allPass, FORGE_LIGHT_DEVICE, FORGE_LIGHT_DRIVER, FORGE_LIGHT_VERIFIED, FORGE_OP1_DEVICE, FORGE_OP1_DRIVER, FORGE_OP1_VERIFIED, LOOP_LIGHT_DEVICE, LOOP_LIGHT_DRIVER, LOOP_MAC_DEVICE, LOOP_MAC_DRIVER, LOOP_OP1_DEVICE, LOOP_OP1_DRIVER } from './sampleDevices';
 import { loadRecordedRuns } from './transport';
 import { contentEvents, LIGHT_DRAFT, mockFetch, sseResponse } from './testkit';
 
@@ -206,6 +207,9 @@ describe('committed recordings (what judges replay without a key)', () => {
   const SAMPLE: Record<string, { device: typeof FORGE_LIGHT_DEVICE; driver: typeof FORGE_LIGHT_DRIVER; verification: typeof FORGE_LIGHT_VERIFIED }> = {
     card_light: { device: FORGE_LIGHT_DEVICE, driver: FORGE_LIGHT_DRIVER, verification: FORGE_LIGHT_VERIFIED },
     card_op1f: { device: FORGE_OP1_DEVICE, driver: FORGE_OP1_DRIVER, verification: FORGE_OP1_VERIFIED },
+    card_tpl_light: { device: LOOP_LIGHT_DEVICE, driver: LOOP_LIGHT_DRIVER, verification: allPass(LOOP_LIGHT_DRIVER) },
+    card_tpl_op1f: { device: LOOP_OP1_DEVICE, driver: LOOP_OP1_DRIVER, verification: allPass(LOOP_OP1_DRIVER) },
+    card_tpl_mac: { device: LOOP_MAC_DEVICE, driver: LOOP_MAC_DRIVER, verification: allPass(LOOP_MAC_DRIVER) },
   };
   const runs = loadRecordedRuns(RECORDED_GEN3D_DIR);
 
@@ -222,5 +226,70 @@ describe('committed recordings (what judges replay without a key)', () => {
       expect(e.report.errors).toEqual([]);
       expect(e.ok && e.untouchedIdentical).toBe(true);
     }
+  });
+});
+
+describe('replay for cards the discovery loop creates (no recording for that card)', () => {
+  const rename = (d: ForgeDriver, cardId: string, map: Record<string, string> = {}, encode: Record<string, { kind: string; msg: string; number: number }> = {}): ForgeDriver => ({
+    ...d,
+    driverId: `drv-${cardId}`,
+    cardId,
+    actions: d.actions.map((a) => ({ ...a, actionId: map[a.actionId] ?? a.actionId, ...(encode[a.actionId] ? { encode: encode[a.actionId] } : {}), ...(a.inverseActionId ? { inverseActionId: map[a.inverseActionId] ?? a.inverseActionId } : {}) })),
+  });
+  const replay = () => createForge({ muse: fixture, replayDir: RECORDED_GEN3D_DIR, replaySpeed: 0 });
+  const boundOk = (ui: NonNullable<Awaited<ReturnType<ReturnType<typeof replay>['generate']>>['uiSpec']>, d: ForgeDriver) => {
+    const ids = new Set(d.actions.map((a) => a.actionId));
+    for (const c of ui.gen3d.controls) {
+      expect(ids.has(c.binding.action), c.binding.action).toBe(true);
+      expect(c.binding.driverId).toBe(d.driverId);
+    }
+    for (const h of ui.hackset.hacks) for (const c of h.commands) expect(ids.has(c.action), c.action).toBe(true);
+  };
+
+  it.each([
+    ['light', LOOP_LIGHT_DEVICE, LOOP_LIGHT_DRIVER],
+    ['synth', LOOP_OP1_DEVICE, LOOP_OP1_DRIVER],
+    ['mac', LOOP_MAC_DEVICE, LOOP_MAC_DRIVER],
+  ] as const)('%s: replays the recording of the same category, with this card and driver ids', async (_n, dev, drv) => {
+    const cardId = 'card-7f3a9c';
+    const driver = rename(drv, cardId);
+    const device: ForgeDevice = { ...dev, cardId };
+    const r = await replay().generate({ device, driver, verification: allPass(driver) });
+    expect(r.report.errors).toEqual([]);
+    expect(r).toMatchObject({ ok: true, source: 'fixture', uiSpec: { cardId, specId: `spec_${cardId}`, driverId: driver.driverId, hackset: { device: { id: cardId } } } });
+    boundOk(r.uiSpec!, driver);
+  });
+
+  it('remaps library-style light action ids (fullOn, nightLight) and replays the edit', async () => {
+    const cardId = 'card-lib1';
+    const driver = rename(LOOP_LIGHT_DRIVER, cardId, { full: 'fullOn', night: 'nightLight' });
+    const r = await replay().generate({ device: { ...LOOP_LIGHT_DEVICE, cardId }, driver, verification: allPass(driver) });
+    expect(r.ok).toBe(true);
+    boundOk(r.uiSpec!, driver);
+    expect(r.report.fixes.some((f) => f.includes('-> fullOn'))).toBe(true);
+  });
+
+  it('remaps a Spark-named synth driver by MIDI number (cc46 -> eng1, note -> note-c4)', async () => {
+    const cardId = 'card-spk2';
+    const names: Record<string, string> = { cc46: 'eng1', cc47: 'eng2', cc48: 'eng3', cc49: 'eng4', cc54: 'fx1', cc55: 'fxmix', note: 'note-c4' };
+    const driver = rename(LOOP_OP1_DRIVER, cardId, names);
+    const f = replay();
+    const r = await f.generate({ device: { ...LOOP_OP1_DEVICE, cardId }, driver, verification: allPass(driver) });
+    expect(r.report.errors).toEqual([]);
+    expect(r.ok).toBe(true);
+    boundOk(r.uiSpec!, driver);
+    expect(r.uiSpec!.gen3d.controls.map((c) => c.binding.action)).toEqual(expect.arrayContaining(['eng1', 'eng2']));
+    const e = await f.edit({ specId: r.uiSpec!.specId, instruction: 'make the resonance control a big red lever' });
+    expect(e.ok).toBe(true);
+    expect(e.uiSpec!.gen3d.parts.some((p) => p.archetype === 'lever')).toBe(true);
+  });
+
+  it('drops recorded hacks whose actions this driver lacks instead of failing', async () => {
+    const cardId = 'card-min1';
+    const driver: ForgeDriver = { ...rename(LOOP_LIGHT_DRIVER, cardId), actions: LOOP_LIGHT_DRIVER.actions.filter((a) => ['full', 'off', 'level'].includes(a.actionId)).map((a) => ({ ...a, inverseActionId: undefined })) };
+    const r = await replay().generate({ device: { ...LOOP_LIGHT_DEVICE, cardId }, driver, verification: allPass(driver) });
+    expect(r.ok).toBe(true);
+    boundOk(r.uiSpec!, driver);
+    expect(r.report.fixes.some((f) => f.startsWith('replay: dropped'))).toBe(true);
   });
 });
