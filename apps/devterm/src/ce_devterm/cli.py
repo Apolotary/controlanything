@@ -193,8 +193,7 @@ def _print_row(r, color):
     if _SHOWN.get(ident) == key:
         return
     _SHOWN[ident] = key
-    cols = r.columns()
-    line = "  ".join(tapemod._fit(c, w) for c, w in zip(cols, tapemod.WIDTHS)).rstrip()
+    line = tapemod.format_row(r, 120).rstrip()
     v = tapemod.verdict_text(r.verdict, not unicode_ok())
     if v:
         line += "  " + ansi("ok" if r.verdict == "ok" else "fail", v, color)

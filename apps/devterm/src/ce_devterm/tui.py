@@ -46,7 +46,12 @@ class Tui(object):
     # ---- run ---------------------------------------------------------------------------------------
 
     def run(self):
-        os.environ.setdefault("ESCDELAY", "25")
+        os.environ.setdefault("ESCDELAY", "25")  # before initscr: the curses escape-delay setter needs Python 3.9
+        try:
+            import locale
+            locale.setlocale(locale.LC_ALL, "")  # ncursesw draws UTF-8 only with the user's locale active
+        except Exception:
+            pass
         try:
             curses.wrapper(self._main)
         finally:
@@ -362,7 +367,7 @@ class Tui(object):
         scr.erase()
         h, w = scr.getmaxyx()
         if h < 10 or w < 40:
-            self.put(0, 0, "ce-devterm needs at least 40x10 (now %dx%d)" % (w, h), t["volt"])
+            self.put(0, 0, "need 40x10, have %dx%d" % (w, h), t["volt"])
             scr.refresh()
             return
         phase = self.app.phase
@@ -376,7 +381,7 @@ class Tui(object):
             body_h = h - 4
             if self.view == "hacks":
                 if w >= WIDE:
-                    lw = min(64, int(w * 0.48))
+                    lw = min(60, int(w * 0.44))
                     self.draw_hacks(2, 0, body_h, lw)
                     self.draw_tape(2, lw + 1, body_h, w - lw - 1)
                 else:
@@ -482,7 +487,7 @@ class Tui(object):
         if s.channel:
             meta.append(s.channel.upper())
         if s.local:
-            meta.append("hand-written self-test")
+            meta.append("built-in")
         elif s.model_id:
             meta.append(s.model_id + (" (replay)" if s.source == "fixture" else ""))
         if s.rev:
@@ -521,7 +526,9 @@ class Tui(object):
                 self.put(y, vx, "[%s]" % ("ON " if on else "OFF"), (t["volt"] if on else t["dim"]))
             else:
                 tail = it.detail
-                self.put(y, vx, tail[:max(0, tail_w)], t["dim"])
+                if not it.operable:
+                    tail = "disarmed" + ((" %s " % g.dot + tail) if tail else "")
+                self.put(y, vx, tail[:max(0, tail_w)], t["magenta"] if not it.operable else t["dim"])
             vt = tapemod.verdict_text(it.verdict, not g.unicode)
             if vt:
                 self.put(y, x0 + w - 2, vt, t["ok"] if it.verdict == "ok" else t["fail"])
@@ -551,8 +558,7 @@ class Tui(object):
         self.put(y0, x0 + 1, title, t["bone"] | curses.A_BOLD)
         if self.tape_scroll:
             self.put(y0, x0 + 2 + len(title), "  (scrolled back %d %s G to follow)" % (self.tape_scroll, g.dot), t["dim"])
-        hdr = tapemod.format_row(tapemod.Row("VERB", "DEVICE", "COMMAND", "STATE", "MEASURE"), w - 6)
-        self.put(y0 + 1, x0 + 1, "TIME    " + hdr[8:], t["dim"], maxw=w - 2)
+        self.put(y0 + 1, x0 + 1, tapemod.header(w - 2), t["dim"], maxw=w - 2)
         avail = h - 2
         end = len(rows) - self.tape_scroll
         start = max(0, end - avail)
@@ -567,23 +573,18 @@ class Tui(object):
     def _tape_row(self, y, x, w, r):
         t, g = self.theme, self.g
         cols = r.columns()
-        widths = tapemod.WIDTHS
         pos = x
         verdict = tapemod.verdict_text(r.verdict, not g.unicode)
-        reserve = (3 if verdict else 0)
         attrs = [t["dim"], t[VERB_TOKEN.get(r.verb, "bone")] | curses.A_BOLD, t["bone"], t["bone"], t["bone"], t["bone"]]
         if r.kind == "warn":
             attrs[4] = t["magenta"]
-        for i, (c, cw) in enumerate(zip(cols, widths)):
-            if pos + cw + reserve > x + w and i > 2:
-                break
-            text = tapemod._fit(c, cw)
-            self.put(y, pos, text, attrs[i])
+        for i, cw in tapemod.layout(w):
+            self.put(y, pos, tapemod._fit(cols[i], cw), attrs[i])
             pos += cw + 2
         if verdict:
             self.put(y, pos, verdict, t["ok"] if r.verdict == "ok" else t["fail"])
-            pos += len(verdict) + 2
-        if r.model and pos < x + w - 4:
+        pos += 4
+        if r.model and pos < x + w - 6:
             self.put(y, pos, r.model, t["cyan"], maxw=x + w - pos)
 
     # ---- DAEMONS -----------------------------------------------------------------------------------------

@@ -67,6 +67,24 @@ class Tape(object):
 
 
 WIDTHS = (8, 8, 10, 14, 12, 14)
+HEADERS = ("TIME", "VERB", "DEVICE", "COMMAND", "STATE", "MEASURE")
+
+# (column index, width) per layout, widest first; the measure and the verdict survive longest, the time
+# goes first (the newest row is at the bottom anyway)
+LAYOUTS = (
+    (96, ((0, 8), (1, 8), (2, 12), (3, 16), (4, 12), (5, 14))),
+    (84, ((0, 8), (1, 8), (2, 9), (3, 13), (4, 10), (5, 12))),
+    (66, ((1, 8), (2, 8), (3, 13), (4, 9), (5, 12))),
+    (0, ((1, 8), (2, 7), (3, 11), (5, 11))),
+)
+
+
+def layout(width):
+    """Columns that fit `width` (2-space gaps, 3 cells kept for the verdict)."""
+    for min_w, cols in LAYOUTS:
+        if width >= min_w:
+            return cols
+    return LAYOUTS[-1][1]
 
 
 def _fit(s, w):
@@ -79,14 +97,11 @@ def _fit(s, w):
 def format_row(row, width, ascii_only=False):
     """The row as text (without the verdict/model columns, which the TUI colours separately)."""
     cols = row.columns()
-    parts = []
-    used = 0
-    for i, (c, w) in enumerate(zip(cols, WIDTHS)):
-        if used + w + 2 > width and i > 2:
-            break
-        parts.append(_fit(c, w))
-        used += w + 2
-    return "  ".join(parts)
+    return "  ".join(_fit(cols[i], w) for i, w in layout(width))
+
+
+def header(width):
+    return "  ".join(_fit(HEADERS[i], w) for i, w in layout(width))
 
 
 def verdict_text(verdict, ascii_only=False):
@@ -130,6 +145,13 @@ def evidence_measure(obs, passed):
     return "%+.2f" % delta
 
 
+SHORT_CATEGORY = {
+    "lighting": "light", "synthesizer": "synth", "drum-machine": "drums", "sampler": "sampler", "groovebox": "groovebox",
+    "midi-controller": "controller", "audio-interface": "audio", "effects": "effects", "remote-control": "remote",
+    "appliance": "appliance", "computer": "computer", "microcontroller": "node", "phone": "phone",
+}
+
+
 class Names(object):
     """Lookups the formatter needs (filled by the app state)."""
 
@@ -140,10 +162,16 @@ class Names(object):
         self.me = None
 
     def card(self, card_id):
+        """The short tape name: "light", "synth" (by category, unless two cards share it), else the card name."""
         if not card_id:
             return ""
         c = self.cards.get(card_id)
-        return (c.get("name") if isinstance(c, dict) else None) or card_id
+        if not isinstance(c, dict):
+            return card_id
+        short = SHORT_CATEGORY.get(c.get("category") or "")
+        if short and sum(1 for o in self.cards.values() if isinstance(o, dict) and o.get("category") == c.get("category")) == 1:
+            return short
+        return c.get("name") or card_id
 
     def device(self, device_id):
         if not device_id:
@@ -229,7 +257,8 @@ def rows_from_message(m, names):
                            key="ts:%s:%s" % (p.get("cardId"), p.get("state"))))
     elif t == "device.card":
         mm = " ".join(x for x in (p.get("maker"), p.get("model")) if x)
-        out.append(Row("IDENTIFY", p.get("name", ""), mm, "identified", "", None, kind="info", key="dc:" + str(p.get("cardId"))))
+        out.append(Row("IDENTIFY", names.card(p.get("cardId")) or p.get("name", ""), mm, "identified", "", None, kind="info",
+                       key="dc:" + str(p.get("cardId"))))
     elif t == "driver.status":
         acts = p.get("actions") or []
         ver = sum(1 for a in acts if isinstance(a, dict) and a.get("verified") == "pass")

@@ -17,7 +17,7 @@ CLOSE_UNAUTHORIZED = 4401
 
 class Link(object):
     def __init__(self, ws_url, token, on_event, capabilities=None, app=None, role=None,
-                 backoff=(0.5, 10.0), ping_interval=20.0, dead_after=45.0, connect_timeout=8.0):
+                 backoff=(0.5, 10.0), ping_interval=20.0, dead_after=45.0, connect_timeout=4.0):
         self.ws_url = ws_url
         self.token = token
         self.on_event = on_event

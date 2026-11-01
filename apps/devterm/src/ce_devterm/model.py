@@ -161,7 +161,7 @@ class AppState(object):
         measure = data.get("measure") or ""
         if state == "failed" and data.get("error"):
             measure = "%s: %s" % (data["error"], measure)
-        self.add_row(Row("EXEC", self.name, data.get("op") or "", state, measure, None, kind="exec" if ok is not False else "warn",
+        self.add_row(Row("EXEC", "devterm", data.get("op") or "", state, measure, None, kind="exec" if ok is not False else "warn",
                          key="ex:" + str(data.get("execId"))))
 
     def on_effect(self, data):
