@@ -1,10 +1,11 @@
+import { readdirSync, readFileSync } from 'node:fs';
 import QRCode from 'qrcode';
 import { describe, expect, it } from 'vitest';
 import { CallLog } from '../muse/callLog';
 import { type DecodedImage, decodeJpeg, encodeJpeg } from '../oracle/image';
 import { iou, pointInPolygon, polygonBox, polygonFor, simplifyPolygon, traceOutline } from './polygon';
 import { findQr, parsePairingQr } from './qr';
-import { cannedSamText, FixtureSam, parseSamText, samKey, simCannedRecords } from './sam';
+import { cannedSamText, decodeMask, FixtureSam, frameHash, parseSamText, samKey, simCannedRecords } from './sam';
 
 describe('SAM output grammar', () => {
   it('parses boxes, confidences and one_bit masks; empty text is zero matches', () => {
@@ -12,7 +13,7 @@ describe('SAM output grammar', () => {
     const recs = parseSamText(text);
     expect(recs).toHaveLength(2);
     expect(recs[0]).toMatchObject({ id: 0, x1: 16, y1: 279, x2: 669, y2: 671, w: 1280, h: 853, confidence: 0.9649 });
-    expect(recs[0].mask).toEqual({ encoding: 'one_bit', payload: 'abc~def', width: 654, height: 393 });
+    expect(recs[0].mask).toEqual({ encoding: 'one_bit', payload: '!abc~def', width: 654, height: 393 });
     expect(recs[1].id).toBe(3);
     expect(recs[1].confidence).toBeUndefined();
     expect(recs[1].mask?.encoding).toBe('lossless');
@@ -22,16 +23,17 @@ describe('SAM output grammar', () => {
 
   it('fixture SAM answers from recordings by prompt, else from the canned scene, always labelled fixture', async () => {
     const log = new CallLog(() => {});
-    const rec = { kind: 'sam' as const, name: samKey('ceiling light', 1280, 960, 'abc'), prompt: 'ceiling light', width: 1280, height: 960, frameHash: 'abc', model: 'sam-3.1', recordedAt: 'now', latencyMs: 1200, text: '<0f>0<|box;x1=600;y1=20;x2=800;y2=140;w=1280;h=960;c=0.95|><|mask;x=0;y=0;c=0.95;data=121,201,!zz|>' };
+    const hash = frameHash('AAAA'); // the exact frame: a recording of it wins over everything else
+    const rec = { kind: 'sam' as const, name: samKey('ceiling light', 1280, 960, hash), prompt: 'ceiling light', width: 1280, height: 960, frameHash: hash, model: 'sam-3.1', recordedAt: 'now', latencyMs: 1200, text: '<0f>0<|box;x1=600;y1=20;x2=800;y2=140;w=1280;h=960;c=0.95|><|mask;x=0;y=0;c=0.95;data=121,201,!zz|>' };
     const sam = new FixtureSam({ recorded: [rec], callLog: log });
     const r = await sam.segment('ceiling light', 'AAAA', { width: 1280, height: 960 });
     expect(r.source).toBe('fixture');
     expect(r.recordedFrom).toBe('sam-3.1');
     expect(r.records[0]).toMatchObject({ x1: 600, y1: 20 });
-    const canned = await sam.segment('synthesizer', 'AAAA', { width: 1280, height: 960 });
+    const canned = await sam.segment('synthesizer', 'BBBB', { width: 640, height: 480 }); // not a sim-sized frame: the generic scene
     expect(canned.records).toHaveLength(1);
     expect(canned.recordedFrom).toBeUndefined();
-    const all = await sam.segmentAll(['ceiling light', 'synthesizer', 'person'], 'AAAA', { width: 1280, height: 960 });
+    const all = await sam.segmentAll(['ceiling light', 'synthesizer', 'person'], 'BBBB', { width: 640, height: 480 });
     expect(all.map((x) => x.records.length)).toEqual([1, 1, 0]);
     expect(log.totals().calls).toBe(5);
     expect(cannedSamText('person', 1280, 960)).toBe('');
@@ -47,6 +49,33 @@ describe('SAM output grammar', () => {
     expect(simCannedRecords('ceiling light', 320, 240)).toBeNull();
     const desk = simCannedRecords('synthesizer', 1280, 960, { position: { x: 0.92, y: 1.3, z: -2.52 } });
     expect(desk![0].y1).toBeGreaterThan(400); // the desk view, where the synth is large
+  });
+});
+
+describe('recorded live SAM answers', () => {
+  it('decodes a real one_bit mask into a raster and an outline', () => {
+    const dir = new URL('../../fixtures/recorded/sam/', import.meta.url);
+    let files: string[] = [];
+    try {
+      files = readdirSync(dir).filter((f) => f.startsWith('sam.synthesizer.1920x1280'));
+    } catch {
+      return;
+    }
+    if (!files.length) return;
+    const rec = JSON.parse(readFileSync(new URL(files[0], dir), 'utf8')) as { text: string; model: string };
+    expect(rec.model).toBe('sam-3.1');
+    const [r] = parseSamText(rec.text);
+    expect(r.mask?.encoding).toBe('one_bit');
+    const raster = decodeMask(r);
+    expect(raster).not.toBeNull();
+    expect(raster!.length).toBe(r.mask!.width * r.mask!.height);
+    let set = 0;
+    for (const v of raster!) set += v;
+    expect(set).toBeGreaterThan(raster!.length * 0.5); // a synth fills most of its box
+    const poly = polygonFor({ data: raster!, width: r.mask!.width, height: r.mask!.height, x0: r.x1, y0: r.y1 }, [r.x1, r.y1, r.x2 - r.x1 + 1, r.y2 - r.y1 + 1]);
+    expect(poly.length).toBeGreaterThanOrEqual(8);
+    expect(poly.length).toBeLessThanOrEqual(64);
+    expect(pointInPolygon((r.x1 + r.x2) / 2, (r.y1 + r.y2) / 2, poly)).toBe(true);
   });
 });
 

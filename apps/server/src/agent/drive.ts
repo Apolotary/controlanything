@@ -151,8 +151,20 @@ export function postProcess(draft: DriverDraft, cardId: string, transport: Drive
     actions: draft.actions.map((a) => ({
       ...a,
       actionId: a.actionId || newId('a'),
-      // a step composite is a 0-100 % control unless the model said otherwise
-      range: a.range ?? (a.encode.kind === 'step' ? { min: 0, max: 100, step: Math.round(100 / Math.max(1, a.encode.steps - 1)) } : undefined),
+      // obvious ranges the model may leave out: a step composite is 0-100 %, a MIDI value 0-127, a volume 0-100
+      range:
+        a.range ??
+        (a.kind !== 'set'
+          ? undefined
+          : a.encode.kind === 'step'
+            ? { min: 0, max: 100, step: Math.round(100 / Math.max(1, a.encode.steps - 1)) }
+            : a.encode.kind === 'midi'
+              ? { min: 0, max: 127, step: 1 }
+              : a.encode.kind === 'local' && a.encode.op === 'volume'
+                ? { min: 0, max: 100, step: 5 }
+                : a.encode.kind === 'local'
+                  ? { min: 0, max: 1 }
+                  : undefined),
     })),
   };
   if (transport === 'ir' && !out.actions.some((a) => a.encode.kind === 'step')) {
@@ -269,6 +281,16 @@ export function fixtureDriverDraft(messages: ChatMessage[]): DriverDraft {
   if (transport === 'ir') {
     const learned: LearnedCode[] = [...text.matchAll(/learned:([A-Za-z0-9_-]+): button "([^"]*)" \(hypothesis (\w+)/g)].map((m) => ({ learnId: m[1], button: m[2], hypothesis: m[3] as LearnedCode['hypothesis'], rawUs: [9000, 4500, 560, 560], capturedAt: 0 }));
     const r: Research = { ...research, learned: learned.length ? learned : undefined };
+    if (learned.length) {
+      // name each learned code by ref; the server fills the timings from the real captures
+      const t = templateIrDraft(card, r);
+      return {
+        ...t,
+        name: 'FIXTURE IR driver (learned codes)',
+        notes: 'FIXTURE: canned driver from learned codes, no Meta model was called',
+        actions: t.actions.map((a) => (a.encode.kind === 'ir' && a.encode.ref?.startsWith('learned:') ? { ...a, encode: { kind: 'ir' as const, protocol: 'RAW' as const, ref: a.encode.ref } } : a)),
+      };
+    }
     if (!learned.length) {
       // the fixture knows the Panasonic CH1 table (the first library entry)
       const table: [string, string, number[], 'on' | 'off' | 'brighter' | 'dimmer' | 'warmer' | 'cooler', string | undefined][] = [
@@ -285,7 +307,7 @@ export function fixtureDriverDraft(messages: ChatMessage[]): DriverDraft {
         'ir',
       );
     }
-    return { ...templateIrDraft(card, r), name: 'FIXTURE IR driver (learned codes)', notes: 'FIXTURE: canned driver from learned codes, no Meta model was called' };
+    return templateIrDraft(card, r);
   }
   return { ...templateLocalDraft(card, research, executorKind), name: 'FIXTURE local driver', notes: 'FIXTURE: canned driver, no Meta model was called' };
 }

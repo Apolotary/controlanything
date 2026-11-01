@@ -307,8 +307,11 @@ describe('discovery loop end to end (sim mode, FIXTURE models)', () => {
     expect(offEv!.observed.delta).toBeLessThan(-0.33);
     const status = quest.seen.filter((m) => m.type === 'driver.status').map((m) => m.payload as PayloadOf<'driver.status'>).at(-1)!;
     const verified = Object.fromEntries((status.actions ?? []).map((a) => [a.actionId, a.verified]));
-    expect(verified, JSON.stringify(evidence.map((e) => [e.actionId, e.pass, e.note]))).toMatchObject({ off: 'pass', full: 'pass', brighter: 'pass', dimmer: 'pass', night: 'pass', cooler: 'pass', level: 'pass' });
-    expect(verified.warmer).toBe('fail'); // the honest miss: the night light already made it warm
+    // order matters on a real lamp: off, full, dimmer, brighter, colour, night last (colour keys do nothing in night mode)
+    expect(verified, JSON.stringify(evidence.map((e) => [e.actionId, e.pass, e.note]))).toMatchObject({ off: 'pass', full: 'pass', dimmer: 'pass', brighter: 'pass', warmer: 'pass', cooler: 'pass', night: 'pass', level: 'pass' });
+    const order = evidence.filter((e) => e.pass).map((e) => e.actionId);
+    expect(order.indexOf('dimmer')).toBeLessThan(order.indexOf('brighter'));
+    expect(order.indexOf('night')).toBeGreaterThan(order.indexOf('cooler'));
     expect(evidence.filter((e) => e.actionId === 'brighter' && e.pass)[0].observed.metric).toBe('luma-abs');
 
     // FORGE: the (fake) forge published a ui.spec with one hack per action

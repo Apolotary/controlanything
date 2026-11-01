@@ -3,7 +3,9 @@
  * demo runs without a key: SAM 3.1 scan prompts on a test frame, Muse Spark identification of the top
  * detection, and a Muse Spark driver draft validated against the curated chart.
  *
- *   MUSE_RECORD=1 npx tsx apps/server/scripts/brain-live.ts [path/to/frame.jpg] [--prompts "a,b"] [--no-drive]
+ *   MUSE_RECORD=1 npx tsx apps/server/scripts/brain-live.ts [path/to/frame.jpg] [--prompts "a,b"] [--pick synthesizer] [--card op-1-field] [--no-drive]
+ *   --pick <prompt>   identify the best detection of that prompt instead of the most confident one
+ *   --card <id>       skip identification and use the curated profile's maker/model as the card (tests the MIDI drive path)
  *
  * Cost: about $0.01 per prompt + $0.005 identify + $0.02-0.05 driver. Budget-safe.
  */
@@ -26,10 +28,16 @@ import { WONDER_MODEL } from '../src/agent/drive';
 loadDotEnv();
 const config = loadConfig(process.env);
 const args = process.argv.slice(2);
-const file = args.find((a) => !a.startsWith('--')) ?? new URL('../../../research/meta-docs/live/scan-scene.jpg', import.meta.url).pathname;
+const FLAGS_WITH_VALUE = new Set(['--prompts', '--pick', '--card']);
+const positional = args.filter((a, i) => !a.startsWith('--') && !FLAGS_WITH_VALUE.has(args[i - 1] ?? ''));
+const file = positional[0] ?? new URL('../../../research/meta-docs/live/scan-scene.jpg', import.meta.url).pathname;
 const promptsArg = args.indexOf('--prompts');
 const prompts = promptsArg >= 0 ? args[promptsArg + 1].split(',').map((s) => s.trim()) : scanPrompts();
 const noDrive = args.includes('--no-drive');
+const pickArg = args.indexOf('--pick');
+const pick = pickArg >= 0 ? args[pickArg + 1].toLowerCase() : undefined;
+const cardArg = args.indexOf('--card');
+const forcedProfile = cardArg >= 0 ? args[cardArg + 1] : undefined;
 
 const log = (line: string) => console.log(line);
 const calls = new CallLog(log);
@@ -55,11 +63,9 @@ for (const r of runs) {
   }
 }
 
-// identify the most confident specific detection
-const best = runs
-  .flatMap((r) => r.records.map((rec) => ({ rec, prompt: r.prompt })))
-  .filter((x) => x.prompt !== 'electronic device')
-  .sort((a, b) => (b.rec.confidence ?? 0) - (a.rec.confidence ?? 0))[0] ?? runs.flatMap((r) => r.records.map((rec) => ({ rec, prompt: r.prompt })))[0];
+// identify the most confident specific detection (or the one of --pick)
+const all = runs.flatMap((r) => r.records.map((rec) => ({ rec, prompt: r.prompt })));
+const best = (pick ? all.filter((x) => x.prompt.toLowerCase() === pick) : all.filter((x) => x.prompt !== 'electronic device')).sort((a, b) => (b.rec.confidence ?? 0) - (a.rec.confidence ?? 0))[0] ?? all[0];
 if (!best) {
   console.log('nothing detected; stopping');
   process.exit(0);
@@ -69,14 +75,23 @@ const det: TargetDetection = {
   box: [best.rec.x1, best.rec.y1, best.rec.x2 - best.rec.x1 + 1, best.rec.y2 - best.rec.y1 + 1], width: img.width, height: img.height, jpeg: jpegB64, capturedAt: Date.now(),
 };
 const spark = createMuseChat(m, { callLog: calls, log });
-const crop = cropJpeg(img, det.box);
-console.log(`identify: crop ${Math.round((crop.length * 3) / 4 / 1024)} KB of a ${det.label}`);
-const id = await identify(spark, det, crop, jpegB64, { cardId: newId('card-'), effort: 'low' });
-console.log(`  -> ${id.card.name} | ${id.card.maker} ${id.card.model} | ${id.card.category} | confidence ${id.card.confidence} | requires ${id.card.requires?.join(',')} | ${id.model} ${id.effort} ${id.latencyMs} ms`);
-console.log(`  evidence: ${id.card.evidence.join(' / ')}`);
+const profilesEarly = loadProfiles();
+let id: Awaited<ReturnType<typeof identify>>;
+if (forcedProfile) {
+  const prof = profilesEarly.midi.get(forcedProfile);
+  if (!prof) throw new Error(`no curated profile "${forcedProfile}" (have ${[...profilesEarly.midi.keys()].join(', ')})`);
+  id = { card: { cardId: newId('card-'), name: prof.device, maker: prof.manufacturer, model: prof.device.replace(prof.manufacturer, '').trim(), category: 'synthesizer', confidence: 1, protocols: ['midi'], evidence: [`forced by --card ${forcedProfile}`], requires: ['midi'], frameId: det.frameId, detId: det.detId }, model: 'none', effort: 'none', latencyMs: 0, source: 'fixture' };
+  console.log(`identify: skipped (--card ${forcedProfile}: ${id.card.maker} ${id.card.model})`);
+} else {
+  const crop = cropJpeg(img, det.box);
+  console.log(`identify: crop ${Math.round((crop.length * 3) / 4 / 1024)} KB of a ${det.label}`);
+  id = await identify(spark, det, crop, jpegB64, { cardId: newId('card-'), effort: 'low' });
+  console.log(`  -> ${id.card.name} | ${id.card.maker} ${id.card.model} | ${id.card.category} | confidence ${id.card.confidence} | requires ${id.card.requires?.join(',')} | ${id.model} ${id.effort} ${id.latencyMs} ms`);
+  console.log(`  evidence: ${id.card.evidence.join(' / ')}`);
+}
 
 if (!noDrive) {
-  const profiles = loadProfiles();
+  const profiles = profilesEarly;
   const web = createWebSearcher(m, { callLog: calls });
   const cap = id.card.requires?.includes('midi') ? 'midi' : id.card.requires?.includes('ir') ? 'ir' : 'local';
   const r = await research({ profiles, web }, id.card, cap, { allowWeb: cap === 'midi' });

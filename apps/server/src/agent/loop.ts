@@ -162,8 +162,10 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       onAttempt: (a) => d.steps.note('drive', a.ok ? `driver attempt ${a.attempt} valid` : a.error ? `driver attempt ${a.attempt} failed: ${a.error}` : `driver attempt ${a.attempt} rejected`, { ...base, kind: 'proof', status: a.ok ? 'ok' : 'fail', model: a.model, effort: a.effort, latencyMs: a.latencyMs, detail: a.issues || a.error }),
     });
     let driver: Driver;
+    // provenance is the server's record (chart file, learned captures, web citations), whatever the model wrote
+    const provenance = [...research.provenance, ...(result?.validation.driver.provenance ?? [])].filter((p, i, arr) => arr.findIndex((q) => q.source === p.source && q.ref === p.ref) === i).slice(0, 12);
     if (result?.validation.ok) {
-      driver = { ...result.validation.driver, modelId: result.model, source: result.source };
+      driver = { ...result.validation.driver, provenance, modelId: result.model, source: result.source };
       dstep.ok(`${driver.actions.length} actions, validated against the allowlist`, { model: result.model, effort: result.effort, latencyMs: result.latencyMs, source: result.source, recordedFrom: result.recordedFrom, evidence: `${driver.actions.length} actions · ${result.attempts} attempt(s)` });
     } else {
       // last resort: the curated template, honestly labelled
@@ -174,7 +176,7 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
         d.targets.setState(t, 'failed', 'could not write a valid driver');
         return;
       }
-      driver = { ...v.driver, modelId: 'template', source: 'fixture' };
+      driver = { ...v.driver, provenance, modelId: 'template', source: 'fixture' };
       dstep.ok('model draft rejected; curated template used (no Meta model wrote this driver)', { model: result?.model ?? 'template', latencyMs: result?.latencyMs, evidence: 'template driver' });
     }
     const unresolved = dryResolve(driver);

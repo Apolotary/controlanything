@@ -1,0 +1,13 @@
+{
+  "kind": "sam",
+  "name": "sam.ceiling-light.1920x1280.f30709f638c5",
+  "prompt": "ceiling light",
+  "width": 1920,
+  "height": 1280,
+  "frameHash": "f30709f638c5",
+  "model": "sam-3.1",
+  "recordedAt": "2026-11-01T21:31:55.727Z",
+  "latencyMs": 2651,
+  "billed": 1,
+  "text": "<0f>0<|box;x1=1810;y1=514;x2=1871;y2=539;w=1920;h=1280;c=0.6878048777580261|><|mask;x=0;y=0;c=0.6878048777580261;data=26,62,!!!!!DDg3V9@OI0Sx_@PS+EUK&:6gvrE-r'5){KqR!!!|>,1<|box;x1=418;y1=50;x2=585;y2=169;w=1920;h=1280;c=0.9298245906829834|><|mask;x=0;y=0;c=0.9298245906829834;data=120,168,!!!!#'CZHkOFGChZRl]if4HGA`8:T*cq$Vm9'618Rv8L[3AwD19kBsi7N_Bp(J4Wzv5MCrh:N^oKbJ&5`b9w-ng7.8.I=*ZkX]h5_b67?Zm{=h{E_**?(+'|>,2<|box;x1=911;y1=19;x2=1271;y2=240;w=1920;h=1280;c=0.941605806350708|><|mask;x=0;y=0;c=0.941605806350708;data=222,361,!!!!$$APCJ#OyW&BbEBwLx1ll8(4W7LU/p{G!gn6?LE?eY3k]IN?$$z_l@FUM6?EbzQa[g.q/&#W8ohOK3x.J^Hc)IvVso_$a^0nFsf:iqvI5.0@$LB=PSj:Hs{=CU??I8?o*TP*Otq6pQXvA3`UcVT'3EwWKbJ/ju:5KW$ycu8jx^?^uW-KqOu=-okMY'mD%cOG0$/cOP=/7vD*2`34l_umTeBdv|>\n"
+}

@@ -1,0 +1,13 @@
+{
+  "kind": "sam",
+  "name": "sam.synthesizer.1920x1280.f30709f638c5",
+  "prompt": "synthesizer",
+  "width": 1920,
+  "height": 1280,
+  "frameHash": "f30709f638c5",
+  "model": "sam-3.1",
+  "recordedAt": "2026-11-01T21:31:55.486Z",
+  "latencyMs": 2408,
+  "billed": 1,
+  "text": "<0f>0<|box;x1=537;y1=986;x2=976;y2=1228;w=1920;h=1280;c=0.9101123809814453|><|mask;x=0;y=0;c=0.9101123809814453;data=243,440,!!!!$Q@.ccgQQUF8)g]{y*VU8O8O{JtH'jxIYF+TiX!2aNiq-{0WLnhbnc!PNXTBlC5%kTJ@3_5Q40i{Hqj$e`OJ6OKK!k5wn4Pw@fL(woK?+w-UL3+jF{Dsr406rQBH..Z#i$Twpu@&$Pvu51e3V%/E8jVS*(fUn2O$^VW@l(=1h#w?${Ej%dC&])6qh@b3!g-R)ZTbIa!D]QMFJBV1jb.Iuc)mfA[C'/qOPn3xvsh=2#2l3@T*&'Se)%Dco/?b5g`8]Zx&^N/g!S#!!|>\n"
+}

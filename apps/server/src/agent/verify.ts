@@ -248,8 +248,19 @@ export async function verifyDriver(deps: VerifyDeps, t: Target, driver: Driver, 
   }
 
   const wanted = new Set(o.actionIds ?? current.actions.map((a) => a.actionId));
-  // most visible first: off, then on (which also undoes off), then the rest; audio: notes before sweeps
-  const rank = (a: DriverAction) => (a.expect?.effect === 'off' ? 0 : a.expect?.effect === 'on' ? 1 : a.encode.kind === 'midi' && a.encode.msg === 'note' ? 2 : 3);
+  // most visible first: off, then on (which also undoes off, leaving the lamp at full), then dimmer (so that
+  // brighter has room to show), then brighter, then the rest; audio: notes before sweeps
+  const rank = (a: DriverAction) => {
+    const e = a.expect?.effect;
+    if (/night/i.test(`${a.actionId} ${a.label}`)) return 6; // night mode last: colour keys do nothing in it
+    if (e === 'off') return 0;
+    if (e === 'on') return 1;
+    if (e === 'dimmer') return 2;
+    if (e === 'brighter') return 3;
+    if (e === 'warmer' || e === 'cooler') return 4;
+    if (a.encode.kind === 'midi' && a.encode.msg === 'note') return 2;
+    return 5;
+  };
   const ordered = [...current.actions].sort((x, y) => rank(x) - rank(y));
   for (const a of ordered) {
     if (!wanted.has(a.actionId) || verification[a.actionId] === 'pass' || verification[a.actionId] === 'fail') continue;

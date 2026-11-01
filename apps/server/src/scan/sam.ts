@@ -107,8 +107,9 @@ export function parseSamText(text: string): SamRecord[] {
         if (first > 0 && second > first) {
           const height = Number(data.slice(0, first));
           const width = Number(data.slice(first + 1, second));
-          const enc = data[second + 1];
-          const payload = data.slice(second + 2);
+          // the encoding marker ("!" one_bit, "~" lossless) is the payload's first character and stays part of it
+          const payload = data.slice(second + 1);
+          const enc = payload[0];
           if (Number.isFinite(width) && Number.isFinite(height) && (enc === '!' || enc === '~')) {
             rec.mask = { encoding: enc === '!' ? 'one_bit' : 'lossless', payload, width, height };
           }
@@ -405,16 +406,16 @@ export class FixtureSam implements Sam {
     const hash = frameHash(jpegBase64);
     const exact = this.byName.get(samKey(prompt, opts.width, opts.height, hash));
     const sameSize = this.byPrompt.get(prompt.toLowerCase())?.filter((r) => !opts.width || (r.width === opts.width && r.height === opts.height));
-    const rec = exact ?? sameSize?.at(-1) ?? this.byPrompt.get(prompt.toLowerCase())?.at(-1);
+    // the exact recorded frame wins; then the sim room's own ground truth (it knows which view the pose is);
+    // then the newest same-size recording of the prompt; then the generic canned scene
+    const ground = exact ? null : simCannedRecords(prompt, opts.width ?? 0, opts.height ?? 0, opts.pose);
+    const rec = exact ?? (ground ? undefined : (sameSize?.at(-1) ?? this.byPrompt.get(prompt.toLowerCase())?.at(-1)));
     let records: SamRecord[];
     let text = '';
     if (rec) {
       text = rec.text;
       records = parseSamText(text);
-    } else {
-      // no recording: the sim room's ground truth for its own frames, else the generic canned scene
-      records = simCannedRecords(prompt, opts.width ?? 0, opts.height ?? 0, opts.pose) ?? parseSamText((text = cannedSamText(prompt, opts.width ?? 0, opts.height ?? 0)));
-    }
+    } else records = ground ?? parseSamText((text = cannedSamText(prompt, opts.width ?? 0, opts.height ?? 0)));
     const latencyMs = Date.now() - started;
     this.o.callLog.add({ at: started, label: opts.label ?? `sam:${prompt}`, model: 'fixture', source: 'fixture', ok: true, latencyMs, format: 'segmentation', recordedFrom: rec?.model, finishReason: `${records.length} objects` });
     return { prompt, records, model: 'fixture', source: 'fixture', latencyMs, text, recordedFrom: rec?.model };
