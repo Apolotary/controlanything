@@ -61,7 +61,10 @@ int main() {
   store::fakeSlots(5);
   strcpy(S.fx.line, "koizumi/off"); S.fx.at = g_now - 250; save("03-idle-sent-beam");
   S.fx.sending = true; S.fx.litUntil = g_now + 50; save("04-idle-sending-flash");
-  S.fx.sending = false; S.fx.litUntil = 0; S.fx.at = 0; strcpy(S.lastCmd, "NEC 82 6D BE 41");
+  S.fx.sending = false; S.fx.litUntil = 0;
+  S.fx.phase = irnode::kPhaseTry; S.fx.step = 7; S.fx.of = 36; strcpy(S.fx.line, "Toshiba OFF"); S.fx.at = g_now - 500;
+  save("04b-idle-link-try");
+  S.fx.phase = 0; S.fx.step = -1; S.fx.at = 0; strcpy(S.lastCmd, "NEC 82 6D BE 41");
 
   S.mode = app::Mode::Pair;
   S.pair.stage = app::kPairPending;

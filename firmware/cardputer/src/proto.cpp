@@ -669,6 +669,10 @@ void emitLearned(const char* ackId, const char* slot, const char* label, bool st
     // Labels are UTF-8 from our own tables or the host; escape quotes and backslashes.
     put(",\"label\":\"");
     for (const char* p = label; *p && n < cfg::kOutMax - 8; p++) {
+      if ((uint8_t)*p < 0x20) {  // control characters would break the line
+        out[n++] = ' ';
+        continue;
+      }
       if (*p == '"' || *p == '\\') out[n++] = '\\';
       out[n++] = *p;
     }

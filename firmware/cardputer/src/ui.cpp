@@ -263,9 +263,17 @@ void drawBoot(uint32_t now) {
 }
 
 void drawIdle(uint32_t now) {
-  const char* st = irnode::busy() || app::S.fx.sending ? "SENDING" : (irnode::rxActive() ? "LEARNING" : "READY");
-  topBar("IR NODE", st, now);
-  if (app::S.hostSeen) {
+  const app::SendFx& fx = app::S.fx;
+  // Host-driven link discovery / replay: "LINK · try 7 / 36" while the sends keep coming.
+  const bool linking = (fx.phase == irnode::kPhaseTry || fx.phase == irnode::kPhaseReplay) && fx.step >= 0 &&
+                       (fx.sending || (fx.at && now - fx.at < 8000));
+  const char* st = irnode::busy() || fx.sending ? "SENDING" : (irnode::rxActive() ? "LEARNING" : "READY");
+  topBar(linking ? "LINK" : "IR NODE", st, now);
+  if (linking) {
+    char c[32];
+    fmtStep(c, sizeof(c), fx.phase == irnode::kPhaseTry ? "try" : "replay", fx.step, fx.of);
+    text(c, 10, 24, F24, kVolt);
+  } else if (app::S.hostSeen) {
     text("LINKED", 10, 26, F18, kCyan);
     if (app::S.hostName[0]) textFit(app::S.hostName, 10 + textW("LINKED", F18) + 10, 30, F12, kDim, 140);
   } else {
