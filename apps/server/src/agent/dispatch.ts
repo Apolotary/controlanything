@@ -30,7 +30,12 @@ interface SenseCollector {
   timer: ReturnType<typeof setTimeout>;
   /** resolve on the first result (frame/audio) or collect until the timer (ir-capture) */
   collect: boolean;
+  /** ir-capture: once a press arrived, wait only this long for a second frame before resolving */
+  grace?: ReturnType<typeof setTimeout>;
 }
+
+/** After the first captured press, the learn window closes this soon (a human presses once; the sim too). */
+export const IR_CAPTURE_GRACE_MS = 700;
 
 /** Token bucket: `rate` tokens per second, burst `burst`. */
 export class RateLimiter {
@@ -242,6 +247,13 @@ export class Dispatcher {
       clearTimeout(c.timer);
       this.senses.delete(r.senseId);
       c.resolve(c.results);
+    } else if (!c.grace) {
+      c.grace = setTimeout(() => {
+        if (!this.senses.has(r.senseId)) return;
+        clearTimeout(c.timer);
+        this.senses.delete(r.senseId);
+        c.resolve(c.results);
+      }, IR_CAPTURE_GRACE_MS);
     }
     return true;
   }
@@ -267,6 +279,7 @@ export class Dispatcher {
     this.acks.clear();
     for (const c of this.senses.values()) {
       clearTimeout(c.timer);
+      if (c.grace) clearTimeout(c.grace);
       c.resolve(c.results);
     }
     this.senses.clear();
