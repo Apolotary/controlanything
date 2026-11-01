@@ -1,11 +1,27 @@
 import { ExecCommandPayload, IrCapture } from '@ce/protocol';
+import QRCode from 'qrcode';
 import { describe, expect, it } from 'vitest';
 import { encodeFrame } from '../irCodec';
-import { CardputerBridge, countFrames, toCapture } from './bridge';
+import { CardputerBridge, countFrames, pairScreenCommand, toCapture } from './bridge';
+import { encodeHostLine } from './protocol';
 import type { CardputerLink, SerialAck } from './cardputer';
 import { parseDeviceLine } from './protocol';
 
 const panasonicOff = [0x2c, 0x52, 0x09, 0x2f, 0x26];
+
+describe('Cardputer pairing screen', () => {
+  it('shows the short CE1:<CODE> QR (uppercase, no dash) and the readable code beside it', () => {
+    const cmd = pairScreenCommand({ code: 'k7q-4m2', display: 'K7Q-4M2', expiresAt: 301_000 }, 1000);
+    expect(cmd).toEqual({ t: 'pair', state: 'pending', code: 'K7Q4M2', display: 'K7Q-4M2', qr: 'CE1:K7Q4M2', ttlMs: 300_000 });
+    expect(encodeHostLine(cmd, 'p1')).toBe('{"t":"pair","state":"pending","code":"K7Q4M2","display":"K7Q-4M2","qr":"CE1:K7Q4M2","ttlMs":300000,"id":"p1"}\n');
+  });
+
+  it('fits a version-1 QR (21 modules: 5 px each in 135 px), where the pairing URL needs version 4', () => {
+    expect(QRCode.create('CE1:K7Q4M2', { errorCorrectionLevel: 'M' }).version).toBe(1);
+    expect(QRCode.create('https://192.168.1.20:8443/p/abcdefghij#K7Q4M2', { errorCorrectionLevel: 'M' }).version).toBeGreaterThanOrEqual(3);
+    expect(pairScreenCommand({ code: 'ABCDEF', display: '', expiresAt: 0 }, 5).display).toBe('ABC-DEF');
+  });
+});
 
 describe('learned → IrCapture', () => {
   it('maps the Cardputer learned event to a valid protocol IrCapture (hex bytes → numbers)', () => {

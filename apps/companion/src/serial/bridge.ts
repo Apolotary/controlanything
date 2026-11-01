@@ -6,13 +6,13 @@
  *   3. relays exec.command IrOps → serial "ir", sense.request ir-capture → serial "learn" → one
  *      sense.result per captured frame, menu picks → control.event, panic → serial "panic".
  */
-import { type ExecAckPayload, type ExecCommandPayload, type IrCapture, IrProtocol, type SenseRequestPayload, type UiSpecPayload } from '@ce/protocol';
+import { type ExecAckPayload, type ExecCommandPayload, formatCode, type IrCapture, IrProtocol, normalizeCode, type PairStartResponse, type SenseRequestPayload, type UiSpecPayload } from '@ce/protocol';
 import { api, ApiError } from '../api';
 import { CLOSE_UNAUTHORIZED, Connection } from '../connection';
 import { decodeFrame, describeTimings, irOpToRaw } from '../irCodec';
 import { fromHex } from '../midiDecode';
 import type { CardputerLink, SerialAck } from './cardputer';
-import type { DeviceMessage, MenuItem } from './protocol';
+import type { DeviceMessage, HostCommand, MenuItem } from './protocol';
 
 interface StoredCardputer {
   deviceId: string;
@@ -51,6 +51,16 @@ function save(chip: string, s: StoredCardputer | undefined): void {
   } catch {
     // private mode: re-pair after a reload
   }
+}
+
+/**
+ * The Cardputer's pairing screen. Its QR carries the short "CE1:<CODE>" text (uppercase, no dash: a
+ * version-1 QR with 5 px modules on the 240×135 screen, instead of version 4 / 3 px for the URL); the
+ * server's scan decoder resolves it exactly like the passcode. Phone-facing QRs keep the full URL.
+ */
+export function pairScreenCommand(r: Pick<PairStartResponse, 'code' | 'display' | 'expiresAt'>, now = Date.now()): Extract<HostCommand, { t: 'pair' }> {
+  const code = normalizeCode(r.code);
+  return { t: 'pair', state: 'pending', code, display: r.display || formatCode(code), qr: `CE1:${code}`, ttlMs: Math.max(0, r.expiresAt - now) };
 }
 
 /** Frames in a capture: one more than the number of long (> 15 ms) spaces. */
@@ -173,7 +183,7 @@ export class CardputerBridge {
         return;
       }
       this.pairing = { pairingId: r.pairingId, pollSecret: r.pollSecret, display: r.display, qr: r.qr, expiresAt: r.expiresAt };
-      const ack = await this.link.request({ t: 'pair', state: 'pending', code: r.code, display: r.display, qr: r.qr.slice(0, 150), ttlMs: Math.max(0, r.expiresAt - Date.now()) });
+      const ack = await this.link.request(pairScreenCommand(r));
       this.log(ack.ok ? 'info' : 'warn', ack.ok ? `Cardputer shows pairing code ${r.display}; approve it from the Quest (look at its QR) or type the code here` : `Cardputer did not take the pairing screen: ${ack.msg ?? ack.err}`);
       this.onChange();
       this.poll();
