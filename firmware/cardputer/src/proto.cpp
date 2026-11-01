@@ -218,6 +218,8 @@ void cmdLearn(JsonDocument& doc, const char* id) {
   uint32_t timeout = doc["timeoutMs"] | (long)cfg::kLearnDefaultTimeoutMs;
   if (timeout < 1000) timeout = 1000;
   if (timeout > 300000) timeout = 300000;
+  // Switch screens first: leaving the spike stops the receiver.
+  if (app::S.mode != app::Mode::Learn) app::enterMode(app::Mode::Learn);
   L.on = true;
   copyStr(L.id, sizeof(L.id), id);
   copyStr(L.label, sizeof(L.label), doc["label"] | "");
@@ -228,8 +230,8 @@ void cmdLearn(JsonDocument& doc, const char* id) {
   L.frames = 0;
   L.stored = false;
   app::S.cap.n = 0;
+  app::S.cap.at = 0;
   irnode::rxStart();
-  if (app::S.mode != app::Mode::Learn) app::enterMode(app::Mode::Learn);
   emitAck(id, true);
 }
 
