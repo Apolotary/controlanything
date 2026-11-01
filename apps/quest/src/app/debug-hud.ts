@@ -151,7 +151,8 @@ export class DebugHud implements Hud {
       this.toastPanel.mesh.position.lerp(target, 0.2);
       faceYaw(this.toastPanel.mesh, this.head.position);
     }
-    if (this.scanning) this.dirty.add('deck');
+    // the scan clock on the deck: 4 Hz is plenty (each redraw re-uploads the canvas texture)
+    if (this.scanning && now - this.deckDrawnAt > 250) this.dirty.add('deck');
     // pinch picking on our plates
     for (const hand of ['left', 'right'] as const) {
       const h = f.hands[hand];
@@ -596,7 +597,10 @@ export class DebugHud implements Hud {
     this.dirty.clear();
   }
 
+  private deckDrawnAt = 0;
+
   private drawDeck(): void {
+    this.deckDrawnAt = performance.now();
     const press = (key: DeckKey) => () => {
       this.deckPressed = key;
       this.events.emit('deck', { key, phase: 'press' });

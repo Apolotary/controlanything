@@ -47,7 +47,9 @@ import { JpegEncoder } from '../scan/encode';
 import { fixtureFromSimLayout, loadSamFixture, type SamFixture } from '../scan/fixture';
 import { VirtualRoomDepth, XrHitTester } from '../scan/hittest';
 import type { DepthProvider } from '../scan/placement';
+import { HandheldTracker, type WristPose } from '../scan/handheld';
 import { PoseRing } from '../scan/poses';
+import { cameraPoseFromHead, questIntrinsics, worldToPixel } from '../scan/projection';
 import { Scanner } from '../scan/scanner';
 import { SyntheticCamera, VirtualRoom } from '../scan/synthetic';
 import { type Target, TargetStore, toHudTarget } from '../scan/targets';
@@ -120,6 +122,7 @@ export class QuestApp {
   readonly encoder = new JpegEncoder(1280, 0.8);
   readonly targets = new TargetStore();
   readonly xrHit = new XrHitTester();
+  readonly handheld = new HandheldTracker();
   readonly recorder = new Recorder();
   readonly mic = new Mic();
   renderer!: WebGLRenderer;
@@ -293,6 +296,12 @@ export class QuestApp {
     this.scanner.on('result', (r) => {
       const rec = this.capture.get(r.frameId);
       this.lastShown = { frameId: r.frameId, dets: r.dets };
+      // a remote in the user's hand follows the wrist from now on (LEARN flow)
+      const wrists = this.wrists();
+      for (const t of r.placed) {
+        const s = this.handheld.observe(t.id, t.label, t.position, wrists, performance.now());
+        if (s !== 'none') this.page.log(`${t.label} ${s === 'attached' ? 'is in your hand: following it' : 'put down'}`);
+      }
       if (r.rejected.length) this.page.log(`dropped ${r.rejected.length}: ${r.rejected.map((x) => `${x.det.label} (${x.reason})`).join(', ')}`, 'warn');
       this.page.log(`scan.result ${r.frameId.slice(-6)}: ${r.placed.length} device(s) · ${this.scanner.stats.lastModelId} ${this.scanner.stats.lastLatencyMs} ms${this.scanner.stats.lastSource === 'fixture' ? ' · FIXTURE' : ''}`);
       if (rec && this.scanner.stats.lastModelId) this.chip(this.scanner.stats.lastModelId, 'done');
@@ -596,6 +605,16 @@ export class QuestApp {
     this.page.log(`ui.spec ${p.title ?? p.specId} rev ${p.rev ?? 1}${p.modelId ? ` · ${p.modelId}` : ''}${p.source === 'fixture' ? ' · FIXTURE' : ''}`, 'ok');
   }
 
+  /** Is a world point inside the current camera frame (with a 5 % margin)? */
+  private inCameraView(p: Vector3): boolean {
+    const f = this.lastFrame;
+    if (!f) return true;
+    const k = this.capture.last?.intrinsics ?? questIntrinsics(1280, 960);
+    const cam = cameraPoseFromHead({ position: f.head.position, quaternion: f.head.quaternion }, this.camera.eye);
+    const px = worldToPixel(p, k, cam);
+    return Boolean(px && px.u > k.width * 0.05 && px.u < k.width * 0.95 && px.v > k.height * 0.05 && px.v < k.height * 0.95);
+  }
+
   private exposureLocked = false;
   private exposureTimer?: ReturnType<typeof setTimeout>;
 
@@ -615,6 +634,13 @@ export class QuestApp {
         this.exposureLocked = false;
       }, 4000);
     }
+    // the camera oracle compares the device region before/after: it must be in view, and the head still
+    const t = p.cardId ? this.targetForCard(p.cardId) : undefined;
+    if (t && this.lastFrame && !this.inCameraView(t.position)) {
+      this.hud.toast(`look at the ${t.label} · verifying`, 'warn');
+      this.page.log(`verify: ${t.label} is not in the camera view`, 'warn');
+    }
+    for (let i = 0; i < 12 && this.poses.peakSpeed(performance.now(), 150) > 15; i++) await new Promise((res) => setTimeout(res, 50));
     let r: Awaited<ReturnType<FrameCapture['capture']>> = null;
     for (let i = 0; i < 30 && !r; i++) {
       r = await this.capture.capture('verify', p.senseId);
@@ -835,6 +861,12 @@ export class QuestApp {
     if (inXr && xrFrame) this.xrHit.onFrame(xrFrame);
     this.room?.update(time);
     this.deckGesture(f, time);
+    for (const m of this.handheld.update(this.wrists(f), time)) {
+      const t = this.targets.get(m.id);
+      if (!t) continue;
+      t.position.copy(m.position);
+      this.hud.upsertTarget(toHudTarget(t));
+    }
     this.consumed.left = this.consumed.right = false;
     this.hud.update(f);
     this.interact(f, time);
@@ -844,6 +876,15 @@ export class QuestApp {
       this.lastStatusAt = time;
       this.updateStatus();
     }
+  }
+
+  private wrists(f: ShellFrame | undefined = this.lastFrame): { left?: WristPose; right?: WristPose } {
+    const out: { left?: WristPose; right?: WristPose } = {};
+    for (const h of ['left', 'right'] as const) {
+      const w = f?.hands[h]?.joints.wrist;
+      if (w) out[h] = { position: w.position, quaternion: w.quaternion };
+    }
+    return out;
   }
 
   private deckGesture(f: ShellFrame, time: number): void {
