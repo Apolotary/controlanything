@@ -339,6 +339,29 @@ def from_ui_spec(p):
     return surf
 
 
+def item_from_partial(p, device_name=""):
+    """One hack streamed by the forge (ui.partial {specId, cardId, seq, control, hack}) as a disarmed item,
+    built with the same merge rules as a full ui.spec."""
+    hack = p.get("hack")
+    if not isinstance(hack, dict) or not hack.get("id"):
+        return None
+    hack = dict(hack)
+    hack.setdefault("commands", [])
+    mini = {
+        "specId": p.get("specId") or "partial",
+        "cardId": p.get("cardId"),
+        "hackset": {"device": {"id": p.get("cardId") or "", "name": device_name or "device", "channel": {"type": ""}}, "hacks": [hack]},
+        "gen3d": {"controls": [p["control"]] if isinstance(p.get("control"), dict) else []},
+    }
+    s = from_ui_spec(mini)
+    if not s.items:
+        return None
+    it = s.items[0]
+    it.armed = False
+    it.reason = "forging: not verified yet"
+    return it
+
+
 def event_value(item, value=None):
     """The control.event value for firing/adjusting `item` (protocol v1 rules)."""
     v = item.value if value is None else value

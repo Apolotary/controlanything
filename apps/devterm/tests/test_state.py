@@ -150,6 +150,29 @@ class AppStateTest(unittest.TestCase):
         self.assertEqual(b.value, 30)
         self.assertFalse(b.operable)
 
+    def test_forge_partials_stream_in_then_the_spec_replaces_them(self):
+        s = AppState("DevTerm")
+        s.apply(fx.env("device.card", {"cardId": "card_light", "name": "Ceiling light", "maker": "", "model": "", "category": "lighting",
+                                       "confidence": 0.8, "protocols": ["ir"], "evidence": []}))
+        hs = fx.light_hackset()
+        g = fx.light_gen3d()
+        for seq, (hack, ctl) in enumerate(zip(hs["hacks"][:2], g["controls"][:2])):
+            s.apply(fx.env("ui.partial", {"specId": "spec_light", "cardId": "card_light", "runId": "r1", "seq": seq, "control": ctl, "hack": hack}))
+        self.assertEqual(len(s.surfaces), 1)
+        prov = s.surfaces[0]
+        self.assertTrue(prov.provisional)
+        self.assertEqual([i.label for i in prov.items], ["Set brightness", "Turn light off"])
+        self.assertTrue(all(not i.operable for i in prov.items))
+        self.assertTrue(any(r.verb == "FORGE" and r.command == "Set brightness" and r.state == "drafted" for r in s.tape.rows))
+        s.apply(fx.env("ui.spec", fx.light_ui_spec()))
+        self.assertEqual(len(s.surfaces), 1)
+        self.assertFalse(getattr(s.surfaces[0], "provisional", False))
+        self.assertEqual(len(s.surfaces[0].items), 5)
+        self.assertTrue(s.surfaces[0].find("h_bright").operable)
+        # a re-forge streaming over a working spec leaves the working spec alone
+        s.apply(fx.env("ui.partial", {"specId": "spec_light", "cardId": "card_light", "seq": 0, "hack": hs["hacks"][0]}))
+        self.assertTrue(s.surfaces[0].find("h_bright").operable)
+
     def test_effects_expire(self):
         s = AppState("DevTerm")
         s.on_effect({"invert": True, "ms": 50})

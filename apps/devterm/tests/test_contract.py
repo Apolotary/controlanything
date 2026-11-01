@@ -142,6 +142,8 @@ class ContractTest(unittest.TestCase):
         self.check(fx.env("verify.result", fx.evidence()))
         self.check(fx.exec_command({"kind": "local", "op": "print", "arg": {"title": "RECEIPT", "lines": ["a"], "models": ["muse-spark-1.3"]}}))
         self.check(fx.exec_command({"kind": "local", "op": "beep", "arg": {"freq": 2000, "count": 3, "ms": 120}}))
+        self.check(fx.env("ui.partial", {"specId": "spec_light", "cardId": "card_light", "runId": "r1", "seq": 0,
+                                         "control": fx.light_gen3d()["controls"][0], "hack": fx.light_hackset()["hacks"][0]}))
 
     def test_pairing_request_capabilities(self):
         schema = load("pair.start")

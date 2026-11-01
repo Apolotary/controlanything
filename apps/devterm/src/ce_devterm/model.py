@@ -118,6 +118,8 @@ class AppState(object):
             surf = surface_mod.from_ui_spec(p)
             if surf.items:
                 self.add_surface(surf)
+        elif t == "ui.partial":
+            self._partial(p)
         elif t == "agent.step":
             sid = p.get("stepId")
             if p.get("status") == "running":
@@ -133,6 +135,25 @@ class AppState(object):
         for row in rows_from_message(m, self.names):
             self.tape.add(row)
         self.touch()
+
+    def _partial(self, p):
+        """The forge is still writing: show each hack as it arrives (disarmed) until the ui.spec lands."""
+        card = self.cards.get(p.get("cardId")) or {}
+        name = card.get("name") or p.get("cardId") or "device"
+        it = surface_mod.item_from_partial(p, name)
+        if it is None:
+            return
+        i = self.surface_index(p.get("specId"), p.get("cardId"))
+        if i >= 0 and not getattr(self.surfaces[i], "provisional", False):
+            return  # a re-forge streaming over a working spec: keep the working one until the new spec arrives
+        if i < 0:
+            surf = surface_mod.Surface(p.get("specId") or "partial", name, card_id=p.get("cardId"), device_name=name,
+                                       items=[], armed=False, reason="forging hacks")
+            surf.provisional = True
+            self.add_surface(surf)
+        else:
+            surf = self.surfaces[i]
+        surf.items = [x for x in surf.items if x.id != it.id] + [it]
 
     def _mirror(self, p):
         """Another controller moved a control: move our bar too."""

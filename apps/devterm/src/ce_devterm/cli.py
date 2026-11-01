@@ -368,7 +368,8 @@ def cmd_doctor(args):
         colors = curses.tigetnum("colors")
     except Exception:
         pass
-    line(bool(term) and term != "dumb", "terminal", "TERM=%s colors=%s" % (term or "-", colors))
+    line(True if (colors or 0) >= 8 else None, "terminal", "TERM=%s colors=%s%s" % (
+        term or "-", colors, "" if sys.stdout.isatty() else " (not a terminal: the UI needs one, --headless does not)"))
     dev = printer_mod.DevTermPrinter()
     if os.path.exists(dev.path):
         line(dev.available(), "printer", dev.describe())

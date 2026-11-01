@@ -255,6 +255,14 @@ def rows_from_message(m, names):
         if ms:
             out.append(Row(ms[0], names.card(p.get("cardId")), p.get("detail") or "", ms[1], "", None, kind="info",
                            key="ts:%s:%s" % (p.get("cardId"), p.get("state"))))
+    elif t == "ui.partial" and isinstance(p.get("hack"), dict):
+        h = p["hack"]
+        out.append(Row("FORGE", names.card(p.get("cardId")), h.get("name") or h.get("id", ""), "drafted", h.get("kind") or "",
+                       None, kind="info", key="up:%s:%s" % (p.get("cardId"), h.get("id"))))
+    elif t == "ui.spec":
+        n = len(((p.get("hackset") or {}).get("hacks")) or p.get("widgets") or [])
+        out.append(Row("FORGE", names.card(p.get("cardId")) or p.get("title", ""), "%d hacks" % n, "ready", "rev %s" % p.get("rev", 1),
+                       None, p.get("modelId") or "", kind="info", key="us:%s:%s" % (p.get("specId"), p.get("rev"))))
     elif t == "device.card":
         mm = " ".join(x for x in (p.get("maker"), p.get("model")) if x)
         out.append(Row("IDENTIFY", names.card(p.get("cardId")) or p.get("name", ""), mm, "identified", "", None, kind="info",

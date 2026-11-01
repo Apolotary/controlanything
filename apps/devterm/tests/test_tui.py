@@ -153,6 +153,27 @@ class TuiTest(unittest.TestCase):
         text = screens.render(self.tui(40, 60))
         self.assertIn("type this code on the Mac", text)
 
+    def test_first_run_asks_for_the_mac_and_starts_pairing(self):
+        from helpers import FakeApi, wait_for
+        from ce_devterm import app as app_mod
+        api = FakeApi(approve_after=100)
+        self.addCleanup(api.stop)
+        opts = app_mod.Options(server=None, printer="file", print_dir=self.dir, identity_path=self.dir + "/fresh.json")
+        a = app_mod.App(opts)
+        self.addCleanup(a.stop)
+        t = screens.make_tui(a, 30, 100)
+        a.start()
+        self.assertEqual(a.phase, "setup")
+        t._ask_server()
+        self.assertIn("MAC ADDRESS", screens.render(t))
+        for ch in "127.0.0.1:%d" % api.port:
+            t._key(ch)
+        t._key("\n")
+        self.assertEqual(a.phase, "pair")
+        self.assertTrue(wait_for(lambda: (a.pump() or True) and a.pair_session is not None and a.pair_session.display == "K7Q-4M2"))
+        self.assertIn("type this code on the Mac", screens.render(t))
+        self.assertEqual(api.starts[0]["kind"], "devterm")
+
     def test_preview_overlay_and_effects(self):
         t = self.tui()
         r = receipt.from_print_arg({"title": "BLACKOUT", "lines": ["light off (seen)"]})

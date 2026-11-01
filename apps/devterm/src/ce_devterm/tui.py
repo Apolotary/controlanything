@@ -494,7 +494,10 @@ class Tui(object):
             meta.append("rev %s" % s.rev)
         self.put(y, x0 + 2 + len(head[:w - 2]), ("  " + ("  %s  " % g.dot).join(meta)) if meta else "", t["cyan"], maxw=w - len(head) - 3)
         y += 1
-        if s.armed is False:
+        if getattr(s, "provisional", False):
+            self.put(y, x0 + 1, "forging %s hacks appear as the model writes them" % g.dot, t["cyan"], maxw=w - 2)
+            y += 1
+        elif s.armed is False:
             self.put(y, x0 + 1, "disarmed %s %s" % (g.dot, s.reason or "verifying on the real device"), t["magenta"], maxw=w - 2)
             y += 1
         y += 1
