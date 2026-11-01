@@ -239,6 +239,8 @@ describe('committed recordings (what judges replay without a key)', () => {
     expect(r.report.errors).toEqual([]);
     expect(r).toMatchObject({ ok: true, source: 'fixture' });
     expect(r.recordedFrom).toMatch(/^muse-/);
+    // the judge path: with the loop's evidence all passing, every control arms
+    if (Object.values(target.verification).every((v) => v === 'pass')) expect(r.uiSpec!.gen3d.controls.every((c) => c.armed)).toBe(true);
     for (const edit of runs.filter((x) => x.task === 'edit' && x.cardId === cardId)) {
       const e = await forge.edit({ specId: r.uiSpec!.specId, instruction: edit.request });
       expect(e.report.errors).toEqual([]);
