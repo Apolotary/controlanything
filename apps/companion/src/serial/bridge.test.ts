@@ -35,8 +35,9 @@ describe('CardputerBridge.exec', () => {
     const link = {
       ready: true,
       info: { caps: ['ir'], chip: 'a1b2c3d4e5f6', fw: 'ce-cardputer@0.1.0', board: 'cardputer' },
-      sendIr: async (raw: unknown) => {
+      sendIr: async (raw: unknown, extra?: unknown) => {
         sent.push(raw);
+        sent.push(extra);
         return { id: 'c1', writtenAt: performance.now(), writtenEpoch: 1234, ...reply } as SerialAck;
       },
       request: async () => ({ id: 'c2', ok: true }) as SerialAck,
@@ -50,8 +51,9 @@ describe('CardputerBridge.exec', () => {
     const b = new CardputerBridge(link, 'test');
     const ack = await b.exec(cmd({ kind: 'ir', protocol: 'NEC', bytes: [0x82, 0x6d, 0xbe, 0x41], rawUs: encodeFrame({ proto: 'NEC', bytes: [0x82, 0x6d, 0xbe, 0x41] }), ref: 'lib:hotalux/re0201/off' }));
     expect(ack).toMatchObject({ execId: 'x1', ok: true, sentAt: 1234 });
-    expect(ack.detail).toContain('hotalux/re0201/off → Cardputer (68 ms on device)');
-    expect(sent).toHaveLength(1);
+    expect(ack.detail).toContain('hotalux/re0201/off (built-in LED) → Cardputer (68 ms on device)');
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toEqual({ tx: 'led' });
     expect((sent[0] as { us: number[] }).us.slice(0, 2)).toEqual([9000, 4500]);
   });
 

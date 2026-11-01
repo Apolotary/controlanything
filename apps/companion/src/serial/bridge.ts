@@ -84,6 +84,14 @@ export class CardputerBridge {
   readonly learned: LearnedRow[] = [];
   learning?: { senseId?: string; prompt?: string; until: number; timer: ReturnType<typeof setTimeout> };
   menuTitle?: string;
+  /** which emitter fires IR: the built-in LED (G44) or the IR Unit on Grove (G2); remembered per browser */
+  tx: 'led' | 'grove' = (() => {
+    try {
+      return localStorage.getItem('ce.cardputer.tx') === 'grove' ? 'grove' : 'led';
+    } catch {
+      return 'led';
+    }
+  })();
   private menuSpecId?: string;
   private pollTimer?: ReturnType<typeof setTimeout>;
   private chip = 'unknown';
@@ -98,6 +106,16 @@ export class CardputerBridge {
 
   get online(): boolean {
     return this.state === 'online';
+  }
+
+  setTx(tx: 'led' | 'grove'): void {
+    this.tx = tx;
+    try {
+      localStorage.setItem('ce.cardputer.tx', tx);
+    } catch {
+      // private mode
+    }
+    this.onChange();
   }
 
   get deviceId(): string | undefined {
@@ -266,8 +284,8 @@ export class CardputerBridge {
       const raw = irOpToRaw(op);
       if (!raw.ok) return ack(false, { error: 'bad_args', detail: raw.error });
       if (cmd.dryRun) return ack(true, { detail: `dry run: ${raw.value.label} (${raw.value.us.length} timings)` });
-      const r = await this.link.sendIr(raw.value);
-      return this.serialAck(cmd, r, raw.value.label, t0);
+      const r = await this.link.sendIr(raw.value, { tx: this.tx });
+      return this.serialAck(cmd, r, `${raw.value.label} (${this.tx === 'grove' ? 'IR Unit' : 'built-in LED'})`, t0);
     }
     if (op.kind === 'local' && op.op === 'beep') {
       const a = op.arg;

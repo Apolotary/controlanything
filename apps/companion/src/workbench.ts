@@ -618,6 +618,13 @@ function renderLinks(): void {
         const i = link.info;
         proof = `${i?.fw ?? 'firmware ?'} · chip ${i?.chip ?? '?'} · ${i?.caps.join(', ') ?? ''}${bridge.deviceId ? ` · ${bridge.deviceId}` : ''}`;
         if (b === 'denied' && lead) acts.push(button('Pair again', () => void bridge.startPairing(), 'primary'));
+        if (lead) {
+          const tx = el('select', { title: 'IR emitter' });
+          tx.append(Object.assign(el('option', { text: 'built-in LED' }), { value: 'led' }), Object.assign(el('option', { text: 'IR Unit (Grove)' }), { value: 'grove' }));
+          tx.value = bridge.tx;
+          tx.addEventListener('change', () => bridge.setTx(tx.value === 'grove' ? 'grove' : 'led'));
+          acts.push(tx);
+        }
         if (b === 'online' && lead) acts.push(button('Re-pair', () => void bridge.repair(), 'ghost'));
         if (lead) acts.push(button('Close', () => void link.close(), 'ghost'));
         break;
