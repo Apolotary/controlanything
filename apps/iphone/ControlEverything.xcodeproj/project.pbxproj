@@ -1,0 +1,514 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		03AF32B5DF1A600CF1C1DE03 /* LogTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = F88392930D1E969B5B030FD1 /* LogTab.swift */; };
+		06CF62E2C24A7E69F5A6E885 /* ServerEndpoint.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F7A79DD302D5D4013499D64 /* ServerEndpoint.swift */; };
+		0A9F497FCE46397E6086F3E4 /* Haptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 944C7E1F144877B8B14543D4 /* Haptics.swift */; };
+		0E2686F0F58C1AB83045740C /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 974AF66454855D0C1D8B3805 /* Theme.swift */; };
+		1027CD5386C369D62FE0DE4A /* LocalExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79D64D14054B46DFF182D2AD /* LocalExecutor.swift */; };
+		1B64F4DC890C1457F9BBDE32 /* ConnectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E43C424726C291731C6C5B8A /* ConnectView.swift */; };
+		343EAF221CAC10E7F4643C57 /* Payloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE74A88240791F880CAA3D9C /* Payloads.swift */; };
+		36385ECF1F4A8F093DFC923F /* PingTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 959545B46A1F5A9515517594 /* PingTab.swift */; };
+		419AB6BE7A5A4C97125D2E6E /* Envelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1CC188303FBC5312A7E337E /* Envelope.swift */; };
+		4390E28F8C70C0D581B45919 /* SurfaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CD305193A5C03B934A6C070 /* SurfaceView.swift */; };
+		4DD49F35BCB269DF376F4F6B /* ScanTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47A853AD9FDB78DEB42BB682 /* ScanTab.swift */; };
+		62157D88C1349089E1BFA277 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 852785EA6BEAB8552AF5FA14 /* AppModel.swift */; };
+		648CB35006A9E712B0BC1FDE /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 74560CF2B04597D478090231 /* Assets.xcassets */; };
+		65FC9CB0426F870D75708A1A /* example-op1-knobs.json in Resources */ = {isa = PBXBuildFile; fileRef = 42FCABCE0C89720A7E873F17 /* example-op1-knobs.json */; };
+		67B2A8EC2F9B4AB1C0E617F3 /* AppModel+Inbound.swift in Sources */ = {isa = PBXBuildFile; fileRef = 305CD16539311536AE6D5696 /* AppModel+Inbound.swift */; };
+		6F5AA9B1A76818F1061DE913 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1F09645174B9C6C47703048 /* APIClient.swift */; };
+		85578C39E2264029C8B35816 /* ControlWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36B3C34AEC61D34674FF3098 /* ControlWidgets.swift */; };
+		8BACEC0E2D8B941F0677F004 /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14306C6B18F360F4833E6284 /* JSONValue.swift */; };
+		999E789C1FC38D917A1F7F2F /* Gen3d.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61848E6F406CDBC8211A5E97 /* Gen3d.swift */; };
+		9A97EB07E1B6FAC075459213 /* DeckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16FE00390E53DAD074594CE /* DeckView.swift */; };
+		A0E518C8040E9642466BDD6E /* example-resonance-lever.json in Resources */ = {isa = PBXBuildFile; fileRef = E1A06CABCDFE8B7C3E92AF21 /* example-resonance-lever.json */; };
+		A6539ED8384C6081E757E927 /* Surface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18B730744ABF8A83F895E4D8 /* Surface.swift */; };
+		AE221FCD373C3161C49D9C7D /* ControlEverythingApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A49BB48F4D38168A469CDDA /* ControlEverythingApp.swift */; };
+		AFB844269BA541588E5BFE6D /* CredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13F4CA2B88FF1417D6B2E6BB /* CredentialStore.swift */; };
+		B9533CFC002420F4EEC8729D /* CameraController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19D828703F25DA4F39121222 /* CameraController.swift */; };
+		C7E4C469BA47ECDDF722E8FB /* HubSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F592ADE03C1FF734A7E94C1 /* HubSocket.swift */; };
+		CF6F3F9AD3CD506D473346D2 /* CameraPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C13603E9CBB34BD41C8193E /* CameraPreview.swift */; };
+		DDE7943032541C61AC78D632 /* example-ceiling-dimmer.json in Resources */ = {isa = PBXBuildFile; fileRef = DF7E9618AC0DF08127C40B8B /* example-ceiling-dimmer.json */; };
+		E92F0C915F57ADB0FC49378B /* Overlays.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A3C9F3378C10B9E9131423 /* Overlays.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		13F4CA2B88FF1417D6B2E6BB /* CredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialStore.swift; sourceTree = "<group>"; };
+		14306C6B18F360F4833E6284 /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValue.swift; sourceTree = "<group>"; };
+		18B730744ABF8A83F895E4D8 /* Surface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Surface.swift; sourceTree = "<group>"; };
+		19D828703F25DA4F39121222 /* CameraController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraController.swift; sourceTree = "<group>"; };
+		1A49BB48F4D38168A469CDDA /* ControlEverythingApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlEverythingApp.swift; sourceTree = "<group>"; };
+		24A3C9F3378C10B9E9131423 /* Overlays.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Overlays.swift; sourceTree = "<group>"; };
+		2C13603E9CBB34BD41C8193E /* CameraPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreview.swift; sourceTree = "<group>"; };
+		305CD16539311536AE6D5696 /* AppModel+Inbound.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppModel+Inbound.swift"; sourceTree = "<group>"; };
+		36B3C34AEC61D34674FF3098 /* ControlWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlWidgets.swift; sourceTree = "<group>"; };
+		42FCABCE0C89720A7E873F17 /* example-op1-knobs.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "example-op1-knobs.json"; sourceTree = "<group>"; };
+		47A853AD9FDB78DEB42BB682 /* ScanTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanTab.swift; sourceTree = "<group>"; };
+		5F592ADE03C1FF734A7E94C1 /* HubSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubSocket.swift; sourceTree = "<group>"; };
+		61848E6F406CDBC8211A5E97 /* Gen3d.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Gen3d.swift; sourceTree = "<group>"; };
+		6F4F73B07270437D1C7FB86A /* ControlEverything.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ControlEverything.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		74560CF2B04597D478090231 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		79D64D14054B46DFF182D2AD /* LocalExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalExecutor.swift; sourceTree = "<group>"; };
+		7CD305193A5C03B934A6C070 /* SurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceView.swift; sourceTree = "<group>"; };
+		852785EA6BEAB8552AF5FA14 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		944C7E1F144877B8B14543D4 /* Haptics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Haptics.swift; sourceTree = "<group>"; };
+		959545B46A1F5A9515517594 /* PingTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PingTab.swift; sourceTree = "<group>"; };
+		974AF66454855D0C1D8B3805 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		9F7A79DD302D5D4013499D64 /* ServerEndpoint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerEndpoint.swift; sourceTree = "<group>"; };
+		BE74A88240791F880CAA3D9C /* Payloads.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Payloads.swift; sourceTree = "<group>"; };
+		C1CC188303FBC5312A7E337E /* Envelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Envelope.swift; sourceTree = "<group>"; };
+		D16FE00390E53DAD074594CE /* DeckView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeckView.swift; sourceTree = "<group>"; };
+		D1F09645174B9C6C47703048 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		DF7E9618AC0DF08127C40B8B /* example-ceiling-dimmer.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "example-ceiling-dimmer.json"; sourceTree = "<group>"; };
+		E1A06CABCDFE8B7C3E92AF21 /* example-resonance-lever.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "example-resonance-lever.json"; sourceTree = "<group>"; };
+		E43C424726C291731C6C5B8A /* ConnectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectView.swift; sourceTree = "<group>"; };
+		F88392930D1E969B5B030FD1 /* LogTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogTab.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		059C771DCDE8AE01B990139A /* Exec */ = {
+			isa = PBXGroup;
+			children = (
+				944C7E1F144877B8B14543D4 /* Haptics.swift */,
+				79D64D14054B46DFF182D2AD /* LocalExecutor.swift */,
+			);
+			path = Exec;
+			sourceTree = "<group>";
+		};
+		17B32C8AE3A1006956846C11 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				6F4F73B07270437D1C7FB86A /* ControlEverything.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		4B33655DD614D4DF48D0F10B /* Camera */ = {
+			isa = PBXGroup;
+			children = (
+				19D828703F25DA4F39121222 /* CameraController.swift */,
+				2C13603E9CBB34BD41C8193E /* CameraPreview.swift */,
+			);
+			path = Camera;
+			sourceTree = "<group>";
+		};
+		5528258A8535254BC1C7D067 /* Net */ = {
+			isa = PBXGroup;
+			children = (
+				D1F09645174B9C6C47703048 /* APIClient.swift */,
+				5F592ADE03C1FF734A7E94C1 /* HubSocket.swift */,
+				9F7A79DD302D5D4013499D64 /* ServerEndpoint.swift */,
+			);
+			path = Net;
+			sourceTree = "<group>";
+		};
+		55BB11AB8EA9F433FE9BF8A2 = {
+			isa = PBXGroup;
+			children = (
+				8099840F3CB31AA1105F7096 /* ControlEverything */,
+				17B32C8AE3A1006956846C11 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		61272747DFA2822CF829A96D /* Store */ = {
+			isa = PBXGroup;
+			children = (
+				13F4CA2B88FF1417D6B2E6BB /* CredentialStore.swift */,
+			);
+			path = Store;
+			sourceTree = "<group>";
+		};
+		6EBC8CF96B68A36E2E98A293 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				74560CF2B04597D478090231 /* Assets.xcassets */,
+				A562020F084A61CFB8AC3416 /* Examples */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		7B73C8238A274FDAE2DCAB5B /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				E43C424726C291731C6C5B8A /* ConnectView.swift */,
+				D16FE00390E53DAD074594CE /* DeckView.swift */,
+				F88392930D1E969B5B030FD1 /* LogTab.swift */,
+				24A3C9F3378C10B9E9131423 /* Overlays.swift */,
+				959545B46A1F5A9515517594 /* PingTab.swift */,
+				47A853AD9FDB78DEB42BB682 /* ScanTab.swift */,
+				7CD305193A5C03B934A6C070 /* SurfaceView.swift */,
+				974AF66454855D0C1D8B3805 /* Theme.swift */,
+				F66D449D3A32CB8E5E81288A /* Controls */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		8099840F3CB31AA1105F7096 /* ControlEverything */ = {
+			isa = PBXGroup;
+			children = (
+				AD3F652C5BA3EA0966D9741B /* App */,
+				4B33655DD614D4DF48D0F10B /* Camera */,
+				059C771DCDE8AE01B990139A /* Exec */,
+				5528258A8535254BC1C7D067 /* Net */,
+				A95FBAD530E7DF7364C1A8B1 /* Protocol */,
+				6EBC8CF96B68A36E2E98A293 /* Resources */,
+				61272747DFA2822CF829A96D /* Store */,
+				7B73C8238A274FDAE2DCAB5B /* UI */,
+			);
+			path = ControlEverything;
+			sourceTree = "<group>";
+		};
+		A562020F084A61CFB8AC3416 /* Examples */ = {
+			isa = PBXGroup;
+			children = (
+				DF7E9618AC0DF08127C40B8B /* example-ceiling-dimmer.json */,
+				42FCABCE0C89720A7E873F17 /* example-op1-knobs.json */,
+				E1A06CABCDFE8B7C3E92AF21 /* example-resonance-lever.json */,
+			);
+			path = Examples;
+			sourceTree = "<group>";
+		};
+		A95FBAD530E7DF7364C1A8B1 /* Protocol */ = {
+			isa = PBXGroup;
+			children = (
+				C1CC188303FBC5312A7E337E /* Envelope.swift */,
+				61848E6F406CDBC8211A5E97 /* Gen3d.swift */,
+				14306C6B18F360F4833E6284 /* JSONValue.swift */,
+				BE74A88240791F880CAA3D9C /* Payloads.swift */,
+			);
+			path = Protocol;
+			sourceTree = "<group>";
+		};
+		AD3F652C5BA3EA0966D9741B /* App */ = {
+			isa = PBXGroup;
+			children = (
+				852785EA6BEAB8552AF5FA14 /* AppModel.swift */,
+				305CD16539311536AE6D5696 /* AppModel+Inbound.swift */,
+				1A49BB48F4D38168A469CDDA /* ControlEverythingApp.swift */,
+				18B730744ABF8A83F895E4D8 /* Surface.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		F66D449D3A32CB8E5E81288A /* Controls */ = {
+			isa = PBXGroup;
+			children = (
+				36B3C34AEC61D34674FF3098 /* ControlWidgets.swift */,
+			);
+			path = Controls;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		ADD8BFAC4D85DF2C224F936E /* ControlEverything */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0A3C0401C061AFCBC06F8DEA /* Build configuration list for PBXNativeTarget "ControlEverything" */;
+			buildPhases = (
+				82FA284C8A3365437D6019BE /* Sources */,
+				9A383FAA910118720429F046 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ControlEverything;
+			packageProductDependencies = (
+			);
+			productName = ControlEverything;
+			productReference = 6F4F73B07270437D1C7FB86A /* ControlEverything.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		EBE087F01C3AFD05E161BFFB /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					ADD8BFAC4D85DF2C224F936E = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 7A1752AE98791CF0DAF1B472 /* Build configuration list for PBXProject "ControlEverything" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 55BB11AB8EA9F433FE9BF8A2;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 17B32C8AE3A1006956846C11 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				ADD8BFAC4D85DF2C224F936E /* ControlEverything */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		9A383FAA910118720429F046 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				648CB35006A9E712B0BC1FDE /* Assets.xcassets in Resources */,
+				DDE7943032541C61AC78D632 /* example-ceiling-dimmer.json in Resources */,
+				65FC9CB0426F870D75708A1A /* example-op1-knobs.json in Resources */,
+				A0E518C8040E9642466BDD6E /* example-resonance-lever.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		82FA284C8A3365437D6019BE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6F5AA9B1A76818F1061DE913 /* APIClient.swift in Sources */,
+				67B2A8EC2F9B4AB1C0E617F3 /* AppModel+Inbound.swift in Sources */,
+				62157D88C1349089E1BFA277 /* AppModel.swift in Sources */,
+				B9533CFC002420F4EEC8729D /* CameraController.swift in Sources */,
+				CF6F3F9AD3CD506D473346D2 /* CameraPreview.swift in Sources */,
+				1B64F4DC890C1457F9BBDE32 /* ConnectView.swift in Sources */,
+				AE221FCD373C3161C49D9C7D /* ControlEverythingApp.swift in Sources */,
+				85578C39E2264029C8B35816 /* ControlWidgets.swift in Sources */,
+				AFB844269BA541588E5BFE6D /* CredentialStore.swift in Sources */,
+				9A97EB07E1B6FAC075459213 /* DeckView.swift in Sources */,
+				419AB6BE7A5A4C97125D2E6E /* Envelope.swift in Sources */,
+				999E789C1FC38D917A1F7F2F /* Gen3d.swift in Sources */,
+				0A9F497FCE46397E6086F3E4 /* Haptics.swift in Sources */,
+				C7E4C469BA47ECDDF722E8FB /* HubSocket.swift in Sources */,
+				8BACEC0E2D8B941F0677F004 /* JSONValue.swift in Sources */,
+				1027CD5386C369D62FE0DE4A /* LocalExecutor.swift in Sources */,
+				03AF32B5DF1A600CF1C1DE03 /* LogTab.swift in Sources */,
+				E92F0C915F57ADB0FC49378B /* Overlays.swift in Sources */,
+				343EAF221CAC10E7F4643C57 /* Payloads.swift in Sources */,
+				36385ECF1F4A8F093DFC923F /* PingTab.swift in Sources */,
+				4DD49F35BCB269DF376F4F6B /* ScanTab.swift in Sources */,
+				06CF62E2C24A7E69F5A6E885 /* ServerEndpoint.swift in Sources */,
+				A6539ED8384C6081E757E927 /* Surface.swift in Sources */,
+				4390E28F8C70C0D581B45919 /* SurfaceView.swift in Sources */,
+				0E2686F0F58C1AB83045740C /* Theme.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		650E42F2C889B39D4B8055D6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ControlEverything/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.controleverything.ios;
+				PRODUCT_NAME = ControlEverything;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		870A09A3577E919715F729A0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		C3F0655E19F78892DC7B8540 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		E85D0A952F40CEC8A18332EC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ControlEverything/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.controleverything.ios;
+				PRODUCT_NAME = ControlEverything;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0A3C0401C061AFCBC06F8DEA /* Build configuration list for PBXNativeTarget "ControlEverything" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E85D0A952F40CEC8A18332EC /* Debug */,
+				650E42F2C889B39D4B8055D6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7A1752AE98791CF0DAF1B472 /* Build configuration list for PBXProject "ControlEverything" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C3F0655E19F78892DC7B8540 /* Debug */,
+				870A09A3577E919715F729A0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = EBE087F01C3AFD05E161BFFB /* Project object */;
+}
