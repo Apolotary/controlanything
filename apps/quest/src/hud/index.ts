@@ -280,12 +280,12 @@ class HudImpl implements Hud {
     }
   }
 
-  /** Lazy follower: 0.9 m ahead, 12° above the horizon; re-seats only when far off. */
+  /** Lazy follower: 0.9 m ahead, ~4° below the line of sight (Meta MR guideline), re-seats only when far off. */
   private worklogTarget(out: Vector3): Vector3 {
     this.camera.getWorldPosition(out);
     const f = this.headForward(new Vector3());
     out.addScaledVector(f, 0.9);
-    out.y += 0.19;
+    out.y -= 0.06;
     return out;
   }
 
@@ -296,8 +296,9 @@ class HudImpl implements Hud {
     const controls = menu.items.map((it) => ({ id: `hack_${it.id}`, kind: 'trigger' as const, label: it.label.slice(0, 16), binding: { action: 'hud.hack', args: { itemId: it.id, targetId } } }));
     const items = menu.items.map((it) => ({ ...it, controlId: `hack_${it.id}` }));
     const spec: Gen3dSpec = { ...this.hudSpec(`hack_${targetId}`, menu.title, [{ id: 'list', kind: 'archetype', archetype: 'hack-list', params: { title: menu.title, ...(menu.subtitle ? { subtitle: menu.subtitle } : {}), items, width: 0.24 } }]), controls };
-    const pos = t ? new Vector3(...t.position).addScaledVector(this.rightOfHead(new Vector3()), (t.sizeM?.[0] ?? 0.25) / 2 + 0.17) : this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.6);
-    if (t) pos.y += 0.06;
+    // the hack menu takes the user's LEFT of the target; generated controls (renderSpec) take the right
+    const pos = t ? new Vector3(...t.position).addScaledVector(this.rightOfHead(new Vector3()), -((t.sizeM?.[0] ?? 0.25) / 2 + 0.19)) : this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.6);
+    if (t) pos.y += 0.1;
     const m = this.mount(`hack_${targetId}`, spec, { position: pos, faceHead: true }, 'buildup', targetId);
     m.obj.emitter.on('control', (e: ControlEvent) => {
       if (e.phase !== 'start') return;
