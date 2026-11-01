@@ -1,6 +1,6 @@
 /**
  * Speech-to-text with Meta's Muse Voice Transcribe, plus a FIXTURE transcriber when no key is set.
- * Ported and adapted from FAMILIAR (same author, built earlier in this hackathon): server/transcribe.ts.
+ * Adapted from the author's own earlier prototype written during this hackathon (Oct 29–Nov 1).
  *
  * Request (docs: dev.meta.ai/docs/api-reference/voice/transcribe):
  *   POST {MUSE_API_BASE|https://api.meta.ai/v1}/asr/transcribe

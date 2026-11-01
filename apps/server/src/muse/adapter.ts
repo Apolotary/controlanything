@@ -2,7 +2,7 @@
  * Muse Spark chat client for the Meta Model API (OpenAI-compatible chat/completions), plus a FIXTURE
  * client used when MODEL_API_KEY is absent. The API key lives only here and in config; never log it.
  *
- * Ported and adapted from FAMILIAR (same author, built earlier in this hackathon): server/adapter.ts.
+ * Adapted from the author's own earlier prototype written during this hackathon (Oct 29–Nov 1).
  * Changes: multi-part messages with images, json_schema -> json_object -> plain fallback chain,
  * temperature left unset by default, max_completion_tokens, usage logging, zod-validated chatJson.
  *

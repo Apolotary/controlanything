@@ -1,6 +1,6 @@
 /**
  * Cancellation helpers for model calls.
- * Ported from FAMILIAR (same author, built earlier in this hackathon): server/cancellation.ts.
+ * Adapted from the author's own earlier prototype written during this hackathon (Oct 29–Nov 1).
  */
 import type { Request, Response } from 'express';
 
