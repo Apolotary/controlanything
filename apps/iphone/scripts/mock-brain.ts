@@ -5,7 +5,7 @@
  * which the app accepts in DEBUG builds only. Prints everything the iPhone sends back.
  *
  *   npx tsx apps/iphone/scripts/mock-brain.ts [scenario ...] [--listen]
- *     scenarios: steps spec targets arm exec scan disarmed (default: steps spec targets)
+ *     scenarios: steps spec targets arm exec wash red washoff scan disarmed (default: steps spec targets)
  *     --listen   stay connected and answer hack uploads with verify.result evidence (else exit after ~2.5 s)
  *     --loud     really speak/beep in the exec scenario (default: say and beep go out as dryRun, so no sound)
  *     debug k=v  send an x.debug command (DEBUG app builds): tab=log · surface=spec_op1 · hack=full ·
@@ -202,6 +202,9 @@ ws.on('message', async (data) => {
       if (want('arm')) await sendArm();
       if (want('scan')) await sendScan();
       if (want('exec')) await sendExec();
+      if (want('wash')) sendX('exec.command', { execId: `x-wash-${Date.now().toString(36)}`, executorDeviceId: iphone, op: { kind: 'local', op: 'screen', arg: { color: '#38F0FF', mode: 'steady', ms: 8000 } } }, iphone);
+      if (want('red')) sendX('exec.command', { execId: `x-red-${Date.now().toString(36)}`, executorDeviceId: iphone, op: { kind: 'local', op: 'screen', arg: { color: '#FF2020', mode: 'flash' } } }, iphone);
+      if (want('washoff')) sendX('exec.command', { execId: `x-washoff-${Date.now().toString(36)}`, executorDeviceId: iphone, op: { kind: 'local', op: 'screen', arg: 'off' } }, iphone);
       if (debugArgs) sendX('debug', debugArgs, iphone);
       if (!listen) { setTimeout(() => process.exit(0), 2500); }
       console.log(listen ? '[mock] sent; listening (Ctrl+C to stop)' : '[mock] sent; exiting shortly');

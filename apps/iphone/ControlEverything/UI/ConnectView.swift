@@ -92,7 +92,9 @@ struct PairingView: View {
                     }
                     .padding(.top, 10)
 
-                    QRCodeView(text: p.start.qr)
+                    // short "CE1:<code>" payload: a version-1 QR the headset reads at arm's length (the server
+                    // resolves it like the typed passcode); the full URL stays available to the Mac companion
+                    QRCodeView(text: "CE1:" + p.start.code)
                         .frame(maxWidth: 270)
                         .overlay(Rectangle().stroke(Neon.cyan, lineWidth: 2).padding(-6))
                         .opacity(p.status == "pending" ? 1 : 0.25)

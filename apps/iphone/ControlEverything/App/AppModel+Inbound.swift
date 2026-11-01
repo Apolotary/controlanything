@@ -44,7 +44,11 @@ extension AppModel {
         case MsgType.driverStatus:
             if let d = try? f.payload(DriverStatusPayload.self) { driverStatus[d.driverId] = d }
         case MsgType.log:
-            if let l = try? f.payload(LogPayload.self) { log(l.level, l.message, code: l.code) }
+            if let l = try? f.payload(LogPayload.self) {
+                log(l.level, l.message, code: l.code)
+                // the hub refused something this phone sent: say so instead of failing silently
+                if l.level == "error", f.head.from == Wire.serverId || f.head.from == nil { show("Server: \(l.message)", tone: .fail) }
+            }
         case MsgType.voiceText:
             if let v = try? f.payload(VoiceTextPayload.self) { transcript = v }
         case MsgType.panic:

@@ -151,12 +151,13 @@ struct ModelChipView: View {
     var source: String?
     var body: some View {
         HStack(spacing: 4) {
-            Text(id).font(Typo.mono(10, weight: .semibold)).foregroundStyle(Neon.cyan)
+            Text(id).font(Typo.mono(10, weight: .semibold)).foregroundStyle(Neon.cyan).lineLimit(1)
             if let source, source != "live" {
-                Text(source.uppercased()).font(Typo.mono(9, weight: .bold)).foregroundStyle(Neon.void)
+                Text(source.uppercased()).font(Typo.mono(9, weight: .bold)).foregroundStyle(Neon.void).lineLimit(1)
                     .padding(.horizontal, 3).background(Neon.dim)
             }
         }
+        .fixedSize()
         .padding(.horizontal, 6).padding(.vertical, 3)
         .background(Neon.void)
         .overlay(Rectangle().stroke(Neon.cyan.opacity(0.5), lineWidth: 1))

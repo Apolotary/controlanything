@@ -9,7 +9,8 @@ struct ScreenWashOverlay: View {
         let ex = model.executor
         if ex.washVisible, let c = ex.washColor {
             ZStack(alignment: .bottom) {
-                c.ignoresSafeArea()
+                Neon.void.opacity(ex.washOpacity < 1 ? 1 : 0).ignoresSafeArea()
+                c.opacity(ex.washOpacity).ignoresSafeArea()
                 Text("SCREEN \(ex.washHex ?? "") · \(ex.washMode)\(ex.washRateHz > 0 ? String(format: " %.1f Hz", ex.washRateHz) : "") · tap to clear")
                     .font(Typo.mono(11)).foregroundStyle(Neon.bone)
                     .padding(.horizontal, 10).padding(.vertical, 6).background(Neon.void.opacity(0.92))

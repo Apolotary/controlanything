@@ -48,7 +48,7 @@ struct LogTab: View {
                         }
                     }
                     if !model.hubLog.isEmpty {
-                        SectionTitle(title: "HUB", subtitle: "warnings")
+                        SectionTitle(title: "HUB", subtitle: "warnings").id("hub")
                         ForEach(model.hubLog.suffix(20).reversed()) { l in
                             Text("\(l.level.uppercased()) · \(l.message)").font(Typo.mono(10))
                                 .foregroundStyle(l.level == "error" ? Neon.fail : Neon.dim)
@@ -102,19 +102,31 @@ struct StepRow: View {
                 }
                 if let d = step.detail, !d.isEmpty { Text(d).font(Typo.mono(11)).foregroundStyle(Neon.dim).lineLimit(3) }
                 if let e = step.evidence {
-                    Text(e).font(Typo.mono(11, weight: .semibold)).foregroundStyle(step.kind == "proof" ? Neon.ok : Neon.cyan)
+                    Text(e).font(Typo.mono(11, weight: .semibold))
+                        .foregroundStyle(step.status == "fail" ? Neon.fail : step.kind == "proof" ? Neon.ok : Neon.cyan)
                 }
-                HStack(spacing: 6) {
-                    if let m = step.model { ModelChipView(id: m, source: step.source) }
-                    if let eff = step.effort { Text("effort \(eff)").font(Typo.mono(10)).foregroundStyle(Neon.dim) }
-                    if let d = duration { Text(d).font(Typo.mono(10)).foregroundStyle(Neon.dim) }
-                    if let k = step.kind { Text(k).font(Typo.mono(10)).foregroundStyle(k == "proof" ? Neon.ok : Neon.cyan) }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) {
+                        if let m = step.model { ModelChipView(id: m, source: step.source) }
+                        meta
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let m = step.model { ModelChipView(id: m, source: step.source) }
+                        HStack(spacing: 6) { meta }
+                    }
                 }
             }
             Spacer(minLength: 0)
         }
         .padding(10)
         .plate(edge: color, cut: 6, edgeOpacity: step.status == "running" ? 0.7 : 0.35)
+    }
+
+    @ViewBuilder
+    private var meta: some View {
+        if let eff = step.effort { Text("effort \(eff)").font(Typo.mono(10)).foregroundStyle(Neon.dim).fixedSize() }
+        if let d = duration { Text(d).font(Typo.mono(10)).foregroundStyle(Neon.dim).fixedSize() }
+        if let k = step.kind { Text(k).font(Typo.mono(10)).foregroundStyle(k == "proof" ? Neon.ok : Neon.cyan).fixedSize() }
     }
 
     private var phaseColor: Color {

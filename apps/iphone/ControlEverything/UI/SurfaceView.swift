@@ -40,13 +40,15 @@ struct SurfaceView: View {
                 }
                 Spacer(minLength: 0)
             }
-            HStack(spacing: 6) {
-                if let m = surface.modelId { ModelChipView(id: m, source: surface.source) }
-                ForEach(surface.verifiedBy, id: \.self) { v in
-                    Text(v).font(Typo.mono(10)).foregroundStyle(Neon.ok)
-                        .padding(.horizontal, 6).padding(.vertical, 3).overlay(Rectangle().stroke(Neon.ok.opacity(0.45), lineWidth: 1))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    if let m = surface.modelId { ModelChipView(id: m, source: surface.source).fixedSize() }
+                    ForEach(surface.verifiedBy, id: \.self) { v in
+                        Text(v).font(Typo.mono(10)).foregroundStyle(Neon.ok).fixedSize()
+                            .padding(.horizontal, 6).padding(.vertical, 3).overlay(Rectangle().stroke(Neon.ok.opacity(0.45), lineWidth: 1))
+                    }
                 }
-                Spacer(minLength: 0)
+                .padding(1)
             }
         }
         .padding(14)

@@ -22,6 +22,8 @@ final class LocalExecutor {
     private(set) var washVisible = false
     private(set) var washMode = "steady"
     private(set) var washRateHz: Double = 0
+    /// saturated red is shown dimmed (over void) so it never becomes a bright full-field red transition
+    private(set) var washOpacity: Double = 1
     // torch state: the level actually set, or the level we would have set (shown on screen) when there is no torch
     private(set) var torchLevel: Double = 0
     private(set) var torchIsVirtual = !CameraController.hasTorch
@@ -132,8 +134,11 @@ final class LocalExecutor {
         washColor = rgb.color
         washMode = mode
         washRateHz = mode == "pulse" ? rate : 0
+        washOpacity = rgb.isSaturatedRed ? 0.55 : 1
+        let fadeIn = rgb.isSaturatedRed ? 1.2 : 0.35
         switch mode {
         case "flash":
+            // one crisp flash, counted by the governor
             guard governor.allow() else { return Outcome(ok: false, detail: "flash skipped: 3 flashes per second is the limit", error: "rate_limited") }
             washVisible = true
             washTask = Task { [weak self] in
@@ -143,26 +148,28 @@ final class LocalExecutor {
             }
             return Outcome(ok: true, detail: "screen flash \(washHex!)\(note)")
         case "pulse":
+            // breathing, not strobing: eased edges, onsets still counted by the governor
             let period = 1.0 / rate
+            let edge = min(0.4, period * 0.4)
             let until = Date().addingTimeInterval((ms ?? 5000) / 1000)
             washTask = Task { [weak self] in
                 while !Task.isCancelled, Date() < until {
                     guard let self else { return }
-                    if self.governor.allow() { self.washVisible = true }
+                    if self.governor.allow() { withAnimation(.easeInOut(duration: edge)) { self.washVisible = true } }
                     try? await Task.sleep(for: .seconds(period / 2))
-                    self.washVisible = false
+                    withAnimation(.easeInOut(duration: edge)) { self.washVisible = false }
                     try? await Task.sleep(for: .seconds(period / 2))
                 }
-                self?.washVisible = false
+                withAnimation(.easeOut(duration: 0.3)) { self?.washVisible = false }
             }
             return Outcome(ok: true, detail: "screen pulse \(washHex!) at \(String(format: "%.1f", rate)) Hz\(note)")
         default:
-            washVisible = true
+            withAnimation(.easeIn(duration: fadeIn)) { washVisible = true }
             if let ms {
                 washTask = Task { [weak self] in
                     try? await Task.sleep(for: .milliseconds(Int(ms)))
                     guard !Task.isCancelled else { return }
-                    self?.washVisible = false
+                    withAnimation(.easeOut(duration: 0.35)) { self?.washVisible = false }
                 }
             }
             return Outcome(ok: true, detail: "screen \(washHex!) steady\(note)")
@@ -171,7 +178,7 @@ final class LocalExecutor {
 
     func clearWash() {
         washTask?.cancel()
-        washVisible = false
+        withAnimation(.easeOut(duration: 0.25)) { washVisible = false }
         washMode = "steady"
         washRateHz = 0
     }

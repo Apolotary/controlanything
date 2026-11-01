@@ -57,9 +57,14 @@ nonisolated struct ServerEndpoint: Codable, Hashable, Sendable {
         return out
     }
 
-    /// A pairing QR of another device: https://host:8443/p/<pairingId>#<code>
-    static func pairingTarget(from input: String) -> (pairingId: String, code: String)? {
-        guard let url = URL(string: input.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
+    /// A pairing QR of another device: "CE1:<code>" (short form) or https://host:8443/p/<pairingId>#<code>
+    static func pairingTarget(from input: String) -> (pairingId: String?, code: String)? {
+        let s = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.uppercased().hasPrefix("CE1:") {
+            let code = s.dropFirst(4).uppercased().filter { $0.isLetter || $0.isNumber }
+            return code.count == 6 ? (nil, String(code)) : nil
+        }
+        guard let url = URL(string: s) else { return nil }
         let parts = url.path.split(separator: "/")
         guard parts.count == 2, parts[0] == "p", let code = url.fragment, !code.isEmpty else { return nil }
         return (String(parts[1]), code)

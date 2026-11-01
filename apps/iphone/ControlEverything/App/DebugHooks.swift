@@ -9,6 +9,7 @@ import Foundation
 ///   -CEName <name>    this phone's name for pairing
 ///   -CETab <name>     hacks | scan | ping | log
 ///   -CEDemo 1         load the bundled demo surfaces
+///   -CEOffline 1      open the deck even when not paired (offline demo surfaces, UI tests)
 ///
 /// Deep links while running (`xcrun simctl openurl <udid> 'controleverything://debug?tab=log'`; iOS asks to confirm),
 /// or the same keys in an `x.debug` hub message from a paired test script (scripts/mock-brain.ts `debug k=v ...`):
@@ -24,6 +25,8 @@ extension AppModel {
             screen = .connect
         }
         if let name = d.string(forKey: "CEName") { deviceName = name }
+        // open the deck without a server (offline look at the demo surfaces; UI tests)
+        if d.bool(forKey: "CEOffline") { screen = .deck }
         if let tab = d.string(forKey: "CETab") { setTab(tab) }
         if d.bool(forKey: "CEDemo") { loadDemoSurfaces() }
         if credentials == nil, let server = d.string(forKey: "CEServer") {

@@ -61,11 +61,29 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+  ControlEverythingUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: ControlEverythingUITests
+    dependencies:
+      - target: ControlEverything
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.controleverything.ios.uitests
+        TEST_TARGET_NAME: ControlEverything
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+        CODE_SIGN_STYLE: Automatic
 schemes:
   ControlEverything:
     build:
       targets:
         ControlEverything: all
+    test:
+      config: Debug
+      targets:
+        - ControlEverythingUITests
     run:
       config: Debug
     archive:

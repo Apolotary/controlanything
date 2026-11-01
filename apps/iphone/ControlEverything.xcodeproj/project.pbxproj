@@ -14,6 +14,7 @@
 		0E2686F0F58C1AB83045740C /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 974AF66454855D0C1D8B3805 /* Theme.swift */; };
 		1027CD5386C369D62FE0DE4A /* LocalExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79D64D14054B46DFF182D2AD /* LocalExecutor.swift */; };
 		1B64F4DC890C1457F9BBDE32 /* ConnectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E43C424726C291731C6C5B8A /* ConnectView.swift */; };
+		2C12B69C373169D81A47A8C2 /* ControlGestureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFF57C11BE132A03EA8D1272 /* ControlGestureTests.swift */; };
 		343EAF221CAC10E7F4643C57 /* Payloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE74A88240791F880CAA3D9C /* Payloads.swift */; };
 		36385ECF1F4A8F093DFC923F /* PingTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 959545B46A1F5A9515517594 /* PingTab.swift */; };
 		419AB6BE7A5A4C97125D2E6E /* Envelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1CC188303FBC5312A7E337E /* Envelope.swift */; };
@@ -39,6 +40,16 @@
 		E92F0C915F57ADB0FC49378B /* Overlays.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A3C9F3378C10B9E9131423 /* Overlays.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		59A678A99274C166D5D341A7 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = EBE087F01C3AFD05E161BFFB /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = ADD8BFAC4D85DF2C224F936E;
+			remoteInfo = ControlEverything;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		13F4CA2B88FF1417D6B2E6BB /* CredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialStore.swift; sourceTree = "<group>"; };
 		14306C6B18F360F4833E6284 /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValue.swift; sourceTree = "<group>"; };
@@ -56,6 +67,7 @@
 		6F4F73B07270437D1C7FB86A /* ControlEverything.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ControlEverything.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		719D5095E5CBC4F3FB9AA325 /* DebugHooks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugHooks.swift; sourceTree = "<group>"; };
 		74560CF2B04597D478090231 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		77011D1464D1D6500725F0AB /* ControlEverythingUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ControlEverythingUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		79D64D14054B46DFF182D2AD /* LocalExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalExecutor.swift; sourceTree = "<group>"; };
 		7CD305193A5C03B934A6C070 /* SurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceView.swift; sourceTree = "<group>"; };
 		852785EA6BEAB8552AF5FA14 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
@@ -71,6 +83,7 @@
 		E1A06CABCDFE8B7C3E92AF21 /* example-resonance-lever.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "example-resonance-lever.json"; sourceTree = "<group>"; };
 		E43C424726C291731C6C5B8A /* ConnectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectView.swift; sourceTree = "<group>"; };
 		F88392930D1E969B5B030FD1 /* LogTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogTab.swift; sourceTree = "<group>"; };
+		FFF57C11BE132A03EA8D1272 /* ControlGestureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlGestureTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -87,8 +100,17 @@
 			isa = PBXGroup;
 			children = (
 				6F4F73B07270437D1C7FB86A /* ControlEverything.app */,
+				77011D1464D1D6500725F0AB /* ControlEverythingUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		2434F846F9EEB76A0AAB2CE4 /* ControlEverythingUITests */ = {
+			isa = PBXGroup;
+			children = (
+				FFF57C11BE132A03EA8D1272 /* ControlGestureTests.swift */,
+			);
+			path = ControlEverythingUITests;
 			sourceTree = "<group>";
 		};
 		4B33655DD614D4DF48D0F10B /* Camera */ = {
@@ -114,6 +136,7 @@
 			isa = PBXGroup;
 			children = (
 				8099840F3CB31AA1105F7096 /* ControlEverything */,
+				2434F846F9EEB76A0AAB2CE4 /* ControlEverythingUITests */,
 				17B32C8AE3A1006956846C11 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -228,6 +251,24 @@
 			productReference = 6F4F73B07270437D1C7FB86A /* ControlEverything.app */;
 			productType = "com.apple.product-type.application";
 		};
+		EC85BD6EF6735825F8183F72 /* ControlEverythingUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F33750E990C42C2535DF538E /* Build configuration list for PBXNativeTarget "ControlEverythingUITests" */;
+			buildPhases = (
+				F1922C9B56AF83200537CCDA /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DDB461A32DEB0B5D00A67AEE /* PBXTargetDependency */,
+			);
+			name = ControlEverythingUITests;
+			packageProductDependencies = (
+			);
+			productName = ControlEverythingUITests;
+			productReference = 77011D1464D1D6500725F0AB /* ControlEverythingUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -239,6 +280,10 @@
 				TargetAttributes = {
 					ADD8BFAC4D85DF2C224F936E = {
 						ProvisioningStyle = Automatic;
+					};
+					EC85BD6EF6735825F8183F72 = {
+						ProvisioningStyle = Automatic;
+						TestTargetID = ADD8BFAC4D85DF2C224F936E;
 					};
 				};
 			};
@@ -257,6 +302,7 @@
 			projectRoot = "";
 			targets = (
 				ADD8BFAC4D85DF2C224F936E /* ControlEverything */,
+				EC85BD6EF6735825F8183F72 /* ControlEverythingUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -309,9 +355,44 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F1922C9B56AF83200537CCDA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2C12B69C373169D81A47A8C2 /* ControlGestureTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		DDB461A32DEB0B5D00A67AEE /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = ADD8BFAC4D85DF2C224F936E /* ControlEverything */;
+			targetProxy = 59A678A99274C166D5D341A7 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		31AF0EA49DB1E918ADA513E8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.controleverything.ios.uitests;
+				SDKROOT = iphoneos;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = ControlEverything;
+			};
+			name = Debug;
+		};
 		650E42F2C889B39D4B8055D6 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -466,6 +547,25 @@
 			};
 			name = Debug;
 		};
+		D4023D6D45411640D49426EF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.controleverything.ios.uitests;
+				SDKROOT = iphoneos;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = ControlEverything;
+			};
+			name = Release;
+		};
 		E85D0A952F40CEC8A18332EC /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -508,6 +608,15 @@
 			buildConfigurations = (
 				C3F0655E19F78892DC7B8540 /* Debug */,
 				870A09A3577E919715F729A0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F33750E990C42C2535DF538E /* Build configuration list for PBXNativeTarget "ControlEverythingUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				31AF0EA49DB1E918ADA513E8 /* Debug */,
+				D4023D6D45411640D49426EF /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
