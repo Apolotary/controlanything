@@ -329,8 +329,25 @@ export class QuestApp {
     if (error) this.page.log(error, 'warn');
     this.page.log(`HUD: ${kind === 'gen3d' ? 'gen3d renderer' : 'shell debug HUD'}`);
     hud.on('consumed', (e) => {
-      if (e.hand === 'left' || e.hand === 'right') this.consumed[e.hand as Handedness] = true;
+      // the desktop mouse is the right hand (gen3d reports its dev cursor as 'mouse')
+      const hand = e.hand === 'mouse' ? 'right' : e.hand;
+      if (hand === 'left' || hand === 'right') this.consumed[hand as Handedness] = true;
     });
+    // desktop: gen3d's widgets take a mouse "dev cursor" that raycasts the HUD's own objects (as in its gallery)
+    const devHud = hud as Hud & { setDevCursors?: (c: unknown[]) => void };
+    if (this.emulator && kind === 'gen3d' && typeof devHud.setDevCursors === 'function') {
+      try {
+        const g = (await import('../gen3d/index')) as unknown as { MouseCursor?: new (el: HTMLElement, cam: PerspectiveCamera) => { cursor: unknown; setTargets(o: unknown[]): void; update(): unknown } };
+        if (g.MouseCursor) {
+          this.mouseCursor = new g.MouseCursor(this.renderer.domElement, this.desktopCam);
+          this.mouseCursor.setTargets([hud.root]);
+          devHud.setDevCursors([this.mouseCursor.cursor]);
+          this.page.log('desktop: the mouse drives gen3d widgets (dev cursor)');
+        }
+      } catch (e) {
+        this.page.log(`gen3d dev cursor unavailable: ${(e as Error).message}`, 'warn');
+      }
+    }
     hud.on('deck', (e) => this.onDeck(e.key, e.phase));
     hud.on('hack', (e) => this.onHack(e));
     hud.on('control', (e) => this.onControl(e));
@@ -559,6 +576,7 @@ export class QuestApp {
   }
 
   private pendingArm?: string;
+  private mouseCursor?: { cursor: unknown; setTargets(o: unknown[]): void; update(): unknown };
 
   answerConfirm(armId: string, approve: boolean, hold?: boolean): void {
     const payload: PayloadOf<'arm.confirm'> = { armId, approve };
@@ -582,8 +600,13 @@ export class QuestApp {
     return uiSpecId;
   }
 
+  /** HUD menu key → ui.spec id, so a hack pinch carries the spec it came from */
+  private readonly menuSpec = new Map<string, string>();
+
   private onUiSpec(p: UiSpecPayload): void {
-    const t = p.cardId ? this.targetForCard(p.cardId) : this.lockedId ? this.targets.get(this.lockedId) : undefined;
+    // a card's spec sits at that device; a room-level spec (no cardId: daemons, combos) floats on its own
+    const t = p.cardId ? this.targetForCard(p.cardId) : undefined;
+    const menuKey = p.cardId ? (t?.id ?? p.cardId) : `room:${p.specId}`;
     if (p.cardId) {
       this.specByCard.set(p.cardId, p.specId);
       this.cardOfSpec.set(p.specId, p.cardId);
@@ -600,9 +623,10 @@ export class QuestApp {
         if (h.blurb) it.detail = h.blurb.slice(0, 32);
         return it;
       });
-      this.hud.showHackMenu(t?.id ?? '', { title: p.hackset.device.name, subtitle: 'HACKS · your devices', items });
+      this.menuSpec.set(menuKey, p.specId);
+      this.hud.showHackMenu(menuKey, { title: p.hackset.device.name, subtitle: 'HACKS · your devices', items });
     }
-    this.page.log(`ui.spec ${p.title ?? p.specId} rev ${p.rev ?? 1}${p.modelId ? ` · ${p.modelId}` : ''}${p.source === 'fixture' ? ' · FIXTURE' : ''}`, 'ok');
+    this.page.log(`ui.spec ${p.title ?? p.specId} rev ${p.rev ?? 1}${p.cardId ? '' : ' (room)'}${p.modelId ? ` · ${p.modelId}` : ''}${p.source === 'fixture' ? ' · FIXTURE' : ''}`, 'ok');
   }
 
   /** Is a world point inside the current camera frame (with a 5 % margin)? */
@@ -706,7 +730,7 @@ export class QuestApp {
   private onHack(e: { targetId: string; itemId: string; controlId?: string; index: number; hold?: boolean }): void {
     // the pinch IS the human confirmation: an action hack fires as {widgetId: hackId, value: true, phase: 'end'}
     const t = this.targets.get(e.targetId);
-    const specId = t?.cardId ? this.specByCard.get(t.cardId) : undefined;
+    const specId = this.menuSpec.get(e.targetId) ?? (t?.cardId ? this.specByCard.get(t.cardId) : undefined);
     const payload: PayloadOf<'control.event'> = { widgetId: e.itemId, value: true, ts: Date.now(), phase: 'end' };
     if (specId) payload.specId = specId;
     this.ws.send('control.event', payload);
@@ -849,10 +873,18 @@ export class QuestApp {
 
   private frameInner(time: number, xrFrame?: XRFrame): void {
     const inXr = Boolean(xrFrame && this.refSpace);
-    if (!inXr && this.emulator) {
+    if (this.emulator) {
       const h = this.emulator.head();
       this.desktopCam.position.copy(h.position);
       this.desktopCam.quaternion.copy(h.quaternion);
+      const fov = (this.emulator.device.fovy * 180) / Math.PI;
+      const rect = this.renderer.domElement.getBoundingClientRect();
+      const aspect = rect.width > 0 && rect.height > 0 ? rect.width / rect.height : this.desktopCam.aspect;
+      if (Math.abs(this.desktopCam.fov - fov) > 0.01 || Math.abs(this.desktopCam.aspect - aspect) > 0.001) {
+        this.desktopCam.fov = fov;
+        this.desktopCam.aspect = aspect;
+        this.desktopCam.updateProjectionMatrix();
+      }
     }
     this.desktopCam.updateMatrixWorld();
     const cam = inXr ? this.renderer.xr.getCamera() : this.desktopCam;
@@ -871,7 +903,13 @@ export class QuestApp {
       this.hud.upsertTarget(toHudTarget(t));
     }
     this.consumed.left = this.consumed.right = false;
-    this.hud.update(f);
+    if (this.mouseCursor) {
+      // gen3d gets the mouse as its dev cursor, not also as a hand
+      this.mouseCursor.update();
+      const hands = { ...f.hands };
+      if (hands.right?.controller && this.input.mouseAsHand) delete hands.right;
+      this.hud.update({ ...f, hands });
+    } else this.hud.update(f);
     this.interact(f, time);
     this.scanner.tick(time);
     this.renderer.render(this.scene, this.desktopCam);
