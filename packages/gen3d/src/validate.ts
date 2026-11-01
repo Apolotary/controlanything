@@ -80,7 +80,7 @@ const REQUIRED_DIMS: Record<string, string[]> = {
   torus: ['r'],
   capsule: ['r'],
   cone: ['r'],
-  ring: ['rOuter'],
+  ring: ['rOuter|r'],
   lathe: ['profile'],
   extrude: ['profile'],
 };
@@ -88,7 +88,7 @@ const REQUIRED_DIMS: Record<string, string[]> = {
 const BEHAVIOR_KINDS: Record<Behavior['type'], readonly Control['kind'][]> = {
   rotate: ['continuous', 'stepped', 'toggle'],
   slide: ['continuous', 'stepped'],
-  press: ['trigger', 'toggle'],
+  press: ['trigger', 'toggle', 'stepped'],
   toggle: ['toggle', 'trigger'],
   pull: ['trigger', 'toggle', 'stepped'],
   xy: ['xy'],
@@ -167,7 +167,11 @@ export function validateSpec(input: unknown): ValidationResult {
       case 'primitive': {
         if (!p.shape) err('part.shape', `${path}.shape`, `a primitive needs a shape`);
         else {
-          for (const k of REQUIRED_DIMS[p.shape] ?? []) if ((p.dims as Record<string, unknown> | undefined)?.[k] === undefined) err('part.dims', `${path}.dims.${k}`, `${p.shape} needs dims.${k}`);
+          for (const k of REQUIRED_DIMS[p.shape] ?? []) {
+            const alts = k.split('|');
+            const d = (p.dims ?? {}) as Record<string, unknown>;
+            if (!alts.some((a) => d[a] !== undefined)) err('part.dims', `${path}.dims.${alts[0]}`, `${p.shape} needs dims.${alts.join(' or ')}`);
+          }
         }
         break;
       }

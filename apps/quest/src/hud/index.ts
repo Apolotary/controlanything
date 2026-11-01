@@ -1,0 +1,641 @@
+/**
+ * The HUD: everything the app shell shows in the room, built from gen3d specs so the agent's HUD and the
+ * generated controls are one system (one validator, one budget, one interaction runtime).
+ *
+ *   targets   outline + brackets + tag (+ twin) per detection, world-anchored where the shell placed them
+ *   pings     ping-line per route (hypothesis grey dashed → requested volt → verified)
+ *   worklog   agent steps with evidence words and the Meta model ids, lazily following the head
+ *   hack menu / upload bar / evidence strip / confirm key beside the locked target
+ *   deck      palm panel: SCAN · PING · HACKS · DAEMONS · UNDO · PANIC
+ *   reticle   head-ray cursor; specs: generated 3D controls (renderSpec / patchSpec / setArmed / setControlValue)
+ */
+import { Camera, Group, Object3D, Quaternion, Scene, Vector3, WebGLRenderer } from 'three';
+import type { ControlEvent, Gen3dSpec, HackItem, HudStatus, LogRow, ModelChip, Part, Patch } from '@ce/gen3d';
+import { EXAMPLES, NEON, SpecHistory, applyPatch, validateSpec } from '@ce/gen3d';
+import { SpecObject, type GenEvents } from '../gen3d/build';
+import { UiAudio } from '../gen3d/audio';
+import { Emitter, type EventSink } from '../gen3d/events';
+import { handCursor, newCursor, type Cursor } from '../gen3d/interact';
+import { MaterialClock } from '../gen3d/materials';
+import { RoomDim } from '../fx/roomDim';
+import { ScanSweep } from '../fx/sweep';
+import { damp } from '../gen3d/anim';
+import type { AgentStepLike, ConfirmRequest, EvidenceState, Hud, HudEvents, HudFrame, HudTarget, PingLine, UploadState } from './contract';
+import '../gen3d/index';
+
+export * from './contract';
+
+const _v = new Vector3();
+const _q = new Quaternion();
+
+interface Mounted {
+  obj: SpecObject;
+  /** which spec this object shows (for diffs) */
+  spec: Gen3dSpec;
+  history?: SpecHistory;
+  targetId?: string;
+}
+
+export function createHud(ctx: { scene: Scene; camera: Camera; renderer: WebGLRenderer }): Hud {
+  return new HudImpl(ctx);
+}
+
+class HudImpl implements Hud {
+  readonly root = new Group();
+  private readonly clock = new MaterialClock();
+  private readonly audio = new UiAudio();
+  private readonly events = new Emitter<HudEvents>();
+  private readonly objects = new Map<string, Mounted>();
+  private readonly targets = new Map<string, HudTarget>();
+  private readonly cursors: Cursor[] = [newCursor('left', 'left'), newCursor('right', 'right')];
+  private readonly roomDim = new RoomDim();
+  private readonly sweep = new ScanSweep();
+  private candidate: string | null = null;
+  private locked: string | null = null;
+  private steps = new Map<string, AgentStepLike>();
+  private chips: ModelChip[] = [];
+  private pings: PingLine[] = [];
+  private scanning = false;
+  private worklogPose = { position: new Vector3(), yaw: 0, placed: false };
+  private deckOpen = false;
+  private toastTimer: ReturnType<typeof setTimeout> | null = null;
+  private time = 0;
+  private readonly camera: Camera;
+  private readonly sink: EventSink;
+
+  constructor(ctx: { scene: Scene; camera: Camera; renderer: WebGLRenderer }) {
+    this.camera = ctx.camera;
+    this.root.name = 'hud';
+    this.root.add(this.roomDim, this.sweep);
+    ctx.scene.add(this.root);
+    this.sink = { control: (e) => this.events.emit('control', e) };
+    ctx.renderer.domElement.addEventListener('pointerdown', () => this.audio.unlock(), { once: true });
+  }
+
+  on<K extends keyof HudEvents>(k: K, fn: (e: HudEvents[K]) => void): () => void {
+    return this.events.on(k, fn);
+  }
+
+  /** Dev hook (gallery, IWER): extra cursors (mouse, emulated controllers) that operate HUD widgets. */
+  setDevCursors(cursors: Cursor[]): void {
+    this.devCursors = cursors;
+  }
+  private devCursors: Cursor[] = [];
+
+  // --- mounting -------------------------------------------------------------------------------------
+
+  private mount(key: string, spec: Gen3dSpec, place?: { position?: Vector3; yaw?: number; faceHead?: boolean }, animate: 'none' | 'buildup' | 'diff' = 'diff', targetId?: string): Mounted {
+    const v = validateSpec(spec);
+    if (!v.spec) {
+      console.warn('[hud] invalid spec', key, v.errors);
+      return this.objects.get(key)!;
+    }
+    spec = v.spec;
+    let m = this.objects.get(key);
+    if (!m) {
+      const obj = new SpecObject(spec, { clock: this.clock, audio: this.audio, sink: this.sink });
+      if (animate === 'buildup') obj.applySpec(spec, 'buildup');
+      obj.emitter.on('consumed', (e) => this.events.emit('consumed', { hand: e.hand, widget: e.widget }));
+      obj.emitter.on('grab', (g) => this.events.emit('grab', g));
+      this.root.add(obj);
+      m = { obj, spec, ...(targetId ? { targetId } : {}) };
+      this.objects.set(key, m);
+    } else {
+      m.obj.applySpec(spec, animate);
+      m.spec = spec;
+    }
+    if (place?.position) m.obj.position.copy(place.position);
+    if (place?.yaw !== undefined) m.obj.rotation.set(0, (place.yaw * Math.PI) / 180, 0);
+    else if (place?.faceHead ?? true) this.faceHead(m.obj);
+    return m;
+  }
+
+  private unmount(key: string): void {
+    const m = this.objects.get(key);
+    if (!m) return;
+    this.root.remove(m.obj);
+    m.obj.dispose();
+    this.objects.delete(key);
+  }
+
+  private faceHead(obj: Object3D): void {
+    this.camera.getWorldPosition(_v);
+    obj.lookAt(_v.x, obj.position.y, _v.z);
+  }
+
+  private headForward(out: Vector3): Vector3 {
+    this.camera.getWorldDirection(out);
+    out.y = 0;
+    return out.normalize();
+  }
+
+  private rightOfHead(out: Vector3): Vector3 {
+    return this.headForward(out).cross(new Vector3(0, 1, 0)).normalize();
+  }
+
+  private hudSpec(id: string, title: string, parts: Part[], extra: Partial<Gen3dSpec> = {}): Gen3dSpec {
+    return { spec: 'ce.gen3d/1', specId: id, rev: 1, title, anchor: { mode: 'world', position: [0, 0, 0], grabbable: false }, controls: [], parts, ...extra };
+  }
+
+  // --- SCAN -------------------------------------------------------------------------------------------
+
+  setScanning(on: boolean, info?: { prompts?: number; pending?: number; startedAt?: number; modelId?: string }): void {
+    if (on && !this.scanning) {
+      this.sweep.start(this.time);
+      this.audio.unlock();
+      this.audio.play('sweep');
+      this.roomDim.target = 0.5;
+      if (info?.modelId) this.setModelChips(this.chips.map((c) => (c.id === info.modelId ? { ...c, state: 'live' } : c)));
+    }
+    if (!on && this.scanning) {
+      this.roomDim.target = this.locked ? 0 : 0.25;
+      this.setModelChips(this.chips.map((c) => (c.state === 'live' ? { ...c, state: 'done' } : c)));
+    }
+    this.scanning = on;
+  }
+
+  upsertTarget(t: HudTarget): void {
+    this.targets.set(t.id, t);
+    this.renderTarget(t);
+  }
+
+  private renderTarget(t: HudTarget): void {
+    const size = t.sizeM ?? [0.25, 0.1, 0.2];
+    const status: HudStatus = this.locked === t.id ? (t.status === 'scanned' || t.status === 'candidate' ? 'locked' : t.status) : this.candidate === t.id ? 'candidate' : t.status;
+    const outlineStatus: HudStatus = !t.confirmed && status === 'scanned' ? 'scanned' : status;
+    const facing = t.facing ?? [0, 0, 1];
+    const parts: Part[] = [
+      // the contour lies in the facing plane: a group whose +z is the facing vector
+      { id: 'plane', kind: 'group', transform: { rotationDeg: facingToEuler(facing) } },
+      { id: 'outline', parentId: 'plane', kind: 'archetype', archetype: 'outline', params: { status: outlineStatus, ...(t.contour ? { contour: t.contour } : { boxSize: size }) } },
+      ...(status === 'candidate' || status === 'locked' || status === 'linking' || status === 'linked' || status === 'controlled' || status === 'verified'
+        ? [{ id: 'brackets', kind: 'archetype', archetype: 'brackets', params: { boxSize: size, status: status === 'candidate' ? 'candidate' : 'locked' } } as Part]
+        : []),
+      { id: 'tag', kind: 'archetype', archetype: 'tag', params: { title: t.label, subtitle: t.subtitle ?? statusWord(status, t.confirmed), status, ...(t.channel ? { channel: t.channel } : {}) }, transform: { position: [0, size[1] / 2 + 0.07, 0] } },
+      { id: 'lead', kind: 'path', path: { from: [0, size[1] / 2 + 0.01, 0], to: [0, size[1] / 2 + 0.052, 0], width: 0.0015, color: statusHex(status), keyline: true } },
+    ];
+    if (status === 'locked' || status === 'controlled' || status === 'verified') {
+      parts.push({ id: 'twin', parentId: 'plane', kind: 'archetype', archetype: 'twin', params: { status, depth: Math.min(0.06, size[2]), ...(t.contour ? { contour: t.contour } : { boxSize: size }) }, transform: { position: [0, 0, 0] } });
+    }
+    const spec = this.hudSpec(`tgt_${t.id}`, t.label, parts, { modelId: t.modelId ?? 'sam-3.1' });
+    const existed = this.objects.has(`tgt_${t.id}`);
+    const m = this.mount(`tgt_${t.id}`, spec, { position: new Vector3(...t.position), faceHead: false }, existed ? 'diff' : 'buildup', t.id);
+    // tag faces the user; the contour plane is world-fixed
+    m.obj.rotation.set(0, 0, 0);
+    const tag = m.obj.nodes.get('tag');
+    if (tag) {
+      this.camera.getWorldPosition(_v);
+      const local = m.obj.worldToLocal(_v.clone());
+      tag.rotation.set(0, Math.atan2(local.x - tag.position.x, local.z - tag.position.z), 0);
+    }
+    if (!existed) this.audio.play('step', new Vector3(...t.position));
+  }
+
+  removeTarget(id: string): void {
+    this.targets.delete(id);
+    this.unmount(`tgt_${id}`);
+    this.unmount(`hack_${id}`);
+    if (this.candidate === id) this.candidate = null;
+    if (this.locked === id) this.locked = null;
+  }
+
+  clearTargets(): void {
+    for (const id of [...this.targets.keys()]) this.removeTarget(id);
+  }
+
+  setCandidate(id: string | null): void {
+    if (this.candidate === id) return;
+    const prev = this.candidate;
+    this.candidate = id;
+    if (prev) this.refreshTarget(prev);
+    if (id) {
+      this.refreshTarget(id);
+      this.audio.play('tick');
+    }
+  }
+
+  setLocked(id: string | null): void {
+    if (this.locked === id) return;
+    const prev = this.locked;
+    this.locked = id;
+    if (prev) this.refreshTarget(prev);
+    if (id) {
+      this.refreshTarget(id);
+      this.audio.play('lock');
+      this.roomDim.target = 0;
+    }
+  }
+
+  private refreshTarget(id: string): void {
+    const t = this.targets.get(id);
+    if (t) this.renderTarget(t);
+  }
+
+  // --- PING -------------------------------------------------------------------------------------------
+
+  setPing(lines: PingLine[]): void {
+    this.pings = lines;
+    if (!lines.length) {
+      this.unmount('pings');
+      return;
+    }
+    const head = this.camera.getWorldPosition(new Vector3());
+    const parts: Part[] = [];
+    for (const l of lines) {
+      const t = this.targets.get(l.targetId);
+      if (!t) continue;
+      const from = l.from ?? [head.x, head.y - 0.25, head.z];
+      const status: HudStatus = l.status ?? (!l.proven ? 'hypothesis' : l.inFlight ? 'requested' : 'verified');
+      parts.push({ id: `ping_${l.id}`, kind: 'archetype', archetype: 'ping-line', params: { channel: l.channel, status, from, to: t.position, particles: l.inFlight ? 14 : l.proven ? 4 : 0, speed: l.inFlight ? 0.9 : 0.3, ...(l.label ? { title: l.label } : {}) } });
+    }
+    this.mount('pings', this.hudSpec('pings', 'Ping', parts.length ? parts : [{ id: 'none', kind: 'group' }]), { position: new Vector3(), faceHead: false });
+  }
+
+  // --- agent presence ----------------------------------------------------------------------------------
+
+  logStep(step: AgentStepLike): void {
+    this.steps.set(step.stepId, step);
+    if (step.model) {
+      const live = step.status === 'running';
+      const has = this.chips.some((c) => c.id === step.model);
+      this.chips = has ? this.chips.map((c) => (c.id === step.model ? { ...c, state: live ? 'live' : c.state === 'live' ? 'done' : c.state } : c)) : [...this.chips, { id: step.model, state: live ? 'live' : 'done' }];
+    }
+    this.renderWorklog();
+    if (step.status === 'ok') this.audio.play('step');
+    if (step.status === 'fail') this.audio.play('fail');
+  }
+
+  setModelChips(chips: ModelChip[]): void {
+    this.chips = chips;
+    this.renderWorklog();
+  }
+
+  private renderWorklog(): void {
+    const rows: LogRow[] = [...this.steps.values()].slice(-8).map((s) => ({ title: s.title.slice(0, 28), status: s.status, ...(s.evidence || s.detail ? { evidence: (s.evidence ?? s.detail ?? '').slice(0, 64) } : {}), ...(s.kind ? { kind: s.kind } : {}) }));
+    const parts: Part[] = [{ id: 'log', kind: 'archetype', archetype: 'worklog', params: { title: 'AGENT', width: 0.36, logRows: rows, models: this.chips.slice(0, 6) } }];
+    const m = this.mount('worklog', this.hudSpec('worklog', 'Agent', parts), { position: this.worklogPose.placed ? this.worklogPose.position : this.worklogTarget(new Vector3()), faceHead: true });
+    if (!this.worklogPose.placed) {
+      this.worklogPose.position.copy(m.obj.position);
+      this.worklogPose.placed = true;
+    }
+  }
+
+  /** Lazy follower: 0.9 m ahead, 12° above the horizon; re-seats only when far off. */
+  private worklogTarget(out: Vector3): Vector3 {
+    this.camera.getWorldPosition(out);
+    const f = this.headForward(new Vector3());
+    out.addScaledVector(f, 0.9);
+    out.y += 0.19;
+    return out;
+  }
+
+  // --- HACKS ---------------------------------------------------------------------------------------------
+
+  showHackMenu(targetId: string, menu: { title: string; subtitle?: string; items: HackItem[] }): void {
+    const t = this.targets.get(targetId);
+    const controls = menu.items.map((it) => ({ id: `hack_${it.id}`, kind: 'trigger' as const, label: it.label.slice(0, 16), binding: { action: 'hud.hack', args: { itemId: it.id, targetId } } }));
+    const items = menu.items.map((it) => ({ ...it, controlId: `hack_${it.id}` }));
+    const spec: Gen3dSpec = { ...this.hudSpec(`hack_${targetId}`, menu.title, [{ id: 'list', kind: 'archetype', archetype: 'hack-list', params: { title: menu.title, ...(menu.subtitle ? { subtitle: menu.subtitle } : {}), items, width: 0.24 } }]), controls };
+    const pos = t ? new Vector3(...t.position).addScaledVector(this.rightOfHead(new Vector3()), (t.sizeM?.[0] ?? 0.25) / 2 + 0.17) : this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.6);
+    if (t) pos.y += 0.06;
+    const m = this.mount(`hack_${targetId}`, spec, { position: pos, faceHead: true }, 'buildup', targetId);
+    m.obj.emitter.on('control', (e: ControlEvent) => {
+      if (e.phase !== 'start') return;
+      const item = menu.items[e.index ?? -1] ?? menu.items.find((it) => `hack_${it.id}` === e.controlId);
+      if (item) this.events.emit('hack', { targetId, itemId: item.id, controlId: item.controlId, index: e.index ?? menu.items.indexOf(item) });
+    });
+  }
+
+  hideHackMenu(): void {
+    for (const key of [...this.objects.keys()]) if (key.startsWith('hack_')) this.unmount(key);
+  }
+
+  setUpload(u: UploadState | null): void {
+    if (!u) {
+      this.unmount('upload');
+      return;
+    }
+    const parts: Part[] = [{ id: 'bar', kind: 'archetype', archetype: 'upload-bar', params: { title: u.label.slice(0, 32), steps: u.steps ?? ['GEN', 'CHECK', 'SEND', 'SEEN'], stepsDone: u.stepsDone, width: 0.24, ...(u.verdict === 'fail' ? { status: 'failed' as const } : {}) } }];
+    this.mount('upload', this.hudSpec('upload', 'Upload', parts, u.modelId ? { modelId: u.modelId } : {}), { position: this.belowHackMenu(0.0), faceHead: true });
+    if (u.verdict === 'ok') this.audio.play('ok');
+    if (u.verdict === 'fail') this.audio.play('fail');
+  }
+
+  showEvidence(e: EvidenceState | null): void {
+    if (!e) {
+      this.unmount('evidence');
+      return;
+    }
+    const parts: Part[] = [{ id: 'strip', kind: 'archetype', archetype: 'oracle-strip', params: { sent: e.sent.slice(0, 24), expect: e.expect.slice(0, 24), seen: e.seen.slice(0, 24), verdict: e.verdict, width: 0.3 } }];
+    const t = e.targetId ? this.targets.get(e.targetId) : undefined;
+    const pos = t ? new Vector3(...t.position).add(new Vector3(0, (t.sizeM?.[1] ?? 0.1) / 2 + 0.115, 0)) : this.belowHackMenu(-0.05);
+    this.mount('evidence', this.hudSpec('evidence', 'Evidence', parts), { position: pos, faceHead: true });
+    if (e.verdict === 'ok') this.audio.play('ok');
+    if (e.verdict === 'fail') this.audio.play('fail');
+  }
+
+  private belowHackMenu(dy: number): Vector3 {
+    const menu = [...this.objects.entries()].find(([k]) => k.startsWith('hack_'))?.[1];
+    if (menu) return menu.obj.position.clone().add(new Vector3(0, -0.16 + dy, 0));
+    return this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.6).add(new Vector3(0, -0.18 + dy, 0));
+  }
+
+  showConfirm(c: ConfirmRequest | null): void {
+    if (!c) {
+      this.unmount('confirm');
+      return;
+    }
+    const spec: Gen3dSpec = {
+      ...this.hudSpec('confirm', c.title, [
+        { id: 'plate', kind: 'primitive', shape: 'box', dims: { w: 0.26, h: 0.11, d: 0.004, radius: 0.006 }, transform: { position: [0, 0, -0.003] }, material: { style: 'holo', color: NEON.plate, opacity: 0.92, edges: true, edgeColor: NEON.volt, scanlines: true } },
+        { id: 'title', kind: 'text', text: { value: c.title.slice(0, 40), heightM: 0.008, color: NEON.bone, align: 'left' }, transform: { position: [-0.12, 0.035, 0.001] } },
+        ...(c.summary ? [{ id: 'summary', kind: 'text', text: { value: c.summary.slice(0, 48), heightM: 0.0055, color: NEON.dim, align: 'left', uppercase: false, wrap: 34 }, transform: { position: [-0.12, 0.012, 0.001] } } as Part] : []),
+        { id: 'yes', kind: 'archetype', archetype: 'button', controlId: 'approve', params: { size: 0.044, accent: NEON.volt, title: c.hold ? 'HOLD' : 'ARM' }, transform: { position: [0.085, -0.028, 0.002] } },
+        { id: 'no', kind: 'archetype', archetype: 'button', controlId: 'deny', params: { size: 0.044, accent: NEON.dim, shape: 'square', title: 'NO' }, transform: { position: [0.03, -0.028, 0.002] } },
+      ]),
+      controls: [
+        { id: 'approve', kind: 'trigger', label: c.hold ? 'HOLD' : 'ARM', binding: { action: 'hud.confirm', args: { id: c.id } } },
+        { id: 'deny', kind: 'trigger', label: 'NO', binding: { action: 'hud.deny', args: { id: c.id } } },
+      ],
+    };
+    const t = c.targetId ? this.targets.get(c.targetId) : undefined;
+    const pos = t ? new Vector3(...t.position).add(new Vector3(0, (t.sizeM?.[1] ?? 0.1) / 2 + 0.2, 0)) : this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.55).add(new Vector3(0, -0.05, 0));
+    const m = this.mount('confirm', spec, { position: pos, faceHead: true }, 'buildup');
+    let holdStart = 0;
+    m.obj.emitter.on('control', (e: ControlEvent) => {
+      if (e.controlId === 'deny' && e.phase === 'start') this.events.emit('confirm', { id: c.id, approve: false });
+      if (e.controlId === 'approve') {
+        if (e.phase === 'start') holdStart = performance.now();
+        if (e.phase === 'end') {
+          const held = performance.now() - holdStart;
+          if (!c.hold || held > 600) this.events.emit('confirm', { id: c.id, approve: true, hold: !!c.hold });
+        }
+      }
+    });
+    m.obj.emitter.on('consumed', () => this.events.emit('consumed', { hand: 'right', widget: 'confirm' }));
+  }
+
+  // --- generated controls -----------------------------------------------------------------------------------
+
+  renderSpec(spec: Gen3dSpec, at: { targetId?: string; position?: [number, number, number]; yawDeg?: number }): void {
+    const key = `spec_${spec.specId}`;
+    const existed = this.objects.get(key);
+    let position: Vector3;
+    if (at.position) position = new Vector3(...at.position);
+    else if (at.targetId && this.targets.has(at.targetId)) {
+      const t = this.targets.get(at.targetId)!;
+      const side = spec.anchor.side === 'left' ? -1 : 1;
+      position = new Vector3(...t.position).addScaledVector(this.rightOfHead(new Vector3()), side * ((t.sizeM?.[0] ?? 0.25) / 2 + (spec.anchor.offset?.[0] ?? 0.2)));
+      position.y += spec.anchor.offset?.[1] ?? 0.06;
+    } else if (existed) position = existed.obj.position.clone();
+    else {
+      const d = spec.anchor.distance ?? 0.6;
+      const pitch = ((spec.anchor.pitchDeg ?? -12) * Math.PI) / 180;
+      position = this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), Math.cos(pitch) * d);
+      position.y += Math.sin(pitch) * d;
+    }
+    const m = this.mount(key, spec, { position, ...(at.yawDeg !== undefined ? { yaw: at.yawDeg } : { faceHead: spec.anchor.faceUser ?? true }) }, existed ? 'diff' : 'buildup', at.targetId);
+    if (!m.history) {
+      m.history = new SpecHistory(m.spec);
+      m.obj.emitter.on('control', (e: ControlEvent) => this.events.emit('control', e));
+    } else m.history.push(m.spec);
+  }
+
+  patchSpec(specId: string, patch: Patch): { ok: boolean; errors?: string[] } {
+    const m = this.objects.get(`spec_${specId}`);
+    if (!m) return { ok: false, errors: [`no spec ${specId}`] };
+    const r = applyPatch(m.spec, patch);
+    if (!r.ok) return { ok: false, errors: r.errors.map((e) => `${e.path}: ${e.message}`) };
+    m.spec = r.spec;
+    m.history?.push(r.spec);
+    m.obj.applySpec(r.spec, 'diff');
+    this.audio.play('step', m.obj.position);
+    return { ok: true };
+  }
+
+  removeSpec(specId: string): void {
+    this.unmount(`spec_${specId}`);
+  }
+
+  setArmed(specId: string, armed: boolean, reason?: string, controlIds?: string[]): void {
+    this.objects.get(`spec_${specId}`)?.obj.setArmed(armed, reason, controlIds);
+  }
+
+  setControlValue(specId: string, controlId: string, value: ControlEvent['value']): void {
+    this.objects.get(`spec_${specId}`)?.obj.setValue(controlId, value, { emit: false });
+  }
+
+  // --- pairing, voice, deck, toasts ---------------------------------------------------------------------------
+
+  showPairing(p: { display: string; qr: string; message?: string } | null): void {
+    if (!p) {
+      this.unmount('pairing');
+      return;
+    }
+    const parts: Part[] = [
+      { id: 'plate', kind: 'primitive', shape: 'box', dims: { w: 0.24, h: 0.1, d: 0.004, radius: 0.006 }, transform: { position: [0, 0, -0.003] }, material: { style: 'holo', color: NEON.plate, opacity: 0.92, edges: true, edgeColor: NEON.cyan, scanlines: true } },
+      { id: 'title', kind: 'text', text: { value: 'PAIR THIS HEADSET', heightM: 0.0075, color: NEON.cyan } , transform: { position: [0, 0.03, 0.001] } },
+      { id: 'code', kind: 'text', text: { value: p.display, heightM: 0.018, color: NEON.volt, font: 'mono' }, transform: { position: [0, -0.002, 0.001] } },
+      { id: 'msg', kind: 'text', text: { value: (p.message ?? 'type this code on the Mac').slice(0, 44), heightM: 0.0055, color: NEON.dim, uppercase: false }, transform: { position: [0, -0.032, 0.001] } },
+    ];
+    const pos = this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.6).add(new Vector3(0, -0.02, 0));
+    this.mount('pairing', this.hudSpec('pairing', 'Pairing', parts), { position: pos, faceHead: true });
+  }
+
+  showApprovals(list: { pairingId: string; name: string; kind: string; display: string }[]): void {
+    for (const key of [...this.objects.keys()]) if (key.startsWith('approval_') && !list.some((a) => key === `approval_${a.pairingId}`)) this.unmount(key);
+    list.forEach((a, i) => {
+      const key = `approval_${a.pairingId}`;
+      if (this.objects.has(key)) return;
+      const spec: Gen3dSpec = {
+        ...this.hudSpec(key, 'Approve', [
+          { id: 'plate', kind: 'primitive', shape: 'box', dims: { w: 0.26, h: 0.09, d: 0.004, radius: 0.006 }, transform: { position: [0, 0, -0.003] }, material: { style: 'holo', color: NEON.plate, opacity: 0.92, edges: true, edgeColor: NEON.volt, scanlines: true } },
+          { id: 'title', kind: 'text', text: { value: `${a.name} wants to join`.slice(0, 40), heightM: 0.0075, color: NEON.bone, align: 'left', uppercase: false }, transform: { position: [-0.12, 0.025, 0.001] } },
+          { id: 'code', kind: 'text', text: { value: `${a.kind} · ${a.display}`, heightM: 0.0065, color: NEON.volt, align: 'left', font: 'mono' }, transform: { position: [-0.12, 0.004, 0.001] } },
+          { id: 'yes', kind: 'archetype', archetype: 'button', controlId: 'approve', params: { size: 0.044, accent: NEON.ok, title: 'OK' }, transform: { position: [0.09, -0.02, 0.002] } },
+          { id: 'no', kind: 'archetype', archetype: 'button', controlId: 'deny', params: { size: 0.044, accent: NEON.dim, shape: 'square', title: 'NO' }, transform: { position: [0.035, -0.02, 0.002] } },
+        ]),
+        controls: [
+          { id: 'approve', kind: 'trigger', label: 'OK', binding: { action: 'hud.approve', args: { pairingId: a.pairingId } } },
+          { id: 'deny', kind: 'trigger', label: 'NO', binding: { action: 'hud.deny', args: { pairingId: a.pairingId } } },
+        ],
+      };
+      const pos = this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.6).add(new Vector3(0, 0.1 - i * 0.11, 0));
+      const m = this.mount(key, spec, { position: pos, faceHead: true }, 'buildup');
+      m.obj.emitter.on('control', (e: ControlEvent) => {
+        if (e.phase !== 'start') return;
+        this.events.emit('approve', { pairingId: a.pairingId, approve: e.controlId === 'approve' });
+        this.events.emit('consumed', { hand: 'right', widget: 'approval' });
+      });
+    });
+  }
+
+  setVoice(v: { listening: boolean; level?: number; partial?: string; final?: string }): void {
+    if (!v.listening && !v.final) {
+      if (this.objects.has('voice')) this.audio.play('voiceOff');
+      this.unmount('voice');
+      return;
+    }
+    if (!this.objects.has('voice') && v.listening) this.audio.play('voiceOn');
+    const text = (v.final ?? v.partial ?? (v.listening ? 'listening…' : '')).slice(0, 48);
+    const parts: Part[] = [
+      { id: 'chip', kind: 'text', text: { value: text, heightM: 0.0075, color: v.final ? NEON.bone : NEON.cyan, background: NEON.void, uppercase: false }, transform: { position: [0, 0, 0] } },
+      { id: 'level', kind: 'primitive', shape: 'box', dims: { w: Math.max(0.004, 0.12 * Math.min(1, v.level ?? 0)), h: 0.003, d: 0.001 }, transform: { position: [0, -0.014, 0] }, material: { style: 'solid', color: NEON.volt, emissive: NEON.volt, emissiveIntensity: 1 } },
+    ];
+    const pos = this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.55).add(new Vector3(0, -0.14, 0));
+    this.mount('voice', this.hudSpec('voice', 'Voice', parts, { modelId: 'muse-voice-transcribe-1.0' }), { position: pos, faceHead: true });
+  }
+
+  setDeck(d: { open?: boolean; scanning?: boolean; daemons?: boolean; at?: [number, number, number] }): void {
+    if (d.open === false) {
+      this.deckOpen = false;
+      this.unmount('deck');
+      return;
+    }
+    if (d.open) this.deckOpen = true;
+    if (!this.deckOpen) return;
+    const items = [
+      { id: 'scan', label: 'SCAN', status: d.scanning ? ('uploading' as const) : undefined },
+      { id: 'ping', label: 'PING' },
+      { id: 'hacks', label: 'HACKS', subtitle: 'your devices' },
+      { id: 'daemons', label: 'DAEMONS', subtitle: 'automations', kind: 'daemon' as const, status: d.daemons ? ('verified' as const) : undefined },
+      { id: 'undo', label: 'UNDO' },
+      { id: 'panic', label: 'PANIC' },
+    ].map((it) => ({ ...it, controlId: `deck_${it.id}` }));
+    const spec: Gen3dSpec = {
+      ...this.hudSpec('deck', 'Deck', [{ id: 'deck', kind: 'archetype', archetype: 'deck', params: { title: 'DECK', items } }]),
+      controls: items.map((it) => ({ id: `deck_${it.id}`, kind: 'trigger' as const, label: it.label, binding: { action: `hud.${it.id}` } })),
+    };
+    const base = EXAMPLES.deck?.anchor;
+    void base;
+    const pos = d.at ? new Vector3(...d.at) : this.objects.get('deck')?.obj.position.clone() ?? this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.45).add(new Vector3(-0.15, -0.2, 0));
+    const existed = this.objects.has('deck');
+    const m = this.mount('deck', spec, { position: pos, faceHead: true }, existed ? 'diff' : 'buildup');
+    if (!existed) {
+      m.obj.emitter.on('control', (e: ControlEvent) => {
+        const key = e.controlId.replace('deck_', '') as HudEvents['deck']['key'];
+        this.events.emit('deck', { key, phase: e.phase === 'start' ? 'press' : 'release' });
+        if (e.phase === 'start') this.events.emit('consumed', { hand: 'right', widget: 'deck' });
+      });
+    }
+  }
+
+  toast(text: string, level: 'info' | 'ok' | 'warn' | 'error' = 'info'): void {
+    const color = level === 'ok' ? NEON.ok : level === 'warn' ? NEON.volt : level === 'error' ? NEON.fail : NEON.cyan;
+    const parts: Part[] = [{ id: 't', kind: 'text', text: { value: text.slice(0, 48), heightM: 0.0085, color, background: NEON.void, uppercase: false } }];
+    const pos = this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.5).add(new Vector3(0, -0.09, 0));
+    this.mount('toast', this.hudSpec('toast', 'Toast', parts), { position: pos, faceHead: true }, 'buildup');
+    if (level === 'ok') this.audio.play('ok');
+    if (level === 'error') this.audio.play('fail');
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => this.unmount('toast'), 1600);
+  }
+
+  // --- per frame ----------------------------------------------------------------------------------------------
+
+  update(f: HudFrame): void {
+    this.time = f.time;
+    this.clock.tick(f.time);
+    handCursor('left', f.hands.left, this.cursors[0]!);
+    handCursor('right', f.hands.right, this.cursors[1]!);
+    this.roomDim.update(this.camera, f.dt);
+    this.sweep.update(this.camera, f.time);
+    // audio listener
+    this.camera.getWorldPosition(_v);
+    const fwd = this.camera.getWorldDirection(new Vector3());
+    const up = new Vector3(0, 1, 0).applyQuaternion(this.camera.getWorldQuaternion(_q));
+    this.audio.setListener(_v, fwd, up);
+    // reticle at the head ray (0.9 m) unless a candidate is in view
+    this.updateReticle(f);
+    // lazy follower for the work log
+    const wl = this.objects.get('worklog');
+    if (wl && !wl.obj.interacting) {
+      const target = this.worklogTarget(new Vector3());
+      if (target.distanceTo(this.worklogPose.position) > 0.45) this.worklogPose.position.lerp(target, 1 - Math.exp(-f.dt / 0.6));
+      wl.obj.position.x = damp(wl.obj.position.x, this.worklogPose.position.x, 0.3, f.dt);
+      wl.obj.position.y = damp(wl.obj.position.y, this.worklogPose.position.y, 0.3, f.dt);
+      wl.obj.position.z = damp(wl.obj.position.z, this.worklogPose.position.z, 0.3, f.dt);
+      this.faceHead(wl.obj);
+    }
+    const cursors = this.devCursors.length ? [...this.cursors, ...this.devCursors] : this.cursors;
+    for (const m of this.objects.values()) m.obj.update(f.dt, f.time, cursors, this.camera);
+  }
+
+  private updateReticle(f: HudFrame): void {
+    const state = this.locked ? 'locked' : this.candidate ? 'candidate' : this.scanning ? 'working' : 'idle';
+    const key = 'reticle';
+    const spec = this.hudSpec(key, 'Reticle', [{ id: 'r', kind: 'archetype', archetype: 'reticle', params: { reticleState: state } }]);
+    const existing = this.objects.get(key);
+    if (!existing || (existing.spec.parts[0]!.params?.reticleState ?? 'idle') !== state) this.mount(key, spec, { faceHead: true }, 'none');
+    const m = this.objects.get(key)!;
+    const ray = f.head.ray ?? { origin: f.head.position, dir: new Vector3(0, 0, -1).applyQuaternion(f.head.quaternion) };
+    const cand = this.candidate ? this.targets.get(this.candidate) : undefined;
+    const target = cand ? new Vector3(...cand.position) : ray.origin.clone().addScaledVector(ray.dir, 0.9);
+    m.obj.position.lerp(target, 1 - Math.exp(-f.dt / 0.08));
+    m.obj.visible = !this.locked;
+    this.faceHead(m.obj);
+  }
+
+  dispose(): void {
+    for (const key of [...this.objects.keys()]) this.unmount(key);
+    this.root.parent?.remove(this.root);
+  }
+}
+
+function statusWord(s: HudStatus, confirmed: boolean): string {
+  if (!confirmed && s === 'scanned') return 'seen · place unconfirmed';
+  switch (s) {
+    case 'scanned':
+      return 'seen by camera';
+    case 'candidate':
+      return 'pinch to lock';
+    case 'locked':
+      return 'locked';
+    case 'linking':
+      return 'linking · awaiting evidence';
+    case 'linked':
+      return 'linked';
+    case 'verified':
+      return 'verified · device reacted';
+    case 'controlled':
+      return 'controlled';
+    case 'refused':
+      return 'wrong device · refused';
+    case 'no-reaction':
+      return 'no reaction';
+    default:
+      return s;
+  }
+}
+
+function statusHex(s: HudStatus): string {
+  switch (s) {
+    case 'candidate':
+    case 'locked':
+    case 'requested':
+    case 'awaiting':
+    case 'uploading':
+      return NEON.volt;
+    case 'linking':
+    case 'linked':
+      return NEON.magenta;
+    case 'verified':
+    case 'controlled':
+      return NEON.ok;
+    case 'failed':
+    case 'offline':
+    case 'refused':
+    case 'no-reaction':
+      return NEON.fail;
+    default:
+      return NEON.cyan;
+  }
+}
+
+/** Euler (degrees) that turns local +z onto the given unit vector. */
+function facingToEuler(facing: [number, number, number]): [number, number, number] {
+  const [x, y, z] = facing;
+  const yaw = Math.atan2(x, z);
+  const pitch = -Math.asin(Math.max(-1, Math.min(1, y)));
+  return [(pitch * 180) / Math.PI, (yaw * 180) / Math.PI, 0];
+}

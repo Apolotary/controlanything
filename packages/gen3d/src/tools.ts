@@ -7,7 +7,7 @@
  * Both target the same schema, so `applyToolCall` is just an upsert into a spec under construction.
  */
 import { z } from 'zod';
-import { Anchor, ArmState, Behavior, Collection, Control, DeviceRef, Feedback, GEN3D_SPEC_VERSION, Gen3dSpec, Id, Part, Patch } from './schema';
+import { Anchor, ArmState, Behavior, Collection, Control, DeviceRef, EditSet, Feedback, GEN3D_SPEC_VERSION, Gen3dSpec, Id, Part, Patch } from './schema';
 import { assertMuseCompatible, toJsonSchema, type JsonSchema } from './jsonSchema';
 import { applyOp } from './patch';
 
@@ -102,7 +102,14 @@ export function specResponseFormat(name = 'gen3d_spec') {
   return { type: 'json_schema' as const, json_schema: { name, schema, strict: false, description: 'A ce.gen3d/1 generated 3D control object. Give every control an archetype part (controlId) and keep ids short.' } };
 }
 
-/** `response_format` for an edit call that returns a Patch against the current spec. */
+/** `response_format` for an edit call: an EditSet (every key required, so the decoder cannot skip the payload). */
+export function editResponseFormat(name = 'gen3d_edit') {
+  const schema = toJsonSchema(EditSet);
+  assertMuseCompatible(name, schema);
+  return { type: 'json_schema' as const, json_schema: { name, schema, strict: false, description: 'Items to add or replace (by id) in each collection, ids to remove, a new title and a one-line summary. Leave arrays empty when a collection is unchanged.' } };
+}
+
+/** `response_format` for an edit call that returns a Patch against the current spec (prefer editResponseFormat). */
 export function patchResponseFormat(name = 'gen3d_patch') {
   const schema = toJsonSchema(Patch);
   assertMuseCompatible(name, schema);

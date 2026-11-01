@@ -100,6 +100,15 @@ export const Control = z.object({
   stepLabels: z.array(z.string().max(12)).max(32).optional(),
   /** colour of this control's indicator (arc, cap, glow); defaults to the device accent or the theme */
   accent: HexColor.optional(),
+  /** words at the ends of the range, rendered at the track ends, e.g. "DARK" / "BRIGHT" */
+  minLabel: z.string().max(8).optional(),
+  maxLabel: z.string().max(8).optional(),
+  /** centre detent at the middle of the range (pan, pitch bend) */
+  bipolar: z.boolean().optional(),
+  /** value curve for the visual mapping (default linear) */
+  curve: z.enum(['linear', 'log']).optional(),
+  /** gesture hint shown on hover, e.g. "pinch · drag up" (default from the archetype) */
+  hint: z.string().max(24).optional(),
   binding: Binding,
   /** xy only: binding for the y axis */
   yBinding: Binding.optional(),
@@ -156,6 +165,7 @@ export const Dims = z.object({
   r: z.number().min(0.0005).max(1).optional(),
   rTop: z.number().min(0).max(1).optional(),
   rBottom: z.number().min(0).max(1).optional(),
+  /** ring: inner/outer radii; `r` is accepted as an alias for rOuter / rTop+rBottom */
   rInner: z.number().min(0).max(1).optional(),
   rOuter: z.number().min(0.0005).max(1).optional(),
   tube: z.number().min(0.0005).max(0.5).optional(),
@@ -234,7 +244,9 @@ export type PathStyle = z.infer<typeof PathStyle>;
  *   HACK       hack-list (per-device actions, items 44 mm) · queue-strip (queued hacks with progress) ·
  *              upload-bar (GEN / CHECK / SEND / SEEN segments, lit per real step)
  *   DAEMON     daemon-link (persistent cross-device automation line + chip)
- *   HUD        deck (palm panel: SCAN · PING · DAEMONS · UNDO) · model-chips (Meta model ids, lit while live) ·
+ *   LEARN      ir-waveform-card (a captured IR pulse train as a card: captured → flying → replaying → seen/no-change) ·
+ *              remote-chips (plates over the remote's buttons from its SAM mask)
+ *   HUD        deck (palm panel: SCAN · PING · HACKS · DAEMONS · UNDO) · model-chips (Meta model ids, lit while live) ·
  *              worklog (agent steps with evidence + model chips) · handle (grab bar for the whole object)
  */
 export const ArchetypeName = z.enum([
@@ -265,6 +277,8 @@ export const ArchetypeName = z.enum([
   'deck',
   'model-chips',
   'worklog',
+  'ir-waveform-card',
+  'remote-chips',
   'handle',
 ]);
 export type ArchetypeName = z.infer<typeof ArchetypeName>;
@@ -274,7 +288,29 @@ export const Channel = z.enum(['usb', 'midi', 'ir', 'wifi', 'ble', 'serial', 'si
 export type Channel = z.infer<typeof Channel>;
 
 /** Lifecycle of a device or a hack as the HUD shows it. */
-export const HudStatus = z.enum(['idle', 'scanned', 'candidate', 'locked', 'pinging', 'linking', 'linked', 'uploading', 'verified', 'controlled', 'running', 'paused', 'killed', 'offline', 'failed']);
+export const HudStatus = z.enum([
+  'idle',
+  'scanned',
+  'candidate',
+  'locked',
+  'pinging',
+  'linking',
+  'linked',
+  'uploading',
+  'verified',
+  'controlled',
+  'running',
+  'paused',
+  'killed',
+  'offline',
+  'failed',
+  // evidence states, always written in words on the HUD: an ack is never success
+  'hypothesis',
+  'requested',
+  'awaiting',
+  'no-reaction',
+  'refused',
+]);
 export type HudStatus = z.infer<typeof HudStatus>;
 
 export const HackItem = z.object({
@@ -289,8 +325,12 @@ export const HackItem = z.object({
   status: z.enum(['ready', 'locked', 'queued', 'uploading', 'verified', 'failed']).optional(),
   /** queue-strip: upload progress 0..1 */
   progress: z.number().min(0).max(1).optional(),
-  /** 0-9 pips, purely visual */
-  cost: z.number().int().min(0).max(9).optional(),
+  /** right-hand column: how the device's reaction was proven (seen = camera, heard = mic, wired = ack) */
+  verdict: z.enum(['seen', 'heard', 'wired', 'pending', 'none']).optional(),
+  /** deck keys / hack rows: 7 mm second line, e.g. "your devices" under HACKS, "automations" under DAEMONS */
+  subtitle: z.string().max(20).optional(),
+  /** Japanese label from the device itself, e.g. 常夜灯 */
+  jpLabel: z.string().max(12).optional(),
 });
 export type HackItem = z.infer<typeof HackItem>;
 
@@ -364,6 +404,17 @@ export const ArchetypeParams = z.object({
   /** indices of cells that solved (verified by camera) */
   solved: z.array(z.number().int().min(0).max(63)).max(64).optional(),
   current: z.number().int().min(0).max(63).optional(),
+  /** link-matrix: what the camera saw for a cell, named by the agent (LEARN → LINK by sight → LABEL) */
+  cellMeta: z.array(z.object({ i: z.number().int().min(0).max(63), effect: z.string().max(14).optional(), jp: z.string().max(12).optional(), state: z.enum(['idle', 'trying', 'ok', 'fail']).optional() })).max(64).optional(),
+  /** ir-waveform-card: the captured pulse train, <= 60 normalised samples (0 = space, 1 = mark) */
+  samples: z.array(z.number().min(0).max(1)).max(60).optional(),
+  /** ir-waveform-card: what the camera saw when it was replayed, e.g. "BRIGHTER" */
+  effectLabel: z.string().max(14).optional(),
+  jpLabel: z.string().max(12).optional(),
+  /** ir-waveform-card state */
+  cardState: z.enum(['captured', 'flying', 'replaying', 'seen', 'no-change']).optional(),
+  /** remote-chips: one chip per remote button, positions in metres in the card's plane */
+  chips: z.array(z.object({ id: Id, x: z.number(), y: z.number(), label: z.string().max(14), jpLabel: z.string().max(12).optional(), state: z.enum(['idle', 'pressed', 'captured']).optional() })).max(16).optional(),
   /** sweep-plane / generic 0..1 progress */
   progress: z.number().min(0).max(1).optional(),
   /** upload-bar segment labels (default GEN CHECK SEND SEEN) and how many have really completed */
@@ -460,6 +511,9 @@ export const Behavior = z.object({
   invert: z.boolean().optional(),
   /** how close a pinch must be to grab, metres (default: part size + 0.03) */
   grabRadius: z.number().min(0.01).max(0.5).optional(),
+  /** pads/keys/wheel segments/list rows: which item this part is; a press on it sets a stepped control to
+   *  min + index*step, or fires a trigger with this index */
+  index: z.number().int().min(0).max(127).optional(),
 });
 export type Behavior = z.infer<typeof Behavior>;
 
@@ -591,6 +645,23 @@ export const Patch = z.object({
   reason: z.string().max(120).optional(),
 });
 export type Patch = z.infer<typeof Patch>;
+
+/**
+ * What a model actually writes for an edit. The constrained decoder lets a model skip optional keys, so a
+ * PatchOp with optional payloads often comes back empty (live finding, research/12 §3). EditSet has every
+ * key required: items to upsert per collection (possibly empty arrays) and ids to remove. `editSetToPatch`
+ * turns it into a Patch.
+ */
+export const EditSet = z.object({
+  title: z.string().min(1).max(40),
+  summary: z.string().max(120),
+  controls: z.array(Control).max(LIMITS.controls),
+  parts: z.array(Part).max(LIMITS.parts),
+  behaviors: z.array(Behavior).max(LIMITS.behaviors),
+  feedback: z.array(Feedback).max(LIMITS.feedback),
+  remove: z.array(z.object({ collection: Collection, id: Id })).max(64),
+});
+export type EditSet = z.infer<typeof EditSet>;
 
 // --- events out of the renderer -----------------------------------------------------------------------
 

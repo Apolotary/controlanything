@@ -2,7 +2,7 @@
  * Malleable edits: apply a Patch to a spec (by id, so untouched items stay byte-identical), and a linear
  * undo/redo history where undo restores an older revision as a NEW revision (nothing is ever lost).
  */
-import { Patch, type Gen3dSpec, type PatchOp } from './schema';
+import { EditSet, Patch, type Gen3dSpec, type PatchOp } from './schema';
 import { validateSpec, type Issue } from './validate';
 
 export type PatchResult = { ok: true; spec: Gen3dSpec; warnings: Issue[] } | { ok: false; errors: Issue[]; warnings: Issue[] };
@@ -84,6 +84,22 @@ export function applyPatch(base: Gen3dSpec, patchInput: unknown): PatchResult {
   const v = validateSpec(next);
   if (!v.ok) return { ok: false, errors: v.errors, warnings: v.warnings };
   return { ok: true, spec: v.spec, warnings: v.warnings };
+}
+
+/** Convert a model-written EditSet into a Patch against `base` (title changes become a set op). */
+export function editSetToPatch(base: Gen3dSpec, editInput: unknown): { ok: true; patch: Patch } | { ok: false; errors: Issue[] } {
+  const parsed = EditSet.safeParse(editInput);
+  if (!parsed.success) return { ok: false, errors: parsed.error.issues.map((i) => ({ code: `edit.${i.code}`, path: i.path.join('.'), message: i.message })) };
+  const e = parsed.data;
+  const ops: PatchOp[] = [];
+  for (const r of e.remove) ops.push({ op: 'remove', collection: r.collection, id: r.id });
+  for (const c of e.controls) ops.push({ op: 'upsert', control: c });
+  for (const p of e.parts) ops.push({ op: 'upsert', part: p });
+  for (const b of e.behaviors) ops.push({ op: 'upsert', behavior: b });
+  for (const f of e.feedback) ops.push({ op: 'upsert', feedback: f });
+  if (e.title && e.title !== base.title) ops.push({ op: 'set', title: e.title });
+  if (!ops.length) ops.push({ op: 'set', notes: e.summary || base.notes || 'no change' });
+  return { ok: true, patch: { specId: base.specId, baseRev: base.rev, ops, ...(e.summary ? { reason: e.summary } : {}) } };
 }
 
 /** Linear revision history with non-destructive undo (undo = re-publish rev-1's content as a new rev). */

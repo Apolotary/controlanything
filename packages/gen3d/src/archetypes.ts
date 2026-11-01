@@ -68,6 +68,8 @@ export const ARCHETYPE_CONTROL_KINDS: Record<ArchetypeName, readonly Control['ki
   deck: ['trigger', 'toggle'],
   'model-chips': [],
   worklog: [],
+  'ir-waveform-card': [],
+  'remote-chips': [],
   handle: [],
 };
 
@@ -104,7 +106,9 @@ function ring(id: string, parentId: string, rInner: number, rOuter: number, posi
   return part({ id, parentId, kind: 'primitive', shape: 'ring', dims: { rInner, rOuter, arcDeg, startDeg, segments: 64 }, transform: { position }, material, ...extra });
 }
 function text(id: string, parentId: string, value: string, position: Vec3, style: Partial<TextStyle> = {}, extra: Partial<Part> = {}): Part {
-  return part({ id, parentId, kind: 'text', text: { value, heightM: 0.009, color: NEON.text, font: 'sans', weight: 'bold', align: 'center', uppercase: true, ...style }, transform: { position }, ...extra });
+  // control labels longer than 10 characters wrap onto two lines so neighbours 90-100 mm apart never overlap
+  const wrap = extra.role === 'label' && value.length > 10 && !style.wrap && value.includes(' ') ? { wrap: Math.max(6, Math.ceil(value.length / 2)) } : {};
+  return part({ id, parentId, kind: 'text', text: { value, heightM: 0.009, color: NEON.text, font: 'sans', weight: 'bold', align: 'center', uppercase: true, ...wrap, ...style }, transform: { position }, ...extra });
 }
 function group(id: string, parentId: string, position: Vec3, extra: Partial<Part> = {}): Part {
   return part({ id, parentId, kind: 'group', transform: { position, ...(extra.transform ?? {}) }, ...omit(extra, ['transform']) });
@@ -174,8 +178,11 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
       parts.push(box(`${id}.tick1`, id, 0.002, 0.008, 0.002, onRing(half, r + 0.016, 0.001), solidGlow(accent), { transform: { position: onRing(half, r + 0.016, 0.001), rotationDeg: [0, 0, -half] } }));
       if (showLabel && label) parts.push(text(`${id}.label`, id, label, [0, -(r + 0.024), 0.002], { heightM: 0.008, background: NEON.panel, color: NEON.text }, { role: 'label' }));
       if (showValue) parts.push(text(`${id}.value`, id, fmtDefault(c), [0, r + 0.026, 0.002], { heightM: 0.009, color: accent, font: 'mono', background: NEON.ink }, { role: 'readout' }));
+      if (c?.minLabel) parts.push(text(`${id}.min`, id, c.minLabel, onRing(-half, r + 0.03, 0.002), { heightM: 0.0045, color: NEON.dim }));
+      if (c?.maxLabel) parts.push(text(`${id}.max`, id, c.maxLabel, onRing(half, r + 0.03, 0.002), { heightM: 0.0045, color: NEON.dim }));
+      parts.push(text(`${id}.hint`, id, c?.hint ?? 'PINCH · DRAG UP/DOWN', [0, -(r + 0.04), 0.002], { heightM: 0.0045, color: NEON.volt, background: NEON.void }, { role: 'decor', visibleWhen: 'hover' }));
       if (cid) {
-        behaviors.push({ id: `${id}.rotate`, partId: `${id}.cap`, controlId: cid, type: 'rotate', axis: 'z', sweepDeg: [-half, half], gestures: ['pinch-drag', 'pinch-twist'], dragGain: 0.1, grabRadius: r + 0.03, ...(p.detents ? { detents: p.detents } : {}) });
+        behaviors.push({ id: `${id}.rotate`, partId: `${id}.cap`, controlId: cid, type: 'rotate', axis: 'z', sweepDeg: [-half, half], gestures: ['pinch-drag', 'pinch-twist'], dragGain: 0.1, grabRadius: r + 0.02, ...(p.detents ? { detents: p.detents } : {}) });
         fb('arc-fill', `${id}.arc`);
         fb('glow', `${id}.skirt`, { on: 'hover', color: accent });
         fb('tick', undefined, { every: 0.05, sound: 'tick' });
@@ -201,6 +208,9 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
       }
       if (showLabel && label) parts.push(text(`${id}.label`, id, label, vertical ? [0, -(len / 2 + 0.03), 0.004] : [0, -0.03, 0.004], { heightM: 0.008, background: NEON.panel }, { role: 'label' }));
       if (showValue) parts.push(text(`${id}.value`, id, fmtDefault(c), vertical ? [0, len / 2 + 0.03, 0.004] : [0, 0.03, 0.004], { heightM: 0.009, color: accent, font: 'mono', background: NEON.ink }, { role: 'readout' }));
+      if (c?.minLabel) parts.push(text(`${id}.min`, `${id}.rail`, c.minLabel, [0.03, -len / 2, 0.004], { heightM: 0.0045, color: NEON.dim, align: 'left' }));
+      if (c?.maxLabel) parts.push(text(`${id}.max`, `${id}.rail`, c.maxLabel, [0.03, len / 2, 0.004], { heightM: 0.0045, color: NEON.dim, align: 'left' }));
+      parts.push(text(`${id}.hint`, id, c?.hint ?? 'PINCH THE CAP · DRAG', vertical ? [0, -(len / 2 + 0.046), 0.004] : [0, -0.046, 0.004], { heightM: 0.0045, color: NEON.volt, background: NEON.void }, { role: 'decor', visibleWhen: 'hover' }));
       if (cid) {
         behaviors.push({ id: `${id}.slide`, partId: `${id}.cap`, controlId: cid, type: 'slide', axis: 'y', travel: [-len / 2, len / 2], gestures: ['pinch-drag', 'grab'], grabRadius: 0.035, ...(p.detents ? { detents: p.detents } : {}) });
         fb('arc-fill', `${id}.fill`);
@@ -351,7 +361,7 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
           else parts.push(box(`${id}.pad${i}.face`, `${id}.pad${i}`, s, s, 0.01, [0, 0, 0.005], holo(body, { opacity: 0.95 }), { dims: { radius: 0.006 } }));
           parts.push(text(`${id}.pad${i}.n`, `${id}.pad${i}`, String(i + 1), [0, 0, 0.011], { heightM: 0.007, color: accent, font: 'mono' }));
           if (cid) {
-            behaviors.push({ id: `${id}.pad${i}.press`, partId: `${id}.pad${i}`, controlId: cid, type: 'press', axis: 'z', depth: 0.006, gestures: ['poke', 'pinch'], grabRadius: s / 2 + 0.01 });
+            behaviors.push({ id: `${id}.pad${i}.press`, partId: `${id}.pad${i}`, controlId: cid, type: 'press', axis: 'z', depth: 0.006, gestures: ['poke', 'pinch'], grabRadius: s / 2 + 0.01, index: i });
             fb('glow', `${id}.pad${i}.face`, { on: 'trigger', color: accent });
           }
         }
@@ -378,14 +388,14 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
           const idx = o * 12 + semis[k]!;
           parts.push(group(`${id}.k${idx}`, id, [x, 0, 0.004], { role: 'cap' }));
           parts.push(box(`${id}.k${idx}.face`, `${id}.k${idx}`, wk, whiteLen, 0.012, [0, 0, 0.006], holo(NEON.text, { color: '#9FD9E6', opacity: 0.85 }), { dims: { radius: 0.003 } }));
-          if (cid) behaviors.push({ id: `${id}.k${idx}.press`, partId: `${id}.k${idx}`, controlId: cid, type: 'press', axis: 'z', depth: 0.005, gestures: ['poke', 'pinch'], grabRadius: 0.02 });
+          if (cid) behaviors.push({ id: `${id}.k${idx}.press`, partId: `${id}.k${idx}`, controlId: cid, type: 'press', axis: 'z', depth: 0.005, gestures: ['poke', 'pinch'], grabRadius: 0.02, index: idx });
           const bi = blackAfter.indexOf(k);
           if (bi >= 0) {
             const bidx = o * 12 + blackSemis[bi]!;
             const bx = x + (wk + gap) / 2;
             parts.push(group(`${id}.k${bidx}`, id, [bx, whiteLen * 0.2, 0.016], { role: 'cap' }));
             parts.push(box(`${id}.k${bidx}.face`, `${id}.k${bidx}`, 0.02, 0.06, 0.012, [0, 0, 0.006], holo(NEON.ink, { opacity: 0.98, edges: true, edgeColor: accent }), { dims: { radius: 0.002 } }));
-            if (cid) behaviors.push({ id: `${id}.k${bidx}.press`, partId: `${id}.k${bidx}`, controlId: cid, type: 'press', axis: 'z', depth: 0.005, gestures: ['poke', 'pinch'], grabRadius: 0.015 });
+            if (cid) behaviors.push({ id: `${id}.k${bidx}.press`, partId: `${id}.k${bidx}`, controlId: cid, type: 'press', axis: 'z', depth: 0.005, gestures: ['poke', 'pinch'], grabRadius: 0.015, index: bidx });
           }
         }
       }
@@ -406,7 +416,7 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
           const a0 = (360 * i) / n;
           parts.push(group(`${id}.seg${i}`, id, [0, 0, 0.004], { role: 'cap' }));
           parts.push(ring(`${id}.seg${i}.face`, `${id}.seg${i}`, rIn, rOut - 0.002, [0, 0, 0], solidGlow(col, { emissiveIntensity: 0.7 }), 360 / n - 2, 90 - a0 - 360 / n + 1));
-          if (cid) behaviors.push({ id: `${id}.seg${i}.press`, partId: `${id}.seg${i}`, controlId: cid, type: 'press', axis: 'z', depth: 0.004, gestures: ['poke', 'pinch'], grabRadius: rOut });
+          if (cid) behaviors.push({ id: `${id}.seg${i}.press`, partId: `${id}.seg${i}`, controlId: cid, type: 'press', axis: 'z', depth: 0.004, gestures: ['poke', 'pinch'], grabRadius: rOut, index: i });
         }
         parts.push(cyl(`${id}.swatch`, id, rIn * 0.8, 0.006, [0, 0, 0.003], solidGlow(accent), { role: 'indicator', transform: { position: [0, 0, 0.003], rotationDeg: [90, 0, 0] } }));
         if (cid) fb('color-shift', `${id}.swatch`);
@@ -421,8 +431,10 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
           const col = rgbHex(warm.map((c, k) => c + (cool[k]! - c) * t));
           const x = -w / 2 + sw / 2 + i * (sw + 0.004);
           parts.push(group(`${id}.seg${i}`, id, [x, 0, 0.004], { role: 'cap' }));
-          parts.push(box(`${id}.seg${i}.face`, `${id}.seg${i}`, sw, 0.028, 0.008, [0, 0, 0.004], solidGlow(col, { emissiveIntensity: 0.6 }), { dims: { radius: 0.004 } }));
-          if (cid) behaviors.push({ id: `${id}.seg${i}.press`, partId: `${id}.seg${i}`, controlId: cid, type: 'press', axis: 'z', depth: 0.004, gestures: ['poke', 'pinch'], grabRadius: sw });
+          parts.push(box(`${id}.seg${i}.face`, `${id}.seg${i}`, sw, 0.044, 0.008, [0, 0, 0.004], solidGlow(col, { emissiveIntensity: 0.6 }), { dims: { radius: 0.004 } }));
+          const stepLabel = c?.stepLabels?.[i];
+          if (stepLabel) parts.push(text(`${id}.seg${i}.t`, `${id}.seg${i}`, stepLabel, [0, 0, 0.0085], { heightM: Math.min(0.0045, (sw * 0.8) / Math.max(3, stepLabel.length) / 0.65), color: NEON.void }));
+          if (cid) behaviors.push({ id: `${id}.seg${i}.press`, partId: `${id}.seg${i}`, controlId: cid, type: 'press', axis: 'z', depth: 0.004, gestures: ['poke', 'pinch'], grabRadius: sw, index: i });
         }
         parts.push(text(`${id}.warm`, id, 'WARM', [-w / 2 - 0.022, 0, 0.004], { heightM: 0.006, color: NEON.dim }));
         parts.push(text(`${id}.cool`, id, 'COOL', [w / 2 + 0.022, 0, 0.004], { heightM: 0.006, color: NEON.dim }));
@@ -528,11 +540,12 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
         parts.push(text(`${id}.row${i}.glyph`, `${id}.row${i}`, kindGlyph(it.kind), [-w / 2 + 0.018, 0, 0.003], { heightM: 0.0075, color: it.kind === 'daemon' ? NEON.magenta : col, font: 'mono', uppercase: false }));
         parts.push(text(`${id}.row${i}.label`, `${id}.row${i}`, it.label, [-w / 2 + 0.034, it.detail ? 0.006 : 0, 0.003], { heightM: 0.0085, color: st === 'locked' ? NEON.dim : NEON.bone, align: 'left' }));
         if (it.detail) parts.push(text(`${id}.row${i}.detail`, `${id}.row${i}`, it.detail, [-w / 2 + 0.034, -0.0085, 0.003], { heightM: 0.0055, color: NEON.dim, align: 'left', uppercase: false }));
-        if (it.channel) parts.push(text(`${id}.row${i}.chan`, `${id}.row${i}`, channelGlyph(it.channel), [w / 2 - 0.028, 0, 0.003], { heightM: 0.0055, color: NEON.dim, align: 'right', font: 'mono' }));
+        const verdict = it.verdict === 'seen' ? 'SEEN ✓' : it.verdict === 'heard' ? 'HEARD ✓' : it.verdict === 'wired' ? 'WIRED ✓' : it.verdict === 'pending' ? 'AWAITING' : it.channel ? channelGlyph(it.channel) : '—';
+        parts.push(text(`${id}.row${i}.verdict`, `${id}.row${i}`, verdict, [w / 2 - 0.028, 0, 0.003], { heightM: 0.0055, color: it.verdict && it.verdict !== 'pending' && it.verdict !== 'none' ? NEON.ok : NEON.dim, align: 'right', font: 'mono', uppercase: false }));
         parts.push(sphere(`${id}.row${i}.pip`, `${id}.row${i}`, 0.0035, [w / 2 - 0.016, 0, 0.003], st === 'ready' || st === 'locked' ? dim(col) : solidGlow(col), { role: st === 'uploading' ? 'indicator' : 'decor' }));
         const target = it.controlId ?? cid;
         if (target && st !== 'locked') {
-          behaviors.push({ id: `${id}.row${i}.press`, partId: `${id}.row${i}`, controlId: target, type: 'press', axis: 'z', depth: 0.003, gestures: ['poke', 'pinch'], grabRadius: 0.024 });
+          behaviors.push({ id: `${id}.row${i}.press`, partId: `${id}.row${i}`, controlId: target, type: 'press', axis: 'z', depth: 0.003, gestures: ['poke', 'pinch'], grabRadius: 0.024, index: i });
           feedback.push({ id: `${id}.row${i}.glow`, controlId: target, type: 'glow', partId: `${id}.row${i}.hit`, on: 'hover', color: NEON.volt });
           feedback.push({ id: `${id}.row${i}.snd`, controlId: target, type: 'tick', on: 'trigger', sound: 'chirp' });
         }
@@ -590,22 +603,26 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
       const items = (p.items ?? [
         { id: 'scan', label: 'SCAN' },
         { id: 'ping', label: 'PING' },
-        { id: 'daemons', label: 'DAEMONS' },
+        { id: 'hacks', label: 'HACKS', subtitle: 'your devices' },
+        { id: 'daemons', label: 'DAEMONS', subtitle: 'automations', kind: 'daemon' as const },
         { id: 'undo', label: 'UNDO' },
       ]).slice(0, 6);
       const key = 0.044;
       const gap = 0.016;
       const w = items.length * key + (items.length - 1) * gap + 0.024;
-      parts.push(box(`${id}.plate`, id, w, key + 0.044, 0.004, [0, 0, 0], plate(NEON.plate, accent), { role: 'base', dims: { radius: 0.006 } }));
-      parts.push(text(`${id}.title`, id, p.title ?? 'DECK', [-w / 2 + 0.012, key / 2 + 0.012, 0.003], { heightM: 0.0065, color: accent, align: 'left' }));
+      const anySub = items.some((it) => it.subtitle);
+      const h = key + 0.044 + (anySub ? 0.012 : 0);
+      parts.push(box(`${id}.plate`, id, w, h, 0.004, [0, 0, 0], plate(NEON.plate, accent), { role: 'base', dims: { radius: 0.006 } }));
+      parts.push(text(`${id}.title`, id, p.title ?? 'DECK', [-w / 2 + 0.012, h / 2 - 0.01, 0.003], { heightM: 0.0065, color: accent, align: 'left' }));
       items.forEach((it, i) => {
         const x = -w / 2 + 0.012 + key / 2 + i * (key + gap);
-        parts.push(group(`${id}.k${i}`, id, [x, -0.006, 0.0025], { role: 'cap' }));
+        parts.push(group(`${id}.k${i}`, id, [x, -0.004 + (anySub ? 0.004 : 0), 0.0025], { role: 'cap' }));
         parts.push(box(`${id}.k${i}.face`, `${id}.k${i}`, key, key, 0.008, [0, 0, 0.004], holo(NEON.void, { opacity: 0.95, edges: true, edgeColor: it.kind === 'daemon' ? NEON.magenta : accent }), { dims: { radius: 0.005 } }));
-        parts.push(text(`${id}.k${i}.t`, `${id}.k${i}`, it.label, [0, 0, 0.0085], { heightM: 0.0062, color: NEON.bone }));
+        parts.push(text(`${id}.k${i}.t`, `${id}.k${i}`, it.label, [0, it.subtitle ? 0.004 : 0, 0.0085], { heightM: 0.0062, color: NEON.bone }));
+        if (it.subtitle) parts.push(text(`${id}.k${i}.s`, `${id}.k${i}`, it.subtitle, [0, -0.011, 0.0085], { heightM: 0.0036, color: NEON.dim, uppercase: false }));
         const target = it.controlId ?? cid;
         if (target) {
-          behaviors.push({ id: `${id}.k${i}.press`, partId: `${id}.k${i}`, controlId: target, type: 'press', axis: 'z', depth: 0.005, gestures: ['poke', 'pinch'], grabRadius: key / 2 + 0.01 });
+          behaviors.push({ id: `${id}.k${i}.press`, partId: `${id}.k${i}`, controlId: target, type: 'press', axis: 'z', depth: 0.005, gestures: ['poke', 'pinch'], grabRadius: key / 2 + 0.01, index: i });
           feedback.push({ id: `${id}.k${i}.glow`, controlId: target, type: 'glow', partId: `${id}.k${i}.face`, on: 'hover', color: NEON.volt });
           feedback.push({ id: `${id}.k${i}.snd`, controlId: target, type: 'tick', on: 'trigger', sound: 'click' });
         }
@@ -661,11 +678,16 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
         const x = -w / 2 + cell / 2 + c2 * (cell + gap);
         const y = h / 2 - cell / 2 - r * (cell + gap);
         const txt = p.cells?.[i] ?? hex2(i * 37 + 11);
-        const isCur = p.current === i;
-        const col = solved.has(i) ? NEON.green : isCur ? NEON.yellow : picked.has(i) ? NEON.magenta : NEON.cyan;
-        const faded = picked.has(i) && !solved.has(i) && !isCur;
-        parts.push(box(`${id}.cell${i}`, id, cell, cell, 0.002, [x, y, 0.002], { style: 'holo', color: faded ? NEON.ink : NEON.holo, opacity: faded ? 0.5 : 0.9, edges: isCur || solved.has(i), edgeColor: col, glow: isCur ? 1 : 0.3, fresnel: 2 }, { role: 'decor' }));
-        parts.push(text(`${id}.cell${i}.t`, id, txt, [x, y, 0.0035], { heightM: 0.0065, color: faded ? NEON.dim : col, font: 'mono' }));
+        const meta = p.cellMeta?.find((m) => m.i === i);
+        const isCur = p.current === i || meta?.state === 'trying';
+        const isOk = solved.has(i) || meta?.state === 'ok';
+        const isFail = meta?.state === 'fail';
+        const col = isOk ? NEON.ok : isFail ? NEON.fail : isCur ? NEON.volt : picked.has(i) ? NEON.magenta : NEON.cyan;
+        const faded = picked.has(i) && !isOk && !isCur && !isFail;
+        parts.push(box(`${id}.cell${i}`, id, cell, cell, 0.002, [x, y, 0.002], { style: 'holo', color: faded ? NEON.ink : NEON.holo, opacity: faded ? 0.5 : 0.9, edges: isCur || isOk || isFail, edgeColor: col, glow: isCur ? 1 : 0.3, fresnel: 2 }, { role: isCur ? 'indicator' : 'decor' }));
+        parts.push(text(`${id}.cell${i}.t`, id, meta?.effect ? txt : txt, [x, meta?.effect ? y + cell * 0.18 : y, 0.0035], { heightM: meta?.effect ? 0.005 : 0.0065, color: faded ? NEON.dim : col, font: 'mono' }));
+        if (meta?.effect) parts.push(text(`${id}.cell${i}.e`, id, meta.effect, [x, y - cell * 0.22, 0.0035], { heightM: Math.min(0.0042, (cell * 0.9) / Math.max(4, meta.effect.length) / 0.6), color: col }));
+        if (isFail) parts.push(text(`${id}.cell${i}.x`, id, '✕', [x + cell * 0.32, y + cell * 0.3, 0.0036], { heightM: 0.004, color: NEON.fail, font: 'mono', uppercase: false }));
       }
       // path through picked cells
       const order = p.picked ?? [];
@@ -750,10 +772,49 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
       break;
     }
 
+    // --- LEARN (IR) -------------------------------------------------------------------------------------
+
+    case 'ir-waveform-card': {
+      const w = p.width ?? 0.12;
+      const h = 0.036;
+      const st = p.cardState ?? 'captured';
+      const col = st === 'seen' ? NEON.ok : st === 'no-change' ? NEON.fail : st === 'replaying' ? NEON.volt : NEON.cyan;
+      parts.push(box(`${id}.plate`, id, w, h, 0.003, [0, 0, 0], plate(NEON.plate, col), { role: 'base', dims: { radius: 0.004 } }));
+      const samples = p.samples && p.samples.length >= 2 ? p.samples : Array.from({ length: 40 }, (_, k) => ((k * 7919) % 13 < 6 ? 1 : 0));
+      const n = samples.length;
+      const left = -w / 2 + 0.008;
+      const span = w - 0.016;
+      const pts: Vec3[] = [];
+      for (let k = 0; k < n; k++) {
+        const x = left + (span * k) / (n - 1);
+        const y = 0.004 + (samples[k]! - 0.5) * 0.012;
+        pts.push([x, y, 0.0025]);
+        if (k < n - 1 && samples[k + 1] !== samples[k]) pts.push([x, 0.004 + (samples[k + 1]! - 0.5) * 0.012, 0.0025]);
+      }
+      parts.push(part({ id: `${id}.wave`, parentId: id, kind: 'path', role: 'indicator', path: { points: pts.slice(0, 96), width: 0.0012, color: col, keyline: true, animate: st === 'replaying' ? 'pulse' : 'none' } }));
+      const label = st === 'captured' ? `${p.title ?? 'CAPTURED'} · ?` : st === 'replaying' ? 'REPLAYING…' : st === 'seen' ? `SEEN ✓ ${p.effectLabel ?? ''}`.trim() : st === 'no-change' ? 'NO CHANGE ✗' : p.title ?? 'IR';
+      parts.push(text(`${id}.label`, id, label, [left, -0.011, 0.003], { heightM: 0.0052, color: st === 'captured' ? NEON.dim : col, align: 'left', font: 'mono', uppercase: false }, { role: 'readout' }));
+      if (p.jpLabel) parts.push(text(`${id}.jp`, id, p.jpLabel, [w / 2 - 0.008, -0.011, 0.003], { heightM: 0.0052, color: NEON.bone, align: 'right', uppercase: false }));
+      break;
+    }
+
+    case 'remote-chips': {
+      const chips = p.chips ?? [];
+      chips.forEach((c, i) => {
+        const st = c.state ?? 'idle';
+        const col = st === 'captured' ? NEON.ok : st === 'pressed' ? NEON.volt : NEON.cyan;
+        parts.push(box(`${id}.c${i}`, id, 0.024, 0.024, 0.002, [c.x, c.y, 0], { style: 'holo', color: NEON.void, opacity: st === 'idle' ? 0.6 : 0.92, edges: true, edgeColor: col, glow: st === 'pressed' ? 1 : 0.3, fresnel: 2 }, { dims: { radius: 0.004 }, role: st === 'pressed' ? 'indicator' : 'decor' }));
+        parts.push(text(`${id}.c${i}.t`, id, c.jpLabel ?? c.label, [c.x, c.y + (c.jpLabel ? 0.003 : 0), 0.0025], { heightM: c.jpLabel ? 0.0055 : 0.0038, color: st === 'idle' ? NEON.dim : NEON.bone, uppercase: false }));
+        if (c.jpLabel) parts.push(text(`${id}.c${i}.e`, id, c.label, [c.x, c.y - 0.0075, 0.0025], { heightM: 0.0028, color: col }));
+      });
+      break;
+    }
+
     case 'handle': {
-      const w = p.width ?? p.size ?? 0.12;
+      const titleW = p.title ? p.title.length * 0.0048 + 0.02 : 0;
+      const w = Math.max(p.width ?? p.size ?? 0.12, 0.05 + titleW);
       parts.push(box(`${id}.bar`, id, w, 0.024, 0.006, [0, 0, 0], plate(NEON.panel, accent), { role: 'handle', dims: { radius: 0.006 } }));
-      for (let i = -1; i <= 1; i++) parts.push(box(`${id}.g${i + 1}`, id, 0.0025, 0.012, 0.0015, [i * 0.007, 0, 0.0035], solidGlow(accent)));
+      for (let i = 0; i < 3; i++) parts.push(box(`${id}.g${i}`, id, 0.0025, 0.012, 0.0015, [-w / 2 + 0.012 + i * 0.007, 0, 0.0035], solidGlow(accent)));
       if (p.title) parts.push(text(`${id}.title`, id, p.title, [w / 2 - 0.008, 0, 0.0035], { heightM: 0.0055, color: NEON.dim, align: 'right' }));
       behaviors.push({ id: `${id}.grab`, partId: id, type: 'grab', gestures: ['pinch-drag', 'grab'], grabRadius: 0.04 });
       break;
@@ -840,9 +901,49 @@ export function expandSpec(spec: Gen3dSpec): ExpandedSpec {
   return { parts, behaviors, feedback, origin };
 }
 
-/** Put the handle just above the highest top-level part (rough: max y of root parts + 0.06). */
+/**
+ * Put the handle under the object: lowest root part minus its rough half-height minus 40 mm, so it never
+ * covers a readout (reviewer note: a handle above the object collided with faders and lists).
+ */
 function handleY(spec: Gen3dSpec): number {
-  let top = 0;
-  for (const p of spec.parts) if (!p.parentId) top = Math.max(top, (p.transform?.position?.[1] ?? 0) + 0.04);
-  return top + 0.05;
+  let bottom = 0;
+  for (const p of spec.parts) {
+    if (p.parentId) continue;
+    const y = p.transform?.position?.[1] ?? 0;
+    const half = roughHalfHeight(p);
+    bottom = Math.min(bottom, y - half);
+  }
+  return bottom - 0.05;
+}
+function roughHalfHeight(p: Part): number {
+  const s = p.params?.size ?? p.params?.length ?? 0;
+  if (p.kind === 'archetype') {
+    switch (p.archetype) {
+      case 'fader':
+        return (p.params?.length ?? 0.16) / 2 + 0.05;
+      case 'hack-list':
+        return (0.03 + Math.max(1, Math.min(6, p.params?.items?.length ?? 1)) * 0.044) / 2 + 0.01;
+      case 'worklog':
+        return (0.036 + (p.params?.logRows?.length ?? 0) * 0.034 + 0.05) / 2;
+      case 'link-matrix':
+        return ((p.params?.rows ?? 6) * ((p.params?.size ?? 0.028) + 0.004)) / 2 + 0.03;
+      case 'knob':
+        return (s || 0.064) / 2 + 0.05;
+      case 'dimmer-ring':
+        return (s || 0.14) / 2 + 0.03;
+      case 'pull-cord':
+        return (p.params?.length ?? 0.2) + 0.06;
+      case 'wheel':
+        return (p.params?.mode === 'warmth' ? 0.05 : (s || 0.14) / 2) + 0.04;
+      case 'xy-orb':
+        return (s || 0.16) / 2 + 0.04;
+      case 'toggle':
+      case 'button':
+        return 0.06;
+      default:
+        return (s || 0.06) / 2 + 0.03;
+    }
+  }
+  const d = p.dims;
+  return Math.max(d?.h ?? 0, (d?.r ?? 0) * 2, (d?.rOuter ?? 0) * 2) / 2;
 }

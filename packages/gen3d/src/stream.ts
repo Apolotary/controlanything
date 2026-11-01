@@ -67,10 +67,50 @@ function parseItems<T>(text: string, key: string, schema: { safeParse(v: unknown
   return out;
 }
 
+/** Value of a top-level string key (depth 1 only, so a nested params.title never matches). */
+export function topLevelString(text: string, key: string): string | undefined {
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  let strStart = -1;
+  let lastKey: string | null = null;
+  let expectValue = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') {
+        inStr = false;
+        const s = text.slice(strStart + 1, i);
+        if (depth === 1) {
+          if (expectValue) {
+            if (lastKey === key) return JSON.parse(`"${s}"`) as string;
+            expectValue = false;
+            lastKey = null;
+          } else lastKey = s;
+        }
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inStr = true;
+      strStart = i;
+    } else if (ch === '{' || ch === '[') depth++;
+    else if (ch === '}' || ch === ']') depth--;
+    else if (ch === ':' && depth === 1) expectValue = true;
+    else if (ch === ',' && depth === 1) {
+      expectValue = false;
+      lastKey = null;
+    }
+  }
+  return undefined;
+}
+
 /** Best-effort partial spec from streamed text. Safe to call on every delta (cheap for a few KB). */
 export function scanPartialSpec(text: string): PartialSpec {
   const rejected = { n: 0 };
-  const title = /"title"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text)?.[1];
+  const title = topLevelString(text, 'title');
   const out: PartialSpec = {
     controls: parseItems(text, 'controls', Control, rejected),
     parts: parseItems(text, 'parts', Part, rejected),
@@ -78,6 +118,6 @@ export function scanPartialSpec(text: string): PartialSpec {
     feedback: parseItems(text, 'feedback', Feedback, rejected),
     rejected: rejected.n,
   };
-  if (title !== undefined) out.title = JSON.parse(`"${title}"`) as string;
+  if (title !== undefined) out.title = title;
   return out;
 }

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gen3d gallery</title>
+    <style>
+      :root {
+        --void: #0a0e12;
+        --plate: #101820;
+        --bone: #f3f7fa;
+        --dim: #8fa3b3;
+        --cyan: #38f0ff;
+        --volt: #eeff41;
+        --magenta: #ff3dbe;
+        --ok: #5cffa3;
+        --fail: #ff5a3c;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: #1b2027; color: var(--bone); font: 13px/1.4 'Chakra Petch', system-ui, sans-serif; }
+      #stage { position: fixed; inset: 0; background: radial-gradient(ellipse at 50% 35%, #3a414b 0%, #262b33 45%, #14181e 100%); }
+      #stage canvas { display: block; width: 100%; height: 100%; }
+      #panel { position: fixed; top: 12px; left: 12px; width: 300px; max-height: calc(100% - 24px); overflow: auto; background: color-mix(in srgb, var(--plate) 92%, transparent); border: 1px solid #1f2a35; border-radius: 6px; padding: 12px; backdrop-filter: blur(4px); }
+      h1 { font-size: 14px; letter-spacing: 0.08em; text-transform: uppercase; margin: 0 0 10px; color: var(--cyan); }
+      h2 { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; margin: 14px 0 6px; color: var(--dim); }
+      button, select, textarea { font: inherit; color: var(--bone); background: var(--void); border: 1px solid #27333f; border-radius: 4px; }
+      button { padding: 6px 10px; cursor: pointer; letter-spacing: 0.06em; text-transform: uppercase; font-size: 11px; }
+      button:hover { border-color: var(--cyan); color: var(--cyan); }
+      button.volt { border-color: var(--volt); color: var(--volt); }
+      .row { display: flex; flex-wrap: wrap; gap: 6px; }
+      select { width: 100%; padding: 6px; }
+      textarea { width: 100%; height: 120px; padding: 6px; font: 11px/1.35 'Share Tech Mono', ui-monospace, monospace; resize: vertical; }
+      #validation { font: 11px/1.4 'Share Tech Mono', ui-monospace, monospace; white-space: pre-wrap; color: var(--dim); max-height: 120px; overflow: auto; }
+      #validation .ok { color: var(--ok); }
+      #validation .err { color: var(--fail); }
+      #validation .warn { color: var(--volt); }
+      #events { font: 11px/1.4 'Share Tech Mono', ui-monospace, monospace; color: var(--cyan); max-height: 160px; overflow: auto; white-space: pre; }
+      #hint { position: fixed; right: 12px; bottom: 12px; color: var(--dim); font-size: 11px; text-align: right; letter-spacing: 0.04em; }
+      #hint b { color: var(--volt); font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <div id="stage"></div>
+    <aside id="panel">
+      <h1>gen3d · gallery</h1>
+      <h2>example</h2>
+      <select id="examples"></select>
+      <div class="row" style="margin-top: 6px">
+        <button id="arm" class="volt">disarm</button>
+        <button id="materialize">materialize</button>
+        <button id="stream">stream demo</button>
+        <button id="shot">screenshot</button>
+        <button id="xr">enter xr</button>
+        <button id="hud" class="volt">hud demo</button>
+      </div>
+      <h2>paste a spec (ce.gen3d/1 json)</h2>
+      <textarea id="json" spellcheck="false"></textarea>
+      <div class="row" style="margin-top: 6px">
+        <button id="load">load</button>
+        <button id="copy">copy current</button>
+      </div>
+      <div id="validation"></div>
+      <h2>control events</h2>
+      <div id="events"></div>
+    </aside>
+    <div id="hint"><b>drag</b> a knob up/down · <b>wheel</b> twists · <b>click</b> buttons · right-drag orbits · <b>hud demo</b> plays the scan → link → arm sequence</div>
+    <script type="module" src="/src/gen3d/dev/gallery.ts"></script>
+  </body>
+</html>

@@ -190,6 +190,20 @@ describe('patches and history', () => {
   });
 });
 
+describe('edit sets', () => {
+  it('converts an EditSet into a valid patch and applies it', async () => {
+    const { editSetToPatch, editResponseFormat } = await import('./index');
+    const edit = { title: op1Knobs.title, summary: 'make the blue knob bigger', controls: [], parts: [{ id: 'k1', kind: 'archetype', archetype: 'knob', controlId: 'blue', params: { size: 0.09 }, transform: { position: [-0.14, 0, 0] } }], behaviors: [], feedback: [], remove: [] };
+    const conv = editSetToPatch(op1Knobs, edit);
+    expect(conv.ok).toBe(true);
+    if (!conv.ok) return;
+    const r = applyPatch(op1Knobs, conv.patch);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.spec.parts.find((p) => p.id === 'k1')?.params?.size).toBe(0.09);
+    expect(jsonSchemaDepth(editResponseFormat().json_schema.schema)).toBeLessThanOrEqual(10);
+  });
+});
+
 describe('tool calls', () => {
   it('builds a valid spec from a sequence of tool calls', () => {
     let spec = emptySpec('t1');
