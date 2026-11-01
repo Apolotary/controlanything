@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+/dist/*.tmp
+# the built zipapp is committed so it can be copied straight to the DevTerm
+!/dist/
