@@ -1,0 +1,94 @@
+{
+  "device": "Bastl Kastle 2 Wave Bard",
+  "id": "kastle-2-wave-bard",
+  "manufacturer": "Bastl Instruments",
+  "firmwareNotes": "This CC map is for the WAVE BARD variant only (the stereo sample player). It is the variant in the user's koii-sampler skill, but confirm the unit on the desk. USB MIDI was added in Wave Bard firmware 1.1. The latest firmware is 1.6 (USB descriptor fix: the unit now names itself 'Kastle 2 Wave Bard', with better Linux support). In 1.5 the lowest two MIDI octaves started playing samples at original pitch. Source: manual v1.5 (2025-11-01) and Bastl's MIDI cheat sheet (June 2025). The other Kastle 2 variants also have USB MIDI but DIFFERENT maps: Kastle 2 Alchemist (synth; firmware 1.7 added velocity and sustain) and Kastle 2 FX Wizard (effects; USB MIDI since firmware 1.2). Do not use this chart for them.",
+  "sources": [
+    {"title": "Kastle 2 Wave Bard product page", "url": "https://bastl-instruments.com/instruments/kastle-2-wave-bard", "confidence": "docs"},
+    {"title": "Kastle 2 Wave Bard user manual v1.5 (USB MIDI IMPLEMENTATION chapter)", "url": "https://bastl-instruments.com/content/files/manual-kastle2-wave-bard-web.pdf", "confidence": "docs"},
+    {"title": "Wave Bard MIDI cheat sheet (official)", "url": "https://bastl-instruments.com/content/files/kastle2_wavebard_midi_cheat_sheet.pdf", "confidence": "docs"},
+    {"title": "Wave Bard firmware release notes v1.6", "url": "https://bastl-instruments.com/content/files/kastle2-wavebard-fw-release-notes_v1.6.pdf", "confidence": "docs"},
+    {"title": "Wave Bard FAQ ('USB-C is used for powering..., firmware updates/loading samples, and for sending/receiving USB MIDI')", "url": "https://bastl-instruments.com/support/helpline/kastle2-wave-bard", "confidence": "docs"},
+    {"title": "Kastle 2 Alchemist manual (different MIDI map)", "url": "https://bastl-instruments.com/content/files/manual-kastle2-alchemist-web.pdf", "confidence": "docs"}
+  ],
+  "usb": {
+    "classCompliantMidi": true,
+    "classCompliantAudio": false,
+    "portNameHint": "Kastle 2 Wave Bard",
+    "confidence": "inferred",
+    "notes": "USB-C carries power, firmware updates, sample loading and USB MIDI in and out [docs]. No driver is mentioned and it is used directly with DAWs, so it is assumed class compliant [inferred]. No USB audio is mentioned; audio goes through 3.5 mm jacks [docs/inferred]. The port name comes from the 1.6 USB descriptor fix [inferred], so match /kastle/i. It does not charge batteries over USB [docs]."
+  },
+  "identity": {
+    "respondsToUniversalInquiry": null,
+    "manufacturerId": null,
+    "replyExample": null,
+    "confidence": "unknown",
+    "notes": "Nothing documented. Do not rely on SysEx."
+  },
+  "channels": {
+    "receive": "One channel for both input and output. It applies to Note, Pitch Bend and CC. Clock has no channel [docs]. Default channel is not stated (probably 1) [unknown].",
+    "send": "Same channel as input [docs].",
+    "notes": "To set the channel: enter Advanced Settings (hold SHIFT+BANK for 2 s), then hold SHIFT, press BANK N times and release; the light blinks N times. To MIDI-learn instead: in Advanced Settings hold BANK for at least 1 s, send any Note, CC or Pitch Bend from the web app, then release. Leave Advanced Settings with SHIFT+BANK for 2 s or a power cycle [docs]. MIDI-learn is the most reliable step to do on camera."
+  },
+  "notes": {
+    "description": "Responds to Note On only. Velocity and Note Off are ignored, and the sample plays its LENGTH envelope [docs].",
+    "map": {
+      "0-47": "Select and trigger samples 1-12 of the current bank; each octave starts at C = sample 1 [docs]",
+      "0-23": "Played at original sample pitch (since firmware 1.5) [docs]",
+      "24-47": "Pitch unchanged (stays at MIDI/Patch pitch) [docs]",
+      "48-127": "Trigger the current sample, pitched: 48 = -2 oct, 72 (C4) = original pitch, 96 = +2 oct [docs]",
+      "pitchBend": "+/-7 semitones, only after a Note On (MIDI Pitch mode) [docs]",
+      "cc1": "Mod wheel selects the bank [docs]"
+    }
+  },
+  "parameters": [
+    {"name": "FILTER", "group": "tone", "cc": 20, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "Bipolar: middle = open, left = lowpass, right = highpass [docs]. Center value is about 64 [inferred]. Applies immediately."},
+    {"name": "FX", "group": "tone", "cc": 21, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "Center = no effect. Left = tempo-synced delay (3/8). Right = chorus/flanger/soft-clip [docs]."},
+    {"name": "PITCH", "group": "pitch", "cc": 14, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "Top right knob. Moving it via CC returns the unit to Patch Pitch [docs]."},
+    {"name": "PITCH MOD", "group": "pitch", "cc": 15, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "Top left knob"},
+    {"name": "SAMPLE", "group": "sample", "cc": 16, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "Applied only right before the next trigger or Note On [docs]"},
+    {"name": "SAMPLE MOD", "group": "sample", "cc": 17, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "Applied only on next trigger [docs]"},
+    {"name": "LENGTH", "group": "envelope", "cc": 18, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "Center = shortest envelope, right = forward and longer. Applied only on next trigger [docs]."},
+    {"name": "LENGTH MOD", "group": "envelope", "cc": 19, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "Applied only on next trigger [docs]"},
+    {"name": "LFO", "group": "modulation", "cc": 22, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "Bottom right knob"},
+    {"name": "LFO MOD", "group": "modulation", "cc": 23, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "Bottom left knob"},
+    {"name": "TEMPO", "group": "sequencer", "cc": 24, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "While MIDI clock is running, TEMPO selects the clock divider [docs]"},
+    {"name": "RHYTHM", "group": "sequencer", "cc": 25, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": ""},
+    {"name": "BANK", "group": "sample", "cc": 1, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "0-127 is scaled to the number of banks. Applied on next trigger [docs]."},
+    {"name": "BANK MOD", "group": "sample", "cc": 26, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "Applied on next trigger [docs]"},
+    {"name": "SCALE", "group": "pitch", "cc": 27, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "Quantizer scale"},
+    {"name": "PITCH ROOT", "group": "pitch", "cc": 28, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": ""},
+    {"name": "FINE TUNE", "group": "pitch", "cc": 29, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": ""},
+    {"name": "Input Gain", "group": "levels", "cc": 9, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "Up to +12 dB [docs]. Avoid in the demo."},
+    {"name": "Output Volume", "group": "levels", "cc": 7, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "Clamp in the driver. A jump to 127 can blast headphones."},
+    {"name": "Reset All Controllers", "group": "system", "cc": 121, "nrpn": null, "range": [0, 127], "channel": "device channel", "confidence": "docs", "notes": "Gives control back to the physical knobs. Received CC values otherwise hold until a knob is moved [docs]."}
+  ],
+  "transport": {
+    "clockIn": true,
+    "startStop": true,
+    "notes": "Syncs to USB MIDI clock automatically, and it takes priority over SYNC IN and the internal clock [docs]. Start resets the pattern generator and waits for clock; Stop stops the sequencer; Continue resumes [docs]. It sends clock and transport only while it is not receiving clock [docs]. Ignore-clock options live in Advanced Settings (LFO knob)."
+  },
+  "unsafeMessages": [
+    "CC 7 (Output Volume) at high values: hearing and speaker risk. Clamp it, e.g. to 100 or less.",
+    "CC 9 (Input Gain): up to +12 dB, so feedback or clipping is possible when a line input is patched.",
+    "CC 121 resets all received CC values to the physical knob positions, which causes sudden jumps in sound.",
+    "MIDI clock from the app overrides the Kastle's internal and SYNC tempo. Send it on purpose, or not at all."
+  ],
+  "demo": {
+    "bestParameters": [
+      "CC20 FILTER sweep (instant)",
+      "CC21 FX (delay to chorus/flanger)",
+      "CC14 PITCH",
+      "CC22 LFO",
+      "Notes 48-96 for pitched sample melodies"
+    ],
+    "visualFeedback": "Weak. The knobs are plain potentiometers and do not move. The LEDs show bank colour and LFO state only. Put the CC values on screen in the web UI instead.",
+    "audibleFeedback": "Immediate for FILTER, FX, PITCH and volume. SAMPLE, LENGTH and BANK changes are heard only on the next trigger or Note On.",
+    "risks": [
+      "Variant mix-up: this map is Wave Bard only.",
+      "The default MIDI channel is undocumented, so MIDI-learn it first.",
+      "Physical knob moves override the CC values.",
+      "Patch cables change what a knob does (modulation inputs). Unpatch everything for a predictable demo."
+    ]
+  }
+}

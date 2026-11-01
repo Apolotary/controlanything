@@ -33,6 +33,7 @@
     "arm.result": "arm.result.json",
     "panic": "panic.json",
     "ui.spec": "ui.spec.json",
+    "ui.partial": "ui.partial.json",
     "control.event": "control.event.json",
     "gen3d.generate": "gen3d.generate.json",
     "gen3d.edit": "gen3d.edit.json",

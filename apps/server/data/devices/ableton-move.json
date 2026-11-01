@@ -1,0 +1,101 @@
+{
+  "device": "Ableton Move",
+  "id": "ableton-move",
+  "manufacturer": "Ableton",
+  "firmwareNotes": "Valid for Move 2.1.1 (latest stable, 2026-09-15; beta 2.1.5b2 2026-10-09 adds no MIDI changes) per the release notes and the help article 'Using MIDI with Move' (updated 2026-10-01). Relevant history: 1.1 = Control Live Mode; 1.3.0 (2025-02-11) = poly aftertouch sent on MIDI Out + CC120 All Sound Off sent on stop; 1.5.0 (2025-06-11) = MIDI In and Out at the same time, per-track MIDI In/Out channels, MIDI clock receive (MIDI Sync In); 1.6.0 (2025-09-02) = USB-A devices forwarded to the computer in Control Live Mode ('Ableton Move (External Port)'); 1.7.0 (2025-10-14) = 'When Move is in Standalone Mode, other hardware with a USB Host port can now connect to Move via its USB-C port' (computer <-> Move MIDI). No 2.x release adds MIDI CC input, MIDI mapping, program change or MPE. The online manual's 'MIDI In Only / MIDI Out Only' text is out of date (written before 1.5). Use the help article as the current reference.",
+  "sources": [
+    {"title": "Ableton Help: Using MIDI with Move (updated 2026-10-01)", "url": "https://help.ableton.com/hc/en-us/articles/14661164865308-Using-MIDI-with-Move", "confidence": "docs"},
+    {"title": "Move Release Notes (1.1 to 2.1.1)", "url": "https://www.ableton.com/en/release-notes/move-1/", "confidence": "docs"},
+    {"title": "Move Beta Release Notes (up to 2.1.5b2)", "url": "https://www.ableton.com/en/release-notes/move-1-beta/", "confidence": "docs"},
+    {"title": "Ableton Move Manual (Connectivity, USB Operation Modes, Control Live Mode, USB-C Audio; MIDI section predates 1.5)", "url": "https://www.ableton.com/en/move/manual/", "confidence": "docs"},
+    {"title": "Ableton Help: Using Move to control Ableton Live", "url": "https://help.ableton.com/hc/en-us/articles/14661553738524-Using-Move-to-control-Ableton-Live", "confidence": "docs"},
+    {"title": "Ableton Help: Move Audio Interface", "url": "https://help.ableton.com/hc/en-us/articles/15814463084060", "confidence": "docs"},
+    {"title": "Ableton Help: Move Technical FAQ", "url": "https://help.ableton.com/hc/en-us/articles/13997458993180-Move-Technical-FAQ", "confidence": "docs"},
+    {"title": "Ableton push-interface doc (Ableton SysEx manufacturer ID 00 21 1D, identity reply layout, macOS port naming pattern)", "url": "https://github.com/Ableton/push-interface/blob/master/doc/AbletonPush2MIDIDisplayInterface.asc", "confidence": "docs"},
+    {"title": "Decompiled Live 12.1 'Move' MIDI Remote Script (midi.py, elements.py, firmware.py, __init__.py)", "url": "https://github.com/chiakibeats/AbletonLive12.1_MIDIRemoteScripts/tree/main/Move", "confidence": "community"},
+    {"title": "Decompiled Live 12.4 'Move' MIDI Remote Script __init__.py (same identity bytes and USB IDs)", "url": "https://github.com/gluon/AbletonLive12_MIDIRemoteScripts/tree/main/Move", "confidence": "community"},
+    {"title": "Schwung (formerly Move Everything), docs/SYSEX.md: Mac on USB-C, 'Ableton Move Standalone Port', only that port reaches Move", "url": "https://github.com/charlesvestal/schwung/blob/main/docs/SYSEX.md", "confidence": "community"},
+    {"title": "Schwung docs/ADDRESSING_MOVE_SYNTHS.md (track N <-> channel N default, Move echoes received notes)", "url": "https://github.com/charlesvestal/schwung/blob/main/docs/ADDRESSING_MOVE_SYNTHS.md", "confidence": "community"},
+    {"title": "Move Anything (original SSH framework)", "url": "https://github.com/bobbydigitales/move-anything", "confidence": "community"},
+    {"title": "CDM Move guide (v1.1 era; port names, Control Live Mode maps every control to notes/CCs)", "url": "https://cdm.link/ableton-move-guide/", "confidence": "community"},
+    {"title": "Elektronauts Move user thread p.53 (pads light up for incoming external notes, Oct 2024)", "url": "https://www.elektronauts.com/t/ableton-move-user-thread/221204?page=53", "confidence": "community"}
+  ],
+  "usb": {
+    "classCompliantMidi": true,
+    "classCompliantAudio": true,
+    "portNameHint": "Ableton Move Standalone Port",
+    "confidence": "docs",
+    "notes": "MIDI over USB-C to a computer works only in Standalone Mode, with firmware 1.7.0 or later [docs]. No setting is needed. Move exposes four USB-MIDI ports, which Ableton lists as 'Ableton Move (Live Port)' (used to control Ableton Live), '(User Port)' (inactive), '(External Port)' (USB-A devices forwarded to the computer in Control Live Mode) and '(Standalone Port)' (sends and receives MIDI in Standalone Mode) [docs]. The macOS CoreMIDI name is 'Ableton Move Standalone Port' (no parentheses; matches the Push 2 'Ableton Push 2 Live Port' pattern) [community: Schwung SYSEX.md]. Match ports with /move/i plus /standalone/i, not an exact string. Only the Standalone Port reaches Move's tracks. The Live/User/External ports put nothing into Move's MIDI input [community]. The Live Port streams Active Sensing (0xFE) [community: CDM], so filter 0xF8-0xFF in logs. If the Standalone Port is missing on a Mac that met Move before firmware 1.4.1: quit apps, delete the 'Ableton Move' device in Audio MIDI Setup > Window > Show MIDI Studio, then reconnect [docs]. USB audio: 'Move acts as a class-compliant USB audio interface' over USB-C (44.1 kHz; no driver needed on macOS; Windows needs Ableton's driver) [docs]. USB IDs: VID 0x2982 (10626), PID 0x1958 (6488) [community: decompiled Live script]. The USB-A port is host-only and is for MIDI controllers; it cannot connect to a computer [docs]. Only USB-C connects to the MacBook."
+  },
+  "identity": {
+    "respondsToUniversalInquiry": null,
+    "manufacturerId": [0, 33, 29],
+    "replyExample": "Pattern only (no captured bytes): F0 7E <dev> 06 02 00 21 1D 58 32 01 00 <XMOS fw major> <minor> <build lsb> <build msb> <serial x5> <board rev> <PMC major> <PMC minor> <PMC bootloader> F7 (Live's script expects a 23-byte reply)",
+    "confidence": "community",
+    "notes": "Manufacturer ID 00 21 1D is Ableton's MMA-assigned ID [docs: Ableton push-interface]. Live's own Move script (decompiled) identifies Move with identity_response_id_bytes = 00 21 1D + 58 32 01 00. Family code 0x58 0x32 (LSB first) = 0x1958 = Move's USB PID, the same scheme as Push 2's 0x67 0x32 = 0x1967. Live sends the identity request and then 'get control mode' (F0 00 21 1D 01 01 47 F7) on the Live Port while Move is still in Standalone Mode, so the Live Port almost certainly answers F0 7E 7F 06 01 F7 [inferred from community decompile]. Whether the Standalone Port answers is unknown. USB-C MIDI on that port goes to the same input as USB-A MIDI, which is a note/channel router [community]. Recommendation: do not send SysEx at all. Identify Move by port name, and request Web MIDI with {sysex:false}."
+  },
+  "channels": {
+    "receive": "Each MIDI track has a MIDI In setting: Auto or Channel 1-16 (hold Shift + press the track button, then pick MIDI In) [docs]. A track set to Auto that is currently selected receives every channel not explicitly assigned to another track. Ableton's example: Track 1 on Ch 5 and the others on Auto means the selected track takes Ch 1-4 and 6-16 [docs]. Channels assigned explicitly go to their track whether or not it is selected [docs, implied by the Auto rule and the 1.6 notes 'Use MIDI channels to route several external devices to and from Move's specific tracks']. Move has 4 tracks [docs: Technical FAQ]. Since 2.0 a track can be MIDI or audio, and only MIDI tracks play notes [inferred]. Before going on camera, set Track 1-4 MIDI In to Ch 1-4 explicitly on the device. Community reports a default of track N = channel N, but Schwung warns not to rely on Move's auto channel mapping [community].",
+    "send": "Each track has a MIDI Out channel 1-16 (hold Shift + track button, then MIDI Out) [docs]. Out goes pad-played and sequenced notes with velocity and length, plus polyphonic aftertouch from pad pressure (since 1.3) [docs]. On stop Move sends CC 120 All Sound Off [docs, 1.3.0 notes]. With Setup > MIDI Sync = Out it sends MIDI clock and transport [docs]. Knobs, buttons and the wheel send no CC in Standalone Mode: 'MIDI CC output supported in Control Live Mode' only [docs]. Move re-emits notes it receives on its MIDI Out (track MIDI Out channel), so expect echoes of your own notes on the Standalone Port input [community: Schwung].",
+    "notes": "MIDI In and Out work at the same time (since 1.5) [docs]. Supported data in both directions: pitch, note length, velocity, key pressure (polyphonic aftertouch) and MIDI clock [docs]. Not supported: sustain, MPE, pitch bend, channel aftertouch, MIDI CC, and MIDI mapping of external devices [docs]. Program Change is not listed anywhere [docs], so treat it as ignored. The selected track arms itself automatically for MIDI input, so pressing Record or Capture on Move records incoming notes into a clip [docs]."
+  },
+  "notes": {
+    "description": "Incoming Note On/Off on the Standalone Port is routed by channel to a MIDI track (see channels.receive) and plays that track's instrument at the received velocity. Melodic tracks (Drift, Wavetable, Melodic Sampler): the note number is the pitch, and Move's pad scale/layout setting should not filter incoming MIDI [inferred]. Drum tracks: the note number picks the Drum Rack pad. Move's Drum Rack is Live's Drum Rack, browsable 16 pads at a time with +/- [docs]. The default 16-pad bank is notes 36-51 (C1-D#2) [community: Schwung measured drum voices at notes 36, 37 on a Move drum track; inferred from Live's Drum Rack convention]. Check on the device before filming: send 36..51 and watch which pads light. Pads of the selected track reportedly light for incoming notes [community, firmware 1.1 era report]. Incoming polyphonic aftertouch (An kk vv) is accepted [docs]. Pad pressure modulates Track Presets built on Drift and Wavetable [docs], so incoming poly AT on those tracks should modulate the same targets [inferred]. It has no effect on drum or sampler tracks [inferred].",
+    "map": {
+      "track1": "MIDI In channel you set on Track 1 (recommend Ch 1)",
+      "track2": "MIDI In channel you set on Track 2 (recommend Ch 2)",
+      "track3": "MIDI In channel you set on Track 3 (recommend Ch 3)",
+      "track4": "MIDI In channel you set on Track 4 (recommend Ch 4)",
+      "drumPads": "36-51 = 16 visible Drum Rack pads (C1-D#2) [community/inferred; verify]",
+      "melodic": "0-127 = pitch; 60 = C3 in Ableton naming (Ableton calls note 60 'C3') [inferred]",
+      "velocity": "1-127 used; Note On with velocity 0 = Note Off (MIDI spec)",
+      "polyAftertouch": "0xA0|ch, note, 0-127, applied to a sounding note on Drift/Wavetable presets [docs: receive supported; effect inferred]"
+    }
+  },
+  "parameters": [
+    {"name": "Play notes on a track (pitch + velocity + length)", "group": "notes", "cc": null, "nrpn": null, "range": [0, 127], "channel": "the track's MIDI In channel (recommend 1-4 = Track 1-4)", "confidence": "docs", "notes": "Note On 0x9n / Note Off 0x8n. This is the main control surface Move offers externally."},
+    {"name": "Per-note pressure (polyphonic aftertouch)", "group": "expression", "cc": null, "nrpn": null, "range": [0, 127], "channel": "same as the note", "confidence": "inferred", "notes": "Receiving poly AT is [docs]. Audible effect depends on the preset's pressure modulation, on Drift and Wavetable presets only [docs: pads' pressure modulates those presets]. The closest thing to continuous timbre control. Send only while the note is held."},
+    {"name": "Tempo (follow external MIDI clock)", "group": "transport", "cc": null, "nrpn": null, "range": null, "channel": "system realtime (no channel)", "confidence": "docs", "notes": "Set Move Setup (Shift + Step 2) > MIDI Sync = In, and Link = Off [docs]. Send 0xF8 at 24 PPQN, scheduled with Web MIDI send() timestamps to reduce jitter. Tempo range and jitter tolerance are unverified."},
+    {"name": "Transport start / stop", "group": "transport", "cc": null, "nrpn": null, "range": null, "channel": "system realtime", "confidence": "docs", "notes": "Help article: 'Move can send and receive MIDI clock and transport.' 0xFA Start / 0xFC Stop are standard. Behaviour for 0xFB Continue and Song Position Pointer is unverified."},
+    {"name": "MIDI CC / Program Change / Pitch Bend / Sustain", "group": "unsupported", "cc": null, "nrpn": null, "range": null, "channel": "n/a", "confidence": "docs", "notes": "Move does not respond to incoming CC, pitch bend, sustain, channel aftertouch or MPE, in any mode [docs]. Program Change is undocumented, so assume it is ignored. There is no CC chart because none exists. Device, macro and volume parameters cannot be set over MIDI."}
+  ],
+  "transport": {
+    "clockIn": true,
+    "startStop": true,
+    "notes": "Setup (Shift + Step 2) > MIDI Sync: Off / In / Out. 'Move can send and receive MIDI clock and transport.' With MIDI Sync In, set Link to Off [docs]. Clock receive arrived in 1.5.0 and clock send existed before that [docs]. Use only one clock master. If the web app sends clock, Move must be set to In. Applies to USB-A and USB-C MIDI alike [inferred: both reach the same MIDI input, community]. While the transport runs, the display shows the phase of the longest playing full-bar clip [docs: 1.4.0 notes]. A moving step-LED playhead is expected but not documented [inferred]. Either gives a visible sync cue."
+  },
+  "controlLiveMode": {
+    "confidence": "community",
+    "notes": "Separate mode (Setup > Control Live; needs Live 11.3.35+ or 12.1+ running, otherwise Move shows an error) [docs]. Move becomes Live's control surface on the Live Port, and the Standalone MIDI/track settings and the Setup 'MIDI' entry are unavailable [docs]. USB-A devices are forwarded as 'Ableton Move (External Port)' [docs]. Here Move sends notes and CCs for every control [docs: 'MIDI CC output supported in Control Live Mode']. Map from the decompiled Live script [community]: pads = notes 68-99 (4x8, bottom-left 68); step buttons = notes 16-31; encoders 1-8 = CC 71-78 (relative two's complement); volume encoder = CC 79; wheel = CC 14 (relative), wheel push = CC 3, wheel touch = note 9; encoder touch = notes 0-8; track buttons = CC 43..40 (top to bottom); Shift 49, Note/Session 50, Back 51, Capture 52, Minus 54, Plus 55, Undo 56, Loop 58, Copy/Duplicate 60, Left 62, Right 63, Play 85, Record 86, Mute 88, Sample 118, Delete 119. Not useful for this demo: Move's own synth engine is not playing in this mode, and entering it needs Live's SysEx handshake."
+  },
+  "unsafeMessages": [
+    "Any SysEx to any Move port. Request Web MIDI with {sysex:false} so Chrome refuses it. Live-script commands seen in the decompiled script include F0 00 21 1D 01 01 39 06 F7 = power SHUT DOWN, F0 00 21 1D 01 01 46 <00|01> F7 = set control mode (Control Live / Standalone), F0 00 21 1D 01 01 41 01 00 F7 = shut-down image, F0 00 21 1D 01 01 06 <n> F7 = LED brightness [community].",
+    "Writing to 'Ableton Move Live Port', 'User Port' or 'External Port'. Use only the Standalone Port output.",
+    "MIDI clock or Start/Stop while Move's MIDI Sync = Out or Link is on (two masters fighting). Send clock only after Move is set to MIDI Sync = In with Link Off.",
+    "A Note On without its Note Off (stuck notes). CC 120/123 are not documented as received, so the panic routine must send explicit Note Offs for every note the app has turned on.",
+    "Unpaced bursts (hundreds of messages at once, e.g. a 16 ch x 128 note panic). Move's MIDI input FIFO truncates USB-C bursts [community: Schwung measured SysEx]. Pace at no more than about 1 message/ms and send note-offs only for tracked notes.",
+    "Routing Move's MIDI output back into Move. Move re-emits received notes on its MIDI Out, so this makes a feedback loop [community].",
+    "Leaving Ableton Live open on the demo Mac. It auto-loads the Move control script on the Live Port, and an accidental Control Live toggle switches Move away from Standalone [inferred]."
+  ],
+  "demo": {
+    "bestParameters": [
+      "4-track note playback: drums on Ch 1 (notes 36-51), bass/keys/lead on Ch 2-4, with AI-generated velocity",
+      "Polyphonic aftertouch sweeps on held Drift/Wavetable notes (continuous timbre change)",
+      "Tempo plus Start/Stop via MIDI clock (Move on MIDI Sync In, Link Off)",
+      "Record the AI's notes into a real Move clip (press Record or Capture on Move while the app plays), then show them on the step LEDs",
+      "Reverse direction: a human plays pads, Move sends notes on the track's MIDI Out channel, and the AI answers (call and response)"
+    ],
+    "visualFeedback": "Pads light for incoming notes on the selected track [community]. The display shows clip phase while the transport runs [docs], and the step LEDs should show a playhead [inferred]. Both move with the external clock. Recorded clips show notes as bright-white step LEDs [docs]. The display shows the selected track and preset. Knobs and parameter values never move from MIDI, because Move has no CC input.",
+    "audibleFeedback": "Move's built-in speaker, or headphones/line out (3.5 mm). Keep Setup > USB-C Audio = 'Mic' (default). 'Main Out' sends Move's output to the Mac over USB but disables Move's speaker while USB-C is connected [docs]. That option is useful if the web app should capture Move's audio for an on-screen scope via getUserMedia.",
+    "risks": [
+      "No CC control: an 'AI turns the filter knob' shot is impossible on Move. Frame the demo as 'AI plays and conducts Move' (notes, aftertouch, tempo, transport).",
+      "Wrong channel routing on stage: set Track 1-4 MIDI In to Ch 1-4 explicitly. If tracks are on Auto, all channels go to the selected track.",
+      "Drum note numbers 36-51 are not officially documented. Verify on the device during rehearsal.",
+      "Poly aftertouch only does something on presets whose pressure is mapped (Drift/Wavetable). Pick and test presets in advance.",
+      "Clock: Link must be Off when MIDI Sync = In. Clock jitter from a browser main thread can wobble tempo, so schedule with timestamps (lookahead about 100 ms).",
+      "Port missing on the Mac: delete the stale 'Ableton Move' device in Audio MIDI Setup's MIDI Studio [docs]. Chrome shows a MIDI permission prompt and needs https or localhost.",
+      "Move must stay in Standalone Mode. Its own sound engine does not play in Control Live Mode.",
+      "Community SSH frameworks (Move Anything, Schwung) are unofficial: they need SSH set up via move.local/development/ssh, and Ableton gives no support. Do not use them for the demo."
+    ]
+  }
+}

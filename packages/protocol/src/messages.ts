@@ -44,6 +44,7 @@ import {
   SnapshotPayload,
   TargetSelectPayload,
   TargetStatusPayload,
+  UiPartialPayload,
   UiSpecPayload,
   VerifyResultPayload,
   VoiceAudioPayload,
@@ -104,6 +105,7 @@ export const PayloadSchemas = {
   panic: PanicPayload,
   // generated controls
   'ui.spec': UiSpecPayload,
+  'ui.partial': UiPartialPayload,
   'control.event': ControlEventPayload,
   'gen3d.generate': Gen3dGeneratePayload,
   'gen3d.edit': Gen3dEditPayload,
@@ -162,6 +164,7 @@ export const MessageSchemas = {
   'arm.result': message('arm.result'),
   panic: message('panic'),
   'ui.spec': message('ui.spec'),
+  'ui.partial': message('ui.partial'),
   'control.event': message('control.event'),
   'gen3d.generate': message('gen3d.generate'),
   'gen3d.edit': message('gen3d.edit'),
@@ -203,6 +206,7 @@ export const Message = z.discriminatedUnion('type', [
   MessageSchemas['arm.result'],
   MessageSchemas.panic,
   MessageSchemas['ui.spec'],
+  MessageSchemas['ui.partial'],
   MessageSchemas['control.event'],
   MessageSchemas['gen3d.generate'],
   MessageSchemas['gen3d.edit'],
@@ -238,10 +242,11 @@ export const SERVER_ONLY_TYPES: readonly MessageType[] = [
   'verify.result',
   'arm.request',
   'arm.result',
+  'ui.partial',
 ];
 
 /** Frequent or large client -> server payloads: the hub drops them for a backed-up receiver (latest wins). */
-export const DROPPABLE_TYPES: readonly MessageType[] = ['control.event', 'snapshot', 'scan.frame', 'voice.audio'];
+export const DROPPABLE_TYPES: readonly MessageType[] = ['control.event', 'snapshot', 'scan.frame', 'voice.audio', 'ui.partial'];
 
 // --- ids ------------------------------------------------------------------------------------
 

@@ -1,0 +1,462 @@
+{
+  "id": "jp-ceiling-light-ir",
+  "device": "Japanese-market LED ceiling lights (シーリングライト), infrared remote control",
+  "generated": "2026-11-02",
+  "status": "Desk research only. No code has been sent to a real lamp. Labels: [docs] = manufacturer or chip-vendor document; [community] = blog, GitHub or forum; [inferred] = derived in this research (bit reversal, XOR rule, pattern); [unknown] = no public data found.",
+  "conventions": {
+    "byteNotation": "Every hex string in 'commands', 'frames' and 'searchCandidates' lists the bytes in the order they are sent, and each byte is sent LSB-first (bit0 first). This is the native AEHA and NEC convention. hello-ino, shrkn65, katsumin, widehill, negligible, IRRC32 and Flipper's address/command fields all use it. Where a source uses another notation, the entry quotes that source's string in 'commandsAsGiven' or 'customerCodeAsGiven'.",
+    "conversions": {
+      "ArduinoIRremote_v3plus": "decodedRawData is the first 4 bytes joined little-endian (2C 52 09 2C -> 0x2C09522C). The mamezou article writes the 5th byte separately in parentheses: 0x2C09522C(0x25).",
+      "MSB-first tools (IRremote v2 'value', IRremoteESP8266, ESPHome transmit_aeha, telecotele.com, HayashiTakaki binary)": "Bit-reverse every byte: 2C->34, 52->4A, 09->90, 01->80, 10->08. In this notation the Panasonic lighting customer code is 0x344A and Hitachi's is 0x8008. ESPHome AEHA encode() masks from 1<<15 (address) and 1<<7 (data) down, i.e. MSB-first [community: esphome aeha_protocol.cpp].",
+      "ESPHome_transmit_nec": "Sends 16-bit fields LSB-first: address = b0 | b1<<8 (82 6D -> 0x6D82), command = b2 | b3<<8 (BE 41 -> 0x41BE) [community: esphome nec_protocol.cpp].",
+      "Flipper_NECext": "address: 'b0 b1 00 00', command: 'b2 b3 00 00' (for example address 82 6D 00 00, command BE 41 00 00). Flipper uses NECext whenever byte1 is not ~byte0. That is the case for every Japanese lighting NEC code here [inferred from the Flipper NEC decoder logic].",
+      "katsumin_M5Stack_decoder": "Prints the AEHA customer code as a 16-bit little-endian value (2C 52 -> 522C; 01 10 -> 1001)."
+    }
+  },
+  "protocols": {
+    "NEC": {
+      "carrierHz": 38000,
+      "dutyCycle": 0.33,
+      "unitUs": 562.5,
+      "leader": [9000, 4500],
+      "bit0": [562.5, 562.5],
+      "bit1": [562.5, 1687.5],
+      "stopMarkUs": 562.5,
+      "frameBits": 32,
+      "frameLayout": "custom code byte0, custom code byte1, command, ~command. All bytes LSB-first. Every Japanese ceiling-light code found uses an EXTENDED 16-bit custom code, so byte1 is not ~byte0.",
+      "repeat": "While a key is held, a repeat code (9000 on, 2250 off, 562.5 on) is sent every 108 ms. Some lighting remotes (Takizumi) resend the full frame instead.",
+      "measuredInWild": "Captures run about 7-12% long: Broadlink about 9.7/4.8 ms leader, TSOP4838 on a Toshiba remote about 10.15/5.0 ms with 650-700 us marks. Decode by ratio, not by absolute time.",
+      "source": "https://akizukidenshi.com/goodsaffix/OE13KIR.pdf [docs: Akizuki NEC-format transmitter sheet: 9 ms + 4.5 ms leader, 0.56/1.125/2.25 ms, 108 ms, 38 kHz, LSB first]; https://www.alldatasheet.com/datasheet-pdf/pdf/6958/NEC/UPD6121.html [docs: NEC uPD6121/6122, origin of the format, '9-ms carrier + 4.5-ms OFF' leader, custom codes assigned by NEC]; https://www.sbprojects.net/knowledge/ir/nec.php [community: gives 560 us and a 110 ms repeat]; https://raw.githubusercontent.com/esphome/esphome/dev/esphome/components/remote_base/nec_protocol.cpp [community: 9000/4500/560/1690/560, 108000 repeat period]"
+    },
+    "AEHA": {
+      "aka": "家製協 / 家電協 format of the Association for Electric Home Appliances (家電製品協会). Called 'Kaseikyo' (romanised 家製協) by hifi-remote, Arduino-IRremote and Flipper, which implement only the 48-bit member.",
+      "carrierHz": 38000,
+      "carrierRangeHz": [33000, 40000],
+      "dutyCycle": 0.33,
+      "unitUs": 425,
+      "unitRangeUs": [350, 500],
+      "leaderT": [8, 4],
+      "bit0T": [1, 1],
+      "bit1T": [1, 3],
+      "trailerT": 1,
+      "trailerGapMinMs": 8,
+      "framePeriodMs": 130,
+      "frameLayout": "Bytes 0-1: 16-bit customer (maker) code. Byte 2: low nibble = parity (XOR of the 4 customer-code nibbles), high nibble = system/data0. Then variable-length data, often ending in an XOR checksum. All LSB-first. Parity check: Panasonic lighting 2C 52 -> C^2^2^5 = 9 -> byte2 = x9. Hitachi 01 10 -> 0 -> byte2 = x0. Sharp AV AA 5A -> F -> 8F. Panasonic AV 02 20 -> 0 -> B0 [inferred, consistent with all sources].",
+      "repeat": "Usually no repeat code: the whole frame is resent about every 130 ms while the key is held. Panasonic lighting remotes send each frame twice per press, about 75 ms apart.",
+      "observedUnitUs": {"PanasonicLighting": "432-450 (Flipper raw: leader 3483/1746, marks 479-515, spaces 353-391 / 1226-1264)", "HitachiLighting": "400-450", "SharpBrandedLight_tandh": "390 (425 did not work)"},
+      "source": "http://elm-chan.org/docs/ir_format.html [community: T=350-500 us (425 typ), 33-40 kHz (38 typ), 16-bit customer + 4-bit parity, about 130 ms repeat]; http://shrkn65.nobody.jp/remocon/aeha.html [community: leader 8T/4T, 0=1T/1T, 1=1T/3T, trailer 1T + >=8 ms, 33-40 kHz recommended]; https://hello-ino.seesaa.net/article/2012-10-17.html [community: T=425 (350-500), LSB-first]; https://renesas.com/jp/ja/document/apn/874436 [docs: Renesas R01AN1266JJ0103 RL78 'リモコン受信処理（家製協フォーマット）', header + 48-bit data stored LSB-first]; https://raw.githubusercontent.com/esphome/esphome/dev/esphome/components/remote_base/aeha_protocol.cpp [community: BITWISE=425, header 8T/4T, 1=1T/3T, data 2-35 bytes, MSB-first!]"
+    },
+    "Kaseikyo48_relation": {
+      "summary": "Kaseikyo is AEHA fixed at 48 bits: 16-bit vendor ID, 4-bit vendor parity, then data, then an XOR checksum. Arduino-IRremote uses KASEIKYO_UNIT 432 us (3456/1728 header, 1296 one-space, 130 ms repeat). Its vendor IDs (little-endian of the transmitted bytes) are Panasonic 0x2002 (bytes 02 20), Denon 0x3254, Mitsubishi 0xCB23, Sharp 0x5AAA (bytes AA 5A) and JVC 0x0103. Flipper's Kaseikyo decoder needs exactly 48 bits, vendor_id = data[0] | data[1]<<8, a vendor-parity nibble check and data[5] == data[2]^data[3]^data[4]. hifi-remote IRP: {37k,432}<1,-1|1,-3>(8,-4,M:8,N:8,X:4,D:4,S:8,F:8,E:4,C:4,1,-173)+, Panasonic = OEM 2.32.",
+      "consequenceForLights": "Panasonic lighting frames are 40-bit AEHA (vendor bytes 2C 52 = 0x522C) and Hitachi lighting frames are 88-bit AEHA (vendor 01 10). Neither is Kaseikyo-48. Flipper stores them RAW (Flipper-IRDB HK9494 file is raw). IRremoteESP8266 reports UNKNOWN ('42 bits' = rawlen/2 for an 83-edge, 40-bit frame). Arduino-IRremote reports a generic PulseDistance protocol. ESPHome transmit_aeha can send them only after bit-reversing every byte.",
+      "source": "https://raw.githubusercontent.com/Arduino-IRremote/Arduino-IRremote/master/src/ir_Kaseikyo.hpp [community]; https://raw.githubusercontent.com/flipperdevices/flipperzero-firmware/dev/lib/infrared/encoder_decoder/kaseikyo/infrared_decoder_kaseikyo.c [community]; https://hifi-remote.com/wiki/index.php/Kaseikyo [community]; https://qiita.com/ayakix/items/3ad454f135fb63a92026 [community: ceiling light = IRremoteESP8266 UNKNOWN 42 bits, rawData[83] starting 3486,1722,446,418]"
+    },
+    "IRIS_PWM_proprietary": {
+      "carrierHz": 38000,
+      "unitUs": 500,
+      "unitRangeUs": [450, 550],
+      "leaderMeasuredUs": [2076, 948, 5548, 964],
+      "leaderT": "about 4T on, 2T off, 11T on, 2T off (two marks)",
+      "bit0T": [1, 1],
+      "bit1T": [3, 1],
+      "encoding": "Pulse WIDTH: the mark length carries the bit and the space is constant. Not NEC or AEHA.",
+      "frameBits": 40,
+      "trailerT": 1,
+      "confidence": "community (single analysis) + inferred",
+      "source": "https://telecotele.com/projects/ir-remote/ [community: Iris Ohyama CL8DL-5.0]. Consistent with the Broadlink capture of Iris LEDHCL-R2 in SmartIR codes/light/1000.json (5943/1018 leader, then marks of about 525 or 1600 us with spaces of about 525 us) [inferred]."
+    },
+    "NONAME_280us": {
+      "unitUs": 280,
+      "leader": [7000, 4760],
+      "bit0": "mark 1 unit, space 2 units",
+      "bit1": "mark 1 unit, space 5 units",
+      "frameBits": 16,
+      "layout": "channel byte (CH1 = AA, CH2 = 55) + command byte",
+      "source": "https://diysmartmatter.com/archives/297 [community: cheap Amazon ceiling light; commands 4F toggle, DF night light, 67 brighter, CD dimmer]"
+    }
+  },
+  "brands": [
+    {
+      "brand": "Panasonic (incl. National)",
+      "protocol": "AEHA, 40-bit frame (5 bytes)",
+      "carrierHz": 38000,
+      "unitUs": 432,
+      "customerCode": "0x2C52 = bytes 2C 52 (LSB-first). VERIFIED by 7 independent sources plus the AEHA parity nibble 9.",
+      "customerCodeAsGiven": {"katsumin": "522C (16-bit little-endian)", "telecotele": "34 4A (MSB-first)", "mamezou": "low half of 0x..09522C / 0x..39522C"},
+      "frameLayout": "2C 52 | S9 | CMD | S9^CMD. S9 = 0x09 for basic keys and 0x39 for colour, timer and channel-confirm keys (system nibble 0 vs 3). Last byte = byte2 XOR byte3.",
+      "channels": "CH1-CH3 (most remotes: HK9327K, HK9392K, HK9478, HK9482, HK9484, HK9490, HK9492, HK9493, HK9494, HK9496, HK9497, HK9800). HK9339 ON/OFF remote has CH1-2. Wall switches WH7215K/WTC56919 use CH A-C.",
+      "channelRule": "Basic keys: CMD = 0x20 + 8*ch + k, where ch is 1..3 and k is 2 明るく, 3 暗く, 4 全灯, 5 点灯/お好み/省エネ, 6 常夜灯, 7 消灯. CH1 = 0x2A-0x2F, CH2 = 0x32-0x37, CH3 = 0x3A-0x3F. Colour keys (byte2 = 0x39): CMD = 0x90 + 4*(ch-1) + (warm ? 1 : 0).",
+      "commands": {
+        "fullOn": "2C 52 09 2C 25",
+        "off": "2C 52 09 2F 26",
+        "brighter": "2C 52 09 2A 23",
+        "dimmer": "2C 52 09 2B 22",
+        "nightLight": "2C 52 09 2E 27",
+        "on": "2C 52 09 2D 24",
+        "warmer": "2C 52 39 91 A8",
+        "cooler": "2C 52 39 90 A9"
+      },
+      "channelTable": {
+        "CH1": {"brighter": "2C 52 09 2A 23", "dimmer": "2C 52 09 2B 22", "fullOn": "2C 52 09 2C 25", "on": "2C 52 09 2D 24", "nightLight": "2C 52 09 2E 27", "off": "2C 52 09 2F 26", "warmer": "2C 52 39 91 A8", "cooler": "2C 52 39 90 A9"},
+        "CH2": {"brighter": "2C 52 09 32 3B", "dimmer": "2C 52 09 33 3A", "fullOn": "2C 52 09 34 3D", "on": "2C 52 09 35 3C", "nightLight": "2C 52 09 36 3F", "off": "2C 52 09 37 3E", "warmer": "2C 52 39 95 AC", "cooler": "2C 52 39 94 AD"},
+        "CH3": {"brighter": "2C 52 09 3A 33", "dimmer": "2C 52 09 3B 32", "fullOn": "2C 52 09 3C 35", "on": "2C 52 09 3D 34", "nightLight": "2C 52 09 3E 37", "off": "2C 52 09 3F 36", "warmer": "2C 52 39 99 A0", "cooler": "2C 52 39 98 A1"}
+      },
+      "commandsAsGiven": {
+        "mamezou_HK9493_CH1": "全灯 0x2C09522C(0x25), 消灯 0x2F09522C(0x26), 明るい 0x2A09522C(0x23), 暗い 0x2B09522C(0x22), 常夜灯 0x2E09522C(0x27), 点灯 0x2D09522C(0x24), 暖かい色 0x9139522C(0xA8), 白い色 0x9039522C(0xA9)",
+        "katsumin": "customer 522C; 全灯 002C25, 消灯 002F26, 省エネ 002D24",
+        "hello-ino_HHPFZ4380E6": "d[0..2]=0x2c,0x52,0x09; d[3]=cmd+(ch<<3)+0x20; d[4]=d[2]^d[3]; cmd 2 明, 3 暗, 4 全灯, 5 お好み, 6 常夜灯, 7 消灯",
+        "negligible": "2c52092d24 = Ch1 点灯",
+        "widehill": "2c 52 09 30 39 (button unnamed; frame seen twice)",
+        "FlipperIRDB_HK9494_raw_decoded": "On = 2C 52 09 2D 24, Off = 2C 52 09 2F 26 (decoded by this research from the raw timings)"
+      },
+      "doNotSend": {"channelConfirm(チャンネル確定)": ["2C 52 39 DA E3", "2C 52 39 DB E2", "2C 52 39 DC E5"], "sleepTimer30(おやすみ30分)": ["2C 52 39 A1 98", "2C 52 39 AA 93", "2C 52 39 B3 8A"]},
+      "repeat": "Send 2 identical frames per press with about 75 ms after the trailer mark (Flipper raw gaps 74951-74988 us; widehill also saw 2 frames). Bright, dim and colour keys auto-repeat while held.",
+      "confidence": "community (high: independent sources agree byte for byte; parity is consistent)",
+      "sources": [
+        "https://developer.mamezou-tech.com/blogs/2025/03/28/ir-remote-control-with-attiny13a_epi2/",
+        "https://developer.mamezou-tech.com/blogs/2025/03/28/ir-remote-control-with-attiny13a_epi1/",
+        "https://hello-ino.seesaa.net/article/2012-10-17.html",
+        "https://qiita.com/katsumin/items/517cd9fbe66e26d72fa7",
+        "https://negligible.hatenablog.com/entry/2021/04/08/031940",
+        "https://widehill.net/automatization-of-illumination-1/",
+        "https://github.com/Lucaslhm/Flipper-IRDB/blob/main/LED_Lighting/Panasonic/Panasonic_HK9494_LED.ir",
+        "https://telecotele.com/projects/ir-remote/"
+      ],
+      "notes": "The frame format has been stable from fluorescent ツインPa (HK9327K era, HHPFZ4380E6) to LED HK9493/HK9494. ESPHome equivalent of CH1 全灯: transmit_aeha address 0x344A, data [0x90, 0x34, 0xA4] [inferred]. One ATtiny build only reached about 50 cm, so IR power matters."
+    },
+    {
+      "brand": "NEC Lighting / HotaluX (ホタルクス)",
+      "protocol": "NEC 32-bit, extended 16-bit custom code",
+      "carrierHz": 38000,
+      "unitUs": 562.5,
+      "customerCode": "bytes 82 6D (LSB-first)",
+      "customerCodeAsGiven": {"shrkn65": "82 6d", "moris.day / IRremote": "address 0x6D82", "HayashiTakaki": "0b0100000110110110 = 0x41B6 (transmission-order MSB notation = bit-reversed 82 6D)", "Flipper": "NECext address 82 6D 00 00 [inferred]"},
+      "frameLayout": "82 6D CMD ~CMD",
+      "channels": "CH1/CH2 (remotes RE0201, RE0206, RE0207, RL49, RL54)",
+      "channelRule": "CH1 = command with bit7 set (0xA_/0xB_). CH2 = CMD & 0x7F (0x2_/0x3_). Confirmed by shrkn65 and SmartIR 1020/1021.",
+      "commands": {
+        "fullOn": "82 6D A6 59",
+        "off": "82 6D BE 41",
+        "brighter": "82 6D BA 45",
+        "dimmer": "82 6D BB 44",
+        "nightLight": "82 6D BC 43",
+        "on": "82 6D BD 42",
+        "warmer": "82 6D A8 57",
+        "cooler": "82 6D A7 58",
+        "toggleOnOff": "82 6D AB 54",
+        "tonePresetActive": "82 6D AC 53",
+        "tonePresetNatural": "82 6D AD 52",
+        "tonePresetRelax": "82 6D AE 51",
+        "brightnessLevel10to1": "82 6D B0 4F ... 82 6D B9 46 (B0 = 10, B9 = 1)"
+      },
+      "channelTable": {
+        "CH2": {"fullOn": "82 6D 26 D9", "off": "82 6D 3E C1", "brighter": "82 6D 3A C5", "dimmer": "82 6D 3B C4", "nightLight": "82 6D 3C C3", "on": "82 6D 3D C2", "toggleOnOff": "82 6D 2B D4"}
+      },
+      "commandsAsGiven": {
+        "HayashiTakaki_HLDZB0849_RE0201": "lightFull 0b01100101 (=A6), lightUp 0b01011101 (=BA), lightDown 0b11011101 (=BB), lightOff 0b01111101 (=BE); binary written in transmission order",
+        "moris.day": "明るく 0xBA (0x45BA6D82), 暖色 0xA8 (0x57A86D82), 寒色 0xA7 (0x58A76D82), 暗く 0xBB (0x44BB6D82)",
+        "shrkn65": "CH1: ON/OFF ab 54, アクティブ ac 53, ナチュラル ad 52, リラックス ae 51, 常夜灯 bc 43, 明るさ10..1 b0..b9; CH2: 2b d4, 2c d3, 2d d2, 2e d1, 3c c3, 30..39",
+        "SmartIR_1020_RE0201-CH1_decoded": "on 82 6D BD 42; off [82 6D BD 42, 82 6D BE 41]; brighten 82 6D BA 45 (+repeat codes); dim 82 6D BB 44; night 82 6D BC 43",
+        "SmartIR_1021_RE0201-CH2_decoded": "on 82 6D 3D C2; off [82 6D 3D C2, 82 6D 3E C1]; brighten 82 6D 3A C5; dim 82 6D 3B C4; night 82 6D 3C C3"
+      },
+      "confidence": "community (high for A6/BA/BB/BC/BE across 4 sources; CH2 全灯 26 is inferred from the bit7 rule; BD meaning (点灯 or toggle) is unclear)",
+      "sources": [
+        "https://shrkn65.nobody.jp/remocon/database.html",
+        "https://qiita.com/HayashiTakaki/items/5f6374748196cdebcbf1",
+        "https://moris.day/blog/post/ir-remote/",
+        "https://github.com/smartHomeHub/SmartIR/blob/master/codes/light/1020.json",
+        "https://github.com/smartHomeHub/SmartIR/blob/master/codes/light/1021.json"
+      ],
+      "notes": "Different remote generations use different power keys (A6 全灯 on RE0201, AB ON/OFF toggle on 調色 remotes, BD 'on' in SmartIR). Send off = BE first, which is discrete. Held brighten/dim emit NEC repeat codes."
+    },
+    {
+      "brand": "Toshiba (東芝ライテック; Toshiba-brand home lights now made by NVC Lighting Japan under licence)",
+      "protocol": "NEC 32-bit, extended custom code",
+      "carrierHz": 38000,
+      "unitUs": 562.5,
+      "customerCode": "bytes E7 0C (LSB-first) = IRremote address 0x0CE7",
+      "customerCodeAsGiven": {"SnowDango (IRremote v2 MSB value)": "E73045BA / E730D12E", "IRRC32": "E7 0C"},
+      "frameLayout": "E7 0C CMD ~CMD",
+      "channels": "CH1/CH2. Slide switch on the remote; the lamp is moved to CH2 by holding メモリ and pressing 全灯. Factory default CH1 [docs]. Code-level effect of CH2 is [unknown].",
+      "commands": {
+        "fullOn": "[unknown]",
+        "off": "E7 0C 8B 74",
+        "brighter": "[unknown]",
+        "dimmer": "[unknown]",
+        "nightLight": "[unknown]",
+        "on": "E7 0C A2 5D"
+      },
+      "unlabeledLearned": ["E7 0C 8F 70", "E7 0C 9B 64", "E7 0C 9F 60", "E7 0C 97 68"],
+      "commandsAsGiven": {"SnowDango_NLER001-LC": "点灯 E73045BA, 消灯 E730D12E (IRremote v2, NEC, 32 bits)", "IRRC32_README": "learned 000707E70CA25D, ...8F70, ...9B64, ...9F60, ...9768, ...8B74 (OFF); one of the unlabeled keys is ECO"},
+      "confidence": "community (on/off confirmed by 2 sources; the rest unknown)",
+      "sources": [
+        "https://qiita.com/SnowDango/items/8e4da3d04d5f676019c4",
+        "https://github.com/Goji2100/IRRC32",
+        "https://www.nvc-lighting.jp/files/manual/ceiling-light/NLEH001B-LC.pdf"
+      ],
+      "notes": "The NLER001-LC remote has 全灯, 点灯, 明, 暗, 電球色, 白色, 常夜灯, 消灯, メモリ, おやすみタイマー and a CH1/CH2 slide [docs]. 全灯 and 消灯 fade over about 3 s [docs]. Toggling the wall switch OFF->ON within 1 s cycles 全灯 -> 点灯 -> 常夜灯 [docs]. Measured timing runs long (leader about 10.15/5.0 ms); replay the measured raw timings if standard NEC fails. Daiko shares ELPA codes 32/33 with a Toshiba row, so try this family for Daiko [inferred]. Older remotes FRC-150T, FRC-165T, FRC-199T, FRC-200T, FRC-203T, FRC-205T(K) and FRC-214T(KW) may use other codes [unknown]."
+    },
+    {
+      "brand": "Hitachi (日立)",
+      "protocol": "AEHA, 88-bit frame (11 bytes)",
+      "carrierHz": 38000,
+      "unitUs": 425,
+      "customerCode": "bytes 01 10 (LSB-first) = katsumin '1001' (seen on a Hitachi air purifier)",
+      "customerCodeAsGiven": {"telecotele (MSB-first)": "80 08", "katsumin": "1001"},
+      "frameLayout": "01 10 30 50 AF 00 FF CMD ~CMD X ~X (complement pairs 50/AF, 00/FF, CMD/~CMD, X/~X) [inferred]",
+      "channels": "CH1/CH2 (IR-B01H) or CH1-CH3 (IR-A05H). Encoding [unknown].",
+      "commands": {
+        "fullOn": "[unknown]",
+        "off": "01 10 30 50 AF 00 FF 03 FC C2 3D",
+        "brighter": "[unknown]",
+        "dimmer": "[unknown]",
+        "nightLight": "01 10 30 50 AF 00 FF 09 F6 C2 3D",
+        "relax": "01 10 30 50 AF 00 FF 22 DD F2 0D"
+      },
+      "commandsAsGiven": {"telecotele_LEC-AH1210PH_IR-A07HRT (MSB-first)": "リラックス 80 08 0C 0A F5 00 FF 44 BB 4F B0; 保安灯 80 08 0C 0A F5 00 FF 90 6F 43 BC; 消灯 80 08 0C 0A F5 00 FF C0 3F 43 BC", "tandh.work test2/test3 bit arrays": "decode to exactly the 消灯 and 保安灯 frames above"},
+      "confidence": "community + inferred (one model; bit reversal done here; 保安灯 is assumed to be the night light)",
+      "sources": ["https://telecotele.com/projects/ir-remote/", "https://qiita.com/katsumin/items/517cd9fbe66e26d72fa7", "https://tandh.work/note/making/arduino_remocon2/"],
+      "notes": "The telecotele MSB-first strings equal ESPHome transmit_aeha notation (address 0x8008, data [0x0C, 0x0A, 0xF5, 0x00, 0xFF, 0xC0, 0x3F, 0x43, 0xBC] = 消灯). The long frame needs a big receive buffer when learning."
+    },
+    {
+      "brand": "Sharp (シャープ)",
+      "protocol": "AEHA",
+      "carrierHz": 38000,
+      "unitUs": 390,
+      "customerCode": "[unknown] for own-design lights. Sharp AV uses AA 5A. One 'SHARP LED ceiling light' accepted the Hitachi 01 10 frames.",
+      "channels": "ELPA lists 3 codes (06, 07, 08), probably CH1-3 [inferred]",
+      "commands": {"fullOn": "[unknown]", "off": "01 10 30 50 AF 00 FF 03 FC C2 3D (Hitachi-format; worked at T=390 us)", "brighter": "[unknown]", "dimmer": "[unknown]", "nightLight": "01 10 30 50 AF 00 FF 09 F6 C2 3D (Hitachi-format)"},
+      "confidence": "community (single blog) + inferred",
+      "sources": ["https://tandh.work/note/making/arduino_remocon2/", "https://www.elpa.co.jp/product/pdf/rc-c009.pdf"],
+      "notes": "The author reports AEHA with T=425 failing and T=390 working. Possibly a Hitachi OEM, or the shared format is a coincidence [inferred]. Sweep T over 390/425/450 for this family."
+    },
+    {
+      "brand": "Iris Ohyama (アイリスオーヤマ; incl. 丸善, AGLED per KDDI)",
+      "protocol": "Proprietary 40-bit pulse-width (5.x/6.x LED ceiling series). Other products differ.",
+      "carrierHz": 38000,
+      "unitUs": 500,
+      "customerCode": "[unknown]. No AEHA/NEC customer code; frames start C0 81 (MSB-first as given)",
+      "channels": "CH1/CH2 (R5.0-DL, CL-RC2, CL-R52, CL-RIDR, CL-RM2, CL-RM3, CL-RMS2)",
+      "commands": {
+        "fullOn": "[unknown]",
+        "off": "cycle key C0 81 40 00 5B (MSB-first, as given) = 03 81 02 00 DA (LSB-first)",
+        "brighter": "C0 81 02 00 19 (MSB-first) = 03 81 40 00 98",
+        "dimmer": "C0 81 01 00 1A (MSB-first) = 03 81 80 00 58",
+        "nightLight": "same cycle key (ON -> 常夜灯 -> OFF)",
+        "cooler": "C0 81 04 00 1F (MSB-first) = 03 81 20 00 F8",
+        "warmer": "C0 81 08 00 13 (MSB-first) = 03 81 10 00 C8"
+      },
+      "otherModels": {
+        "LEDHCL-R2 (SmartIR 1000, Broadlink) 'on' decoded here": "80 81 00 00 5B (MSB-first) - same pulse-width family; capture starts mid-leader [inferred]",
+        "LDCL3040SS round lamp (kameya)": "'NEC format': 0x8A,0x6E,0x04,0x80,0x3A (On/Off/night), 0x8A,0x6E,0x04,0x40,0xFA (bright), 0x8A,0x6E,0x04,0x20,0x9A (dark); bit order not stated",
+        "ACL-6DG (middleriver)": "proprietary; LIRC capture failed"
+      },
+      "confidence": "community (low: 1-2 captures per format; the last byte may be a checksum, guessed as byte2 XOR 0x1B)",
+      "sources": ["https://telecotele.com/projects/ir-remote/", "https://github.com/smartHomeHub/SmartIR/blob/master/codes/light/1000.json", "https://kameya.my.coocan.jp/Mac/IrisRem.html", "http://middleriver.chagasi.com/electronics/irremote.html", "https://www.elpa.co.jp/product/pdf/rc-c009.pdf"],
+      "notes": "ELPA footnote [docs]: on some Iris code sets one signal cycles 点灯 -> 常夜灯 -> 消灯. The lamp is stateful, so learning or raw replay is strongly preferred. ELPA has 4 Iris rows (23/24, 25/26, 27/28/30/31, 29), so Iris uses several code families."
+    },
+    {
+      "brand": "Takizumi (瀧住 / タキズミ)",
+      "protocol": "NEC 32-bit, extended custom code",
+      "carrierHz": 38000,
+      "unitUs": 562.5,
+      "customerCode": "bytes 84 52 (LSB-first) = IRremote address 0x5284",
+      "channels": "CH1/CH2 (TLR-002/003/004, TNR-001, TDR-001)",
+      "commands": {"fullOn": "[unknown]", "off": "84 52 32 CD (入/切 toggle; also SmartIR off[0])", "brighter": "84 52 50 AF", "dimmer": "[unknown]", "nightLight": "84 52 58 A7", "on": "84 52 32 CD (toggle)"},
+      "confidence": "community (SmartIR Broadlink codes decoded by this research)",
+      "sources": ["https://github.com/smartHomeHub/SmartIR/blob/master/codes/light/1060.json"],
+      "notes": "The capture shows the full frame twice, about 47 ms apart. NEC custom code 84 51 (ON 84 51 9A 65 / OFF 84 51 2A D5) appears in the IRRC32 README for an unnamed ceiling light whose sample file is 'ODELIC_NRL_350P'. Odelic or a Takizumi channel variant is possible [inferred, low]."
+    },
+    {
+      "brand": "Odelic (オーデリック)",
+      "protocol": "[unknown] (possibly NEC 84 51)",
+      "channels": "CH1-3 (RC602W, RC801W, RC401W/NRL-332I, RC701W/NRL-352P1); RC290W CH1-9",
+      "commands": {"fullOn": "[unknown]", "off": "84 51 2A D5 ? [inferred, low]", "brighter": "[unknown]", "dimmer": "[unknown]", "nightLight": "[unknown]", "on": "84 51 9A 65 ? [inferred, low]"},
+      "confidence": "unknown",
+      "sources": ["https://github.com/Goji2100/IRRC32", "https://www.commufa.jp/-/media/Project/commufa/commufa/files/services/option/smarthome/pdf/rc02_maker_01.pdf"],
+      "notes": "ELPA codes 20/21/22 (LED, full function) and 59/60."
+    },
+    {
+      "brand": "Koizumi (コイズミ照明)",
+      "protocol": "[unknown]",
+      "channels": "2CH (KRH-TA-7A, KRH-TG-9A) or 3CH (KRH-TA-8A, KRH-TA-11A)",
+      "commands": {"fullOn": "[unknown]", "off": "[unknown]", "brighter": "[unknown]", "dimmer": "[unknown]", "nightLight": "[unknown]"},
+      "confidence": "unknown",
+      "sources": ["https://www.commufa.jp/-/media/Project/commufa/commufa/files/services/option/smarthome/pdf/rc02_maker_01.pdf", "https://www.elpa.co.jp/product/pdf/rc-c009.pdf"],
+      "notes": "ELPA codes 11/12 (LED, full function) and 52/53. Must be learned."
+    },
+    {
+      "brand": "Daiko (大光電機)",
+      "protocol": "[unknown]; probably the Toshiba family for some models [inferred]",
+      "channels": "CH1-2 or CH1-3 depending on model",
+      "commands": {"fullOn": "[unknown]", "off": "try Toshiba E7 0C 8B 74 [inferred]", "brighter": "[unknown]", "dimmer": "[unknown]", "nightLight": "[unknown]"},
+      "confidence": "inferred",
+      "sources": ["https://www.elpa.co.jp/product/pdf/rc-c009.pdf", "https://www.commufa.jp/-/media/Project/commufa/commufa/files/services/option/smarthome/pdf/rc02_maker_01.pdf"],
+      "notes": "ELPA lists code numbers 32/33 under both Toshiba and Daiko, plus 34/35 for Daiko."
+    },
+    {
+      "brand": "Others: Mitsubishi, Yamazen, Nitori, Doshisha, OHM, AGLED/丸善, WY, Kishima, Darren, 良品計画, Artwork Studio, 日本オムニグロー, Amazon no-name",
+      "protocol": "[unknown]; many are OEM (often Iris-like or Chinese 16/32-bit formats)",
+      "channels": "Usually CH1/CH2",
+      "commands": {"fullOn": "[unknown]", "off": "[unknown]", "brighter": "[unknown]", "dimmer": "[unknown]", "nightLight": "[unknown]"},
+      "confidence": "unknown",
+      "sources": ["https://homeiot.kddi.com/faq/pdf/ura01a_maker_01.pdf", "https://www.commufa.jp/-/media/Project/commufa/commufa/files/services/option/smarthome/pdf/rc02_maker_01.pdf", "https://diysmartmatter.com/archives/297"],
+      "notes": "Example no-name format: protocols.NONAME_280us, CH1 = AA, CH2 = 55, toggle-only power."
+    }
+  ],
+  "universalRemoteCandidateSets": [
+    {
+      "name": "ELPA RC-C009 照明リモコン (developed against fixtures released up to April 2015)",
+      "url": "https://www.elpa.co.jp/product/pdf/rc-c009.pdf",
+      "makerCodes": {"Panasonic": "01,02,03", "Toshiba": "04,05 | 32,33 | 44,45 (no colour)", "Sharp": "06,07,08", "Takizumi": "09,10 | 54,55", "Koizumi": "11,12 | 52,53", "Hitachi": "13,14,15 | 40,41", "NEC": "16,17 | 18,19 | 48,49,50,51", "Odelic": "20,21,22 | 59,60", "Iris Ohyama": "23,24 | 25,26 (single cycle signal) | 27,28,30,31 | 29", "Daiko": "32,33 | 34,35", "AGLED": "38,39 | 36,37"},
+      "notes": "Codes 01-39 are LED fixtures and 40-60 fluorescent [docs]. Multiple numbers in a row probably map to channels (Panasonic 3, NEC 2) [inferred]. Total about 60 code sets, 11 makers: a realistic upper bound for the candidate set."
+    },
+    {
+      "name": "OHM OCR-LEDR4 (08-3098), released 2022-07",
+      "url": "https://www.ohm-electric.co.jp/product/c01/c0110/873460/",
+      "makers": ["Panasonic", "Toshiba", "NEC", "Sharp", "Hitachi", "OHM"],
+      "notes": "Code table researched up to end of 2020. Some models only switch on and off with 全灯 [docs, via retailer copies]."
+    },
+    {
+      "name": "KDDI au HOME 赤外線リモコン01 supported ceiling-light makers (2019-03-28)",
+      "url": "https://homeiot.kddi.com/faq/pdf/ura01a_maker_01.pdf",
+      "makers": ["NECライティング", "アイリスオーヤマ(丸善, AGLED含む)", "パナソニック", "日立製作所", "シャープ", "三菱電機", "コイズミ照明", "WY", "山善", "キシマ", "ダーレン", "東芝ライテック", "瀧住電機工業", "オーデリック", "大光電機", "良品計画", "アートワークスタジオ"],
+      "notes": "Only fixtures whose remote has separate ON and OFF buttons [docs]."
+    },
+    {
+      "name": "KDDI/Commufa 赤外線リモコン02 model list (2019-08-27)",
+      "url": "https://www.commufa.jp/-/media/Project/commufa/commufa/files/services/option/smarthome/pdf/rc02_maker_01.pdf",
+      "notes": "Per-model remote numbers and channel counts for Panasonic (mostly CH1-3), NEC (CH1-2), Yamazen, OHM, Sharp, Nitori, Hitachi, Daiko, Toshiba (CH1-2), Takizumi (CH1-2), Iris (CH1-2), Koizumi (2CH/3CH), Odelic (CH1-3, RC290W CH1-9) and National [docs]."
+    }
+  ],
+  "databases": [
+    {
+      "name": "Flipper-IRDB",
+      "url": "https://github.com/Lucaslhm/Flipper-IRDB",
+      "format": ".ir text: 'Filetype: IR signals file' / 'Version: 1', blocks separated by '#'. Parsed entries: name, type: parsed, protocol, address (4 hex bytes), command (4 hex bytes). Raw entries: type: raw, frequency (Hz), duty_cycle, data (us, at most 1024 values). Firmware protocols: NEC, NECext, NEC42, NEC42ext, Samsung32, RC5, RC5X, RC6, SIRC, SIRC15, SIRC20, Kaseikyo, RCA, plus Pioneer in the current firmware tree.",
+      "jpCeilingCoverage": "Very poor. The only Japanese ceiling light is LED_Lighting/Panasonic/Panasonic_HK9494_LED.ir: 6 RAW buttons (On, Off, Brighter, Darker, Max, Night light), each two 40-bit AEHA frames about 75 ms apart, at 38 kHz / 0.33. Decoded here: On = 2C 52 09 2D 24, Off = 2C 52 09 2F 26. Fans/ has Panasonic, Toshiba, Hitachi, Mitsubishi and KDK fans, not lights. No NEC/HotaluX, Toshiba, Hitachi, Iris or Koizumi lights in LED_Lighting/ or Miscellaneous/. _Converted_/ was not exhaustively searched.",
+      "notes": "Canonical repo is Lucaslhm/Flipper-IRDB (main; pushed 2026-04-12). github.com/flipperdevices/Flipper-IRDB returns 404. Format doc: https://raw.githubusercontent.com/flipperdevices/flipperzero-firmware/dev/documentation/file_formats/InfraredFileFormats.md"
+    },
+    {
+      "name": "SmartIR codes/light (Home Assistant)",
+      "url": "https://github.com/smartHomeHub/SmartIR/blob/master/docs/LIGHT.md",
+      "format": "JSON, Broadlink base64 (tick 269/8192 ms = 32.84 us). Keys: on, off[], brighten, dim, colder, warmer, night.",
+      "jpCeilingCoverage": "1000 Iris Ohyama LEDHCL-R2; 1020/1021 NEC RE0201 CH1/CH2 (decoded: 82 6D BD/BE/BA/BB/BC, CH2 3D/3E/3A/3B/3C); 1040 Toshiba FRC-199T (EMPTY placeholders); 1060 Takizumi TLR-002 (NEC 84 52 32/50/58).",
+      "notes": "The best machine-readable Japanese lighting source found. Decode the Broadlink timings to bytes before use."
+    },
+    {
+      "name": "mamezou-tech HK9493 article (開発編)",
+      "url": "https://developer.mamezou-tech.com/blogs/2025/03/28/ir-remote-control-with-attiny13a_epi2/",
+      "format": "Command table in Arduino-IRremote little-endian 32-bit words plus a parity byte",
+      "jpCeilingCoverage": "Panasonic full table: CH1-3 × 全灯/点灯/消灯/明/暗/常夜灯/暖色/白色/おやすみ30分/チャンネル確定, plus long-press flags",
+      "notes": "Timing: leader 3450/1700, T about 450, 38 kHz."
+    },
+    {
+      "name": "shrkn65 赤外線リモコンの信号定義データの合成",
+      "url": "https://shrkn65.nobody.jp/remocon/database.html",
+      "format": "Byte lists (LSB-first), plus format pages aeha.html and nec.html",
+      "jpCeilingCoverage": "NEC LED ceiling light CH1/CH2 table (82 6d + command/complement: ON/OFF, 3 tone presets, 常夜灯, brightness 10 levels)",
+      "notes": "Also Sharp AQUOS, Panasonic DIGA and HUMAX AEHA examples, with the AEHA timing spec."
+    },
+    {
+      "name": "telecotele 赤外線リモコンの信号を見る",
+      "url": "https://telecotele.com/projects/ir-remote/",
+      "format": "MSB-first byte strings (bit-reverse each byte to get LSB-first)",
+      "jpCeilingCoverage": "Hitachi LEC-AH1210PH (88-bit AEHA), Iris Ohyama CL8DL-5.0 (proprietary pulse-width), Panasonic WTC56939 wall switch",
+      "notes": "Same notation as ESPHome transmit_aeha."
+    },
+    {
+      "name": "hello-ino ATtiny13A AEHA (Panasonic HHPFZ4380E6)",
+      "url": "https://hello-ino.seesaa.net/article/2012-10-17.html",
+      "format": "C code with formula",
+      "jpCeilingCoverage": "Panasonic channel formula d[3]=cmd+(ch<<3)+0x20 and the XOR checksum",
+      "notes": "Gives AEHA T=425 (350-500)."
+    },
+    {
+      "name": "Qiita / blog captures (NEC, Toshiba, Panasonic customer codes)",
+      "url": "https://qiita.com/HayashiTakaki/items/5f6374748196cdebcbf1 ; https://moris.day/blog/post/ir-remote/ ; https://qiita.com/SnowDango/items/8e4da3d04d5f676019c4 ; https://qiita.com/katsumin/items/517cd9fbe66e26d72fa7",
+      "format": "Mixed notations (see conventions)",
+      "jpCeilingCoverage": "NEC RE0201 (A6/BA/BB/BE); NEC 0x6D82 (BA/BB/A7/A8); Toshiba NLER001-LC (A2/8B); M5Stack AEHA decoder with Panasonic (522C) and Hitachi (1001) customer codes",
+      "notes": "katsumin's decoder runs on M5Stack, which is directly relevant to the Cardputer."
+    },
+    {
+      "name": "Universal-remote maker-code lists (ELPA RC-C009, OHM OCR-LEDR4, KDDI/Commufa)",
+      "url": "https://www.elpa.co.jp/product/pdf/rc-c009.pdf",
+      "format": "PDF tables",
+      "jpCeilingCoverage": "No raw codes, but defines the candidate set: 11 makers, about 36 LED code sets (ELPA)",
+      "notes": "See universalRemoteCandidateSets."
+    },
+    {
+      "name": "probonopd/irdb and LIRC remotes",
+      "url": "https://github.com/probonopd/irdb ; https://sourceforge.net/p/lirc-remotes/code/ci/master/tree/remotes/panasonic/",
+      "format": "IRDB: CSV codes/<maker>/<type>/<device>,<subdevice>.csv (protocol/device/subdevice/function). LIRC: lircd.conf",
+      "jpCeilingCoverage": "None. Grep of the IRDB index (3205 files) found no Japanese lighting; LIRC Panasonic has 169 files, none lighting.",
+      "notes": "irdb.tk is not referenced by the repo. Use the GitHub/jsDelivr copy."
+    }
+  ],
+  "learningNotes": "WHAT A 38 kHz DEMODULATING RECEIVER SEES (M5Stack Unit IR U002: 38 kHz hardware-demodulating receiver plus 940 nm LED, range <= 5 m [docs]). On a Cardputer Grove port, IR_TX (yellow) = G2 and IR_RX (white) = G1 [docs, inferred from wire colours]; the built-in TX is G44. The receiver outputs the mark/space envelope only; the carrier frequency is lost and the output is inverted (active-low) [docs: Akizuki sheet]. Expected signatures: Panasonic AEHA leader about 3.45-3.5 ms / 1.7 ms, then 40 bits (83 edges), trailer, then about 75 ms gap and the identical frame again. Hitachi AEHA uses the same leader with 88 bits (179 edges). NEC lighting uses a 9-10 ms / 4.5-5 ms leader, 32 bits and a stop bit, with 9 ms / 2.25 ms repeat codes while held. Iris uses a two-mark leader (about 2.1 / 0.95 / 5.5 / 0.96 ms) and pulse-WIDTH bits. PITFALLS: (1) Receivers stretch marks and shrink spaces by 50-150 us, so classify by mark/space ratio. One NEC remote measured 10.15/5.0 ms with 650-700 us marks. (2) Buffer and timeout: IRremoteESP8266's default buffer of about 100 entries is too small for 88-bit frames (179 edges). Use >= 512 and a timeout that splits frames at the 47-75 ms gaps; keep one frame and record the repeat count and gap. IRremoteESP8266 labels 40-bit Panasonic-lighting frames UNKNOWN '42 bits'. Arduino-IRremote shows them as PulseDistance; Flipper stores RAW. (3) Several remotes send each press 2 times (Panasonic, Takizumi). When replaying, send the frame twice with the observed gap. Held keys send repeats (NEC repeat codes, or full AEHA frames about every 130 ms). (4) Toggles vs discrete: Panasonic, NEC and Toshiba have discrete 全灯/消灯. Iris cycles 点灯 -> 常夜灯 -> 消灯 on one key [docs: ELPA footnote]. Takizumi and no-name lamps use 入/切 toggles, and NEC's AB key is an ON/OFF toggle. Learn discrete keys first and track state for toggles. (5) Carrier: AEHA allows 33-40 kHz (38 typ). Every lighting remote found is consistent with 38 kHz, duty about 1/3. A 38 kHz demodulator still receives 36-40 kHz at reduced range, so a learned signal never tells you the exact carrier; transmit at 38 kHz. (6) Unit T varies by maker (Panasonic about 432-450, Hitachi about 400-450, one Sharp-branded lamp needed 390). Prefer replaying measured timings over re-synthesising with a textbook T. (7) Lamps fade on and off over about 3 s [docs: Toshiba/NVC manual], so wait at least 3-4 s before judging with a camera or light sensor. (8) Channel: factory default is CH1 for lamp and remote [docs: Toshiba/NVC manual]. A remote set to CH2/CH3 sends different codes (Panasonic bits 3-4 of the command byte, NEC bit 7), so learn the user's actual remote as-is. (9) Notation: normalise every capture to transmission-order LSB-first bytes before storing (see conventions).",
+  "searchCandidateOrder": [
+    "0. Precondition: lamp ON at full brightness via the wall switch (most lamps restore the last or full state). Camera or lux sensor watching it; Cardputer IR (or Unit IR on G2) aimed at the lamp's receiver window in the centre of the fixture, ideally under 2-3 m. Send OFF candidates first, because ON->OFF is the most visible discrete change. After each send wait about 4 s, then confirm a hit with the matching 全灯/点灯 code.",
+    "1. Panasonic CH1 消灯: AEHA T=432, 2C 52 09 2F 26, sent 2 times about 75 ms apart; confirm with 全灯 2C 52 09 2C 25",
+    "2. NEC/HotaluX CH1 消灯: NEC 82 6D BE 41; confirm with 全灯 82 6D A6 59 or 82 6D BD 42",
+    "3. Toshiba(NVC) CH1 消灯: NEC E7 0C 8B 74; confirm with 点灯 E7 0C A2 5D (also covers some Daiko)",
+    "4. Hitachi 消灯: AEHA 88-bit 01 10 30 50 AF 00 FF 03 FC C2 3D at T=425, then T=390 (also covers the Sharp-branded case); confirm only via 保安灯 01 10 30 50 AF 00 FF 09 F6 C2 3D (全灯 unknown)",
+    "5. Iris Ohyama 5.x/6.x cycle key (proprietary PWM, MSB-first C0 81 40 00 5B): expect ON -> 常夜灯; low confidence when synthesised",
+    "6. Takizumi 入/切 toggle: NEC 84 52 32 CD, sent 2 times about 47 ms apart; then NEC 84 51 2A D5 (unidentified, possibly Odelic)",
+    "7. Repeat steps 1-2 on other channels: Panasonic CH2 2C 52 09 37 3E, CH3 2C 52 09 3F 36; NEC CH2 82 6D 3E C1",
+    "8. If nothing reacts: Koizumi, Odelic, Daiko, Sharp, Mitsubishi and OEM brands have no public codes. Ask the user for the brand or remote model printed on the remote, or learn the remote with the Unit IR receiver (the most reliable path).",
+    "NEVER sweep unknown command bytes: they include channel-programming and memory keys (Panasonic チャンネル確定 2C 52 39 DA-DC; Toshiba メモリ+全灯 moves the lamp to CH2), which can leave the lamp deaf to its own remote."
+  ],
+  "searchCandidates": [
+    {"step": 1, "brand": "Panasonic", "ch": 1, "cmd": "off", "protocol": "AEHA", "unitUs": 432, "bytes": "2C 52 09 2F 26", "repeatFrames": 2, "frameGapUs": 75000, "confirm": "2C 52 09 2C 25", "confidence": "community-high"},
+    {"step": 2, "brand": "NEC/HotaluX", "ch": 1, "cmd": "off", "protocol": "NEC", "unitUs": 562.5, "bytes": "82 6D BE 41", "repeatFrames": 1, "confirm": "82 6D A6 59", "confidence": "community-high"},
+    {"step": 3, "brand": "Toshiba/NVC (+Daiko?)", "ch": 1, "cmd": "off", "protocol": "NEC", "unitUs": 562.5, "bytes": "E7 0C 8B 74", "repeatFrames": 1, "confirm": "E7 0C A2 5D", "confidence": "community-medium"},
+    {"step": 4, "brand": "Hitachi (+Sharp?)", "ch": 1, "cmd": "off", "protocol": "AEHA", "unitUs": 425, "altUnitUs": [390, 450], "bytes": "01 10 30 50 AF 00 FF 03 FC C2 3D", "repeatFrames": 1, "confirm": "01 10 30 50 AF 00 FF 09 F6 C2 3D (night light)", "confidence": "community-low"},
+    {"step": 5, "brand": "Iris Ohyama 5.x/6.x", "ch": 1, "cmd": "cycle(on->night->off)", "protocol": "IRIS_PWM_proprietary", "unitUs": 500, "bitsMsbFirstAsGiven": "C0 81 40 00 5B", "repeatFrames": 1, "confidence": "community-low"},
+    {"step": 6, "brand": "Takizumi", "ch": 1, "cmd": "toggle", "protocol": "NEC", "unitUs": 562.5, "bytes": "84 52 32 CD", "repeatFrames": 2, "frameGapUs": 47000, "confidence": "community-medium"},
+    {"step": 6.5, "brand": "unidentified (Odelic?)", "ch": 1, "cmd": "off", "protocol": "NEC", "unitUs": 562.5, "bytes": "84 51 2A D5", "repeatFrames": 1, "confirm": "84 51 9A 65", "confidence": "inferred-low"},
+    {"step": 7, "brand": "Panasonic", "ch": 2, "cmd": "off", "protocol": "AEHA", "unitUs": 432, "bytes": "2C 52 09 37 3E", "repeatFrames": 2, "frameGapUs": 75000, "confirm": "2C 52 09 34 3D", "confidence": "community-high"},
+    {"step": 7, "brand": "Panasonic", "ch": 3, "cmd": "off", "protocol": "AEHA", "unitUs": 432, "bytes": "2C 52 09 3F 36", "repeatFrames": 2, "frameGapUs": 75000, "confirm": "2C 52 09 3C 35", "confidence": "community-high"},
+    {"step": 7, "brand": "NEC/HotaluX", "ch": 2, "cmd": "off", "protocol": "NEC", "unitUs": 562.5, "bytes": "82 6D 3E C1", "repeatFrames": 1, "confirm": "82 6D 3D C2", "confidence": "community-high"}
+  ],
+  "doNotSend": [
+    {"brand": "Panasonic", "what": "チャンネル確定 (channel programming)", "bytes": ["2C 52 39 DA E3", "2C 52 39 DB E2", "2C 52 39 DC E5"], "source": "https://developer.mamezou-tech.com/blogs/2025/03/28/ir-remote-control-with-attiny13a_epi2/"},
+    {"brand": "Any", "what": "Unknown command bytes in a known family (NEC 82 6D xx, E7 0C xx, AEHA 2C 52 39 xx) may be memory or channel-set keys", "bytes": [], "source": "[inferred]"}
+  ],
+  "risks": [
+    "Coverage: only Panasonic and NEC/HotaluX are well documented. Toshiba has on/off only, Hitachi one model (no 全灯), Iris several proprietary formats, and Koizumi/Odelic/Daiko/Sharp/Mitsubishi none. A blind search can therefore fail; plan for learning with the Unit IR receiver.",
+    "Model variance inside a brand: Panasonic uses system nibble 0 vs 3; NEC power keys A6, AB or BD; Iris has 4 ELPA code families.",
+    "Bit-order and notation mismatches between libraries (LSB-first bytes, IRremote little-endian words, ESPHome/IRremoteESP8266/telecotele MSB-first). A wrong byte order fails silently.",
+    "Decoder gaps: 40-bit Panasonic, 88-bit Hitachi and Iris pulse-width frames are not standard Kaseikyo-48 or NEC, so transmit raw mark/space arrays (RMT) rather than relying on a library protocol.",
+    "IR power and aim: the Cardputer's built-in LED is weak (an ATtiny Panasonic build only worked at about 50 cm), so aim at the receiver or use the Unit IR.",
+    "State and timing: 3 s fades, toggles, the night-light state, and wall-switch power-cycling modes. Detection logic must wait and track state.",
+    "Safety: never brute-force unknown commands (channel and memory keys)."
+  ],
+  "sources": [
+    {"title": "mamezou HK9493 command table (Panasonic)", "url": "https://developer.mamezou-tech.com/blogs/2025/03/28/ir-remote-control-with-attiny13a_epi2/", "confidence": "community"},
+    {"title": "hello-ino ATtiny13A AEHA (Panasonic formula + AEHA timing)", "url": "https://hello-ino.seesaa.net/article/2012-10-17.html", "confidence": "community"},
+    {"title": "katsumin M5Stack IR decoder (customer codes)", "url": "https://qiita.com/katsumin/items/517cd9fbe66e26d72fa7", "confidence": "community"},
+    {"title": "shrkn65 NEC LED ceiling light table", "url": "https://shrkn65.nobody.jp/remocon/database.html", "confidence": "community"},
+    {"title": "HayashiTakaki NEC HLDZB0849", "url": "https://qiita.com/HayashiTakaki/items/5f6374748196cdebcbf1", "confidence": "community"},
+    {"title": "moris.day NEC 0x6D82 ceiling light", "url": "https://moris.day/blog/post/ir-remote/", "confidence": "community"},
+    {"title": "SnowDango Toshiba NLER001-LC", "url": "https://qiita.com/SnowDango/items/8e4da3d04d5f676019c4", "confidence": "community"},
+    {"title": "telecotele Hitachi / Iris / Panasonic switch", "url": "https://telecotele.com/projects/ir-remote/", "confidence": "community"},
+    {"title": "tandh.work Sharp-branded light, AEHA T=390", "url": "https://tandh.work/note/making/arduino_remocon2/", "confidence": "community"},
+    {"title": "SmartIR light codes", "url": "https://github.com/smartHomeHub/SmartIR/blob/master/docs/LIGHT.md", "confidence": "community"},
+    {"title": "Flipper-IRDB Panasonic HK9494", "url": "https://github.com/Lucaslhm/Flipper-IRDB/blob/main/LED_Lighting/Panasonic/Panasonic_HK9494_LED.ir", "confidence": "community"},
+    {"title": "Goji2100 IRRC32 (Toshiba-family E7 0C, 84 51 lamp)", "url": "https://github.com/Goji2100/IRRC32", "confidence": "community"},
+    {"title": "Toshiba/NVC NLEH*001B-LC manual (channels, fades)", "url": "https://www.nvc-lighting.jp/files/manual/ceiling-light/NLEH001B-LC.pdf", "confidence": "docs"},
+    {"title": "ELPA RC-C009 manual (maker codes)", "url": "https://www.elpa.co.jp/product/pdf/rc-c009.pdf", "confidence": "docs"},
+    {"title": "KDDI 赤外線リモコン01 maker list", "url": "https://homeiot.kddi.com/faq/pdf/ura01a_maker_01.pdf", "confidence": "docs"},
+    {"title": "KDDI/Commufa 赤外線リモコン02 model list", "url": "https://www.commufa.jp/-/media/Project/commufa/commufa/files/services/option/smarthome/pdf/rc02_maker_01.pdf", "confidence": "docs"},
+    {"title": "OHM OCR-LEDR4 product page", "url": "https://www.ohm-electric.co.jp/product/c01/c0110/873460/", "confidence": "docs"},
+    {"title": "elm-chan IR formats", "url": "http://elm-chan.org/docs/ir_format.html", "confidence": "community"},
+    {"title": "shrkn65 AEHA format", "url": "http://shrkn65.nobody.jp/remocon/aeha.html", "confidence": "community"},
+    {"title": "Akizuki NEC-format transmitter sheet", "url": "https://akizukidenshi.com/goodsaffix/OE13KIR.pdf", "confidence": "docs"},
+    {"title": "Renesas R01AN1266JJ0103 家製協フォーマット受信", "url": "https://renesas.com/jp/ja/document/apn/874436", "confidence": "docs"},
+    {"title": "Arduino-IRremote ir_Kaseikyo.hpp", "url": "https://raw.githubusercontent.com/Arduino-IRremote/Arduino-IRremote/master/src/ir_Kaseikyo.hpp", "confidence": "community"},
+    {"title": "Flipper Kaseikyo decoder", "url": "https://raw.githubusercontent.com/flipperdevices/flipperzero-firmware/dev/lib/infrared/encoder_decoder/kaseikyo/infrared_decoder_kaseikyo.c", "confidence": "community"},
+    {"title": "ESPHome AEHA/NEC implementations", "url": "https://raw.githubusercontent.com/esphome/esphome/dev/esphome/components/remote_base/aeha_protocol.cpp", "confidence": "community"},
+    {"title": "M5Stack Unit IR / Cardputer docs", "url": "https://docs.m5stack.com/en/unit/ir", "confidence": "docs"}
+  ]
+}

@@ -1,0 +1,304 @@
+{
+  "device": "Teenage Engineering EP-133 K.O. II",
+  "id": "ep-133",
+  "manufacturer": "Teenage Engineering",
+  "firmwareNotes": "Chart valid for OS 2.5 per TE's EP-133 guide ver 2.5 (system: 14.1 midi reference, 14.2 note map, 14.5 cc map). OS 2.5 released 2026-06-24; latest 2.5.1 (2026-07-03, USB-audio fix only). CC 12/13/64, USB audio, and identity over TRS need OS >= 2.5. Earlier OS: only CC 1 + bank select. OS 2.0 (2025-04-09) added system MIDI in/out channels, MIDI thru, per-pad MIDI-in channel, pitch bend/mod wheel input, and program change. OS 2.0.1 added setting 127. Since OS 2.0.2 program change is no longer mapped (recorded/relayed only). The identity reply's version bytes are zero on 2.5.x, so read the OS version on the device.",
+  "sources": [
+    {
+      "title": "TE EP-133 guide: system (14.1 midi reference/implementation chart, 14.2 midi note map, 14.5 midi cc map, system setting codes)",
+      "url": "https://teenage.engineering/guides/ep-133/system",
+      "confidence": "docs"
+    },
+    {
+      "title": "TE EP-133 guide: what's new (OS 2.5 / 2.0.x release notes incl. CC 12/13/64, identity over TRS, USB audio, PC unmapped)",
+      "url": "https://teenage.engineering/guides/ep-133/whats-new",
+      "confidence": "docs"
+    },
+    {
+      "title": "TE EP-133 guide: modes (8.2.5 sound edit > midi: per-pad channel + root note)",
+      "url": "https://teenage.engineering/guides/ep-133/modes",
+      "confidence": "docs"
+    },
+    {
+      "title": "TE EP-133 guide: how-to (12.8 midi keyboard, 12.9 external midi, 12.11 usb audio)",
+      "url": "https://teenage.engineering/guides/ep-133/how-to",
+      "confidence": "docs"
+    },
+    {
+      "title": "TE EP-133 guide: effects (FX types and knob X/Y meanings)",
+      "url": "https://teenage.engineering/guides/ep-133/effects",
+      "confidence": "docs"
+    },
+    {
+      "title": "TE downloads: EP-133 OS versions",
+      "url": "https://teenage.engineering/downloads/ep-133",
+      "confidence": "docs"
+    },
+    {
+      "title": "MIDI Association SysEx manufacturer ID table (Teenage Engineering = 00H 20H 76H)",
+      "url": "https://midi.org/sysexidtable",
+      "confidence": "docs"
+    },
+    {
+      "title": "CrabbTech/ko-bridge docs/spike-results.md (identity reply bytes, port/audio names, latency, clock)",
+      "url": "https://github.com/CrabbTech/ko-bridge/blob/main/docs/spike-results.md",
+      "confidence": "community"
+    },
+    {
+      "title": "benjaminr/mcp-koii DEVICE.md (port 'EP-133', per-pad channel test, CC 12/13 no-audible-change test, identity)",
+      "url": "https://github.com/benjaminr/mcp-koii/blob/main/DEVICE.md",
+      "confidence": "community"
+    },
+    {
+      "title": "kmorrill/ep-series-sysex (verified SysEx protocol, midi-reference.md, errors.md; OS 2.5.1)",
+      "url": "https://github.com/kmorrill/ep-series-sysex",
+      "confidence": "community"
+    },
+    {
+      "title": "ZacharySBrown/ep133-ppak PROTOCOL.md (TE SysEx framing F0 00 20 76 33 40 ...)",
+      "url": "https://github.com/ZacharySBrown/ep133-ppak/blob/main/PROTOCOL.md",
+      "confidence": "community"
+    },
+    {
+      "title": "seajaysec/ep-unity (WebMIDI DFU firmware flashing; 'can brick your device')",
+      "url": "https://github.com/seajaysec/ep-unity",
+      "confidence": "community"
+    },
+    {
+      "title": "garrettjwilke/ep_133_sysex_thingy (raw .syx incl. switch_to_project, delete_sample)",
+      "url": "https://github.com/garrettjwilke/ep_133_sysex_thingy",
+      "confidence": "community"
+    },
+    {
+      "title": "midi.guide EP-133 K.O. II CC list",
+      "url": "https://midi.guide/d/teenage-engineering/ep-133-ko-ii/",
+      "confidence": "community"
+    }
+  ],
+  "usb": {
+    "classCompliantMidi": true,
+    "classCompliantAudio": true,
+    "portNameHint": "EP-133",
+    "confidence": "community",
+    "notes": "Driverless USB-MIDI device (TE's own browser EP Sample Tool talks to it over Web MIDI). USB-C is a device port, not a MIDI host. macOS MIDI input and output are both named 'EP-133' (ko-bridge, mcp-koii). USB audio (OS >= 2.5, docs: works with any class-compliant USB audio host, stereo in/out): CoreAudio device 'EP-133', 2 in / 2 out at 48 kHz (engine runs at 46.875 kHz), so Chrome getUserMedia can capture it. Disable echoCancellation/noiseSuppression/autoGainControl. Measured MIDI note to USB audio about 3.6 ms. Close TE's EP Sample Tool tab while the demo app runs (the device allows one SysEx file session)."
+  },
+  "identity": {
+    "respondsToUniversalInquiry": true,
+    "manufacturerId": [
+      0,
+      32,
+      118
+    ],
+    "replyExample": "F0 7E 33 06 02 00 20 76 20 00 02 00 00 00 00 00 F7",
+    "confidence": "community",
+    "notes": "TE implementation chart: SysEx = 'identity request+reply, proprietary messages' (docs). OS 2.5 notes: identity now also works over TRS MIDI. Reply bytes captured over USB on OS 2.5.x (ko-bridge, 2026-10-16): device-ID byte 0x33 (EP-133 product code, not 7F), manufacturer 00 20 76, family 20 00 (LSB-first = 0x0020 = 32, consistent with SKU TE032AS00x), member 02 00, software version 00 00 00 00 (zeroed on 2.5.x, verified by ep-series-sysex). Parse by position: bytes[1]=7E, [3..4]=06 02, [5..7]=00 20 76. Do not filter on the device-ID byte. EP-40 uses product byte 0x3C. TE proprietary SysEx = F0 00 20 76 33 40 <flags> <reqId> <cmd> ... F7 (GREET 0x01, FILE 0x05, DFU). Not needed for control. Chrome needs requestMIDIAccess({sysex:true})."
+  },
+  "channels": {
+    "receive": "Default (system setting 110): receive on ALL channels. Setting 111-126 = receive and send only on channel 1-16. Setting 127 = pads only send and receive when a MIDI channel is assigned in SOUND EDIT. Per pad (OS >= 2.0): SHIFT+SOUND > (-/+ to the MIDI page) > knob X = channel (send and receive), knob Y = root note. No per-group (A-D) channel setting: groups are addressed by note range.",
+    "send": "Pad presses/sequenced notes go out on channel 1 by default (system channel; ko-bridge observed ch 1), or on a pad's own sound-edit channel. Device sends CC 120 on stop (community). Clock out only with setting 102. No documented CC output from knobs or fader.",
+    "notes": "System settings: SHIFT+ERASE, type the 3-digit code (applies immediately; ko-bridge also pressed MAIN). Not settable over SysEx or MIDI. With default omni, any note 36-83 on any channel fires a pad. For a melodic pad on ch 2, either keep pitched notes below 36 or set system code 111 (ch 1 only)."
+  },
+  "notes": {
+    "description": "Notes 36-83 trigger the 48 pads: group A = 36-47, B = 48-59, C = 60-71, D = 72-83. Within a group the order is '.', '0', 'enter', '1'..'9' (keypad bottom-left to top-right). In KEYS mode, notes 0-127 play the selected pad chromatically. A pad with its own MIDI channel plays at pitch on that channel.",
+    "map": {
+      "36": "group A pad '.' (bottom row left)",
+      "37": "group A pad '0' (bottom row middle)",
+      "38": "group A pad 'enter' (bottom row right)",
+      "39": "group A pad '1' (row 2 left)",
+      "40": "group A pad '2' (row 2 middle)",
+      "41": "group A pad '3' (row 2 right)",
+      "42": "group A pad '4' (row 3 left)",
+      "43": "group A pad '5' (row 3 middle)",
+      "44": "group A pad '6' (row 3 right)",
+      "45": "group A pad '7' (top row left)",
+      "46": "group A pad '8' (top row middle)",
+      "47": "group A pad '9' (top row right)",
+      "48": "group B pad '.' (bottom row left)",
+      "49": "group B pad '0' (bottom row middle)",
+      "50": "group B pad 'enter' (bottom row right)",
+      "51": "group B pad '1' (row 2 left)",
+      "52": "group B pad '2' (row 2 middle)",
+      "53": "group B pad '3' (row 2 right)",
+      "54": "group B pad '4' (row 3 left)",
+      "55": "group B pad '5' (row 3 middle)",
+      "56": "group B pad '6' (row 3 right)",
+      "57": "group B pad '7' (top row left)",
+      "58": "group B pad '8' (top row middle)",
+      "59": "group B pad '9' (top row right)",
+      "60": "group C pad '.' (bottom row left)",
+      "61": "group C pad '0' (bottom row middle)",
+      "62": "group C pad 'enter' (bottom row right)",
+      "63": "group C pad '1' (row 2 left)",
+      "64": "group C pad '2' (row 2 middle)",
+      "65": "group C pad '3' (row 2 right)",
+      "66": "group C pad '4' (row 3 left)",
+      "67": "group C pad '5' (row 3 middle)",
+      "68": "group C pad '6' (row 3 right)",
+      "69": "group C pad '7' (top row left)",
+      "70": "group C pad '8' (top row middle)",
+      "71": "group C pad '9' (top row right)",
+      "72": "group D pad '.' (bottom row left)",
+      "73": "group D pad '0' (bottom row middle)",
+      "74": "group D pad 'enter' (bottom row right)",
+      "75": "group D pad '1' (row 2 left)",
+      "76": "group D pad '2' (row 2 middle)",
+      "77": "group D pad '3' (row 2 right)",
+      "78": "group D pad '4' (row 3 left)",
+      "79": "group D pad '5' (row 3 middle)",
+      "80": "group D pad '6' (row 3 right)",
+      "81": "group D pad '7' (top row left)",
+      "82": "group D pad '8' (top row middle)",
+      "83": "group D pad '9' (top row right)"
+    }
+  },
+  "parameters": [
+    {
+      "name": "Trigger pad (groups A-D)",
+      "group": "notes",
+      "cc": null,
+      "nrpn": null,
+      "range": [
+        36,
+        83
+      ],
+      "channel": "default: any channel (system 110 = receive all, send ch 1). Send on ch 1.",
+      "confidence": "docs",
+      "notes": "Note On 0x9n, velocity 0-127 recognised. note = 36 + 12*group(A=0..D=3) + padIndex; padIndex order: '.',0,enter,1..9 (bottom-left to top-right). Hardware-verified by several community tools. Velocity-0 note-on is handled as note-off (OS 1.1.1). Send matching Note Offs: KEY/LEGATO pads play while held (ONESHOT pads likely ignore note-off, inferred)."
+    },
+    {
+      "name": "Play a pad chromatically (per-pad channel)",
+      "group": "notes",
+      "cc": null,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "the channel assigned to that pad in SOUND EDIT > MIDI (knob X)",
+      "confidence": "docs",
+      "notes": "OS >= 2.0: a pad's sound-edit MIDI channel is also its MIDI-in channel. Notes on that channel play the pad's sample at pitch, relative to the pad root note (knob Y). Community-verified (C1-G1 on ch 2 played a bass pad at pitch). In KEYS mode on the device, incoming notes 0-127 play the selected pad chromatically."
+    },
+    {
+      "name": "Pitch bend",
+      "group": "notes",
+      "cc": null,
+      "nrpn": null,
+      "range": [
+        0,
+        16383
+      ],
+      "channel": "basic channel",
+      "confidence": "docs",
+      "notes": "OS 2.0 notes: incoming pitch bend affects sample playback. Bend range not documented. Centre = 8192."
+    },
+    {
+      "name": "Vibrato (mod wheel)",
+      "group": "sound",
+      "cc": 1,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "basic channel (any with default 110, inferred)",
+      "confidence": "docs",
+      "notes": "TE CC map prints range 1-127. OS 2.0: mod wheel affects sample playback (vibrato). Subtle; best on a sustained KEY/LEGATO pad."
+    },
+    {
+      "name": "FX parameter X (master FX knob X)",
+      "group": "fx",
+      "cc": 12,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "basic channel (any with default 110, inferred)",
+      "confidence": "docs",
+      "notes": "OS >= 2.5. Controls knob X of the currently selected FX: delay time, reverb length, distortion drive, chorus modulation, filter cutoff (left = low-pass, right = high-pass), or compressor drive. Audible only if an FX type is selected and a group's FX send (fader in FX mode) is up. Community warning: one OS 2.5 hardware test (mcp-koii) heard no audible change sweeping CC 12/13 on ch 1, cause unknown. midi.guide describes it as the selected punch-in effect's X. Verify before going on camera."
+    },
+    {
+      "name": "FX parameter Y (master FX knob Y)",
+      "group": "fx",
+      "cc": 13,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "basic channel (any with default 110, inferred)",
+      "confidence": "docs",
+      "notes": "OS >= 2.5. Knob Y of the selected FX: delay feedback, reverb color, distortion color, chorus feedback, filter resonance, compressor speed. Same caveats as CC 12."
+    },
+    {
+      "name": "Sustain pedal",
+      "group": "sound",
+      "cc": 64,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "basic channel",
+      "confidence": "docs",
+      "notes": "OS >= 2.5. Sustains KEY and LEGATO sound modes only (not oneshot). >=64 = down, <64 = up."
+    },
+    {
+      "name": "All sound off / all notes off (panic)",
+      "group": "global",
+      "cc": 120,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "every channel used",
+      "confidence": "inferred",
+      "notes": "TE implementation chart lists all sound off (CC 120), reset all controllers (121) and all notes off (123) under channel-mode messages, but the received/transmitted marks were not readable. The device itself sends CC 120 on stop (community). Use CC 120 then CC 123 as panic."
+    }
+  ],
+  "notControllableViaMidi": [
+    "Per-sound volume (AMP), pitch (PTC), pan, attack/release, trim, time-stretch: no CC (docs by omission; ep-series-sysex: 'no CC maps to the 12 fader parameters')",
+    "Fader / punch-in FX 2.0 parameters (LVL, PTC, TIM, LPF, HPF, FX, ATK, REL, PAN, TUNE, VEL, MOD) and group FX send: no CC, not recordable over MIDI",
+    "FX type selection, tempo, swing, scene/pattern/project selection: no CC",
+    "Sound selection via program change / bank select CC 0/32: listed in the chart ('sounds 1-999') but not mapped since OS 2.0.2 (recorded/relayed only)"
+  ],
+  "transport": {
+    "clockIn": true,
+    "startStop": true,
+    "notes": "MIDI clock is OFF by default (code 100). SHIFT+ERASE then 101 = clock in (24 PPQN; the sequencer runs at 96 PPQN internally). Then Start/Stop/Continue/SPP from the Mac drive the sequencer. External START plays the cursor scene, and STOP chokes ringing one-shots. On internal clock the device ignores the Mac's START entirely (community). 102 = clock out. Song mode needs internal clock (SHIFT+PLAY on device). OS 2.5: SPP in song mode is relative to song start. 140/141 = reset controllers at stop off/on. The 3.5 mm SYNC jacks (codes 200-212) are separate from MIDI clock. Community: clock jitter about 0.12 ms, and about 140 note-ons in a burst on one song-mode start (cause open)."
+  },
+  "unsafeMessages": [
+    "Any TE proprietary SysEx F0 00 20 76 33 ... (FILE protocol put/delete/metadata-set, project writes, 'switch to project', DFU firmware flashing). Can corrupt projects, wedge the file system until power-cycle, force a flash format (ERR CLOCK 43), or brick the unit (DFU). Never generate it. Only the universal identity request is safe.",
+    "Running any SysEx file session while TE's EP Sample Tool (or another tool) is connected: concurrent sessions freeze the device until power-cycle. Device debug frames F0 00 20 76 33 33 ... mean stop all SysEx.",
+    "Notes while the device is recording (REC armed / live record) are written into the pattern. Undo exists.",
+    "MIDI Start/Continue with clock-in (101) set starts the sequencer and plays the cursor scene. Stop chokes one-shots.",
+    "Program change + bank select (CC 0/32): no-op on OS >= 2.0.2, but switched sounds on OS 2.0-2.0.1. Avoid.",
+    "Note/CC floods: voice stealing drops notes (community lost 12-19 of 172 note-ons under voice pressure; polyphony 16 mono / 12 stereo voices).",
+    "MIDI thru (code 131) forwards input to MIDI out + USB. An app that echoes input to output creates a loop.",
+    "Not a MIDI message, but holding SHIFT+ERASE while powering on formats the device."
+  ],
+  "demo": {
+    "bestParameters": [
+      "Note On 36-83 on channel 1: instant drum/pad hits across groups A-D (most reliable, about 3.6 ms)",
+      "MIDI clock + Start/Stop (after setting 101): the device's own pattern runs in sync (pad lights following the pattern is inferred)",
+      "CC 12 / CC 13: FX knob X/Y (e.g. FILTER cutoff/resonance) with the group's FX send up. OS >= 2.5, and verify first because one community test heard nothing",
+      "Per-pad channel (e.g. ch 2) + notes: play a bass/melody sample chromatically"
+    ],
+    "visualFeedback": "No documented on-screen read-out of incoming CC values. Visible cues: the MIDI/USB icon appears when notes arrive (docs), pads light while their sounds play (inferred), and the sequencer display runs under external clock. CC 12/13 changes are mostly audible only.",
+    "audibleFeedback": "Pad triggers are immediate (community about 3.6 ms MIDI to USB audio). FX X/Y sweeps are only audible with an FX type selected and FX send > 0 on the playing group. Vibrato (CC 1) is subtle and needs a sustained KEY/LEGATO pad.",
+    "risks": [
+      "Only 4 receivable CCs (1, 12, 13, 64), so it is a weak 'twist a knob' demo. Volume/pan/pitch/filter per pad are not MIDI-controllable.",
+      "CC 12/13 reported inaudible in one OS 2.5 hardware test. Rehearse on the actual unit and OS.",
+      "Default omni: notes 36-83 on any channel trigger pads (clashes with melodic channels).",
+      "Clock/start ignored unless code 101 is set on the device.",
+      "Never let generated code emit F0 00 20 76 ... SysEx."
+    ],
+    "setup": [
+      "Confirm OS >= 2.5 on the device (identity reply shows zeros).",
+      "Load a project with drums on groups A/B. Select an FX (e.g. FILTER) and raise the FX send fader for that group.",
+      "Optional: SHIFT+ERASE 101 for clock in; SHIFT+ERASE 111 to stop omni clashes.",
+      "Close TE's EP Sample Tool before opening the app."
+    ]
+  }
+}

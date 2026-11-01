@@ -1,0 +1,860 @@
+{
+  "device": "Teenage Engineering OP-1 Field",
+  "id": "op-1-field",
+  "manufacturer": "Teenage Engineering",
+  "firmwareNotes": "Incoming-CC chart = the 'midi reference' section of TE's OP-1 field guide v1.7.0. It applies to firmware >= 1.7.0 (released 2026-04-29; changelog 'new MIDI controls'; TE: MIDI 'significantly expanded', control 'across nearly all parameters'). Latest listed firmware: 1.7.3+1 (2026-05-26). Before 1.7.0 the OP-1 field only took notes, pitch bend, clock/transport and CC 1-4 via the MIDI LFO. The firmware version shows on the boot screen. Community device test (CrabbTech/op-bridge, 2026-09-26, fw 1.7.x, MacBook Pro over USB-C) confirmed CC 9, 46, 54-57, 62, 93, 104 and program change. CC 63 did nothing.",
+  "sources": [
+    {
+      "title": "TE OP-1 field guide v1.7.0: 'midi reference' (incoming messages + incoming CC tables)",
+      "url": "https://teenage.engineering/guides/op-1#midi-reference",
+      "confidence": "docs"
+    },
+    {
+      "title": "OP-1 field user guide PDF, firmware 1.7.0 REV 10 (com, system > midi/usb mode, control, midi lfo, tempo/midi sync, tech specs)",
+      "url": "https://assets.teenage.engineering/_img/69f248938d433104c4dd1846_original.pdf",
+      "confidence": "docs"
+    },
+    {
+      "title": "TE downloads: OP-1 field firmware changelog (1.7.0 'new MIDI controls', MIDI monitor, SPP origin)",
+      "url": "https://teenage.engineering/downloads/op-1/field",
+      "confidence": "docs"
+    },
+    {
+      "title": "TE 'now' post: OP-1 field 1.7.0 (MIDI control across nearly all parameters)",
+      "url": "https://teenage.engineering/now",
+      "confidence": "docs"
+    },
+    {
+      "title": "MIDI Association SysEx manufacturer ID table (Teenage Engineering = 00H 20H 76H)",
+      "url": "https://midi.org/sysexidtable",
+      "confidence": "docs"
+    },
+    {
+      "title": "CrabbTech/op-bridge docs/device.md: hardware test log (port 'OP-1', channel behaviour, CC results, USB audio layout, latency)",
+      "url": "https://github.com/CrabbTech/op-bridge/blob/main/docs/device.md",
+      "confidence": "community"
+    },
+    {
+      "title": "andrewralon/op1-lfo-hero: sends CC automation to OP-1 field (port match 'op-1', CC channel usage)",
+      "url": "https://github.com/andrewralon/op1-lfo-hero",
+      "confidence": "community"
+    },
+    {
+      "title": "tacoe/OP1field: Ableton remote script ('OP-1' input; CTRL-mode CC numbers sent by the OP-1)",
+      "url": "https://github.com/tacoe/OP1field",
+      "confidence": "community"
+    },
+    {
+      "title": "midi.guide OP-1 field CC list (mirrors the TE table)",
+      "url": "https://midi.guide/d/teenage-engineering/op-1-field/",
+      "confidence": "community"
+    },
+    {
+      "title": "jstnfst/te-op1 (TE USB VID 0x2367, MTP storage, fw 1.7.3)",
+      "url": "https://github.com/jstnfst/te-op1",
+      "confidence": "community"
+    }
+  ],
+  "usb": {
+    "classCompliantMidi": true,
+    "classCompliantAudio": true,
+    "portNameHint": "OP-1",
+    "confidence": "community",
+    "notes": "Driverless on macOS. Guide spec: 'usb midi host & device', 'audio class 2.0 usb device support', 'multichannel usb-c audio interface'. The MIDI port and the CoreAudio device both appear as 'OP-1' (op-bridge; Ableton's input list shows 'OP-1'). Match case-insensitively on the substring 'op-1', not an exact name. USB audio mode is set in SHIFT+COM > T1 SYS > SYSTEM > USB MODE: 2CH = main stereo only; 8CH = tape tracks 1-4 as stereo pairs (the setting shown in TE screenshots; community measured 8 in / 2 out at 44.1 kHz, and the live synth appears on the selected track's pair, post-mixer); 10CH = main stereo on ch 1-2 + tape tracks. For Chrome getUserMedia capture of the synth, use 2CH (or 10CH and take ch 1-2), and pass echoCancellation/noiseSuppression/autoGainControl = false. macOS asks for microphone permission on first capture. Avoid MTP/disk mode (COM > T4) during a demo: MIDI behaviour there is untested and it likely re-enumerates USB (inferred). Turning USB charging off (COM screen, orange encoder) can remove USB noise. TE USB vendor ID 0x2367."
+  },
+  "identity": {
+    "respondsToUniversalInquiry": null,
+    "manufacturerId": [
+      0,
+      32,
+      118
+    ],
+    "replyExample": null,
+    "confidence": "unknown",
+    "notes": "No official or community record of the OP-1 field answering F0 7E 7F 06 01 F7. TE's guide lists no SysEx, and op-bridge explicitly did not test identity. Manufacturer ID 00 20 76 is confirmed (MIDI Association table). Sibling TE devices do reply: EP-133 sends F0 7E 33 06 02 00 20 76 20 00 02 00 00 00 00 00 F7, and OP-Z sends a non-standard reply with ASCII serial/version. Probing is a read-only universal message, so send it with a ~500 ms timeout and fall back to port-name matching ('OP-1'). Chrome needs requestMIDIAccess({sysex:true}). The label's model number is TE002AS002. Guess, not evidence: if it replies, the family code may encode 002, the way EP-133's family 0x20 (= 32) matches its SKU TE032."
+  },
+  "channels": {
+    "receive": "Notes, pitch bend and program change: only on the channel set in SYSTEM > MIDI (SHIFT+COM, T1 sys, MIDI page; 1-16). Community-verified that notes on other channels are ignored. CCs marked 'any': any channel (CC 46 worked on ch 1 and 8). CC 7/9/10: the channel selects tape track 1-4. CC 102: the channel selects sound slot 1-8.",
+    "send": "Normal mode: keyboard notes on the SYSTEM > MIDI channel, velocity fixed at 127 unless KEYBOARD > VELOCITY is on. op-bridge saw no outgoing messages for mode, sound or transport changes; encoder CC output in normal mode is not documented. Treat the OP-1 as unable to report its state. CTRL mode (SHIFT+COM, T2 'ctrl') turns it into a controller keyboard with its own channel 1-16, encoders relative/absolute, and octave settings. Community (OP1Field.py): encoders send CC 1-4 (relative mode: value 1 or 127 per detent, direction as handled in OP1Field.py), encoder pushes CC 66-69, REC 38, PLAY 39, STOP 40, MIC 48, COM 49, ARP 26.",
+    "notes": "Before a demo, set SYSTEM > MIDI: channel = 1; NOTES = in or both; OTHER = in or both (CC and transport are in the 'other' filter group); CLOCK = in/both only if slaving to the Mac; SPP ORIGIN as needed. The default channel is not documented, and one test unit was on ch 8, so set it explicitly. COM > T3 'list' holds per-device clock/notes/other filters for devices the OP-1 hosts over USB/BLE, not for the Mac."
+  },
+  "notes": {
+    "description": "Synth mode: chromatic, MIDI note = pitch (60 = C4), full MIDI range accepted. Drum mode: each note is a kit key. Send on the SYSTEM > MIDI channel. CC 93 (or the device) chooses synth or drum mode. Program change 0-7 / 8-15 chooses the slot.",
+    "map": {
+      "synth": "chromatic; note number = pitch; 60 = C4",
+      "internalKeyboardDefaultOctave": "53 (F3) .. 76 (E5) = the 24 keys (inferred from layout + community drum test)",
+      "drumKit": "kit keys start at 53 (F3): 53-76 = 24 kit keys left to right (inferred); community: 53-82 sound on drum slot 1, nothing below 53",
+      "velocity": "1-127 honoured",
+      "polyphony": "community: clean up to 8 voices (slot 1 engine), oldest-note stealing beyond; budget 6"
+    }
+  },
+  "parameters": [
+    {
+      "name": "Play note (synth: chromatic / drum: kit key)",
+      "group": "notes",
+      "cc": null,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "the channel set in SYSTEM > MIDI (other channels are ignored)",
+      "confidence": "docs",
+      "notes": "Note On 0x9n / Note Off 0x8n, velocity 1-127 honoured (community: ~20 dB between vel 8 and 127). Guide lists note on/off on channels 1-16; a community device test found notes are accepted ONLY on the configured channel. Always send a matching Note Off."
+    },
+    {
+      "name": "Pitch bend (synth)",
+      "group": "notes",
+      "cc": null,
+      "nrpn": null,
+      "range": [
+        0,
+        16383
+      ],
+      "channel": "the channel set in SYSTEM > MIDI",
+      "confidence": "docs",
+      "notes": "14-bit pitch bend, 8192 = centre. Community: the bend is held until reset, so send 8192 after a bend."
+    },
+    {
+      "name": "Program change: load sound slot",
+      "group": "program",
+      "cc": null,
+      "nrpn": null,
+      "range": [
+        0,
+        15
+      ],
+      "channel": "the channel set in SYSTEM > MIDI",
+      "confidence": "docs",
+      "notes": "0-7 = synth slots 1-8, 8-15 = drum slots 1-8. Community-verified (op-bridge): switching slots does not discard live edits. Changes the sound on camera, so use deliberately."
+    },
+    {
+      "name": "Track volume (mixer)",
+      "group": "mixer",
+      "cc": 7,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "channel 1-4 = tape track 1-4",
+      "confidence": "docs",
+      "notes": "Mixer T1 page (level meters). Used by op1-lfo-hero and op-bridge."
+    },
+    {
+      "name": "Track mute (mixer)",
+      "group": "mixer",
+      "cc": 9,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "channel 1-4 = tape track 1-4",
+      "confidence": "docs",
+      "notes": ">=64 = muted, <64 = unmuted. Community-verified: muting track 1 silenced its USB audio pair."
+    },
+    {
+      "name": "Track pan (mixer)",
+      "group": "mixer",
+      "cc": 10,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "channel 1-4 = tape track 1-4",
+      "confidence": "docs",
+      "notes": "64 = centre (community)."
+    },
+    {
+      "name": "MIDI LFO input 1",
+      "group": "midi-lfo",
+      "cc": 1,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (midi.guide; TE guide does not say)",
+      "confidence": "docs",
+      "notes": "Only when the patch's T4 LFO is set to 'midi lfo'; destination chosen on the device with the encoders. This was the only CC path before firmware 1.7.0."
+    },
+    {
+      "name": "MIDI LFO input 2",
+      "group": "midi-lfo",
+      "cc": 2,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "As CC 1 (MIDI LFO slot 2)."
+    },
+    {
+      "name": "MIDI LFO input 3",
+      "group": "midi-lfo",
+      "cc": 3,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "As CC 1 (MIDI LFO slot 3)."
+    },
+    {
+      "name": "MIDI LFO input 4",
+      "group": "midi-lfo",
+      "cc": 4,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "As CC 1 (MIDI LFO slot 4)."
+    },
+    {
+      "name": "Synth engine parameter 1 / drum active-key pitch",
+      "group": "engine",
+      "cc": 46,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Synth mode: engine parameter driven by the BLUE encoder on the T1 engine page (encoder mapping inferred). Drum mode: pitch of the active key. Community-verified: changes the sound during a held note, on ch 1 and ch 8."
+    },
+    {
+      "name": "Synth engine parameter 2 / drum active-key loop in",
+      "group": "engine",
+      "cc": 47,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Synth: OCHRE encoder parameter on T1 (inferred mapping). Drum: loop-in point of the active key."
+    },
+    {
+      "name": "Synth engine parameter 3 / drum active-key loop out",
+      "group": "engine",
+      "cc": 48,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Synth: GRAY encoder parameter on T1 (inferred mapping). Drum: loop-out point of the active key."
+    },
+    {
+      "name": "Synth engine parameter 4 / drum active-key play mode",
+      "group": "engine",
+      "cc": 49,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Synth: ORANGE encoder parameter on T1 (inferred mapping). Drum: play mode of the active key (stepped)."
+    },
+    {
+      "name": "Envelope attack (synth) / attack (drum)",
+      "group": "envelope",
+      "cc": 50,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "T2 envelope page."
+    },
+    {
+      "name": "Envelope decay (synth) / gain (drum)",
+      "group": "envelope",
+      "cc": 51,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "T2 envelope page."
+    },
+    {
+      "name": "Envelope sustain (synth) / release (drum)",
+      "group": "envelope",
+      "cc": 52,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "T2 envelope page."
+    },
+    {
+      "name": "Envelope release (synth) / smooth (drum)",
+      "group": "envelope",
+      "cc": 53,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "T2 envelope page."
+    },
+    {
+      "name": "Patch FX parameter 1",
+      "group": "patch-fx",
+      "cc": 54,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "T3 FX page, blue encoder (inferred). Meaning depends on the effect, e.g. punch: frequency; spring: tone; terminal: rate. Community-verified that CC 54-57 drive the FX knobs."
+    },
+    {
+      "name": "Patch FX parameter 2",
+      "group": "patch-fx",
+      "cc": 55,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "T3 FX page, ochre encoder (inferred). e.g. punch: punch; spring: turns; terminal: bits."
+    },
+    {
+      "name": "Patch FX parameter 3",
+      "group": "patch-fx",
+      "cc": 56,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "T3 FX page, gray encoder (inferred). e.g. punch: rounds; spring: damping; terminal: model."
+    },
+    {
+      "name": "Patch FX parameter 4",
+      "group": "patch-fx",
+      "cc": 57,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "T3 FX page, orange encoder (inferred). Often the wet/dry 'mix' (spring, terminal) or 'power' (punch)."
+    },
+    {
+      "name": "Patch LFO parameter 1",
+      "group": "patch-lfo",
+      "cc": 58,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "T4 LFO page; meaning depends on LFO type."
+    },
+    {
+      "name": "Patch LFO parameter 2",
+      "group": "patch-lfo",
+      "cc": 59,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "T4 LFO page."
+    },
+    {
+      "name": "Patch LFO parameter 3",
+      "group": "patch-lfo",
+      "cc": 60,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "T4 LFO page."
+    },
+    {
+      "name": "Patch LFO parameter 4",
+      "group": "patch-lfo",
+      "cc": 61,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "T4 LFO page."
+    },
+    {
+      "name": "Randomize active patch",
+      "group": "patch",
+      "cc": 62,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Trigger: >=64. DESTRUCTIVE to the current sound: community saw the randomised state persist (survives slot changes); CC 63 reset did not undo it. Only SHIFT + sound-key revert restores a library preset."
+    },
+    {
+      "name": "Reset active patch",
+      "group": "patch",
+      "cc": 63,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Trigger: >=64. Community test (fw 1.7): did nothing in five trials. Do not rely on it."
+    },
+    {
+      "name": "Sustain pedal",
+      "group": "global",
+      "cc": 64,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": ">=64 = down, <64 = up. Live notes only (not tape)."
+    },
+    {
+      "name": "Master FX parameter 1",
+      "group": "master",
+      "cc": 70,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Mixer T3 master effect, blue encoder (inferred)."
+    },
+    {
+      "name": "Master FX parameter 2",
+      "group": "master",
+      "cc": 71,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Mixer T3 master effect, ochre encoder (inferred)."
+    },
+    {
+      "name": "Master FX parameter 3",
+      "group": "master",
+      "cc": 72,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Mixer T3 master effect, gray encoder (inferred)."
+    },
+    {
+      "name": "Master FX parameter 4",
+      "group": "master",
+      "cc": 73,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Mixer T3 master effect, orange encoder (inferred)."
+    },
+    {
+      "name": "Master out parameter 1 (left level)",
+      "group": "master",
+      "cc": 74,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Guide: 'master compressor parameter 1'. Master out page (mixer T4) encoders are left, right, drive, release, so this is most likely master LEFT level (inferred; midi.guide also says Volume L)."
+    },
+    {
+      "name": "Master out parameter 2 (right level)",
+      "group": "master",
+      "cc": 75,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Guide: 'master compressor parameter 2'; most likely master RIGHT level (inferred)."
+    },
+    {
+      "name": "Master out parameter 3 (drive)",
+      "group": "master",
+      "cc": 76,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Guide: 'master compressor parameter 3'; most likely DRIVE (inferred). High values distort/pump."
+    },
+    {
+      "name": "Master out parameter 4 (release)",
+      "group": "master",
+      "cc": 77,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Guide: 'master compressor parameter 4'; most likely drive RELEASE (inferred)."
+    },
+    {
+      "name": "Master EQ low",
+      "group": "master",
+      "cc": 90,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Mixer T2 EQ page. 64 = flat (community)."
+    },
+    {
+      "name": "Master EQ mid",
+      "group": "master",
+      "cc": 91,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Mixer T2 EQ page. 64 = flat (community)."
+    },
+    {
+      "name": "Master EQ high",
+      "group": "master",
+      "cc": 92,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Mixer T2 EQ page. 64 = flat (community)."
+    },
+    {
+      "name": "Tape record level",
+      "group": "global",
+      "cc": 78,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Community (op1-lfo-hero) reports it also acts as the synth/drum main level."
+    },
+    {
+      "name": "Octave shift (incremental)",
+      "group": "global",
+      "cc": 79,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "<64 = one octave down, >=64 = one octave up. Each message is a step; repeated sends keep shifting."
+    },
+    {
+      "name": "Tempo",
+      "group": "global",
+      "cc": 80,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "0-5 -> 40-50 BPM, 6-120 -> 52-166 BPM, 121-127 -> 168-180 BPM. Derived formula: v<=5: 40+2v; 6<=v<=120: v+46; v>=121: 168+2(v-121)."
+    },
+    {
+      "name": "Metronome level",
+      "group": "global",
+      "cc": 81,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": ""
+    },
+    {
+      "name": "Mode select (synth / drum)",
+      "group": "global",
+      "cc": 93,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "<64 = synth mode, >=64 = drum mode. Switches the screen. Community-verified. Also decides whether CC 46-53 address the synth engine or the drum kit."
+    },
+    {
+      "name": "Sound slot select",
+      "group": "global",
+      "cc": 102,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "channel 1-8 = sound slot 1-8",
+      "confidence": "docs",
+      "notes": "Trigger: >=64 selects the slot given by the CHANNEL. Untested by the community."
+    },
+    {
+      "name": "All notes off",
+      "group": "global",
+      "cc": 123,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Panic. Any value."
+    },
+    {
+      "name": "Tape: previous bar",
+      "group": "tape",
+      "cc": 82,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Trigger >=64."
+    },
+    {
+      "name": "Tape: next bar",
+      "group": "tape",
+      "cc": 83,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Trigger >=64."
+    },
+    {
+      "name": "Tape: jump to start",
+      "group": "tape",
+      "cc": 84,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Trigger >=64. Community: cancels an armed track."
+    },
+    {
+      "name": "Tape: jump to end",
+      "group": "tape",
+      "cc": 85,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Trigger >=64."
+    },
+    {
+      "name": "Tape: set loop in",
+      "group": "tape",
+      "cc": 86,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Trigger >=64."
+    },
+    {
+      "name": "Tape: set loop out",
+      "group": "tape",
+      "cc": 87,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Trigger >=64."
+    },
+    {
+      "name": "Tape: toggle loop",
+      "group": "tape",
+      "cc": 88,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Trigger >=64."
+    },
+    {
+      "name": "Tape: stop",
+      "group": "tape",
+      "cc": 104,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Trigger >=64. Community-verified (stopped the tape)."
+    },
+    {
+      "name": "Tape: play",
+      "group": "tape",
+      "cc": 105,
+      "nrpn": null,
+      "range": [
+        0,
+        127
+      ],
+      "channel": "any channel (1-16)",
+      "confidence": "docs",
+      "notes": "Trigger >=64. Community: did not start an armed take. One community tool says play/stop only act on tape when the tempo sync mode is MIDI SYNC."
+    }
+  ],
+  "transport": {
+    "clockIn": true,
+    "startStop": true,
+    "notes": "Received (guide): clock (sync input), start and continue (start tape playback), stop (stop tape), song position (set sequencer position). To follow the Mac's clock, set the tempo screen sync mode (ochre encoder) to MIDI SYNC; tape speed then follows the external clock (96 BPM clock vs 120 BPM song = 80% speed, community). Allow clock in SYSTEM > MIDI. Community: play/stop/arrows act on the tape only in MIDI SYNC mode; an SPP while playing can stop playback; a MIDI start, tape jump or tempo change cancels an armed track. Sends clock in BEAT MATCH mode (internal master) with clock out enabled, and sends SPP on SHIFT+arrow jumps (1.7.0). Latency (community): note-on to audio onset about 8 ms over USB."
+  },
+  "unsafeMessages": [
+    "CC 62 >= 64 (randomize active patch): irreversible over MIDI. The randomised sound persists, CC 63 reset did nothing in community tests, and only SHIFT + sound-key revert restores library presets.",
+    "Any Note On while a tape track is armed: recording starts on the first incoming note (fw 1.4.2+) and records onto the tape track (tape undo exists since 1.7.0).",
+    "MIDI Start/Continue/Stop/SPP and tape CCs 82-88, 104, 105: move or stop the tape; can cancel an armed take.",
+    "Program change 0-15, CC 93 (mode) and CC 102 (slot select): change the active sound and screen on camera (not destructive; edits persist).",
+    "CC 79 (octave) is incremental: every message shifts again. Send once per intended step.",
+    "CC 80 (tempo) and CC 78 (tape record level) change global state. Restore afterwards.",
+    "Unknown/proprietary SysEx (F0 00 20 76 ...): none documented for the OP-1 field. Do not send. Firmware updates use TE's online updater (transport undocumented) or TE boot mass storage. Never script either.",
+    "Floods: more than ~8 simultaneous voices steal notes (community). Rate-limit CC sweeps to roughly 30-60 msgs/s per parameter (inferred recommendation, not measured)."
+  ],
+  "demo": {
+    "bestParameters": [
+      "CC 46-49: synth engine parameters 1-4 (the four colored encoders on the T1 engine screen; biggest timbre change, community-verified on CC 46)",
+      "CC 54-57: patch FX parameters 1-4 (T3 FX screen animations, e.g. punch/spring/terminal; param 4 is often the mix)",
+      "CC 50-53: envelope A/D/S/R (T2 envelope curve)",
+      "CC 7 / CC 10 on channel 1: track 1 volume / pan (mixer meters); CC 90-92 master EQ as a safe alternative"
+    ],
+    "visualFeedback": "Colour LCD draws the active page's parameters, and the four encoder colours match on-screen elements. Keep the matching page open: T1 engine for CC 46-49, T2 envelope for 50-53, T3 FX for 54-57, T4 LFO for 58-61, mixer T1 for CC 7/9/10, mixer T2 for 90-92. That the screen redraws on incoming CC is inferred (the values change the patch), not documented. Verify on device. CC 93 mode switch is the most visible single message (whole screen changes).",
+    "audibleFeedback": "Hold a note on the configured channel, or play a looping tape, while sweeping CC 46-49 / 54-57: immediate timbre/FX change (community-verified for 46 and 54-57). Note-to-audio latency about 8 ms.",
+    "risks": [
+      "Firmware < 1.7.0 ignores almost all of these CCs (MIDI LFO CC 1-4 only). Check the boot screen.",
+      "Notes on the wrong channel are silently ignored. Match SYSTEM > MIDI channel (set it to 1).",
+      "SYSTEM > MIDI 'OTHER' filter must allow input or CCs/transport may be dropped (inferred from 1.6.9/1.7 notes).",
+      "Engine parameter meaning differs per synth engine. Pick and pre-load a demo patch, avoid CC 62/63.",
+      "No state read-back: the app must track what it sent.",
+      "USB audio capture: choose 2CH (or 10CH) USB MODE, or the main mix is not on channels 1-2."
+    ],
+    "setup": [
+      "Update to fw >= 1.7.0 beforehand (TE web updater), not during the demo.",
+      "SHIFT+COM > T1 sys > MIDI: channel 1, NOTES both, OTHER both, CLOCK in only if syncing.",
+      "SHIFT+COM > T1 sys > SYSTEM > USB MODE: 2CH for simple Chrome capture.",
+      "Load a synth patch in slot 1 with expressive T1 parameters and an FX on T3. Stay on the T1 screen."
+    ]
+  }
+}

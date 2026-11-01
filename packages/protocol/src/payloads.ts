@@ -12,10 +12,10 @@
  * `deviceId`. Large or frequent client -> server payloads (scan.frame, voice.audio, sense.result, exec.ack)
  * should be sent with envelope `to: "server"` so the hub does not relay them to every other client.
  */
-import { Gen3dSpec } from '@ce/gen3d';
+import { Control as Gen3dControl, Gen3dSpec, HackItem as Gen3dHackItem, Part as Gen3dPart } from '@ce/gen3d';
 import { z } from 'zod';
 import { Driver, Evidence, ExecOp, IrCapture, VerifyState } from './driver';
-import { HackSet } from './hackset';
+import { Hack, HackSet } from './hackset';
 import {
   PairApproveRequest,
   PairDenyRequest,
@@ -534,6 +534,22 @@ export const ControlEventPayload = z.object({
   phase: z.enum(['start', 'move', 'end']).optional(),
 });
 export type ControlEventPayload = z.infer<typeof ControlEventPayload>;
+
+/**
+ * S->C, droppable. One finished piece of a spec while the model is still writing it, so the headset can show
+ * the object assembling: a control with its 3D part and hack-menu row. The complete spec follows as ui.spec.
+ */
+export const UiPartialPayload = z.object({
+  specId: Id,
+  cardId: Id.optional(),
+  runId: Id.optional(),
+  seq: z.number().int().min(0),
+  control: Gen3dControl.optional(),
+  part: Gen3dPart.optional(),
+  hackItem: Gen3dHackItem.optional(),
+  hack: Hack.optional(),
+});
+export type UiPartialPayload = z.infer<typeof UiPartialPayload>;
 
 /** C->S. Ask the forge for a hack set + 3D spec for a target (the loop does this itself after VERIFY). */
 export const Gen3dGeneratePayload = z.object({

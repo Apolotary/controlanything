@@ -1,0 +1,93 @@
+{
+  "id": "koizumi-krh-tg-9a",
+  "remote": "KOIZUMI KRH-TG-9A",
+  "generated": "2026-11-02",
+  "summary": "No public IR codes, raw captures or protocol description were found for the KRH-TG-9A or any other Koizumi (コイズミ照明) lighting remote. The protocol is UNKNOWN; there is no evidence for NEC, AEHA or a proprietary format. The only reliable route is to learn the real remote with an IR receiver (M5Stack Unit IR on the Cardputer Grove port) and replay it. Everything below about the remote comes from shop listings and universal-remote compatibility lists.",
+  "remoteFacts": {
+    "koizumiPartNumber": "49KE0162 (sold as 49KE0162-(KRH-TG-9A))",
+    "description": "シンプルリモコン 調光・調色シーリング用 2ch (simple remote for dimming and colour-tuning ceiling lights, 2 channels) [community: retailer listings]",
+    "replaces": "KRE-TG-9A [community: Yahoo! Shopping alllight listing]",
+    "pairsWithFixtures": ["AP47612L", "AP47611L", "AP47610L", "AP47609L", "AH47302L", "AH47301L", "AH43909L", "AH43908L", "AH42652L", "AH42651L", "AH42650L", "AH42649L", "AH42634L", "AH42633L", "AD41830L", "AD41829L", "AD41828L", "AP47448L", "AP47447L", "AP45445L", "AP45444L", "AP43081L", "AP43080L", "AP43079L", "AP43078L", "AP43077L", "AP43076L", "BH13702CK", "BH13701CK"],
+    "buttons": "[unknown] No manual was retrievable. Koizumi manuals sit behind the interactive search at https://www.koizumi-lt.co.jp/kensaku/. A dimming + colour remote very likely has 全灯/点灯, 消灯, 明るく, 暗く, 常夜灯, colour keys (暖かい/白い) and a CH selector [inferred from the product category, not verified]."
+  },
+  "protocol": {
+    "family": "UNKNOWN",
+    "evidence": "Nothing published. Checked: Flipper-IRDB (Lucaslhm) LED_Lighting/, Miscellaneous/, Fans/ and _Converted_/IR_Plus/K (no Koizumi); probonopd/irdb index of 3205 files (no Koizumi or Japanese lighting); LIRC remotes K* directories (no koizumi); SmartIR codes/light (only Iris, NEC, Toshiba, Takizumi); ESPIR-DB (derived from Flipper-IRDB); Japanese blogs, Qiita and GitHub (no Koizumi captures). Commercial universal remotes and IR hubs (ELPA RC-C009, OHM OCR-LEDR3, KDDI/Commufa 赤外線リモコン01/02) include Koizumi presets, so the codes exist in closed databases only.",
+    "carrierHz": "assume 38000 (every Japanese ceiling-light remote found so far is consistent with 38 kHz) [inferred]",
+    "dutyCycle": "about 0.33 [inferred]",
+    "bitOrder": "unknown until captured. NEC and AEHA are LSB-first per byte.",
+    "howToIdentifyAfterCapture": {
+      "NEC": "leader about 9.0/4.5 ms (captures read 9.6-10.2 / 4.7-5.0 ms), 32 bits, 0.56 ms marks, spaces 0.56/1.69 ms. IRremoteESP8266 decodes it as NEC.",
+      "AEHA": "leader about 3.4/1.7 ms (8T/4T, T about 425 us), marks about 0.43 ms, spaces 0.43/1.29 ms, length 40-88+ bits. IRremoteESP8266 reports UNKNOWN unless it is a 48-bit Panasonic/Kaseikyo frame.",
+      "proprietary": "Anything else (for example Iris Ohyama's two-mark leader with pulse-width bits). Replay the raw timings."
+    }
+  },
+  "channels": {
+    "count": 2,
+    "names": ["CH1", "CH2"],
+    "source": "Product name '2ch' [community: retailer listings]; Commufa/KDDI 赤外線リモコン02 list rows 'LEDシーリングライト(調光・調色・2CH対応) CH1 / CH2' for KRH-TG-9A [docs]",
+    "factoryDefault": "CH1 [inferred: Toshiba/NVC, Yazawa and Takizumi manuals all ship lamp and remote on CH1; Koizumi manual not seen]",
+    "codeEffect": "[unknown] CH2 sends a different code set. ELPA RC-C009 gives Koizumi LED two code numbers (11, 12), which probably correspond to CH1 and CH2 [inferred].",
+    "settingProcedure": "[unknown] Koizumi manual not retrieved."
+  },
+  "codes": [
+    {"button": "全灯", "function": "fullOn", "channel": 1, "bytes": null, "raw": null, "confidence": "unknown - no public source", "source": "none found"},
+    {"button": "点灯", "function": "on", "channel": 1, "bytes": null, "raw": null, "confidence": "unknown - no public source; button existence not verified", "source": "none found"},
+    {"button": "消灯", "function": "off", "channel": 1, "bytes": null, "raw": null, "confidence": "unknown - no public source", "source": "none found"},
+    {"button": "明るく", "function": "brighter", "channel": 1, "bytes": null, "raw": null, "confidence": "unknown - no public source", "source": "none found"},
+    {"button": "暗く", "function": "dimmer", "channel": 1, "bytes": null, "raw": null, "confidence": "unknown - no public source", "source": "none found"},
+    {"button": "常夜灯", "function": "nightLight", "channel": 1, "bytes": null, "raw": null, "confidence": "unknown - no public source", "source": "none found"},
+    {"button": "調色(暖かい光)", "function": "warmer", "channel": 1, "bytes": null, "raw": null, "confidence": "unknown - no public source", "source": "none found"},
+    {"button": "調色(白い光)", "function": "cooler", "channel": 1, "bytes": null, "raw": null, "confidence": "unknown - no public source", "source": "none found"},
+    {"button": "全灯", "function": "fullOn", "channel": 2, "bytes": null, "raw": null, "confidence": "unknown - no public source", "source": "none found"},
+    {"button": "消灯", "function": "off", "channel": 2, "bytes": null, "raw": null, "confidence": "unknown - no public source", "source": "none found"},
+    {"button": "明るく", "function": "brighter", "channel": 2, "bytes": null, "raw": null, "confidence": "unknown - no public source", "source": "none found"},
+    {"button": "暗く", "function": "dimmer", "channel": 2, "bytes": null, "raw": null, "confidence": "unknown - no public source", "source": "none found"},
+    {"button": "常夜灯", "function": "nightLight", "channel": 2, "bytes": null, "raw": null, "confidence": "unknown - no public source", "source": "none found"},
+    {"button": "調色(暖かい光)", "function": "warmer", "channel": 2, "bytes": null, "raw": null, "confidence": "unknown - no public source", "source": "none found"},
+    {"button": "調色(白い光)", "function": "cooler", "channel": 2, "bytes": null, "raw": null, "confidence": "unknown - no public source", "source": "none found"}
+  ],
+  "learnProcedure": {
+    "hardware": "M5Stack Unit IR (U002: 38 kHz demodulating receiver plus 940 nm LED) on the Cardputer Grove port: IR_RX (white) = GPIO1, IR_TX (yellow) = GPIO2. The Cardputer's built-in IR LED is GPIO44 (TX only). [docs: M5Stack Unit IR and Cardputer pages; wire-to-GPIO mapping inferred from colours]",
+    "receiverSetup": "IRremoteESP8266: IRrecv irrecv(1 /*G1*/, 1024 /*buffer*/, 50 /*ms timeout*/, true); irrecv.setTolerance(25); irrecv.enableIRIn(); then print resultToSourceCode(&results) and typeToString(results.decode_type). Use a 1024-entry buffer because AEHA frames can reach 179+ edges. A 50 ms timeout separates frames repeated about 47-75 ms apart.",
+    "capture": "Leave the remote's CH switch where the user normally has it (probably CH1). Press each key 3 times and keep one clean frame; note whether the remote sends 1 or 2 frames per press and the gap between them. Learn discrete keys (全灯, 消灯, 常夜灯) first.",
+    "doNotSend": "Do not replay or synthesise CH-programming or memory key sequences."
+  },
+  "sendExamples": {
+    "IRremoteESP8266": [
+      "// setup: #include <IRremoteESP8266.h> #include <IRsend.h>  IRsend irsend(44); irsend.begin();  (GPIO44 = Cardputer IR LED)",
+      "// 1) After capture, if decode_type == NEC (value printed MSB-first, e.g. 0x41B67D82): irsend.sendNEC(0x41B67D82ULL, 32);  // equivalently irsend.sendNEC(irsend.encodeNEC(0x6D82, 0xBE)); The numbers here are the NEC/HotaluX CH1 消灯 code used as a FORMAT EXAMPLE, not Koizumi.",
+      "// 2) If UNKNOWN with a ~3.4/1.7 ms leader (AEHA): send the LSB-first bytes with the byte-array overload, MSBfirst=false: const uint8_t kz_off[] = {/* captured bytes */}; irsend.sendGeneric(3456, 1728, 432, 1296, 432, 432, 432, 75000, kz_off, sizeof(kz_off), 38, false, 1 /*repeat -> 2 frames*/, 33);",
+      "// 3) Anything else (or simplest and safest): replay the captured timings: const uint16_t kz_off_raw[] = {/* resultToSourceCode output */}; irsend.sendRaw(kz_off_raw, sizeof(kz_off_raw)/sizeof(kz_off_raw[0]), 38);",
+      "// Candidate-search calls (OTHER brands, from jp-ceiling-light-ir.json):",
+      "irsend.sendNEC(irsend.encodeNEC(0x6D82, 0xBE)); // NEC/HotaluX CH1 消灯 = 0x41B67D82",
+      "irsend.sendNEC(irsend.encodeNEC(0x0CE7, 0x8B)); // Toshiba(NVC) CH1 消灯 = 0xE730D12E",
+      "irsend.sendNEC(irsend.encodeNEC(0x5284, 0x32)); // Takizumi 入/切 toggle = 0x214A4CB3",
+      "{ const uint8_t pana_off[] = {0x2C,0x52,0x09,0x2F,0x26}; irsend.sendGeneric(3456,1728,432,1296,432,432,432,75000,pana_off,5,38,false,1,33); } // Panasonic CH1 消灯 (AEHA 40-bit, 2 frames)",
+      "{ const uint8_t hit_off[] = {0x01,0x10,0x30,0x50,0xAF,0x00,0xFF,0x03,0xFC,0xC2,0x3D}; irsend.sendGeneric(3400,1700,425,1275,425,425,425,100000,hit_off,11,38,false,0,33); } // Hitachi 消灯 (AEHA 88-bit); retry with T=390 (3120,1560,390,1170,390,390,390)"
+    ]
+  },
+  "candidatesIfUnknown": [
+    "No Koizumi code set is public, so a blind search can only find the lamp if Koizumi shares another maker's format. That is unlikely: ELPA RC-C009 gives Koizumi its own codes, 11/12 for LED with full dimming and colour functions and 52/53 in its fluorescent range, separate from every other maker. Treat the blind search as a long shot and learn the remote instead.",
+    "If a blind search is still wanted, start with the lamp ON, send an OFF candidate, wait at least 4 s (fades), then confirm with the matching ON code, in this order: Panasonic CH1 2C 52 09 2F 26 (x2) -> NEC/HotaluX 82 6D BE 41 -> Toshiba E7 0C 8B 74 -> Hitachi 01 10 30 50 AF 00 FF 03 FC C2 3D (T 425 then 390) -> Takizumi toggle 84 52 32 CD -> unidentified NEC 84 51 2A D5 -> Panasonic CH2/CH3 (…37 3E / …3F 36) -> NEC CH2 82 6D 3E C1.",
+    "Universal remotes that cover Koizumi: ELPA RC-C009 (codes 11, 12, 52, 53) [docs]; OHM OCR-LEDR3 (Koizumi listed, code table not retrieved) [community: retailer]; NOT OHM OCR-LEDR4 (6 makers, no Koizumi) [docs]; KDDI 赤外線リモコン01 (Koizumi listed; needs separate ON/OFF keys) [docs]; KDDI/Commufa 赤外線リモコン02 (KRH-TG-9A CH1/CH2 explicitly supported) [docs]. With the user's permission, a borrowed ELPA RC-C009 on code 11/12 could act as a 'teacher': point it at the Unit IR receiver and capture it.",
+    "Never sweep unknown command bytes: some are channel-programming or memory keys."
+  ],
+  "sources": [
+    {"title": "Yahoo! Shopping alllight: 49KE0162-(KRH-TG-9A) listing (2ch, replaces KRE-TG-9A, fixture list)", "url": "https://store.shopping.yahoo.co.jp/alllight/49ke0162-koizumi.html", "confidence": "community"},
+    {"title": "Amazon.co.jp: KOIZUMI シンプルリモコン 調光・調色シーリング用 2ch 49KE0162-(KRH-TG-9A)", "url": "https://www.amazon.co.jp/dp/B07XVBY7S7", "confidence": "community"},
+    {"title": "KDDI/Commufa 赤外線リモコン02 supported models (Koizumi KRH-TG-9A CH1/CH2; KRH-TA-7A, KRH-TA-8A, KRH-TA-11A, etc.), 2019-08-27", "url": "https://www.commufa.jp/-/media/Project/commufa/commufa/files/services/option/smarthome/pdf/rc02_maker_01.pdf", "confidence": "docs"},
+    {"title": "ELPA RC-C009 manual: maker code table (Koizumi 11,12 and 52,53)", "url": "https://www.elpa.co.jp/product/pdf/rc-c009.pdf", "confidence": "docs"},
+    {"title": "KDDI 赤外線リモコン01 maker list (コイズミ照明 included)", "url": "https://homeiot.kddi.com/faq/pdf/ura01a_maker_01.pdf", "confidence": "docs"},
+    {"title": "OHM OCR-LEDR4 (makers: Panasonic, Toshiba, NEC, Sharp, Hitachi, OHM; no Koizumi)", "url": "https://www.ohm-electric.co.jp/product/c01/c0110/873460/", "confidence": "docs"},
+    {"title": "Koizumi product/manual search (interactive; manual not retrieved)", "url": "https://www.koizumi-lt.co.jp/kensaku/", "confidence": "docs"},
+    {"title": "SmartIR light code list (no Koizumi)", "url": "https://github.com/smartHomeHub/SmartIR/blob/master/docs/LIGHT.md", "confidence": "community"},
+    {"title": "Flipper-IRDB (no Koizumi in LED_Lighting/Miscellaneous/Fans/IR_Plus K)", "url": "https://github.com/Lucaslhm/Flipper-IRDB", "confidence": "community"},
+    {"title": "probonopd/irdb (no Koizumi in index)", "url": "https://github.com/probonopd/irdb", "confidence": "community"},
+    {"title": "LIRC remotes (no koizumi directory)", "url": "https://sourceforge.net/p/lirc-remotes/code/ci/master/tree/remotes/", "confidence": "community"},
+    {"title": "M5Stack Unit IR", "url": "https://docs.m5stack.com/en/unit/ir", "confidence": "docs"},
+    {"title": "M5Stack Cardputer", "url": "https://docs.m5stack.com/en/core/Cardputer", "confidence": "docs"},
+    {"title": "Sibling research file with other brands' codes", "url": "file:///private/tmp/claude-501/-Volumes-macbook-ext-Developer-muse-hack2/6ae5ed73-d99c-4fa8-85e6-47661ca0aa9c/scratchpad/devices/jp-ceiling-light-ir.json", "confidence": "community/inferred"}
+  ],
+  "notes": "Time-boxed search, about 20 min. Not found: any Koizumi IR code, raw capture, protocol statement, or the KRH-TG-9A manual (channel procedure, exact buttons). No sibling Koizumi remote (KRH-TA-7A/8A/11A, KRF-TB-7A, KRF-TD-7A, KRU-MRH-7C, KRE-TG-9A, AE54435E/AE54436E) has published codes either. IRremoteESP8266 calls above are written from the library API (encodeNEC, sendNEC, the sendGeneric byte-array overload, sendRaw) and have not been compiled or tested. Verify signatures against the installed library version."
+}

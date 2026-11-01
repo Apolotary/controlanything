@@ -120,7 +120,7 @@ describe('protocol v1: discovery loop', () => {
     for (const t of [
       'scan.frame', 'scan.result', 'target.select', 'target.status', 'link.request', 'link.result', 'driver.spec', 'driver.status',
       'exec.command', 'exec.ack', 'sense.request', 'sense.result', 'verify.result', 'arm.request', 'arm.confirm', 'arm.result',
-      'panic', 'voice.audio', 'voice.text', 'ui.spec', 'gen3d.generate', 'gen3d.edit',
+      'panic', 'voice.audio', 'voice.text', 'ui.spec', 'ui.partial', 'gen3d.generate', 'gen3d.edit',
     ]) {
       expect(MESSAGE_TYPES).toContain(t);
     }
