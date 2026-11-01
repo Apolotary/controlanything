@@ -3,112 +3,149 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light dark" />
-    <title>ControlEverything Companion</title>
+    <meta name="color-scheme" content="dark" />
+    <title>ControlEverything Workbench</title>
     <link rel="icon" href="data:," />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600;700&family=JetBrains+Mono:wght@400;500&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
   </head>
   <body>
-    <header class="top">
-      <div class="brand"><strong>ControlEverything</strong><span>Companion</span></div>
-      <div class="badges">
-        <span id="mode" class="badge">…</span>
-        <span id="status" class="badge">offline</span>
+    <div id="workbench" class="app" hidden>
+      <header class="topbar">
+        <div class="wordmark">CONTROLEVERYTHING<span>WORKBENCH</span></div>
+        <div id="session" class="session">space —</div>
+        <div class="grow"></div>
+        <span id="pill" class="pill"><span id="conn-dot" class="dot"></span><span id="pill-text">connecting</span></span>
+        <button id="panic" class="panic" type="button" title="All notes off on every MIDI output, stop IR, and tell the server to disarm">Panic · all off</button>
+      </header>
+
+      <div id="banners" class="banners"></div>
+
+      <div class="cols">
+        <div class="col left">
+          <section class="panel" id="device-panel">
+            <header>
+              <h2>HACKS<small>your devices</small></h2>
+              <span id="exec-role" class="chip muted">…</span>
+            </header>
+            <div id="device-card" class="device-card"></div>
+          </section>
+
+          <section class="panel fill" id="code-panel">
+            <header>
+              <div class="tabs" role="tablist">
+                <button id="tab-code" class="tab" role="tab" type="button" aria-selected="true">Driver</button>
+                <button id="tab-tape" class="tab" role="tab" type="button" aria-selected="false">Tape</button>
+                <button id="tab-spec" class="tab" role="tab" type="button" aria-selected="false">Spec</button>
+              </div>
+              <div class="row"><span id="filetab" class="filetab"></span><span id="gen-chip"></span></div>
+            </header>
+            <div class="body">
+              <div id="code" class="code"></div>
+              <div id="tape" class="tape" hidden></div>
+              <div id="spec" class="code" hidden></div>
+            </div>
+          </section>
+
+          <section class="panel agent">
+            <header>
+              <h2>AGENT<small>work log · Meta model ids</small></h2>
+              <span id="calls-total" class="tiny dim"></span>
+            </header>
+            <div class="body"><div id="worklog" class="worklog"></div></div>
+            <div id="calls" class="calls"></div>
+          </section>
+        </div>
+
+        <div class="col right">
+          <section class="panel">
+            <header><h2>EVIDENCE<small>sent · expected · observed</small></h2></header>
+            <div id="evidence"></div>
+          </section>
+
+          <section class="panel" id="learn-panel" hidden>
+            <header>
+              <h2>LEARN<small>IR captures from the remote</small></h2>
+              <div id="learn-actions" class="row"></div>
+            </header>
+            <div id="learn"></div>
+          </section>
+
+          <section class="panel">
+            <header><h2>LINKS<small>channels and proof</small></h2></header>
+            <div id="links" class="links"></div>
+          </section>
+
+          <section class="panel" id="approve-panel" hidden>
+            <header><h2>LINK A DEVICE<small>owner approval</small></h2></header>
+            <form id="code-form" class="codeform" autocomplete="off">
+              <label for="code-input" class="small">Enter the code shown on your device</label>
+              <input id="code-input" placeholder="K7Q-4M2" maxlength="9" spellcheck="false" />
+              <button class="primary" type="submit">Approve</button>
+            </form>
+            <p id="code-msg" class="small"></p>
+            <div id="pending" class="pending"></div>
+            <div class="add">
+              <div id="add-qr" class="qr small" aria-label="QR code with the server address"></div>
+              <div class="stack small grow">
+                <div class="label tiny dim">Add a device</div>
+                <div id="add-tabs" class="tabs"></div>
+                <div id="add-url" class="mono small"></div>
+                <div id="add-hint" class="dim tiny"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel" id="daemons-panel" hidden>
+            <header><h2>DAEMONS<small>automations</small></h2></header>
+            <div id="daemons"></div>
+          </section>
+        </div>
       </div>
-    </header>
 
-    <main>
-      <section id="pair-self" class="card" hidden>
-        <h2>Pair this browser</h2>
-        <p class="muted">Approve it from a paired Quest, iPhone or Mac (scan the code or type it), or type <kbd>y</kbd> in the server terminal.</p>
-        <div class="pair-self">
+      <details id="drawer" class="drawer">
+        <summary>Monitors &amp; log</summary>
+        <div class="inner">
+          <div>
+            <div class="row between"><h3>System log</h3><button id="log-clear" class="ghost" type="button">clear</button></div>
+            <pre id="log" class="monitor"></pre>
+          </div>
+          <div>
+            <div class="row between">
+              <h3>MIDI in / out</h3>
+              <label class="tiny dim"><input id="midi-clock" type="checkbox" /> clock</label>
+            </div>
+            <pre id="midi-monitor" class="monitor"></pre>
+            <div id="midi-test-row" class="row" style="margin-top: 6px"></div>
+          </div>
+          <div>
+            <div class="row between"><h3>Serial · Cardputer</h3><span id="serial-state" class="tiny dim"></span></div>
+            <pre id="serial-monitor" class="monitor"></pre>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div id="pairscreen" class="pairscreen" hidden>
+      <div id="pairplate" class="pairplate">
+        <div class="qrwrap">
           <div id="self-qr" class="qr" aria-label="Pairing QR code"></div>
-          <div>
-            <div id="self-code" class="code">———-———</div>
-            <p id="self-expiry" class="muted"></p>
-            <p id="self-msg" class="small"></p>
-            <button id="self-retry" type="button" hidden>Start again</button>
-          </div>
+          <div class="reticle"></div>
         </div>
-      </section>
+        <div class="side">
+          <div class="wordmark">CONTROLEVERYTHING</div>
+          <div class="look">Look at this code from the headset</div>
+          <div class="dim small">or type the code on a paired Mac or iPhone.</div>
+          <div id="self-code" class="code36">———-———</div>
+          <div id="self-expiry" class="dim mono small"></div>
+          <div id="self-msg" class="small"></div>
+          <button id="self-retry" type="button" hidden>Start again</button>
+        </div>
+      </div>
+    </div>
 
-      <section id="intent" class="card banner" hidden>
-        <p id="intent-text"></p>
-        <div class="row">
-          <button id="intent-approve" type="button">Approve</button>
-          <button id="intent-deny" type="button" class="secondary">Deny</button>
-        </div>
-      </section>
-
-      <section id="approvals" class="card" hidden>
-        <h2>Devices waiting to join</h2>
-        <ul id="pending" class="list"></ul>
-        <form id="code-form" class="row" autocomplete="off">
-          <label for="code-input">Enter the code shown on your device</label>
-          <input id="code-input" placeholder="K7Q-4M2" maxlength="9" spellcheck="false" />
-          <button type="submit">Approve</button>
-        </form>
-        <p id="code-msg" class="small"></p>
-      </section>
-
-      <section id="open-elsewhere" class="card" hidden>
-        <h2>Open on another device</h2>
-        <div class="pair-self">
-          <div id="lan-qr" class="qr small-qr" aria-label="QR code for the Quest app URL"></div>
-          <div class="small">
-            <p>Quest Browser: <span id="lan-quest" class="mono"></span></p>
-            <p>Phone or laptop: <span id="lan-companion" class="mono"></span></p>
-            <p class="muted">Self-signed certificate: accept the warning once per device. Over USB: <code>adb reverse tcp:8787 tcp:8787</code>, then open <span class="mono">http://localhost:8787/quest/</span>.</p>
-          </div>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Space</h2>
-        <ul id="devices" class="list"><li class="muted">Not connected yet.</li></ul>
-        <p id="control-last" class="muted small"></p>
-      </section>
-
-      <section class="card">
-        <h2>MIDI</h2>
-        <div class="row">
-          <button id="midi-enable" type="button">Enable MIDI</button>
-          <span id="midi-msg" class="muted small"></span>
-        </div>
-        <div class="grid2">
-          <div>
-            <h3>Outputs</h3>
-            <ul id="midi-outs" class="list"><li class="muted">—</li></ul>
-          </div>
-          <div>
-            <h3>Inputs</h3>
-            <ul id="midi-ins" class="list"><li class="muted">—</li></ul>
-          </div>
-        </div>
-        <div class="row">
-          <label for="midi-out">Output</label>
-          <select id="midi-out"></select>
-          <label for="midi-ch">Channel</label>
-          <select id="midi-ch"></select>
-          <button id="midi-test" type="button" disabled>Send test note</button>
-        </div>
-        <div class="row between">
-          <h3>MIDI in</h3>
-          <div class="row">
-            <label><input id="midi-clock" type="checkbox" /> show clock</label>
-            <button id="midi-clear" type="button" class="secondary">Clear</button>
-          </div>
-        </div>
-        <pre id="midi-monitor" class="monitor"></pre>
-      </section>
-
-      <section class="card">
-        <div class="row between">
-          <h2>Log</h2>
-          <button id="log-clear" type="button" class="secondary">Clear</button>
-        </div>
-        <pre id="log" class="monitor"></pre>
-      </section>
-    </main>
+    <div id="spike" class="spike" hidden></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

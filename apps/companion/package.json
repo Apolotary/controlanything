@@ -2,7 +2,7 @@
   "name": "@ce/companion",
   "version": "0.1.0",
   "private": true,
-  "description": "ControlEverything companion web app: pairing QR, presence, Web MIDI bridge, log.",
+  "description": "ControlEverything Mac companion (Chrome): workbench (agent log, driver, evidence, links), executors (Web MIDI, Cardputer over Web Serial), audio oracle, pairing approvals, ?spike=midi.",
   "type": "module",
   "scripts": {
     "dev": "vite build --watch --emptyOutDir",

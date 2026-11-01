@@ -53,6 +53,21 @@ export class Connection {
     return true;
   }
 
+  /**
+   * Feed a message to the handlers as if the server had sent it (the workbench's ?replay=1 mode).
+   * It is validated like a received message; nothing goes on the wire.
+   */
+  inject(raw: object): boolean {
+    const r = parseMessage(raw);
+    if (!r.ok) {
+      this.onInvalid(`${r.error}${r.issues.length ? `: ${r.issues.join('; ')}` : ''}`);
+      return false;
+    }
+    for (const fn of this.handlers.get(r.message.type) ?? []) fn(r.message);
+    for (const fn of this.handlers.get('*') ?? []) fn(r.message);
+    return true;
+  }
+
   /** Re-send hello, e.g. after MIDI ports changed. */
   resendHello(): void {
     this.send('hello', this.hello());

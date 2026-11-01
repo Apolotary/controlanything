@@ -1,0 +1,1158 @@
+/**
+ * The Mac workbench (Chrome, http://localhost:8787/companion/):
+ * - pairs this browser (owner on localhost), approves other devices, shows the "add a device" QR;
+ * - executes the agent's work: MIDI (Web MIDI), the Cardputer (Web Serial, paired on its behalf),
+ *   the audio oracle (synth USB audio or mic);
+ * - shows the work: agent steps with Meta model ids and latency, the generated driver, the evidence strip
+ *   (GEN · CHECK · SEND · SEEN), IR captures, links with their proof, daemons.
+ * Everything from the wire is rendered with textContent.
+ */
+import {
+  type AgentStepPayload,
+  type ArmRequestPayload,
+  type DeviceCardPayload,
+  type DeviceInfo,
+  type DriverSpecPayload,
+  type DriverStatusPayload,
+  formatCode,
+  isValidCode,
+  type LinkRequestPayload,
+  type LinkResultPayload,
+  type PayloadOf,
+  type PendingPairing,
+  type Port,
+  type UiSpecPayload,
+  type VerifyResultPayload,
+} from '@ce/protocol';
+import { toString as qrSvg } from 'qrcode';
+import { api, ApiError, type CallRecord, type CallsResponse, type Health } from './api';
+import { AudioOracle } from './audio/oracle';
+import { CLOSE_UNAUTHORIZED, Connection } from './connection';
+import { Executor } from './executor';
+import { clearIdentity, defaultDevice, type Identity, isLocalPage, loadIdentity, saveIdentity } from './identity';
+import { MidiBridge } from './midi';
+import { describeMidi, isRealtimeNoise, toHex } from './midiDecode';
+import { MidiExecutor } from './midiExec';
+import { CardputerBridge } from './serial/bridge';
+import { CardputerLink } from './serial/cardputer';
+import { $, ago, appendLine, button, clock, el, scheduler, secs, untilText } from './ui/dom';
+import { jsonView } from './ui/json';
+import { pulseTrain, sparkline } from './ui/spark';
+import { evidenceSentence, linkProof, opSummary } from './ui/words';
+import { replayArmResult, runReplay } from './replay';
+
+const APP = 'companion@0.2.0';
+const params = new URLSearchParams(location.search);
+
+// --- state ----------------------------------------------------------------------------------
+
+let health: Health | undefined;
+let identity: Identity | undefined = loadIdentity();
+let conn: Connection | undefined;
+let canApprove = false;
+let welcome: PayloadOf<'welcome'> | undefined;
+let pollTimer: ReturnType<typeof setTimeout> | undefined;
+let selfExpiresAt = 0;
+const pending = new Map<string, PendingPairing>();
+let devices: DeviceInfo[] = [];
+const steps = new Map<string, AgentStepPayload & { seenAt: number }>();
+const cards = new Map<string, DeviceCardPayload>();
+const drivers = new Map<string, DriverSpecPayload>();
+const driverStatus = new Map<string, DriverStatusPayload>();
+const evidence: VerifyResultPayload[] = [];
+const linkResults = new Map<string, LinkResultPayload>();
+/** "wrong device · refused" verdicts stay in EVIDENCE even after the right cable goes in */
+const refusals: LinkResultPayload[] = [];
+const replaying = params.get('replay') === '1';
+let replayStarted = false;
+const linkRequests = new Map<string, LinkRequestPayload>();
+const specs = new Map<string, UiSpecPayload>();
+let lastSpec: UiSpecPayload | undefined;
+let arm: ArmRequestPayload | undefined;
+let armNote: { text: string; ok: boolean; at: number } | undefined;
+let focusCardId: string | undefined;
+let calls: CallsResponse | undefined;
+let mainTab: 'code' | 'tape' | 'spec' = 'code';
+let tabChosenByUser = false;
+let addTarget: 'phone' | 'quest' | 'devterm' = 'phone';
+let qrShown = '';
+let serverDown = false;
+
+const midi = new MidiBridge();
+const midiExec = new MidiExecutor(midi);
+const link = new CardputerLink(APP);
+const bridge = new CardputerBridge(link, APP);
+const oracle = new AudioOracle();
+const executor = new Executor(midiExec, bridge, oracle);
+
+/** /p/<id>#<code> redirects here as /companion/?approve=<id>#<code> */
+const intent = (() => {
+  const pairingId = params.get('approve');
+  const code = location.hash.slice(1);
+  return pairingId && isValidCode(code) ? { pairingId, code } : undefined;
+})();
+
+// --- log ------------------------------------------------------------------------------------
+
+type Level = 'debug' | 'info' | 'warn' | 'error';
+function log(level: Level, text: string): void {
+  appendLine($('log'), `${clock()} ${level.padEnd(5)} ${text}`, `lvl-${level}`);
+}
+executor.log = log;
+bridge.log = log;
+
+const render = scheduler({
+  top: renderTop,
+  banners: renderBanners,
+  device: renderDevice,
+  code: renderCode,
+  tape: renderTape,
+  spec: renderSpec,
+  agent: renderAgent,
+  calls: renderCalls,
+  evidence: renderEvidence,
+  learn: renderLearn,
+  links: renderLinks,
+  approve: renderApprove,
+  daemons: renderDaemons,
+});
+const renderAll = () => ['top', 'banners', 'device', 'code', 'tape', 'spec', 'agent', 'calls', 'evidence', 'learn', 'links', 'approve', 'daemons'].forEach(render);
+
+// --- helpers --------------------------------------------------------------------------------
+
+const KIND_GLYPH: Record<string, string> = { quest: 'HMD', mac: 'MAC', iphone: 'PHN', devterm: 'TTY', cardputer: 'IR', web: 'WEB', sim: 'SIM' };
+const CHANNEL_GLYPH: Record<string, string> = { midi: 'USB', ir: 'IR', local: 'MAC', sim: 'SIM' };
+
+function setFocus(cardId: string | undefined): void {
+  if (!cardId || cardId === focusCardId) return;
+  focusCardId = cardId;
+  ['device', 'code', 'evidence', 'daemons'].forEach(render);
+}
+
+function focusDriver(): DriverSpecPayload | undefined {
+  const all = [...drivers.values()];
+  return all.filter((d) => d.cardId === focusCardId).at(-1) ?? all.at(-1);
+}
+
+function deviceName(deviceId?: string): string | undefined {
+  return devices.find((d) => d.deviceId === deviceId)?.name;
+}
+
+function hackNameFor(actionId: string): string | undefined {
+  for (const s of specs.values()) for (const h of s.hackset?.hacks ?? []) if (h.commands.some((c) => c.action === actionId)) return h.name;
+  return undefined;
+}
+
+/** epoch ms → performance.now() timeline (the oracle's level history uses the latter) */
+const perfAt = (epoch: number) => epoch - Date.now() + performance.now();
+
+async function renderQr(target: HTMLElement, text: string): Promise<void> {
+  // qrcode returns SVG markup it generated itself from `text`; nothing untrusted is interpreted as HTML
+  target.innerHTML = await qrSvg(text, { type: 'svg', margin: 1, errorCorrectionLevel: 'M', color: { dark: '#0a0e12', light: '#f4f1e6' } });
+}
+
+function chip(text: string, cls = ''): HTMLElement {
+  return el('span', { className: `chip ${cls}`, text });
+}
+
+// --- top bar and banners --------------------------------------------------------------------
+
+function renderTop(): void {
+  const pill = $('pill');
+  const live = health?.mode === 'live';
+  $('pill-text').textContent = serverDown ? 'server unreachable' : !health ? 'connecting' : live ? 'LIVE · ' : 'FIXTURE · recorded answers';
+  if (live && health) $('pill-text').append(el('span', { className: 'mono', text: health.models.chat }));
+  pill.className = `pill ${health && !live ? 'fixture' : ''}`;
+  $('conn-dot').className = `dot ${conn?.open ? 'on' : ''}`;
+  $('conn-dot').title = conn?.open ? 'connected to the server' : 'offline';
+  const space = welcome?.spaceId ?? health?.space?.spaceId;
+  $('session').textContent = space ? `space ${space.slice(-6).toUpperCase()}${welcome ? ` · ${welcome.name}` : ''}` : 'space —';
+  const role = $('exec-role');
+  role.textContent = executor.leader ? 'executor' : 'standby';
+  role.className = `chip ${executor.leader ? '' : 'muted'}`;
+  role.title = executor.leader ? 'This tab runs MIDI, the Cardputer and the audio oracle.' : 'Another companion tab is the executor; this one only watches.';
+}
+
+function renderBanners(): void {
+  const box = $('banners');
+  box.replaceChildren();
+  if (replaying) box.append(el('div', { className: 'banner' }, el('span', { className: 'title', text: 'Replay' }), el('span', { className: 'small grow', text: 'A scripted OP-1 Field run injected into this page to show the panels. Not live: nothing is executed and nothing is sent to the server.' }), el('a', { className: 'small', text: 'leave replay' })));
+  const leave = box.querySelector('a');
+  if (leave) leave.href = location.pathname;
+  if (serverDown) box.append(el('div', { className: 'banner' }, el('span', { className: 'title', text: 'Server unreachable' }), el('span', { className: 'small', text: 'Start it with npm run dev. MIDI tools still work: open ?spike=midi.' })));
+  if (!executor.leader) box.append(el('div', { className: 'banner info' }, el('span', { className: 'title', text: 'Standby' }), el('span', { className: 'small', text: 'Another companion tab is running the devices. Close it to make this one the executor.' })));
+
+  if (intent && identity) {
+    const p = pending.get(intent.pairingId);
+    const who = p ? `${p.name} (${p.kind})` : 'the device you scanned';
+    const row = el('div', { className: 'banner' }, el('span', { className: 'title', text: 'Link request' }), el('span', { className: 'grow', text: canApprove ? `Approve ${who} with code ${formatCode(intent.code)}?` : 'This browser cannot approve devices.' }));
+    if (canApprove) {
+      row.append(
+        button('Approve', async () => {
+          if (await approve(intent.code, intent.pairingId)) clearIntent();
+        }, 'primary'),
+        button('Deny', async () => {
+          await deny(intent.pairingId);
+          clearIntent();
+        }),
+      );
+    }
+    box.append(row);
+  }
+
+  if (arm && arm.expiresAt > Date.now()) {
+    const a = arm;
+    const actions = el('div', { className: 'chips' }, ...a.actions.map((x) => chip(`${x.label} · ${x.verified === 'pass' ? 'verified' : x.verified}`, x.verified === 'pass' ? 'ok' : 'muted')));
+    const row = el(
+      'div',
+      { className: 'banner' },
+      el('span', { className: 'title', text: `Arm · ${a.title}` }),
+      el('span', { className: 'grow small', text: a.summary }),
+      el('span', { className: 'tiny dim mono', text: untilText(a.expiresAt), data: { expires: String(a.expiresAt) } }),
+      actions,
+    );
+    if (a.irreversible) row.append(holdButton('Hold to arm', () => confirmArm(a, true, true)));
+    else row.append(button('Arm', () => confirmArm(a, true, false), 'primary'));
+    row.append(button('Cancel', () => confirmArm(a, false, false)));
+    box.append(row);
+  } else if (armNote && Date.now() - armNote.at < 8000) {
+    box.append(el('div', { className: 'banner info' }, el('span', { className: `title ${armNote.ok ? 'ok-text' : ''}`, text: armNote.ok ? 'Armed' : 'Not armed' }), el('span', { className: 'small', text: armNote.text })));
+  }
+
+  for (const r of linkRequests.values()) {
+    const done = linkResults.get(r.cardId);
+    if (done && done.verdict !== 'none' && done.verdict !== 'unknown') continue;
+    const card = cards.get(r.cardId);
+    const row = el(
+      'div',
+      { className: 'banner link' },
+      el('span', { className: 'title', text: `Link · ${card?.name ?? 'device'}` }),
+      el('span', { className: 'grow small', text: r.reason }),
+      el('span', { className: 'row' }, ...r.needs.map((n) => chip(`needs ${n}`, 'magenta')), ...r.suggestedClients.map((k) => chip(k, 'muted'))),
+    );
+    if (r.needs.includes('ir') && !link.ready && CardputerLink.supported && executor.leader) row.append(button('Connect Cardputer', () => void connectCardputer(), 'primary'));
+    if (r.needs.includes('midi') && !midi.enabled && MidiBridge.supported) row.append(button('Enable MIDI', () => void enableMidi(), 'primary'));
+    if (r.needs.includes('mic') && oracle.state !== 'on') row.append(button('Listen', () => void startOracle(), 'primary'));
+    box.append(row);
+  }
+}
+
+function holdButton(label: string, onHeld: () => void): HTMLButtonElement {
+  const b = el('button', { className: 'primary', text: label });
+  b.type = 'button';
+  let t: ReturnType<typeof setTimeout> | undefined;
+  const cancel = () => {
+    clearTimeout(t);
+    t = undefined;
+    b.textContent = label;
+  };
+  b.addEventListener('pointerdown', () => {
+    b.textContent = 'Holding…';
+    t = setTimeout(() => {
+      t = undefined;
+      b.textContent = label;
+      onHeld();
+    }, 600);
+  });
+  b.addEventListener('pointerup', cancel);
+  b.addEventListener('pointerleave', cancel);
+  return b;
+}
+
+function confirmArm(a: ArmRequestPayload, approve: boolean, hold: boolean): void {
+  if (replaying && conn) {
+    conn.inject(replayArmResult(a.armId, approve));
+    return;
+  }
+  if (!conn?.send('arm.confirm', { armId: a.armId, approve, ...(hold ? { hold } : {}) }, { to: 'server' })) {
+    log('error', 'not connected: could not answer the arm request');
+    return;
+  }
+  log('info', `${approve ? 'armed' : 'cancelled'} ${a.title}`);
+  arm = undefined;
+  render('banners');
+}
+
+// --- device card, code, tape, spec ----------------------------------------------------------
+
+function renderDevice(): void {
+  const box = $('device-card');
+  box.replaceChildren();
+  const card = focusCardId ? cards.get(focusCardId) : undefined;
+  const drv = focusDriver();
+  const lr = focusCardId ? linkResults.get(focusCardId) : undefined;
+  const hs = lastSpec?.cardId === focusCardId ? lastSpec?.hackset : undefined;
+  const name = card?.name ?? drv?.name ?? hs?.device.name;
+  if (!name) {
+    const outs = midi.outputs();
+    box.append(
+      el('div', { className: 'name', text: 'No target yet' }),
+      el('span', { className: 'chip muted', text: 'scan from the headset' }),
+      el(
+        'div',
+        { className: 'facts' },
+        el('span', { text: outs.length ? `USB MIDI: ${outs.map((o) => o.name ?? o.id).join(', ')}` : midi.enabled ? 'waiting for USB… plug in a synth' : 'MIDI off' }),
+        el('span', { text: link.ready ? `Cardputer: ${link.info?.board ?? 'ready'}` : 'Cardputer: not connected' }),
+        el('span', { text: oracle.state === 'on' ? `listening: ${oracle.input?.label ?? 'input'}` : 'oracle: off' }),
+      ),
+    );
+    return;
+  }
+  const channel = lr?.channel ?? drv?.transport;
+  const port = lr?.port?.name ?? drv?.executor.port;
+  const facts = el('div', { className: 'facts' });
+  const fact = (k: string, v: string | undefined) => {
+    if (v) facts.append(el('span', {}, `${k} `, el('b', { text: v })));
+  };
+  fact('maker', card?.maker);
+  fact('model', card?.model || undefined);
+  fact('kind', card?.category ?? hs?.device.kind);
+  fact('channel', channel ? channel.toUpperCase() : undefined);
+  fact('port', port ? `"${port}"` : undefined);
+  fact('via', deviceName(lr?.executorDeviceId ?? drv?.executor.deviceId));
+  if (card) fact('confidence', `${Math.round(card.confidence * 100)} %`);
+  const verdict = lr ? chip(lr.verdict === 'mismatch' ? 'wrong device · refused' : `link ${lr.verdict}`, lr.verdict === 'confirmed' || lr.verdict === 'consistent' ? 'ok' : lr.verdict === 'mismatch' ? 'fail' : 'muted') : chip('link: hypothesis', 'muted');
+  box.append(el('div', { className: 'name', text: name }), verdict, facts);
+}
+
+function setTab(t: typeof mainTab, byUser = false): void {
+  mainTab = t;
+  if (byUser) tabChosenByUser = true;
+  for (const id of ['code', 'tape', 'spec'] as const) {
+    $(`tab-${id}`).setAttribute('aria-selected', String(id === t));
+    $(id).hidden = id !== t;
+  }
+  render(t);
+}
+
+function runningGen(): (AgentStepPayload & { seenAt: number }) | undefined {
+  return [...steps.values()].filter((s) => ['drive', 'codegen', 'forge'].includes(s.phase)).at(-1);
+}
+
+function renderCode(): void {
+  const box = $('code');
+  const drv = focusDriver();
+  const gen = runningGen();
+  const genChip = $('gen-chip');
+  genChip.replaceChildren();
+  if (gen?.model) {
+    const running = gen.status === 'running' || gen.status === 'pending';
+    const since = gen.startedAt ?? gen.seenAt;
+    const c = chip(`${running ? 'GEN · ' : ''}${gen.model}${gen.effort ? ` · ${gen.effort}` : ''} · ${running ? secs(Date.now() - since) : secs(gen.latencyMs ?? (gen.endedAt && gen.startedAt ? gen.endedAt - gen.startedAt : 0))}`, 'model');
+    if (running) c.dataset.since = String(since);
+    if (running) c.dataset.prefix = `GEN · ${gen.model}${gen.effort ? ` · ${gen.effort}` : ''} · `;
+    genChip.append(c);
+  } else if (drv?.modelId) genChip.append(chip(drv.modelId, 'model'));
+  $('filetab').textContent = drv ? `driver · ${drv.cardId}.json${drv.version ? ` · v${drv.version}` : ''}` : '';
+  box.replaceChildren();
+  if (!drv) {
+    const waiting = gen && (gen.status === 'running' || gen.status === 'pending');
+    box.append(jsonView(undefined, waiting ? `waiting for ${gen.model ?? 'the model'} to write the driver…` : 'No driver yet. SCAN a device from the headset (or run the sim room):\nthe agent identifies it, links a channel, writes a declarative driver, and proves each action.'));
+    return;
+  }
+  const prov = drv.provenance.map((p) => `${p.source}: ${p.ref}`).join('\n');
+  box.append(jsonView(drv, `driver.spec · ${drv.transport.toUpperCase()} · written by ${drv.modelId ?? 'the agent'}${drv.source === 'fixture' ? ' (FIXTURE replay)' : ''}${prov ? `\n${prov}` : ''}`));
+}
+
+function renderTape(): void {
+  const box = $('tape');
+  box.replaceChildren();
+  const rows = executor.tape.slice(-120);
+  if (!rows.length) {
+    box.append(el('div', { className: 'empty', text: 'Nothing sent yet. Every command this Mac sends to a device appears here with its ack and verdict.' }));
+    return;
+  }
+  for (const r of rows) {
+    const status = r.ack ? (r.ack.ok ? `sent · ${r.ack.latencyMs ?? 0} ms` : `${r.ack.error ?? 'failed'}`) : 'sending';
+    const right = el('span', { className: 'row' }, el('span', { className: r.ack && !r.ack.ok ? 'fail-text' : 'dim', text: status }));
+    if (r.verdict) right.append(chip(r.verdict.text, r.verdict.pass ? 'ok' : 'fail'));
+    box.append(el('div', { className: 'r', title: r.ack?.detail ?? '' }, el('span', { className: 'dim', text: clock(r.at) }), el('span', { text: r.what }), el('span', { className: 'dim target', text: r.target }), right));
+  }
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderSpec(): void {
+  const box = $('spec');
+  box.replaceChildren();
+  if (!lastSpec) {
+    box.append(jsonView(undefined, 'No hack set yet. After verification the agent forges hacks (ce.hackset/1) and 3D controls (ce.gen3d/1).'));
+    return;
+  }
+  const { gen3d, ...rest } = lastSpec;
+  box.append(jsonView({ ...rest, gen3d: gen3d ? { spec: gen3d.spec, title: gen3d.title, controls: gen3d.controls.map((c) => c.id), parts: gen3d.parts.length, modelId: gen3d.modelId } : undefined }, `ui.spec rev ${lastSpec.rev ?? 1} · ${lastSpec.modelId ?? ''}${lastSpec.check ? ` · checks ${lastSpec.check.ok ? 'passed' : 'failed'} after ${lastSpec.check.attempts} attempt(s)` : ''}`));
+}
+
+// --- agent log and model calls --------------------------------------------------------------
+
+function renderAgent(): void {
+  const box = $('worklog');
+  box.replaceChildren();
+  const list = [...steps.values()].sort((a, b) => (a.startedAt ?? a.seenAt) - (b.startedAt ?? b.seenAt)).slice(-80);
+  if (!list.length) {
+    box.append(el('div', { className: 'empty', text: 'The agent’s steps appear here with the Meta model that did each one (muse-spark-1.3, muse-wonder-1.0, sam-3.1…) and how long it took.' }));
+    return;
+  }
+  for (const s of list) {
+    const running = s.status === 'running' || s.status === 'pending';
+    const since = s.startedAt ?? s.seenAt;
+    const lat = s.latencyMs ?? (s.endedAt && s.startedAt ? s.endedAt - s.startedAt : undefined);
+    const right = el('span', { className: 'row' });
+    if (s.source === 'fixture') right.append(chip(s.recordedFrom ? `FIXTURE · ${s.recordedFrom}` : 'FIXTURE', 'muted'));
+    if (s.model) right.append(chip(`${s.model}${s.effort ? ` · ${s.effort}` : ''}`, 'model'));
+    const t = el('span', { className: running ? 'status-running' : s.status === 'fail' ? 'status-fail' : 'dim', text: running ? secs(Date.now() - since) : s.status === 'fail' ? 'failed' : lat !== undefined ? secs(lat) : 'ok' });
+    if (running) t.dataset.since = String(since);
+    right.append(t);
+    const title = el('div', {}, el('div', { className: 'title', text: s.title }));
+    const sub = [s.evidence, s.kind, s.detail].filter(Boolean).join(' · ');
+    if (sub) title.append(el('div', { className: 'detail', text: sub.slice(0, 300) }));
+    box.append(el('div', { className: 'r' }, el('span', { className: 'dim', text: clock(s.startedAt ?? s.seenAt) }), el('span', { className: 'phase', text: s.phase }), title, right));
+  }
+  const body = box.parentElement!;
+  body.scrollTop = body.scrollHeight;
+}
+
+function renderCalls(): void {
+  const box = $('calls');
+  box.replaceChildren();
+  if (!calls) return;
+  const by = new Map<string, { n: number; ms: number; fixture: number }>();
+  for (const c of calls.calls as CallRecord[]) {
+    const m = by.get(c.model) ?? { n: 0, ms: 0, fixture: 0 };
+    m.n++;
+    m.ms += c.latencyMs;
+    if (c.source === 'fixture') m.fixture++;
+    by.set(c.model, m);
+  }
+  for (const [model, m] of by) box.append(chip(`${model} ×${m.n} · ${secs(m.ms / m.n)} avg${m.fixture ? ` · ${m.fixture} fixture` : ''}`, model === 'fixture' ? 'muted' : 'model'));
+  const t = calls.totals;
+  $('calls-total').textContent = t.calls ? `${t.calls} model calls · ${Math.round((t.promptTokens + t.completionTokens) / 100) / 10}k tokens${t.failures ? ` · ${t.failures} failed` : ''}` : '';
+}
+
+async function pollCalls(): Promise<void> {
+  if (document.visibilityState === 'visible' && !serverDown) {
+    try {
+      calls = await api.calls();
+      render('calls');
+    } catch {
+      // the server may be restarting
+    }
+  }
+  setTimeout(() => void pollCalls(), 4000);
+}
+
+// --- evidence -------------------------------------------------------------------------------
+
+function segs(gen: boolean, check: boolean, send: boolean, seen: 'yes' | 'no' | 'none', word = 'SEEN'): HTMLElement {
+  return el(
+    'div',
+    { className: 'segs' },
+    el('span', { className: `seg ${gen ? 'lit' : ''}`, text: 'GEN' }),
+    el('span', { className: `seg ${check ? 'lit' : ''}`, text: 'CHECK' }),
+    el('span', { className: `seg ${send ? 'lit' : ''}`, text: 'SEND' }),
+    el('span', { className: `seg ${seen === 'yes' ? 'seen' : seen === 'no' ? 'miss' : ''}`, text: seen === 'no' ? `${word} ✗` : word }),
+  );
+}
+
+function evidenceSpark(e: VerifyResultPayload): SVGSVGElement | undefined {
+  if (e.observed.sense === 'audio' && oracle.levels.length) {
+    const t0 = perfAt(e.sent.at);
+    const vals = oracle.levels.filter((l) => l.at >= t0 - 1000 && l.at <= t0 + 2000).map((l) => l.db);
+    if (vals.length > 4) return sparkline(vals, { mark: 1 / 3, minSpan: 12 });
+  }
+  const o = e.observed;
+  return sparkline([o.before, o.before, o.after, o.after], { mark: 0.5, minSpan: Math.max(Math.abs(o.before) * 0.5, Math.abs(o.threshold)) });
+}
+
+function evidenceRow(title: string, e: VerifyResultPayload | undefined, lit: { gen: boolean; check: boolean; send: boolean }, waitingText: string): HTMLElement {
+  const row = el('div', { className: 'ev' });
+  row.append(el('span', { className: 'hack', text: title }));
+  const word = e ? (e.observed.sense === 'audio' ? 'HEARD' : e.observed.sense === 'camera' ? 'SEEN' : 'WIRED') : 'SEEN';
+  if (e) {
+    const s = evidenceSentence(e);
+    row.append(el('span', { className: `chip ${s.pass ? 'ok' : 'fail'}`, text: s.verdict }));
+    row.append(segs(lit.gen, lit.check, true, s.pass ? 'yes' : 'no', word));
+    const extra = [e.attempt > 1 ? `try ${e.attempt} ${s.pass ? 'passed' : 'failed'}` : '', e.note ?? ''].filter(Boolean).join(' · ');
+    const sentence = el('div', { className: 'sentence' }, el('span', { className: 'text', text: `${s.text}${extra ? ` · ${extra}` : ''}` }));
+    const sp = evidenceSpark(e);
+    if (sp) sentence.append(sp);
+    row.append(sentence);
+    row.title = `${e.observed.metric}: before ${e.observed.before.toFixed(3)} → after ${e.observed.after.toFixed(3)} (Δ ${e.observed.delta.toFixed(3)}, threshold ${e.observed.threshold})`;
+  } else {
+    row.append(el('span', { className: 'chip muted', text: waitingText }));
+    row.append(segs(lit.gen, lit.check, lit.send, 'none'));
+  }
+  return row;
+}
+
+function renderEvidence(): void {
+  const box = $('evidence');
+  box.replaceChildren();
+  const rows: HTMLElement[] = [];
+  for (const r of refusals) {
+    const card = cards.get(r.cardId);
+    rows.push(
+      el(
+        'div',
+        { className: 'ev refused' },
+        el('span', { className: 'hack', text: card?.name ?? 'link' }),
+        el('span', { className: 'chip fail', text: 'wrong device · refused' }),
+        el('div', { className: 'sentence' }, el('span', { className: 'text', text: r.reason ?? r.evidence.map((x) => `${x.ok ? '✓' : '✗'} ${x.detail}`).join(' · ') })),
+      ),
+    );
+  }
+  const drv = focusDriver();
+  const known = new Set<string>();
+  if (drv) {
+    const st = driverStatus.get(drv.driverId);
+    const checked = Boolean(st?.phase && !['drafting', 'validating', 'failed'].includes(st.phase));
+    for (const a of drv.actions) {
+      known.add(a.actionId);
+      const ev = evidence.filter((e) => e.actionId === a.actionId).at(-1);
+      const sent = executor.tape.some((t) => t.actionId === a.actionId && t.ack?.ok);
+      const verified = st?.actions?.find((x) => x.actionId === a.actionId)?.verified ?? a.verified;
+      const waiting = sent ? 'awaiting evidence' : verified === 'pending' ? 'requested' : checked ? 'checked' : 'generated';
+      rows.push(evidenceRow(hackNameFor(a.actionId) ?? a.label, ev, { gen: true, check: checked || verified === 'pass' || verified === 'fail', send: sent }, waiting));
+    }
+  }
+  for (const e of evidence.filter((x) => !known.has(x.actionId)).slice(-6)) {
+    rows.push(evidenceRow(e.expected.effect === 'none' ? 'Negative control' : opSummary(e.sent.op), e, { gen: true, check: true, send: true }, ''));
+  }
+  if (!rows.length) box.append(el('div', { className: 'empty', text: 'No evidence yet. Each hack gets GEN · CHECK · SEND · SEEN, and a segment lights only when that real step completes: “sent DIM → light got 38 % darker ✓”.' }));
+  box.append(...rows);
+}
+
+// --- learn (IR captures) --------------------------------------------------------------------
+
+function captureVerdict(us: readonly number[]): VerifyResultPayload | undefined {
+  return evidence.filter((e) => e.sent.op.kind === 'ir' && e.sent.op.rawUs && e.sent.op.rawUs.length === us.length && e.sent.op.rawUs.slice(0, 8).every((x, i) => Math.abs(x - us[i]) <= Math.max(60, us[i] * 0.15))).at(-1);
+}
+
+function renderLearn(): void {
+  const panel = $('learn-panel');
+  const show = link.ready || bridge.learned.length > 0;
+  panel.hidden = !show;
+  if (!show) return;
+  const actions = $('learn-actions');
+  actions.replaceChildren();
+  if (bridge.learning) {
+    actions.append(chip(`listening · ${Math.max(0, Math.round((bridge.learning.until - Date.now()) / 1000))} s`, 'magenta'), button('Stop', () => bridge.stopLearning()));
+  } else if (link.ready && executor.leader) {
+    actions.append(button('Learn 15 s', () => void bridge.startLearning(15_000)));
+  }
+  const box = $('learn');
+  box.replaceChildren();
+  if (!bridge.learned.length) {
+    box.append(el('div', { className: 'empty', text: 'Point the remote at the Cardputer’s IR receiver and press a button. Each capture appears here; the LINK is proven only after a replay is seen.' }));
+    return;
+  }
+  for (const r of bridge.learned.slice(-12).reverse()) {
+    const v = captureVerdict(r.capture.rawUs);
+    const row = el('div', { className: 'ev' });
+    row.append(el('span', { className: 'hack', text: `#${r.n}${r.prompt ? ` · ${r.prompt}` : ''}` }));
+    row.append(v ? chip(evidenceSentence(v).pass ? `seen: ${evidenceSentence(v).text.split('→').pop()?.trim() ?? ''} ✓` : 'no change ✗', evidenceSentence(v).pass ? 'ok' : 'fail') : chip('not replayed', 'muted'));
+    const line = el('div', { className: 'sentence' }, pulseTrain(r.capture.rawUs), el('span', { className: 'text', text: `${r.label} · ${r.capture.rawUs.length} timings · ${r.capture.frames ?? 1} frame${(r.capture.frames ?? 1) === 1 ? '' : 's'}` }));
+    if (link.ready && executor.leader) {
+      line.append(
+        button('Replay', async () => {
+          const ack = await bridge.exec({ execId: `local-${Date.now()}`, executorDeviceId: bridge.deviceId ?? 'local', op: { kind: 'ir', protocol: r.capture.protocol && r.capture.protocol !== 'UNKNOWN' ? r.capture.protocol : 'RAW', rawUs: r.capture.rawUs.map((x) => Math.min(65_000, x)), khz: r.capture.khz ?? 38 } });
+          log(ack.ok ? 'info' : 'warn', `replay #${r.n}: ${ack.ok ? 'sent' : ack.error} ${ack.detail ?? ''}`);
+        }, 'ghost'),
+      );
+    }
+    row.append(line);
+    box.append(row);
+  }
+}
+
+// --- links ------------------------------------------------------------------------------------
+
+function linkRow(glyph: string, name: string | Node, state: Node | string, proof?: string | Node, proven = false, actions: Node[] = []): HTMLElement {
+  const head = el('span', { className: 'name' }, name, ' ', typeof state === 'string' ? el('span', { className: 'state', text: state }) : state);
+  const li = el('div', { className: 'li' }, el('span', { className: 'glyph', text: glyph }), head, el('span', { className: 'row acts' }, ...actions));
+  if (proof) li.append(el('div', { className: `proof ${proven ? 'proven' : ''}` }, proof));
+  return li;
+}
+
+function renderLinks(): void {
+  const box = $('links');
+  box.replaceChildren();
+  const lead = executor.leader;
+
+  // MIDI on this Mac
+  if (!MidiBridge.supported) box.append(linkRow('USB', 'MIDI', 'needs Chrome or Edge on localhost'));
+  else if (!midi.enabled) box.append(linkRow('USB', 'MIDI', 'off', 'Web MIDI is off on this Mac', false, lead ? [button('Enable MIDI', () => void enableMidi(), 'primary')] : []));
+  else {
+    const outs = midi.outputs();
+    const lines = outs.length ? outs.map((o) => `${o.name ?? o.id}${o.manufacturer ? ` · ${o.manufacturer}` : ''} · out ${o.state === 'connected' ? '✓' : '✗'}`).join('\n') : 'waiting for USB… plug in a synth';
+    const proof = el('span', { text: lines });
+    proof.style.whiteSpace = 'pre-line';
+    box.append(linkRow('USB', `MIDI${midi.sysex ? ' + SysEx' : ''}`, `${outs.length} out · ${midi.inputs().length} in · ${midiExec.scheduler.rate()} msg/s`, proof, outs.length > 0));
+  }
+
+  // Cardputer over Web Serial
+  const cpName = link.info ? `${link.info.board === 'cardputer-adv' ? 'Cardputer-Adv' : (link.info.name ?? 'Cardputer')}` : 'Cardputer';
+  if (!CardputerLink.supported) box.append(linkRow('SER', cpName, 'Web Serial needs Chrome or Edge'));
+  else {
+    const acts: Node[] = [];
+    let state = '';
+    let proof = '';
+    switch (link.state) {
+      case 'idle':
+      case 'disconnected':
+      case 'error':
+        state = link.state === 'idle' ? 'not connected' : link.state === 'error' ? 'error' : 'unplugged';
+        proof = link.lastError ?? 'USB-C to the Mac, then CONNECT (one click the first time)';
+        if (lead) acts.push(button('Connect Cardputer', () => void connectCardputer(), 'primary'));
+        break;
+      case 'connecting':
+        state = 'opening…';
+        break;
+      case 'no-reply':
+        state = 'no reply';
+        proof = 'the port is open but the firmware did not answer hello (flash ce-cardputer, or wait for boot)';
+        if (lead) acts.push(button('Close', () => void link.close(), 'ghost'));
+        break;
+      case 'ready': {
+        const b = bridge.state;
+        state = b === 'online' ? 'linked' : b === 'pairing' ? `pairing · ${bridge.pairing?.display ?? ''}` : b === 'denied' ? 'not paired' : b === 'connecting' ? 'joining…' : b === 'offline' ? 'server offline' : 'ready';
+        const i = link.info;
+        proof = `${i?.fw ?? 'firmware ?'} · chip ${i?.chip ?? '?'} · ${i?.caps.join(', ') ?? ''}${bridge.deviceId ? ` · ${bridge.deviceId}` : ''}`;
+        if (b === 'denied' && lead) acts.push(button('Pair again', () => void bridge.startPairing(), 'primary'));
+        if (b === 'online' && lead) acts.push(button('Re-pair', () => void bridge.repair(), 'ghost'));
+        if (lead) acts.push(button('Close', () => void link.close(), 'ghost'));
+        break;
+      }
+      default:
+        state = link.state;
+    }
+    box.append(linkRow('SER', cpName, state, proof, link.ready && bridge.online, acts));
+  }
+
+  // audio oracle
+  if (!AudioOracle.supported) box.append(linkRow('MIC', 'Audio oracle', 'no microphone API here'));
+  else if (oracle.state !== 'on') {
+    box.append(linkRow('MIC', 'Audio oracle', oracle.state === 'starting' ? 'starting…' : oracle.state === 'error' ? 'error' : 'off', oracle.error ?? 'listens to the synth’s own USB audio (or the Mac mic) to prove CCs change the sound', false, lead ? [button('Listen', () => void startOracle(), 'primary')] : []));
+  } else {
+    const meter = el('span', { className: 'meter' }, el('i', { data: { meter: '1' } }));
+    const sel = el('select', { title: 'audio input' });
+    void AudioOracle.inputs().then((ins) => {
+      for (const i of ins) sel.append(Object.assign(el('option', { text: `${i.label}${i.synth ? ' (synth)' : ''}` }), { value: i.deviceId, selected: i.deviceId === oracle.input?.deviceId }));
+    });
+    sel.addEventListener('change', () => void startOracle(sel.value));
+    box.append(linkRow('MIC', 'Audio oracle', meter, el('span', {}, `${oracle.input?.synth ? 'synth USB audio' : 'microphone'} · ${oracle.input?.label ?? ''} · ${oracle.sampleRate / 1000} kHz `, sel), true, [button('Stop', () => void oracle.stop(), 'ghost')]));
+  }
+
+  // link verdicts from the agent
+  for (const r of linkResults.values()) {
+    const card = cards.get(r.cardId);
+    const p = linkProof(r);
+    box.append(linkRow(CHANNEL_GLYPH[r.channel ?? ''] ?? 'LNK', `${card?.name ?? r.cardId}`, chip(p.proven ? 'proven' : r.verdict === 'mismatch' ? 'refused' : 'hypothesis', p.proven ? 'ok' : r.verdict === 'mismatch' ? 'fail' : 'muted'), p.text, p.proven));
+  }
+
+  // other paired devices
+  for (const d of devices) {
+    if (d.deviceId === identity?.deviceId) continue;
+    const acts: Node[] = [];
+    if (canApprove) {
+      acts.push(
+        button('Revoke', async () => {
+          if (!confirm(`Revoke ${d.name}? It will have to pair again.`)) return;
+          try {
+            await api.revoke(d.deviceId, identity?.deviceToken);
+            log('info', `revoked ${d.name}`);
+          } catch (e) {
+            log('error', `revoke failed: ${(e as Error).message}`);
+          }
+        }, 'ghost'),
+      );
+    }
+    const caps = d.capabilities.length ? d.capabilities.join(', ') : 'no capabilities';
+    box.append(linkRow(KIND_GLYPH[d.kind] ?? 'DEV', el('span', {}, el('span', { className: `dot ${d.online ? 'on' : ''}` }), ` ${d.name}`), d.online ? d.role : 'offline', `${d.kind} · ${caps}${d.app ? ` · ${d.app}` : ''}${d.online ? '' : d.lastSeen ? ` · seen ${ago(d.lastSeen)}` : ''}`, d.online, acts));
+  }
+}
+
+// --- approvals and add-a-device ---------------------------------------------------------------
+
+function renderApprove(): void {
+  $('approve-panel').hidden = !canApprove;
+  if (!canApprove) return;
+  const box = $('pending');
+  box.replaceChildren();
+  for (const p of pending.values()) {
+    box.append(
+      el(
+        'div',
+        { className: 'p' },
+        el('span', { className: 'grow' }, el('strong', { text: p.name }), el('span', { className: 'dim small', text: `  ${p.kind}${p.origin ? ` · ${p.origin}` : ''} · ` }), el('span', { className: 'dim small', text: untilText(p.expiresAt), data: { expires: String(p.expiresAt) } })),
+        el('span', { className: 'passcode', text: p.display }),
+        button('Approve', () => void approve(p.code, p.pairingId), 'primary'),
+        button('Deny', () => void deny(p.pairingId), 'ghost'),
+      ),
+    );
+  }
+  const tabs = $('add-tabs');
+  tabs.replaceChildren();
+  for (const t of ['phone', 'quest', 'devterm'] as const) {
+    const b = button(t, () => {
+      addTarget = t;
+      render('approve');
+    }, 'tab');
+    b.setAttribute('aria-selected', String(t === addTarget));
+    tabs.append(b);
+  }
+  const u = health?.urls;
+  const httpsBase = u?.https;
+  const httpBase = u?.http;
+  const url = addTarget === 'phone' ? (httpsBase ? `${httpsBase}/` : undefined) : addTarget === 'quest' ? (httpsBase ? `${httpsBase}/quest/` : undefined) : httpBase ? `${httpBase.replace(/^http/, 'ws')}/ws` : undefined;
+  $('add-url').textContent = url ?? 'no LAN address (is the server on Wi-Fi?)';
+  $('add-hint').textContent =
+    addTarget === 'phone'
+      ? 'Scan with the phone camera (or the iPhone app). Accept the self-signed certificate once; the phone shows a code to approve here.'
+      : addTarget === 'quest'
+        ? 'Quest Browser. Over USB: adb reverse tcp:8787 tcp:8787, then http://localhost:8787/quest/.'
+        : 'Plain WebSocket for the DevTerm CLI and ESP32 clients on the LAN.';
+  if (url && url !== qrShown) {
+    qrShown = url;
+    void renderQr($('add-qr'), url);
+  }
+}
+
+async function approve(code: string, pairingId?: string): Promise<boolean> {
+  const msg = $('code-msg');
+  try {
+    await api.approve(code, identity?.deviceToken, pairingId);
+    msg.textContent = `Approved ${formatCode(code)}.`;
+    msg.className = 'small ok-text';
+    return true;
+  } catch (e) {
+    msg.textContent = e instanceof ApiError ? e.message : `Approve failed: ${(e as Error).message}`;
+    msg.className = 'small fail-text';
+    return false;
+  }
+}
+
+async function deny(pairingId: string): Promise<void> {
+  try {
+    await api.deny(pairingId, identity?.deviceToken);
+  } catch (e) {
+    log('error', `deny failed: ${(e as Error).message}`);
+  }
+}
+
+function clearIntent(): void {
+  history.replaceState(null, '', location.pathname);
+  render('banners');
+}
+
+// --- daemons ----------------------------------------------------------------------------------
+
+function renderDaemons(): void {
+  const daemons = [...specs.values()].flatMap((s) => (s.hackset?.daemons ?? []).map((d) => ({ d, device: s.hackset!.device.name })));
+  $('daemons-panel').hidden = !daemons.length;
+  const box = $('daemons');
+  box.replaceChildren();
+  for (const { d, device } of daemons) {
+    box.append(
+      el(
+        'div',
+        { className: 'ev' },
+        el('span', { className: 'hack magenta-text', text: d.name }),
+        chip(d.status ?? 'proposed', d.status === 'running' ? 'magenta' : 'muted'),
+        el('div', { className: 'sentence' }, el('span', { className: 'text', text: `${device} · ${d.trigger.source} → ${d.targets.map((t) => t.hack).join(', ')} · ≤ ${d.max_rate_hz} Hz${d.blurb ? ` · ${d.blurb}` : ''}` })),
+      ),
+    );
+  }
+}
+
+// --- executors: MIDI, Cardputer, oracle ------------------------------------------------------
+
+async function enableMidi(): Promise<void> {
+  try {
+    await midi.enable();
+    log('info', `Web MIDI on${midi.sysex ? ' with SysEx' : ' (no SysEx: identity checks off)'}`);
+    conn?.resendHello();
+  } catch (e) {
+    log('warn', (e as Error).message);
+  }
+  ['links', 'device', 'banners'].forEach(render);
+}
+
+async function connectCardputer(): Promise<void> {
+  if (!(await link.reconnect())) await link.choose();
+}
+
+async function startOracle(deviceId?: string): Promise<void> {
+  await oracle.start(deviceId);
+  if (oracle.state === 'on') log('info', `audio oracle listening to ${oracle.input?.label} (${oracle.input?.synth ? 'synth USB audio' : 'microphone'}, ${oracle.sampleRate} Hz)`);
+  else if (oracle.error) log('warn', `audio oracle: ${oracle.error}`);
+  conn?.resendHello();
+}
+
+function setupExecutors(): void {
+  const ch = el('select', { title: 'channel' });
+  for (let i = 1; i <= 16; i++) ch.append(Object.assign(el('option', { text: `ch ${i}` }), { value: String(i) }));
+  const out = el('select', { title: 'output' });
+  const fillOuts = () => {
+    const keep = out.value;
+    out.replaceChildren(...midi.outputs().map((o) => Object.assign(el('option', { text: o.name ?? o.id }), { value: o.id })));
+    if (midi.outputs().some((o) => o.id === keep)) out.value = keep;
+  };
+  $('midi-test-row').append(
+    out,
+    ch,
+    button('Test note', () => {
+      if (!out.value) return;
+      try {
+        midi.testNote(out.value, Number(ch.value));
+        appendLine($('midi-monitor'), `${clock()} → ${out.selectedOptions[0]?.text ?? ''} test note C4 ch${ch.value}`, 'out');
+      } catch (e) {
+        log('error', (e as Error).message);
+      }
+    }),
+    el('a', { className: 'small', text: 'MIDI spike ↗' }),
+  );
+  ($('midi-test-row').lastElementChild as HTMLAnchorElement).href = '?spike=midi';
+  midi.onChange = () => {
+    fillOuts();
+    ['links', 'device'].forEach(render);
+    conn?.resendHello();
+  };
+  midi.onMessage = (m) => {
+    if (isRealtimeNoise(m.data) && !($('midi-clock') as HTMLInputElement).checked) return;
+    appendLine($('midi-monitor'), `${clock()} ← ${m.portName.slice(0, 16).padEnd(16)} ${toHex(m.data).padEnd(9)} ${describeMidi(m.data)}`, 'in');
+  };
+  midiExec.onTape = (e) => {
+    if (e.dir === 'out') appendLine($('midi-monitor'), `${clock(e.at)} → ${e.port.slice(0, 16).padEnd(16)} ${toHex(e.bytes).padEnd(9)} ${describeMidi(e.bytes)}`, 'out');
+  };
+  executor.onTape = () => {
+    render('tape');
+    render('evidence');
+    if (!tabChosenByUser && mainTab === 'code' && executor.tape.length && armedOnce) setTab('tape');
+  };
+  executor.onLeader = (leader) => {
+    log('info', leader ? 'this tab is the executor' : 'standby');
+    renderAll();
+    if (leader) void takeDevices();
+  };
+
+  link.onLine = (dir, text) => appendLine($('serial-monitor'), `${clock()} ${dir === 'out' ? '→' : '←'} ${text}`, dir);
+  link.onState = (s) => {
+    $('serial-state').textContent = s;
+    if (s === 'ready') {
+      log('info', `Cardputer ready: ${link.info?.fw ?? '?'} on ${link.info?.board ?? '?'} (chip ${link.info?.chip ?? '?'})`);
+      void bridge.deviceReady();
+    }
+    if (s === 'disconnected' || s === 'idle') bridge.deviceGone();
+    conn?.resendHello();
+    ['links', 'learn', 'banners', 'device'].forEach(render);
+  };
+  link.onMessage = (m) => {
+    if (m.t === 'log') log(m.lvl === 'error' ? 'error' : m.lvl === 'warn' ? 'warn' : 'debug', `[cardputer] ${m.msg}`);
+    bridge.onDeviceMessage(m);
+  };
+  bridge.onChange = () => ['links', 'learn', 'banners'].forEach(render);
+  oracle.onState = () => ['links', 'device', 'banners'].forEach(render);
+  link.listenForPlug();
+}
+
+let armedOnce = false;
+
+/** Re-open what this Mac had granted before (no prompts): MIDI, the Cardputer port, the microphone. */
+async function takeDevices(): Promise<void> {
+  if (MidiBridge.supported && !midi.enabled && (await MidiBridge.alreadyGranted())) await enableMidi();
+  if (CardputerLink.supported && !link.hasPort) await link.reconnect();
+  if (AudioOracle.supported && oracle.state === 'off') {
+    try {
+      const s = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+      if (s.state === 'granted') await startOracle();
+    } catch {
+      // permissions API without "microphone": wait for a click
+    }
+  }
+}
+
+function meterLoop(): void {
+  const m = document.querySelector<HTMLElement>('[data-meter]');
+  if (m && oracle.state === 'on') {
+    const db = oracle.levelDb();
+    m.style.width = `${Math.max(0, Math.min(100, ((db + 70) / 70) * 100))}%`;
+  }
+  requestAnimationFrame(meterLoop);
+}
+
+// --- pairing this browser ---------------------------------------------------------------------
+
+async function pairThisBrowser(): Promise<void> {
+  clearTimeout(pollTimer);
+  conn?.stop();
+  conn = undefined;
+  canApprove = false;
+  const screen = $('pairscreen');
+  screen.hidden = false;
+  $('workbench').hidden = true;
+  $('self-retry').hidden = true;
+  $('self-msg').textContent = '';
+  const me = defaultDevice();
+  const requireApproval = params.get('pair') === '1';
+  try {
+    const r = await api.pairStart({ name: me.name, kind: me.kind, capabilities: hello().capabilities ?? [], ...(requireApproval ? { requireApproval } : {}) });
+    if (r.status === 'approved' && r.deviceId && r.deviceToken) {
+      log('info', `paired instantly as the owner (${isLocalPage() ? 'localhost' : 'trusted'})`);
+      adopt({ deviceId: r.deviceId, deviceToken: r.deviceToken, kind: me.kind, name: me.name }, false);
+      return;
+    }
+    $('self-code').textContent = r.display;
+    selfExpiresAt = r.expiresAt;
+    $('self-expiry').textContent = untilText(r.expiresAt);
+    await renderQr($('self-qr'), r.qr);
+    log('info', `waiting for approval · code ${r.display}`);
+    const poll = async () => {
+      try {
+        const s = await api.pairStatus(r.pairingId, r.pollSecret);
+        if (s.status === 'approved' && s.deviceId && s.deviceToken) {
+          adopt({ deviceId: s.deviceId, deviceToken: s.deviceToken, kind: me.kind, name: me.name }, true);
+          return;
+        }
+        if (s.status !== 'pending') {
+          pairingFailed(s.status === 'expired' ? 'The code expired.' : 'The request was denied.');
+          return;
+        }
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) {
+          pairingFailed('The server forgot this request (restarted?).');
+          return;
+        }
+      }
+      pollTimer = setTimeout(poll, 1500);
+    };
+    pollTimer = setTimeout(poll, 1500);
+  } catch (e) {
+    pairingFailed(`Could not start pairing: ${(e as Error).message}`);
+  }
+}
+
+function pairingFailed(message: string): void {
+  selfExpiresAt = 0;
+  $('self-msg').textContent = message;
+  $('self-msg').className = 'small fail-text';
+  $('self-retry').hidden = false;
+  log('warn', message);
+}
+
+function adopt(id: Identity, flip: boolean): void {
+  identity = id;
+  saveIdentity(id);
+  selfExpiresAt = 0;
+  if (params.get('pair') === '1') history.replaceState(null, '', location.pathname);
+  const done = () => {
+    $('pairscreen').hidden = true;
+    $('workbench').hidden = false;
+    connect();
+  };
+  if (!flip) {
+    done();
+    return;
+  }
+  // flip the plate to the device card for a moment (240 ms), then show the workbench
+  const plate = $('pairplate');
+  plate.classList.add('flipped');
+  setTimeout(() => {
+    const outs = midi.outputs().map((o) => `${o.name ?? o.id}${o.manufacturer ? ` · ${o.manufacturer}` : ''} · USB MIDI ✓`);
+    plate.replaceChildren(
+      el('div', { className: 'side' }, el('div', { className: 'look', text: 'Paired' }), el('div', { className: 'code36', text: id.name }), el('div', { className: 'mono small dim', text: outs.length ? outs.join('\n') : 'waiting for USB…' })),
+    );
+  }, 240);
+  setTimeout(done, 1800);
+}
+
+// --- connection -----------------------------------------------------------------------------
+
+function hello(): PayloadOf<'hello'> {
+  const p: PayloadOf<'hello'> = { deviceToken: identity?.deviceToken ?? '-', app: APP };
+  // another app on this origin (e.g. the Quest page) may own the identity: then don't claim its role
+  if (!identity || identity.kind === 'mac' || identity.kind === 'web') {
+    p.role = 'companion';
+    const caps: NonNullable<PayloadOf<'hello'>['capabilities']> = [];
+    if (MidiBridge.supported) caps.push('midi');
+    if (CardputerLink.supported) caps.push('serial');
+    if (link.ready) caps.push('ir');
+    if (AudioOracle.supported) caps.push('mic');
+    p.capabilities = caps;
+    const ports: Port[] = midi.enabled ? midi.ports() : [];
+    if (link.ready) ports.push({ id: `serial:${link.info?.chip ?? 'cardputer'}`, kind: 'serial', name: `Cardputer USB serial (${link.info?.board ?? 'cardputer'})`, state: 'connected' });
+    p.ports = ports;
+  }
+  return p;
+}
+
+function connect(): void {
+  conn?.stop();
+  const c = new Connection(Connection.sameOrigin(), hello);
+  conn = c;
+  c.onState = (s, info) => {
+    render('top');
+    if (s === 'closed' && info?.code === CLOSE_UNAUTHORIZED) {
+      log('warn', 'This browser is no longer paired (revoked or unknown token); pairing again.');
+      clearIdentity();
+      identity = undefined;
+      void pairThisBrowser();
+    }
+  };
+  c.onInvalid = (error) => log('warn', `ignored a message from the server: ${error}`);
+  c.on('welcome', (m) => {
+    welcome = m.payload;
+    canApprove = m.payload.canApprove;
+    pending.clear();
+    log('info', `connected as ${m.payload.name} (${m.payload.kind}, ${m.payload.deviceId}) · ${m.payload.server} · ${m.payload.mode}`);
+    ['top', 'approve', 'banners', 'links'].forEach(render);
+  });
+  c.on('presence', (m) => {
+    devices = m.payload.devices;
+    render('links');
+  });
+  c.on('pair.pending', (m) => {
+    pending.set(m.payload.pairingId, m.payload);
+    log('info', `${m.payload.name} (${m.payload.kind}) wants to join · ${m.payload.display}`);
+    ['approve', 'banners'].forEach(render);
+  });
+  c.on('pair.approved', (m) => {
+    pending.delete(m.payload.pairingId);
+    log('info', `paired ${m.payload.name} (${m.payload.kind})${m.payload.approvedBy ? ` · approved by ${m.payload.approvedBy}` : ''}`);
+    render('approve');
+  });
+  c.on('pair.denied', (m) => {
+    pending.delete(m.payload.pairingId);
+    log('info', `pairing request ${m.payload.reason}`);
+    render('approve');
+  });
+  c.on('log', (m) => log(m.payload.level, `${m.payload.code ? `[${m.payload.code}] ` : ''}${m.payload.message}`));
+  c.on('agent.step', (m) => {
+    const prev = steps.get(m.payload.stepId);
+    steps.set(m.payload.stepId, { ...m.payload, seenAt: prev?.seenAt ?? Date.now() });
+    if (steps.size > 300) steps.delete(steps.keys().next().value!);
+    setFocus(m.payload.cardId);
+    ['agent', 'code'].forEach(render);
+  });
+  c.on('device.card', (m) => {
+    cards.set(m.payload.cardId, m.payload);
+    focusCardId = m.payload.cardId;
+    ['device', 'evidence', 'links', 'banners'].forEach(render);
+  });
+  c.on('driver.spec', (m) => {
+    drivers.set(m.payload.driverId, m.payload);
+    focusCardId = m.payload.cardId;
+    if (!tabChosenByUser) setTab('code');
+    ['code', 'device', 'evidence'].forEach(render);
+  });
+  c.on('driver.status', (m) => {
+    driverStatus.set(m.payload.driverId, m.payload);
+    render('evidence');
+  });
+  c.on('verify.result', (m) => {
+    evidence.push(m.payload);
+    if (evidence.length > 100) evidence.shift();
+    ['evidence', 'learn', 'tape'].forEach(render);
+  });
+  c.on('link.request', (m) => {
+    linkRequests.set(m.payload.linkId, m.payload);
+    setFocus(m.payload.cardId);
+    render('banners');
+  });
+  c.on('link.result', (m) => {
+    linkResults.set(m.payload.cardId, m.payload);
+    if (m.payload.verdict === 'mismatch') {
+      refusals.push(m.payload);
+      if (refusals.length > 3) refusals.shift();
+    }
+    log(m.payload.verdict === 'mismatch' ? 'warn' : 'info', `link ${m.payload.verdict}: ${m.payload.reason ?? m.payload.evidence.map((e) => e.detail).join(' · ')}`);
+    ['links', 'evidence', 'device', 'banners'].forEach(render);
+  });
+  c.on('arm.request', (m) => {
+    arm = m.payload;
+    setFocus(m.payload.cardId);
+    render('banners');
+  });
+  c.on('arm.result', (m) => {
+    if (arm?.armId === m.payload.armId) arm = undefined;
+    armNote = { text: m.payload.armed ? `${cards.get(m.payload.cardId)?.name ?? 'device'} armed${m.payload.by ? ` by ${m.payload.by}` : ''}` : (m.payload.reason ?? 'cancelled'), ok: m.payload.armed, at: Date.now() };
+    if (m.payload.armed) {
+      armedOnce = true;
+      if (!tabChosenByUser) setTab('tape');
+    }
+    render('banners');
+  });
+  c.on('ui.spec', (m) => {
+    const key = m.payload.cardId ?? m.payload.specId;
+    specs.set(key, m.payload);
+    lastSpec = m.payload;
+    setFocus(m.payload.cardId);
+    ['spec', 'daemons', 'evidence', 'device'].forEach(render);
+  });
+  if (!replaying) executor.attach(c);
+  c.start();
+  if (replaying && !replayStarted) {
+    replayStarted = true;
+    log('info', 'REPLAY: injecting a scripted OP-1 Field run (display only)');
+    runReplay(
+      (m) => c.inject(m),
+      () => log('info', 'replay finished: press Arm or Cancel in the banner'),
+    );
+  }
+}
+
+// --- boot -------------------------------------------------------------------------------------
+
+function setupForms(): void {
+  $('self-retry').addEventListener('click', () => void pairThisBrowser());
+  $('log-clear').addEventListener('click', () => $('log').replaceChildren());
+  $('code-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const input = $('code-input') as HTMLInputElement;
+    if (!isValidCode(input.value)) {
+      $('code-msg').textContent = 'Codes are 6 characters, like K7Q-4M2.';
+      $('code-msg').className = 'small fail-text';
+      return;
+    }
+    if (await approve(input.value)) input.value = '';
+  });
+  $('panic').addEventListener('click', () => {
+    void executor.panicLocal('button');
+    conn?.send('panic', { reason: 'PANIC button on the Mac' }, { to: 'server' });
+  });
+  for (const t of ['code', 'tape', 'spec'] as const) $(`tab-${t}`).addEventListener('click', () => setTab(t, true));
+  setInterval(() => {
+    if (selfExpiresAt) $('self-expiry').textContent = untilText(selfExpiresAt);
+    for (const e of document.querySelectorAll<HTMLElement>('[data-expires]')) e.textContent = untilText(Number(e.dataset.expires));
+    // honest running counters: seconds since a model call started
+    for (const e of document.querySelectorAll<HTMLElement>('[data-since]')) e.textContent = `${e.dataset.prefix ?? ''}${secs(Date.now() - Number(e.dataset.since))}`;
+    if (bridge.learning) render('learn');
+    if (arm && arm.expiresAt <= Date.now()) {
+      arm = undefined;
+      render('banners');
+    }
+  }, 1000);
+}
+
+export async function bootWorkbench(): Promise<void> {
+  $('workbench').hidden = false;
+  $('drawer').toggleAttribute('open', !isLocalPage());
+  setupForms();
+  setupExecutors();
+  renderAll();
+  requestAnimationFrame(meterLoop);
+  executor.claim();
+  try {
+    health = await api.health();
+  } catch {
+    serverDown = true;
+    log('error', 'Cannot reach /api/health. Is the server running? (npm run dev)');
+  }
+  renderAll();
+  void pollCalls();
+  if (params.get('pair') === '1') {
+    clearIdentity();
+    identity = undefined;
+  }
+  if (identity || replaying) connect();
+  else if (!serverDown) await pairThisBrowser();
+}

@@ -26,10 +26,31 @@ export interface Health {
   version: string;
   models: { chat: string; transcribe: string };
   urls: { host: string; https?: string; http?: string; local?: string; lan: string[] };
+  space?: { spaceId: string; pairedDevices: number };
+}
+
+/** One model call as GET /api/muse/calls lists it. */
+export interface CallRecord {
+  at: number;
+  label: string;
+  model: string;
+  source: 'live' | 'fixture';
+  ok: boolean;
+  latencyMs: number;
+  effort?: string;
+  usage?: { promptTokens: number; completionTokens: number; totalTokens: number; reasoningTokens?: number };
+  recordedFrom?: string;
+}
+
+export interface CallsResponse {
+  mode: 'live' | 'fixture';
+  totals: { calls: number; failures: number; promptTokens: number; completionTokens: number; reasoningTokens: number };
+  calls: CallRecord[];
 }
 
 export const api = {
   health: () => call<Health>('GET', '/api/health'),
+  calls: () => call<CallsResponse>('GET', '/api/muse/calls'),
   pairStart: (req: PairStartRequest) => call<PairStartResponse>('POST', '/api/pair/start', req),
   pairStatus: (pairingId: string, pollSecret: string) =>
     call<PairStatusResponse>('GET', `/api/pair/status?pairingId=${encodeURIComponent(pairingId)}&pollSecret=${encodeURIComponent(pollSecret)}`),

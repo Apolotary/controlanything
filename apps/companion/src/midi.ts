@@ -1,29 +1,27 @@
 /**
- * Web MIDI bridge: device list with hot-plug, a test note, and a raw input monitor.
+ * Web MIDI bridge: device list with hot-plug, sends, and input listeners (monitor, identity replies).
  * Needs a secure context (http://localhost or the https LAN URL) and Chrome/Edge (Safari has no Web MIDI).
+ * Implements MidiIO for the executor.
  */
 import type { Port } from '@ce/protocol';
+import type { MidiInEvent, MidiIO } from './midiExec';
 import { noteOff, noteOn } from './midiDecode';
 
-export interface MidiIn {
-  portId: string;
-  portName: string;
-  data: Uint8Array;
-  /** DOMHighResTimeStamp of the event */
-  time: number;
-}
+export type MidiIn = MidiInEvent;
 
-export class MidiBridge {
+export class MidiBridge implements MidiIO {
   access?: MIDIAccess;
   sysex = false;
   onChange: () => void = () => {};
+  /** the monitor's listener (kept for compatibility); use addListener for more */
   onMessage: (m: MidiIn) => void = () => {};
+  private readonly listeners = new Set<(m: MidiIn) => void>();
 
   static get supported(): boolean {
     return typeof navigator !== 'undefined' && 'requestMIDIAccess' in navigator;
   }
 
-  /** True when the browser already granted MIDI, so enabling needs no prompt. */
+  /** True when the browser already granted MIDI (with SysEx), so enabling needs no prompt. */
   static async alreadyGranted(): Promise<boolean> {
     try {
       const s = await navigator.permissions.query({ name: 'midi', sysex: true } as unknown as PermissionDescriptor);
@@ -33,13 +31,17 @@ export class MidiBridge {
     }
   }
 
+  get enabled(): boolean {
+    return Boolean(this.access);
+  }
+
   async enable(): Promise<void> {
     if (!MidiBridge.supported) throw new Error('Web MIDI is not available in this browser (use Chrome or Edge, on localhost or https).');
     try {
       this.access = await navigator.requestMIDIAccess({ sysex: true });
       this.sysex = true;
     } catch {
-      // sysex refused: plain MIDI still covers notes and CCs
+      // SysEx refused: plain MIDI still covers notes and CCs (no identity check)
       this.access = await navigator.requestMIDIAccess({ sysex: false });
       this.sysex = false;
     }
@@ -75,7 +77,12 @@ export class MidiBridge {
     out.send(bytes, timestamp);
   }
 
-  /** Middle C for 300 ms. */
+  addListener(fn: (m: MidiIn) => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  /** Middle C for 300 ms (bypasses the executor; for the manual test button only). */
   testNote(outputId: string, channel = 1, note = 60, velocity = 100): void {
     this.send(outputId, noteOn(channel, note, velocity));
     this.send(outputId, noteOff(channel, note), performance.now() + 300);
@@ -85,7 +92,9 @@ export class MidiBridge {
     for (const input of this.inputs()) {
       input.onmidimessage = (e: MIDIMessageEvent) => {
         if (!e.data) return;
-        this.onMessage({ portId: input.id, portName: input.name ?? input.id, data: e.data, time: e.timeStamp });
+        const m: MidiIn = { portId: input.id, portName: input.name ?? input.id, data: e.data, time: e.timeStamp };
+        this.onMessage(m);
+        for (const fn of this.listeners) fn(m);
       };
     }
   }

@@ -1,0 +1,88 @@
+import { makeMessage, type MessageType } from '@ce/protocol';
+import { describe, expect, it } from 'vitest';
+import { AudioOracle } from './audio/oracle';
+import type { Connection } from './connection';
+import { Executor } from './executor';
+import { type MidiInEvent, type MidiIO, MidiExecutor } from './midiExec';
+import { FakeClock } from './midiScheduler';
+import type { CardputerBridge } from './serial/bridge';
+
+class FakeConn {
+  handlers = new Map<string, ((m: unknown) => void)[]>();
+  sent: { type: string; payload: Record<string, unknown>; to?: string }[] = [];
+  on(type: string, fn: (m: unknown) => void) {
+    this.handlers.set(type, [...(this.handlers.get(type) ?? []), fn]);
+    return () => {};
+  }
+  send(type: string, payload: Record<string, unknown>, opts: { to?: string } = {}) {
+    this.sent.push({ type, payload, to: opts.to });
+    return true;
+  }
+  emit<T extends MessageType>(type: T, payload: unknown) {
+    for (const fn of this.handlers.get(type) ?? []) fn(makeMessage(type, payload as never, { from: 'server', to: 'mac-1' }));
+  }
+}
+
+const io: MidiIO = {
+  enabled: true,
+  sysex: true,
+  outputs: () => [{ id: 'o1', name: 'OP-1', state: 'connected' }],
+  inputs: () => [],
+  send: () => {},
+  addListener: (_fn: (m: MidiInEvent) => void) => () => {},
+};
+
+function setup(leader = true) {
+  const midi = new MidiExecutor(io, { clock: new FakeClock(), wallNow: () => 42 });
+  const bridge = { link: { ready: false }, exec: async () => ({}), panic: async () => {} } as unknown as CardputerBridge;
+  const ex = new Executor(midi, bridge, new AudioOracle());
+  ex.leader = leader;
+  const conn = new FakeConn();
+  ex.attach(conn as unknown as Connection);
+  return { ex, conn };
+}
+
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+describe('Executor', () => {
+  it('runs a MIDI exec.command and acks it to the server', async () => {
+    const { ex, conn } = setup();
+    conn.emit('exec.command', { execId: 'x1', executorDeviceId: 'mac-1', op: { kind: 'midi', msg: 'cc', channel: 1, number: 46, value: 69 }, port: 'OP-1', actionId: 'a-cut' });
+    await tick();
+    expect(conn.sent).toEqual([{ type: 'exec.ack', to: 'server', payload: expect.objectContaining({ execId: 'x1', ok: true, sentAt: 42 }) }]);
+    expect(ex.tape[0]).toMatchObject({ execId: 'x1', what: 'CC 46 → 69 · ch 1', target: 'OP-1', actionId: 'a-cut' });
+  });
+
+  it('a standby tab ignores commands', async () => {
+    const { conn } = setup(false);
+    conn.emit('exec.command', { execId: 'x2', executorDeviceId: 'mac-1', op: { kind: 'midi', msg: 'cc', channel: 1, number: 46, value: 1 }, port: 'OP-1' });
+    await tick();
+    expect(conn.sent).toHaveLength(0);
+  });
+
+  it('answers IR without a Cardputer with no_ir, and audio with the oracle off with an error', async () => {
+    const { conn } = setup();
+    conn.emit('exec.command', { execId: 'x3', executorDeviceId: 'mac-1', op: { kind: 'ir', protocol: 'RAW', rawUs: [9000, 4500, 560, 560] } });
+    conn.emit('sense.request', { senseId: 's1', sensorDeviceId: 'mac-1', kind: 'audio-features', durationMs: 500 });
+    await tick();
+    expect(conn.sent.find((s) => s.type === 'exec.ack')?.payload).toMatchObject({ execId: 'x3', ok: false, error: 'no_ir' });
+    expect(conn.sent.find((s) => s.type === 'sense.result')).toMatchObject({ to: 'server', payload: { senseId: 's1', kind: 'audio-features', ok: false } });
+  });
+
+  it('marks the tape row with the oracle verdict', async () => {
+    const { ex, conn } = setup();
+    conn.emit('exec.command', { execId: 'x4', executorDeviceId: 'mac-1', op: { kind: 'midi', msg: 'cc', channel: 1, number: 46, value: 90 }, port: 'OP-1' });
+    await tick();
+    conn.emit('verify.result', {
+      evidenceId: 'e1',
+      actionId: 'a-cut',
+      execId: 'x4',
+      attempt: 1,
+      sent: { op: { kind: 'midi', msg: 'cc', channel: 1, number: 46, value: 90 }, at: 1 },
+      expected: { sense: 'audio', effect: 'tone-up' },
+      observed: { sense: 'audio', metric: 'centroid', before: 400, after: 600, delta: 200, threshold: 0.3 },
+      pass: true,
+    });
+    expect(ex.tape.find((t) => t.execId === 'x4')?.verdict).toEqual({ pass: true, text: 'heard ✓' });
+  });
+});
