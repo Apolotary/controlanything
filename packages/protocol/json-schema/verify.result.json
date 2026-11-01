@@ -337,6 +337,7 @@
               "type": "string",
               "enum": [
                 "luma-mask-vs-ring",
+                "luma-abs",
                 "rb-ratio",
                 "centroid",
                 "rms",

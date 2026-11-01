@@ -4,7 +4,7 @@ import { CallLog } from '../muse/callLog';
 import { type DecodedImage, decodeJpeg, encodeJpeg } from '../oracle/image';
 import { iou, pointInPolygon, polygonBox, polygonFor, simplifyPolygon, traceOutline } from './polygon';
 import { findQr, parsePairingQr } from './qr';
-import { cannedSamText, FixtureSam, parseSamText, samKey } from './sam';
+import { cannedSamText, FixtureSam, parseSamText, samKey, simCannedRecords } from './sam';
 
 describe('SAM output grammar', () => {
   it('parses boxes, confidences and one_bit masks; empty text is zero matches', () => {
@@ -35,6 +35,18 @@ describe('SAM output grammar', () => {
     expect(all.map((x) => x.records.length)).toEqual([1, 1, 0]);
     expect(log.totals().calls).toBe(5);
     expect(cannedSamText('person', 1280, 960)).toBe('');
+  });
+
+  it('answers the sim room\'s own frames from its ground-truth outlines, never for people', () => {
+    const light = simCannedRecords('ceiling light', 1280, 960);
+    if (!light) return; // apps/sim not present in this checkout
+    expect(light).toHaveLength(1);
+    expect(light[0].polygon!.length).toBeGreaterThanOrEqual(3);
+    expect(light[0].x1).toBeGreaterThan(500);
+    expect(simCannedRecords('person', 1280, 960)).toEqual([]);
+    expect(simCannedRecords('ceiling light', 320, 240)).toBeNull();
+    const desk = simCannedRecords('synthesizer', 1280, 960, { position: { x: 0.92, y: 1.3, z: -2.52 } });
+    expect(desk![0].y1).toBeGreaterThan(400); // the desk view, where the synth is large
   });
 });
 
@@ -106,6 +118,8 @@ describe('QR pairing decode', () => {
     expect(seen?.box?.[2]).toBeGreaterThan(50);
     expect(findQr(decodeJpeg(encodeJpeg(qrImage('hello world'), 90)))?.pairingId).toBeUndefined();
     expect(parsePairingQr('K7Q-4M2')).toEqual({ code: 'K7Q-4M2' });
+    expect(parsePairingQr('CE1:K7Q4M2')).toEqual({ code: 'K7Q4M2' });
+    expect(findQr(decodeJpeg(encodeJpeg(qrImage('CE1:K7Q4M2', 10), 90)))).toMatchObject({ code: 'K7Q4M2' });
     expect(parsePairingQr('nothing here')).toEqual({});
     const plain = { width: 64, height: 64, data: new Uint8Array(64 * 64 * 4).fill(128) };
     expect(findQr(plain)).toBeNull();

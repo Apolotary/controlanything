@@ -15,6 +15,7 @@ import {
   type AnyMessage,
   DEFAULT_ROLE,
   type DeviceInfo,
+  DROPPABLE_TYPES,
   encodeMessage,
   type LogPayload,
   type MessageType,
@@ -36,7 +37,7 @@ export const WS_PATH = '/ws';
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 /** above this many queued bytes a receiver misses droppable messages */
 export const BACKPRESSURE_BYTES = 1024 * 1024;
-const DROPPABLE = new Set(['control.event', 'snapshot']);
+const DROPPABLE = new Set<string>(DROPPABLE_TYPES);
 
 export const CLOSE_UNAUTHORIZED = 4401;
 

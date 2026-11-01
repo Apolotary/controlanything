@@ -3,6 +3,7 @@ import { createApp } from './app';
 import { loadConfig, loadDotEnv, SERVER_VERSION } from './config';
 import { startConsoleApprovals } from './console';
 import { createContext, startServers } from './context';
+import { getAgent } from './agent';
 
 const envFiles = loadDotEnv();
 const config = loadConfig(process.env);
@@ -40,6 +41,8 @@ const replayed = 'recordedKeys' in ctx.muse ? (ctx.muse as { recordedKeys(): str
 if (replayed.length) lines.push(`  replaying ${replayed.length} recorded real response(s) as FIXTURE: ${replayed.join(', ')}`);
 if (config.trustFirstDevice) lines.push('  CE_TRUST_FIRST_DEVICE=1: the first device to pair is approved automatically');
 if (servers.certRegenerated) lines.push(`  generated a new dev certificate for ${servers.certAltNames?.join(', ')}`);
+const agent = getAgent(ctx);
+lines.push(`  agent     scan prompts: ${agent.scan.prompts.join(' · ')} · profiles: ${agent.profiles.files.length} · sam=${agent.sam.mode} · mac-local=${agent.roster.macLocal ? 'on' : 'off'}`);
 for (const w of m.warnings) lines.push(`  warning   ${w}`);
 if (config.consoleApprove) lines.push('  pairing   new requests print here with their code; type "y" to approve, "n" to deny');
 console.log(lines.join('\n'));

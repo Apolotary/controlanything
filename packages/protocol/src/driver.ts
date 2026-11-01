@@ -176,7 +176,7 @@ export type Effect = z.infer<typeof Effect>;
 export const Expectation = z.object({ sense: Sense, effect: Effect });
 export type Expectation = z.infer<typeof Expectation>;
 
-export const EvidenceMetric = z.enum(['luma-mask-vs-ring', 'rb-ratio', 'centroid', 'rms', 'ack', 'none']);
+export const EvidenceMetric = z.enum(['luma-mask-vs-ring', 'luma-abs', 'rb-ratio', 'centroid', 'rms', 'ack', 'none']);
 export type EvidenceMetric = z.infer<typeof EvidenceMetric>;
 
 /** SPEC §3.3: what the HUD's "sent / expected / observed" strip shows. One per verification attempt. */

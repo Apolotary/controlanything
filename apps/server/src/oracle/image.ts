@@ -85,6 +85,8 @@ export interface MaskRegions {
   mask: RegionStats;
   /** pixels in a ring around the polygon's box (background reference, cancels auto-exposure) */
   ring: RegionStats;
+  /** mask and ring together (absolute brightness of the lamp and what it lights; valid at a fixed exposure) */
+  all: RegionStats;
 }
 
 /** Mask vs ring statistics for one polygon in one image. */
@@ -100,5 +102,8 @@ export function maskAndRing(img: DecodedImage, polygon: Polygon, ringFactor = 0.
     (x, y) => !(x >= inner[0] && x < inner[0] + inner[2] && y >= inner[1] && y < inner[1] + inner[3]),
     sampleStep(outer),
   );
-  return { mask, ring };
+  const n = mask.pixels + ring.pixels;
+  const mix = (a: number, b: number) => (n ? (a * mask.pixels + b * ring.pixels) / n : 0);
+  const all: RegionStats = { luma: mix(mask.luma, ring.luma), rb: mix(mask.rb, ring.rb), r: mix(mask.r, ring.r), g: mix(mask.g, ring.g), b: mix(mask.b, ring.b), pixels: n };
+  return { mask, ring, all };
 }

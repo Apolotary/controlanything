@@ -27,6 +27,7 @@ import { PairApproveRequest, PairDenyRequest, PairStartRequest, PROTOCOL_VERSION
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { SERVER_NAME, SERVER_VERSION } from './config';
 import type { ServerContext } from './context';
+import { agentRouter } from './agent/routes';
 import { gen3dRouter } from './gen3d';
 import { MAX_AUDIO_BYTES, requestCancellation, RequestCancelledError, TranscribeInputError, TranscribeUpstreamError } from './muse';
 import { type Approver, PairingError } from './pairing/manager';
@@ -195,6 +196,8 @@ export function createApp(ctx: ServerContext): express.Express {
 
   // generated hack sets + 3D controls (POST /api/gen3d/generate, POST /api/gen3d/edit, GET /api/gen3d/specs[/:id])
   api.use('/gen3d', gen3dRouter(ctx));
+  // the discovery loop: targets, work log, exec monitor, curated profiles, select / arm / panic (see agent/routes.ts)
+  api.use('/agent', agentRouter(ctx));
 
   api.use((req, res) => {
     res.status(404).json({ error: 'not_found', message: `No route ${req.method} ${req.originalUrl}` });

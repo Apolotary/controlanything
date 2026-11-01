@@ -200,14 +200,14 @@ export function midiBrief(profile: MidiProfile, maxParams = 40): string {
 
 /** Short brief of the IR library for the model (brands, keys, how the search runs). */
 export function irBrief(lib: IrLibrary): string {
-  const byBrand = new Map<string, Set<string>>();
+  const byBrand = new Map<string, string[]>();
   for (const c of lib.candidates) {
-    if (!byBrand.has(c.brand)) byBrand.set(c.brand, new Set());
-    byBrand.get(c.brand)!.add(`ch${c.channel}:${c.key}`);
+    if (!byBrand.has(c.brand)) byBrand.set(c.brand, []);
+    byBrand.get(c.brand)!.push(c.ref);
   }
   return [
-    `IR candidate library for Japanese ceiling lights (${lib.candidates.length} codes, NEC and AEHA at 38 kHz).`,
-    ...[...byBrand.entries()].map(([b, keys]) => `  ${b}: ${[...keys].join(', ')}`),
-    'The server fires candidates in order and keeps the ones the camera confirms; unknown command bytes are never swept.',
+    `IR candidate library for Japanese ceiling lights (${lib.candidates.length} codes, NEC and AEHA at 38 kHz). Name a code by its ref only, e.g. {"kind":"ir","protocol":"AEHA","ref":"lib:panasonic/ch1/off"}; the server fills the bytes and timings.`,
+    ...[...byBrand.entries()].map(([b, refs]) => `  ${b}: ${refs.join(' ')}`),
+    'Start with the first brand listed (CH1); the server tries the other brands when the camera sees no reaction. Unknown command bytes are never swept.',
   ].join('\n');
 }

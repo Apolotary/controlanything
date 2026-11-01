@@ -12,10 +12,14 @@ coverage/
 .data/
 
 # internal planning notes (kept out of the public repo)
-research/
-notes/
+/research/
+/notes/
 BRIEF.md
 
 # misc
 *.log
 .DS_Store
+
+# internal planning
+SPEC.md
+MORNING.md

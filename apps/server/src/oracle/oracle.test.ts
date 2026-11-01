@@ -76,6 +76,26 @@ describe('camera oracle', () => {
     expect(observeCamera(warm, cool, poly).effect).toBe('cooler');
   });
 
+  it('sees brightness steps of a lamp that lights its own ring only at a fixed exposure', () => {
+    // the lamp gets 20% brighter and so does the ceiling around it: the mask/ring ratio barely moves
+    const lit = (lamp: number, bg: number) => {
+      const img = roomImage({ bg, lamp });
+      return img;
+    };
+    const a = lit(180, 90);
+    const b = lit(216, 108);
+    const ae = observeCamera(a, b, poly);
+    expect(Math.abs(ae.delta)).toBeLessThan(0.12);
+    expect(ae.effect).toBe('none'); // under auto-exposure this is indistinguishable from an exposure change
+    const locked = observeCamera(a, b, poly, undefined, { exposureLocked: true });
+    expect(locked.effect).toBe('brighter');
+    expect(locked.metric).toBe('luma-abs');
+    expect(locked.absDelta).toBeGreaterThan(0.1);
+    expect(cameraMatches(locked, 'brighter')).toBe(true);
+    expect(cameraEvidence(locked, 'brighter').metric).toBe('luma-abs');
+    expect(cameraMatches(observeCamera(a, lit(60, 90), poly, undefined, { exposureLocked: true }), 'off')).toBe(true);
+  });
+
   it('a step dimmer counts as dimmer but not as off', () => {
     const a = roomImage({ bg: 90, lamp: 230 });
     const b = roomImage({ bg: 90, lamp: 190 });

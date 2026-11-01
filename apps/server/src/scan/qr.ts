@@ -14,10 +14,15 @@ export interface QrSighting {
   box?: PxBox;
 }
 
-/** Parse the pairing URL (or a bare code) out of QR text. */
+/**
+ * Parse the pairing URL (https://host/p/<pairingId>#<code>), the short form "CE1:<code>" a small screen such as
+ * the Cardputer's can show as a version-1 QR, or a bare code out of QR text.
+ */
 export function parsePairingQr(text: string): { pairingId?: string; code?: string } {
   const m = /\/p\/([A-Za-z0-9_-]+)(?:#([A-Za-z0-9-]+))?/.exec(text);
   if (m) return { pairingId: m[1], code: m[2] };
+  const short = /^CE1:([23456789A-Z]{3}-?[23456789A-Z]{3})$/i.exec(text.trim());
+  if (short) return { code: short[1].toUpperCase() };
   const bare = /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{3}-?[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{3}$/i.exec(text.trim());
   if (bare) return { code: text.trim() };
   return {};

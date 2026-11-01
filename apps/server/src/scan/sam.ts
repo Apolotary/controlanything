@@ -12,6 +12,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { decodeMaskToRaster } from '@meta-sam/parser';
 import type { CallLog } from '../muse/callLog';
 import { cancellableDelay, forwardCancellation, RequestCancelledError, throwIfCancelled } from '../muse/cancellation';
@@ -41,6 +42,8 @@ export interface SamRecord {
   h: number;
   confidence?: number;
   mask?: SamMask;
+  /** canned FIXTURE records carry an outline instead of a mask (from the sim room's ground truth) */
+  polygon?: [number, number][];
 }
 
 export interface SamResult {
@@ -61,6 +64,8 @@ export interface SegmentOptions {
   /** source image size (needed only for fixture bookkeeping and box prompts) */
   width?: number;
   height?: number;
+  /** camera pose of the frame (fixture mode picks the sim view with it) */
+  pose?: { position: { x: number; y: number; z: number } };
   label?: string;
 }
 
@@ -299,10 +304,74 @@ export function cannedSamText(prompt: string, width: number, height: number): st
   const box = (x1: number, y1: number, x2: number, y2: number, c: number, id: number) =>
     `${id}<|box;x1=${Math.round(x1 * W)};y1=${Math.round(y1 * H)};x2=${Math.round(x2 * W)};y2=${Math.round(y2 * H)};w=${W};h=${H};c=${c}|><|mask;x=0;y=0;c=${c};data=0,0,!|>`;
   const p = prompt.toLowerCase();
-  if (p.includes('ceiling light') || p.includes('lamp')) return `<0f>${box(0.38, 0.04, 0.62, 0.22, 0.9, 0)}`;
+  if (p.includes('ceiling light') || p.includes('lamp')) return `<0f>${box(0.38, 0.08, 0.62, 0.42, 0.9, 0)}`;
   if (p.includes('synth') || p.includes('keyboard')) return `<0f>${box(0.3, 0.62, 0.62, 0.84, 0.9, 1)}`;
   if (p.includes('electronic device')) return `<0f>${box(0.3, 0.62, 0.62, 0.84, 0.86, 1)},${box(0.7, 0.6, 0.9, 0.8, 0.8, 2)}`;
   return '';
+}
+
+// --- the sim room's ground truth (apps/sim/public/room/meta.json), for FIXTURE scans of its frames -------------
+
+interface SimMeta {
+  width: number;
+  height: number;
+  views: Record<string, { pose?: { position: { x: number; y: number; z: number } }; devices: { id: string; kind: string; label: string; box: number[]; boxPx: number[]; polygon: [number, number][] }[] }>;
+}
+
+export const SIM_META_FILE = fileURLToPath(new URL('../../../sim/public/room/meta.json', import.meta.url));
+let simMeta: SimMeta | null | undefined;
+
+function loadSimMeta(): SimMeta | null {
+  if (simMeta !== undefined) return simMeta;
+  try {
+    simMeta = existsSync(SIM_META_FILE) ? (JSON.parse(readFileSync(SIM_META_FILE, 'utf8')) as SimMeta) : null;
+  } catch {
+    simMeta = null;
+  }
+  return simMeta;
+}
+
+/** Which sim devices a SAM concept would find. */
+function promptMatches(prompt: string, d: { kind: string; label: string }): boolean {
+  const p = prompt.toLowerCase();
+  if (p === d.label.toLowerCase()) return true;
+  if (p === 'electronic device') return d.kind !== 'lighting';
+  if (p.includes('remote')) return d.kind === 'remote-control';
+  if (p.includes('light') || p.includes('lamp')) return d.kind === 'lighting';
+  if (p.includes('synth') || p.includes('keyboard')) return d.kind === 'synthesizer';
+  if (p.includes('laptop') || p.includes('computer')) return d.kind === 'computer';
+  if (p.includes('air conditioner')) return d.kind === 'appliance';
+  return false;
+}
+
+/**
+ * Canned records for a frame of the sim room (same size as the render): the ground-truth boxes and outlines
+ * of the view whose camera pose is nearest to the frame's pose (default: the room view). Null when the
+ * frame is not a sim frame or the meta file is absent.
+ */
+export function simCannedRecords(prompt: string, width: number, height: number, pose?: { position: { x: number; y: number; z: number } }): SamRecord[] | null {
+  const meta = loadSimMeta();
+  if (!meta || width !== meta.width || height !== meta.height) return null;
+  const views = Object.entries(meta.views);
+  let view = views.find(([name]) => name === 'room')?.[1] ?? views[0]?.[1];
+  if (pose) {
+    let best = Infinity;
+    for (const [, v] of views) {
+      if (!v.pose) continue;
+      const d = Math.hypot(v.pose.position.x - pose.position.x, v.pose.position.y - pose.position.y, v.pose.position.z - pose.position.z);
+      if (d < best) {
+        best = d;
+        view = v;
+      }
+    }
+  }
+  if (!view) return null;
+  return view.devices
+    .filter((d) => promptMatches(prompt, d))
+    .map((d, i) => {
+      const [x, y, w, h] = d.boxPx;
+      return { id: i, x1: x, y1: y, x2: x + w - 1, y2: y + h - 1, w: width, h: height, confidence: 0.9, polygon: d.polygon.map(([px, py]) => [Math.round(px), Math.round(py)] as [number, number]) };
+    });
 }
 
 export interface FixtureSamOptions {
@@ -337,11 +406,18 @@ export class FixtureSam implements Sam {
     const exact = this.byName.get(samKey(prompt, opts.width, opts.height, hash));
     const sameSize = this.byPrompt.get(prompt.toLowerCase())?.filter((r) => !opts.width || (r.width === opts.width && r.height === opts.height));
     const rec = exact ?? sameSize?.at(-1) ?? this.byPrompt.get(prompt.toLowerCase())?.at(-1);
-    const text = rec ? rec.text : cannedSamText(prompt, opts.width ?? 0, opts.height ?? 0);
-    const records = parseSamText(text).filter((r) => !rec || r.mask?.payload); // canned rows have empty masks; keep them (box only)
+    let records: SamRecord[];
+    let text = '';
+    if (rec) {
+      text = rec.text;
+      records = parseSamText(text);
+    } else {
+      // no recording: the sim room's ground truth for its own frames, else the generic canned scene
+      records = simCannedRecords(prompt, opts.width ?? 0, opts.height ?? 0, opts.pose) ?? parseSamText((text = cannedSamText(prompt, opts.width ?? 0, opts.height ?? 0)));
+    }
     const latencyMs = Date.now() - started;
     this.o.callLog.add({ at: started, label: opts.label ?? `sam:${prompt}`, model: 'fixture', source: 'fixture', ok: true, latencyMs, format: 'segmentation', recordedFrom: rec?.model, finishReason: `${records.length} objects` });
-    return { prompt, records: rec ? records : parseSamText(text), model: 'fixture', source: 'fixture', latencyMs, text, recordedFrom: rec?.model };
+    return { prompt, records, model: 'fixture', source: 'fixture', latencyMs, text, recordedFrom: rec?.model };
   }
 
   segmentAll(prompts: string[], jpegBase64: string, opts: SegmentOptions = {}): Promise<(SamResult & { error?: string })[]> {

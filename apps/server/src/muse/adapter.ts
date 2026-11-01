@@ -499,8 +499,9 @@ export class FixtureMuse implements MuseChat {
     let text: string;
     if (rec) {
       text = rec.text;
-    } else if (key && this.fixtures.has(key)) {
-      const v = this.fixtures.get(key);
+    } else if (key && (this.fixtures.has(key) || this.fixtures.has(key.split(':')[0]))) {
+      // "device_card:ceiling-light" falls back to the generic "device_card" fixture
+      const v = this.fixtures.get(key) ?? this.fixtures.get(key.split(':')[0]);
       text = JSON.stringify(typeof v === 'function' ? (v as FixtureFn)(messages) : v);
     } else if (wantsJson) {
       const error = `${FIXTURE_LABEL} no fixture or recording for "${key ?? 'json_object'}"; set MODEL_API_KEY for live calls, record one (MUSE_RECORD=1) or register a fixture`;

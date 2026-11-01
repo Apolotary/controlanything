@@ -50,6 +50,28 @@ function hasPlaceholder(encode: ActionEncode): boolean {
   return false;
 }
 
+/** "Panasonic:ch1:off" | "lib:panasonic/ch1/off" | "panasonic ch1 off" -> the library candidate's ref, if any. */
+export function matchLibraryRef(ref: string | undefined, lib: IrLibrary | undefined): IrLibrary['candidates'][number] | undefined {
+  if (!ref || !lib) return undefined;
+  const norm = ref.toLowerCase().replace(/^lib:/, '').replace(/[\s:/._-]+/g, '/');
+  return lib.candidates.find((c) => c.ref.slice(4).toLowerCase() === norm) ?? lib.candidates.find((c) => `${c.brand}/ch${c.channel}/${c.key}`.toLowerCase() === norm);
+}
+
+/**
+ * A model may name a code instead of copying its bytes: `ref: "lib:<brand>/ch<n>/<key>"` (library) or
+ * `ref: "learned:<id>"` (a captured frame). Fill the op from that source; unknown refs stay as they are and
+ * fail the allowlist below.
+ */
+export function resolveIrRef(op: IrOp, ctx: ValidationContext): IrOp {
+  if (op.bytes?.length || op.rawUs?.length) return op;
+  const lib = matchLibraryRef(op.ref, ctx.irLibrary);
+  if (lib) return { ...lib.op, ref: lib.ref };
+  const learnedId = /^learned:(.+)$/.exec(op.ref ?? '')?.[1];
+  const learned = learnedId ? ctx.learned?.find((l) => (l as { learnId?: string }).learnId === learnedId) : undefined;
+  if (learned) return { kind: 'ir', protocol: learned.protocol && learned.protocol !== 'UNKNOWN' ? learned.protocol : 'RAW', rawUs: learned.rawUs, khz: learned.khz ?? 38, bytes: learned.bytes, unitUs: learned.unitUs, repeats: 0, ref: op.ref };
+  return op;
+}
+
 function irInAllowlist(op: IrOp, ctx: ValidationContext): { ok: boolean; why?: string } {
   const bytesEqual = (a: number[] | undefined, b: number[] | undefined) => Boolean(a && b && a.length === b.length && a.every((x, i) => x === b[i]));
   for (const d of ctx.irLibrary?.doNotSend ?? []) {
@@ -112,9 +134,9 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
     } else if (e.kind === 'ir') {
       let filled: IrOp;
       try {
-        filled = fillRaw(e);
+        filled = fillRaw(resolveIrRef(e, ctx));
       } catch (x) {
-        err('ir_unencodable', `${path}.encode`, (x as Error).message);
+        err('ir_unencodable', `${path}.encode`, `${(x as Error).message}; name a library code as ref "lib:<brand>/ch<n>/<key>" or a learned one as "learned:<id>"`);
         filled = e;
       }
       if (filled.rawUs) {

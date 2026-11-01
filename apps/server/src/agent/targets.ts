@@ -1,0 +1,74 @@
+/** The per-target state machine store; every transition is a `target.status` broadcast. */
+import { newId, type TargetState, type TargetStatusPayload } from '@ce/protocol';
+import type { Hub } from '../hub';
+import type { Target } from './types';
+
+export class TargetStore {
+  private readonly targets = new Map<string, Target>();
+  private readonly listeners = new Set<(t: Target) => void>();
+
+  constructor(
+    private readonly hub: Pick<Hub, 'broadcast'>,
+    private readonly log: (line: string) => void = () => {},
+  ) {}
+
+  list(): Target[] {
+    return [...this.targets.values()];
+  }
+
+  get(cardId: string): Target | undefined {
+    return this.targets.get(cardId);
+  }
+
+  onChange(fn: (t: Target) => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  create(partial: Partial<Target> & { cardId?: string } = {}): Target {
+    const t: Target = {
+      cardId: partial.cardId ?? newId('card-'),
+      runId: partial.runId ?? newId('run-'),
+      state: 'scanned',
+      since: Date.now(),
+      verification: {},
+      evidence: [],
+      armed: false,
+      stepIndex: {},
+      paramValues: {},
+      ...partial,
+    };
+    this.targets.set(t.cardId, t);
+    return t;
+  }
+
+  /** Move a target to a state and tell every client. */
+  setState(t: Target, state: TargetState, detail?: string): void {
+    t.state = state;
+    t.since = Date.now();
+    t.detail = detail;
+    if (state === 'failed' && detail) t.lastError = detail;
+    const payload: TargetStatusPayload = { cardId: t.cardId, state, since: t.since };
+    if (detail) payload.detail = detail.slice(0, 300);
+    if (t.driver) payload.driverId = t.driver.driverId;
+    if (t.specId) payload.specId = t.specId;
+    if (t.link?.executorDeviceId) payload.executorDeviceId = t.link.executorDeviceId;
+    this.log(`[target] ${t.cardId} -> ${state}${detail ? `: ${detail}` : ''}`);
+    try {
+      this.hub.broadcast('target.status', payload);
+    } catch (e) {
+      this.log(`[target] status broadcast failed: ${(e as Error).message}`);
+    }
+    for (const fn of this.listeners) fn(t);
+  }
+
+  /** Public view (no frame bytes). */
+  summary(t: Target): Record<string, unknown> {
+    const { detection, abort: _a, research, ...rest } = t;
+    return {
+      ...rest,
+      detection: detection ? { ...detection, jpeg: `<${detection.jpeg.length} chars>` } : undefined,
+      research: research ? { brief: research.brief.slice(0, 2000), provenance: research.provenance, profile: research.profile?.id, allowedCcs: research.allowedCcs ? [...research.allowedCcs] : undefined, learned: research.learned?.map(({ rawUs, ...l }) => ({ ...l, rawUsLength: rawUs.length })) } : undefined,
+    };
+  }
+}
