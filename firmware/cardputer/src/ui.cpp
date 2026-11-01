@@ -341,7 +341,7 @@ void drawPair(uint32_t now) {
   }
   // QR on the left, full height: dark modules on white (standard polarity) with a
   // 2-module white quiet zone, module size chosen as large as the version allows.
-  // A short payload (e.g. "CE1:K7Q4M2", version 1) gives 5 px modules; a ~60-char URL
+  // A short QR text (e.g. "CE1:K7Q4M2", version 1) gives 5 px modules; a ~60-char URL
   // (version 4) only 3 px, which the headset camera needs to be much closer to read.
   const int q = H;
   canvas.fillRect(0, 0, q, q, 0xFFFFFFu);

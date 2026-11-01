@@ -184,7 +184,7 @@ second and stays lit through faster bursts; the IR beam is motion, not a flash.
 - **Pair**: full-height QR (dark on white, 2-module quiet zone, module size as large as the
   version allows) beside the code in two 40 px lines, a countdown and a 0.5 Hz dot; `c`
   shows the code alone at 48 px. Screen brightness goes to maximum for the camera. A short
-  QR payload (for example `CE1:K7Q4M2`, QR version 1) gets 5 px modules; a 60-character URL
+  QR text (for example `CE1:K7Q4M2`, QR version 1) gets 5 px modules; a 60-character URL
   gets 3 px, which the headset has to be much closer to read.
 - **Hacks**: title, a big value numeral with its unit, a 200 × 8 bar, step bars as dots
   (`WARM ● ● ● ○ ○ COOL`), and a key legend; disarmed hacks are grey and cannot be picked.
