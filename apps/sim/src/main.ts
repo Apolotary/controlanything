@@ -25,6 +25,8 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 // --- the device -----------------------------------------------------------------------------------
 
 const synth = new SynthEngine();
+// ?mute=1: no speaker output (the audio features the server verifies by are read from the analyser, so they are unchanged)
+synth.muted = params.get('mute') === '1';
 const meter = new FeatureMeter(
   () => synth.analyser,
   () => synth.running,
@@ -45,6 +47,8 @@ if (EMBED) {
 }
 const room = new RoomView(roomCanvas, overlayCanvas, animator);
 const device = new SimDevice(synth, meter, room, animator);
+// the embed has no remote anyone can reach, so it answers learn prompts itself unless ?autopress=0
+device.autoPress = EMBED ? params.get('autopress') !== '0' : params.get('autopress') === '1';
 device.startClockSignal(); // tempo -> device.signal clock_bpm for the "breathe to tempo" daemon
 const saved = loadLamp();
 if (saved) {
@@ -64,6 +68,12 @@ declare global {
       layout: { width: number; height: number; devices: { id: string; kind: string; label: string; box: [number, number, number, number] }[] };
       lamp: () => LampState;
       leader: () => boolean;
+      /** press a button on the virtual remote (works from any sim page; the paired one transmits) */
+      press: (cmd: LampCmd, channel?: 1 | 2) => void;
+      /** the open learn window (the agent asked to "press 全灯 once"), if any */
+      learn: () => { prompt?: string; until: number; count: number } | null;
+      /** auto-press the button a learn prompt names (default on in ?embed, off on the full page) */
+      setAutoPress: (on: boolean) => void;
     };
   }
 }
@@ -198,9 +208,16 @@ function setRole(): void {
 
 // --- leader election and mirroring --------------------------------------------------------------------
 
+function announceRole(): void {
+  const detail = { leader: sync.leader, view: room.view };
+  window.dispatchEvent(new CustomEvent('ce-sim-role', { detail }));
+  if (window.parent !== window) window.parent.postMessage({ type: 'ce-sim-role', ...detail }, location.origin);
+}
+
 sync.onLeader = (leader) => {
   if (leader) void startLeader();
   else stopLeader();
+  announceRole();
 };
 sync.onMessage = (m: SyncMsg) => {
   if (m.type === 'state' && !sync.leader) {
@@ -463,6 +480,7 @@ function wireUi(): void {
     device.log('ir', `lamp now obeys ${device.codeSet.name}`);
   });
   $('wall').addEventListener('click', () => device.setLampState({ ...device.state, power: 'on', level: 10 }, 'wall switch power cycle'));
+  $<HTMLInputElement>('autopress').checked = device.autoPress;
   $<HTMLInputElement>('autopress').addEventListener('change', (e) => (device.autoPress = (e.target as HTMLInputElement).checked));
 
   // synth
@@ -474,7 +492,7 @@ function wireUi(): void {
   const startAudio = async () => {
     const ok = await synth.start();
     if (ok) meter.start();
-    audioBtn.textContent = ok ? 'AUDIO ON' : 'START AUDIO';
+    audioBtn.textContent = ok ? (synth.muted ? 'AUDIO ON · MUTED' : 'AUDIO ON') : 'START AUDIO';
     audioBtn.disabled = ok;
   };
   audioBtn.addEventListener('click', () => void startAudio());
@@ -590,13 +608,24 @@ async function boot(): Promise<void> {
     },
     lamp: () => device.state,
     leader: () => sync.leader,
+    press: (cmd, channel) => {
+      if (channel) device.remoteChannel = channel;
+      press(cmd);
+    },
+    learn: () => (device.learn ? { prompt: device.learn.prompt, until: device.learn.until, count: device.learn.count } : null),
+    setAutoPress: (on) => {
+      device.autoPress = on;
+      const box = document.getElementById('autopress') as HTMLInputElement | null;
+      if (box) box.checked = on;
+    },
   };
   // devtools handle (and scripted tests): the same objects the page uses
   (window as unknown as { ceSimDebug: unknown }).ceSimDebug = { device, synth, meter, room, sync };
-  window.dispatchEvent(new CustomEvent('ce-sim-ready'));
-  if (window.parent !== window) window.parent.postMessage({ type: 'ce-sim-ready', view: room.view }, location.origin);
   device.log('lamp', `virtual lamp ready: ${describeLamp(device.state)} · obeys ${device.codeSet.name} (e.g. off = ${hex(device.codeSet.codes.find((c) => c.cmd === 'off' && c.channel === 1)!.bytes)})`);
+  // elect first, then announce, so leader() is already right when 'ce-sim-ready' fires
   await sync.start();
+  window.dispatchEvent(new CustomEvent('ce-sim-ready', { detail: { leader: sync.leader, view: room.view } }));
+  if (window.parent !== window) window.parent.postMessage({ type: 'ce-sim-ready', view: room.view, leader: sync.leader }, location.origin);
   void loadLearnedCodes();
 }
 

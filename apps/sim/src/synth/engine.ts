@@ -47,6 +47,13 @@ const LOOP_PATTERN = [45, 57, 52, 57, 48, 60, 55, 60, 43, 55, 50, 55, 47, 59, 52
 export class SynthEngine {
   ctx?: AudioContext;
   analyser?: AnalyserNode;
+  /**
+   * `?mute=1`: the whole graph runs (notes, CCs, analyser, audio features and the audio-clock ticker are
+   * unchanged) but the master bus reaches the speakers through a zero gain, so a silent machine can still
+   * verify the synth by its audio features. Set before the first start(); setMuted() flips it later.
+   */
+  muted = false;
+  private out?: GainNode;
   /** the synth listens to notes on this channel only (like SYSTEM > MIDI on the device) */
   channel = 1;
   readonly cc = new Map<number, number>(Object.entries(INITIAL_CC).map(([k, v]) => [Number(k), v]));
@@ -86,6 +93,12 @@ export class SynthEngine {
 
   get running(): boolean {
     return this.ctx?.state === 'running';
+  }
+
+  /** Speakers on/off without touching the graph (the analyser keeps reading the synth's own output). */
+  setMuted(v: boolean): void {
+    this.muted = v;
+    if (this.out && this.ctx) this.out.gain.setTargetAtTime(v ? 0 : 1, this.ctx.currentTime, 0.01);
   }
 
   onCc(fn: Listener<CcEvent>): () => void {
@@ -194,7 +207,8 @@ export class SynthEngine {
     n.wet.connect(n.track);
     n.track.connect(n.trem).connect(n.pan).connect(n.eqLow).connect(n.eqMid).connect(n.eqHigh).connect(n.master);
     n.master.connect(this.analyser);
-    n.master.connect(ctx.destination);
+    this.out = new GainNode(ctx, { gain: this.muted ? 0 : 1 });
+    n.master.connect(this.out).connect(ctx.destination);
     this.startTicker(ctx, n.master);
     for (const [cc, v] of this.cc) this.apply(cc, v, true);
   }

@@ -87,19 +87,22 @@ export function sameDisplay(a: LampDisplay, b: LampDisplay, eps = 1e-3): boolean
 }
 
 /**
- * Exponential fade toward the target (time constants in ms): tau 450 ms reaches 95 % in ~1.35 s, like the real
- * fixture; colour moves a little slower. The displayed light is a pure function of time (no per-frame stepping),
- * so camera frames are right even when the page is in a background tab, and a "before" frame can be developed
- * for any instant of the last 10 s (sense.request offsetMs < 0).
+ * Fade toward the target over a fixed time (smootherstep: monotonic, no overshoot, nothing that reads as a
+ * flash): 1.2 s for brightness and 1.5 s for colour, like a real LED ceiling light, and then exactly at the
+ * target, so a frame taken after the fade never carries a residual. The light is a pure function of time
+ * (no per-frame stepping): camera frames are right even in a background tab, and a "before" frame can be
+ * developed for any instant of the last 10 s (sense.request offsetMs < 0).
  */
+const ease = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * x * (x * (6 * x - 15) + 10));
+
 export class LampAnimator {
   private segs: { t0: number; from: LampDisplay; to: LampDisplay }[];
   private lastRendered?: LampDisplay;
 
   constructor(
     state: LampState,
-    readonly tauMs = 450,
-    readonly colorTauMs = 600,
+    readonly fadeMs = 1200,
+    readonly colorFadeMs = 1500,
     now = Date.now(),
   ) {
     const d = targetDisplay(state);
@@ -124,8 +127,8 @@ export class LampAnimator {
       }
     }
     const dt = Math.max(0, t - seg.t0);
-    const k = 1 - Math.exp(-dt / this.tauMs);
-    const kc = 1 - Math.exp(-dt / this.colorTauMs);
+    const k = ease(dt / this.fadeMs);
+    const kc = ease(dt / this.colorFadeMs);
     const { from: a, to: b } = seg;
     const d: LampDisplay = {
       main: a.main + (b.main - a.main) * k,

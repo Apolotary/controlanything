@@ -52,13 +52,13 @@ describe('lamp state machine', () => {
     expect(targetDisplay(s).main).toBe(LEVELS[0]);
   });
 
-  it('fades smoothly (no flashes) as a function of time, with history for "before" frames', () => {
+  it('fades smoothly (no flashes) as a function of time, ends exactly on target, keeps history', () => {
     const t0 = 1_000_000;
-    const a = new LampAnimator(DEFAULT_STATE, 450, 600, t0);
+    const a = new LampAnimator(DEFAULT_STATE, 1200, 1500, t0);
     a.setTarget(applyCmd(DEFAULT_STATE, 'fullOn'), { now: t0 });
     let prev = 0;
     let settledAt = 0;
-    for (let t = t0; t <= t0 + 6000; t += 16) {
+    for (let t = t0; t <= t0 + 4000; t += 16) {
       const m = a.at(t).main;
       expect(m).toBeGreaterThanOrEqual(prev); // monotonic, no overshoot
       expect(m - prev).toBeLessThan(0.05); // < 5 % of full per 16 ms frame
@@ -66,13 +66,15 @@ describe('lamp state machine', () => {
       prev = m;
     }
     expect(prev).toBe(1);
-    expect((settledAt - t0) / 1000).toBeGreaterThan(1.0);
-    expect((settledAt - t0) / 1000).toBeLessThan(5.0);
+    expect((settledAt - t0) / 1000).toBeGreaterThan(0.8);
+    expect((settledAt - t0) / 1000).toBeLessThanOrEqual(1.5);
     expect(a.at(t0 - 5).main).toBe(0);
-    // a new command mid-fade starts from where the light is, not from the old target
+    // a new command mid-fade starts from where the light is, and lands exactly on the new target
+    const mid = a.at(t0 + 300).main;
+    expect(mid).toBeGreaterThan(0);
     a.setTarget(DEFAULT_STATE, { now: t0 + 300 });
-    expect(a.at(t0 + 300).main).toBeCloseTo(1 - Math.exp(-300 / 450), 5);
-    expect(a.at(t0 + 300 + 8000).main).toBe(0);
+    expect(a.at(t0 + 300).main).toBeCloseTo(mid, 6);
+    expect(a.at(t0 + 300 + 1200).main).toBe(0);
   });
 });
 
