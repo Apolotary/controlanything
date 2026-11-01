@@ -367,15 +367,30 @@ export class DebugHud implements Hud {
     this.dirty.add('deck');
   }
 
+  /**
+   * Arm's-length anchor on the line of sight to a device (pitch clamped to -28°..+10°), with the plane's
+   * right/up axes: menus and controls for far devices (the ceiling light) stay readable and reachable.
+   */
+  private nearAnchor(target: Vector3, distance = 0.7): { at: Vector3; right: Vector3; up: Vector3 } {
+    const to = target.clone().sub(this.head.position);
+    const dist = to.length();
+    const yaw = Math.atan2(to.x, to.z);
+    const pitch = Math.max(-0.49, Math.min(0.17, Math.asin(to.y / Math.max(1e-6, dist))));
+    const dir = new Vector3(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
+    const at = this.head.position.clone().addScaledVector(dir, Math.min(distance, Math.max(0.35, dist - 0.1)));
+    const right = dir.clone().cross(new Vector3(0, 1, 0)).normalize();
+    const up = right.clone().cross(dir).normalize();
+    return { at, right, up };
+  }
+
   // --- HACKS ---------------------------------------------------------------------------------
 
   showHackMenu(targetId: string, menu: { title: string; subtitle?: string; items: HackItem[] }): void {
     this.menuState = { targetId, ...menu };
     const tv = this.targets.get(targetId);
-    const base = tv ? tv.group.position.clone() : this.head.position.clone().add(new Vector3(0.25, -0.1, -0.6));
-    const toHead = this.head.position.clone().sub(base).setY(0).normalize();
-    const right = new Vector3(0, 1, 0).cross(toHead).normalize();
-    this.menu.mesh.position.copy(base).addScaledVector(right, 0.22).add(new Vector3(0, 0.02, 0));
+    const target = tv ? tv.group.position.clone() : this.head.position.clone().add(new Vector3(0, -0.2, -1));
+    const a = this.nearAnchor(target);
+    this.menu.mesh.position.copy(a.at).addScaledVector(a.right, 0.2).addScaledVector(a.up, 0.03);
     this.menu.mesh.visible = true;
     this.dirty.add('menu');
   }
@@ -397,8 +412,9 @@ export class DebugHud implements Hud {
       return;
     }
     const tv = e.targetId ? this.targets.get(e.targetId) : undefined;
-    const base = tv ? tv.group.position.clone().add(new Vector3(0, -0.12, 0)) : this.head.position.clone().add(new Vector3(0, -0.25, -0.6));
-    this.evidence.mesh.position.copy(base);
+    const target = tv ? tv.group.position.clone() : this.head.position.clone().add(new Vector3(0, -0.2, -1));
+    const a = this.nearAnchor(target);
+    this.evidence.mesh.position.copy(a.at).addScaledVector(a.up, 0.11);
     faceYaw(this.evidence.mesh, this.head.position);
     this.evidence.mesh.visible = true;
     this.dirty.add('evidence');
@@ -428,10 +444,8 @@ export class DebugHud implements Hud {
     const tv = at.targetId ? this.targets.get(at.targetId) : undefined;
     if (at.position) sv.panel.mesh.position.set(...at.position);
     else if (tv) {
-      const base = tv.group.position.clone();
-      const toHead = this.head.position.clone().sub(base).setY(0).normalize();
-      const left = toHead.clone().cross(new Vector3(0, 1, 0)).normalize();
-      sv.panel.mesh.position.copy(base).addScaledVector(left, 0.25).addScaledVector(toHead, 0.1);
+      const a = this.nearAnchor(tv.group.position);
+      sv.panel.mesh.position.copy(a.at).addScaledVector(a.up, -0.02);
     } else {
       const fwd = new Vector3(0, 0, -1).applyQuaternion(this.head.quaternion).setY(0).normalize();
       sv.panel.mesh.position.copy(this.head.position).addScaledVector(fwd, 0.6).add(new Vector3(0, -0.15, 0));

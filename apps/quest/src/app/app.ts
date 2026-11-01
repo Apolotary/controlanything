@@ -11,6 +11,7 @@
  *   scan=fixture       answer scan frames locally with recorded SAM 3.1 boxes (emulator + photo only)
  *   replay=<url>       a take (session.jsonl or .zip); replayMode=playback|pipeline
  *   record=1           start recording at load
+ *   mic=0              never open the microphone (no AudioContext at all)
  *   hud=debug          force the shell's debug HUD
  *   dominant=left      left-handed: the deck opens over the RIGHT palm
  *   ws=<url>           WebSocket override
@@ -463,7 +464,7 @@ export class QuestApp {
     const t = this.targetForCard(p.cardId, { frameId: p.frameId, detId: p.detId });
     this.page.log(`device.card: ${p.maker} ${p.model || p.name} (${Math.round(p.confidence * 100)} %)${p.modelId ? ` · ${p.modelId}` : ''}`, 'ok');
     if (!t) return;
-    t.label = p.model ? `${p.maker} ${p.model}`.trim() : p.name;
+    t.label = p.name || `${p.maker} ${p.model}`.trim();
     if (!t.subtitle || t.subtitle.startsWith('locked')) t.subtitle = 'identified';
     this.hud.upsertTarget(toHudTarget(t));
   }
@@ -879,6 +880,7 @@ export class QuestApp {
 
   async prepareMedia(): Promise<void> {
     await this.startCamera();
+    if (this.params.get('mic') === '0') return;
     try {
       await this.mic.prepare();
       this.page.log(`mic: ${this.mic.label} · ${this.mic.rate} Hz PCM16`, 'ok');
