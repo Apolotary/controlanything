@@ -6,14 +6,33 @@ import type { Vector3 } from 'three';
 
 export type Cue = 'tick' | 'click' | 'lock' | 'step' | 'ok' | 'fail' | 'blip' | 'daemon' | 'sweep' | 'voiceOn' | 'voiceOff' | 'pluck' | 'knock' | 'chirp';
 
+/**
+ * Global mute (user directive, Nov 2: no Web Audio playback on this Mac until lifted). While true, no
+ * AudioContext is created and play() is a no-op. Flip with `UiAudio.muted = false` or `?audio=1`.
+ */
+let MUTED = true;
+try {
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('audio') === '1') MUTED = false;
+} catch {
+  /* non-browser */
+}
+
 export class UiAudio {
   private ctx: AudioContext | null = null;
   private bus: GainNode | null = null;
   private blipIndex = 0;
   enabled = true;
 
-  /** Call from a user gesture (first pinch / click) so the context may start. */
+  static get muted(): boolean {
+    return MUTED;
+  }
+  static set muted(v: boolean) {
+    MUTED = v;
+  }
+
+  /** Call from a user gesture (first pinch / click) so the context may start. No-op while muted. */
   unlock(): void {
+    if (MUTED) return;
     if (this.ctx) {
       if (this.ctx.state === 'suspended') void this.ctx.resume();
       return;
@@ -45,7 +64,7 @@ export class UiAudio {
   }
 
   play(cue: Cue, at?: Vector3): void {
-    if (!this.enabled || !this.ctx || !this.bus) return;
+    if (MUTED || !this.enabled || !this.ctx || !this.bus) return;
     const ctx = this.ctx;
     const t0 = ctx.currentTime;
     let dest: AudioNode = this.bus;

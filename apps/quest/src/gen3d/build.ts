@@ -208,12 +208,83 @@ export class SpecObject extends Group {
     this.applyArmed();
 
     // build-up: 40 ms stagger per part, but the whole object materialises within ~1.6 s however many parts
+    let buildS = 0;
     if (animate !== 'none') {
       const fresh = this.expanded.parts.filter((p) => !(animate === 'diff' && prevIds.has(p.id)));
       const stagger = Math.min(0.04, 1.6 / Math.max(1, fresh.length));
       const t0 = this.now;
       fresh.forEach((p, i) => this.births.set(p.id, t0 + i * stagger));
       if (fresh.length) this.audio?.play('step');
+      buildS = fresh.length * stagger + 0.3;
+    }
+    // skin (Muse Image): fades in after the controls have built
+    if (spec.skin) this.applySkin(spec.skin, buildS + 0.4);
+  }
+
+  /** Paint the skin onto eligible plates / knob faces as a textured layer under the text plates. */
+  private applySkin(skin: Skin, delayS: number): void {
+    const targets: { node: Mesh; part: Part; kind: 'panel' | 'knob-face' }[] = [];
+    for (const mesh of this.meshes) {
+      const part = this.parts.get(mesh.userData.partId as string);
+      if (!part || part.kind !== 'primitive') continue;
+      const owner = this.parts.get(this.expanded.origin.get(part.id) ?? '');
+      if (skin.partIds.length && !skin.partIds.includes(part.id) && !(owner && skin.partIds.includes(owner.id))) continue;
+      // plates: boxes of plate size whose role is base/body or unset (hand-written specs rarely set roles)
+      const isPanel = part.shape === 'box' && (part.role === undefined || part.role === 'base' || part.role === 'body') && (part.dims?.w ?? 0) >= 0.06 && (part.dims?.h ?? 0) >= 0.025 && (part.dims?.d ?? 0.004) <= 0.02;
+      const isKnobFace = owner?.archetype === 'knob' && part.id.endsWith('.capface');
+      if ((skin.kind === 'panel' || skin.kind === 'both') && isPanel) targets.push({ node: mesh, part, kind: 'panel' });
+      else if ((skin.kind === 'knob-face' || skin.kind === 'both') && isKnobFace) targets.push({ node: mesh, part, kind: 'knob-face' });
+    }
+    if (!targets.length) return;
+    const fade = skin.fadeS ?? 2.5;
+    const place = (tex: Texture) => {
+      tex.colorSpace = SRGBColorSpace;
+      tex.anisotropy = 4;
+      const image = tex.image as { width: number; height: number } | undefined;
+      for (const t of targets) {
+        const map = tex.clone();
+        map.needsUpdate = true;
+        let geo: PlaneGeometry | CircleGeometry;
+        let z: number;
+        if (t.kind === 'panel') {
+          const w = (t.part.dims?.w ?? 0.1) - 0.004;
+          const h = (t.part.dims?.h ?? 0.05) - 0.004;
+          geo = new PlaneGeometry(w, h);
+          z = (t.part.dims?.d ?? 0.004) / 2 + 0.0006;
+          fitTexture(map, skin.fit, w / h, image);
+        } else {
+          const r = (t.part.dims?.rTop ?? t.part.dims?.r ?? 0.025) - 0.001;
+          geo = new CircleGeometry(r, 48);
+          z = (t.part.dims?.h ?? 0.008) / 2 + 0.0006;
+          fitTexture(map, 'cover', 1, image);
+        }
+        const mat = new MeshBasicMaterial({ map, transparent: true, opacity: 0, depthWrite: false, toneMapped: false });
+        const layer = new Mesh(geo, mat);
+        if (t.kind === 'knob-face') {
+          // cylinder caps face +y in the mesh's own frame
+          layer.position.set(0, z, 0);
+          layer.rotation.x = -Math.PI / 2;
+        } else layer.position.set(0, 0, z);
+        layer.renderOrder = t.node.renderOrder + 1;
+        layer.name = '_skin';
+        t.node.add(layer);
+        this.skinLayers.push(layer);
+        this.tweens.add(fade, (k) => (mat.opacity = skin.opacity * ease.inOutCubic(k)), undefined, delayS);
+      }
+      this.tweens.add(0.01, () => {}, () => this.onSkinReady?.(skin), delayS + fade);
+    };
+    if (this.skinTexture && this.skinUrl === skin.url) place(this.skinTexture);
+    else {
+      this.skinUrl = skin.url;
+      new TextureLoader().setCrossOrigin('anonymous').load(
+        skin.url,
+        (tex) => {
+          this.skinTexture = tex;
+          place(tex);
+        },
+        undefined,
+        (err) => console.warn('[gen3d] skin failed to load', err),
+      );
     }
   }
 
