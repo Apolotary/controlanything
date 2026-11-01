@@ -64,6 +64,8 @@ const linkResults = new Map<string, LinkResultPayload>();
 /** "wrong device · refused" verdicts stay in EVIDENCE even after the right cable goes in */
 const refusals: LinkResultPayload[] = [];
 const replaying = params.get('replay') === '1';
+/** ?stage=1: recording sizes, no dev devices or revoke buttons, no drawer */
+const stage = params.get('stage') === '1';
 let replayStarted = false;
 const linkRequests = new Map<string, LinkRequestPayload>();
 const specs = new Map<string, UiSpecPayload>();
@@ -160,15 +162,21 @@ function chip(text: string, cls = ''): HTMLElement {
 function renderTop(): void {
   const pill = $('pill');
   const live = health?.mode === 'live';
-  $('pill-text').textContent = serverDown ? 'server unreachable' : !health ? 'connecting' : live ? 'LIVE · ' : 'FIXTURE · recorded answers';
-  if (live && health) $('pill-text').append(el('span', { className: 'mono', text: health.models.chat }));
-  pill.className = `pill ${health && !live ? 'fixture' : ''}`;
+  if (!executor.leader && !replaying && health && !serverDown) {
+    // one pill, one state: a second tab says so here instead of in a banner
+    $('pill-text').textContent = 'STANDBY · another tab runs the devices';
+    pill.className = 'pill standby';
+  } else {
+    $('pill-text').textContent = serverDown ? 'server unreachable' : !health ? 'connecting' : live ? 'LIVE · ' : 'FIXTURE · recorded answers';
+    if (live && health) $('pill-text').append(el('span', { className: 'mono', text: health.models.chat }));
+    pill.className = `pill ${health && !live ? 'fixture' : ''}`;
+  }
   $('conn-dot').className = `dot ${conn?.open ? 'on' : ''}`;
   $('conn-dot').title = conn?.open ? 'connected to the server' : 'offline';
   const space = welcome?.spaceId ?? health?.space?.spaceId;
   $('session').textContent = space ? `space ${space.slice(-6).toUpperCase()}${welcome ? ` · ${welcome.name}` : ''}` : 'space —';
   const role = $('exec-role');
-  role.textContent = executor.leader ? 'executor' : 'standby';
+  role.textContent = replaying ? 'replay' : executor.leader ? 'executor' : 'standby';
   role.className = `chip ${executor.leader ? '' : 'muted'}`;
   role.title = executor.leader ? 'This tab runs MIDI, the Cardputer and the audio oracle.' : 'Another companion tab is the executor; this one only watches.';
 }
@@ -176,11 +184,7 @@ function renderTop(): void {
 function renderBanners(): void {
   const box = $('banners');
   box.replaceChildren();
-  if (replaying) box.append(el('div', { className: 'banner' }, el('span', { className: 'title', text: 'Replay' }), el('span', { className: 'small grow', text: 'A scripted OP-1 Field run injected into this page to show the panels. Not live: nothing is executed and nothing is sent to the server.' }), el('a', { className: 'small', text: 'leave replay' })));
-  const leave = box.querySelector('a');
-  if (leave) leave.href = location.pathname;
   if (serverDown) box.append(el('div', { className: 'banner' }, el('span', { className: 'title', text: 'Server unreachable' }), el('span', { className: 'small', text: 'Start it with npm run dev. MIDI tools still work: open ?spike=midi.' })));
-  if (!executor.leader) box.append(el('div', { className: 'banner info' }, el('span', { className: 'title', text: 'Standby' }), el('span', { className: 'small', text: 'Another companion tab is running the devices. Close it to make this one the executor.' })));
 
   if (intent && identity) {
     const p = pending.get(intent.pairingId);
@@ -228,7 +232,7 @@ function renderBanners(): void {
       { className: 'banner link' },
       el('span', { className: 'title', text: `Link · ${card?.name ?? 'device'}` }),
       el('span', { className: 'grow small', text: r.reason }),
-      el('span', { className: 'row' }, ...r.needs.map((n) => chip(`needs ${n}`, 'magenta')), ...r.suggestedClients.map((k) => chip(k, 'muted'))),
+      el('span', { className: 'row' }, ...r.needs.map((n) => chip(`needs ${n}`, 'volt')), ...r.suggestedClients.map((k) => chip(k, 'muted'))),
     );
     if (r.needs.includes('ir') && !link.ready && CardputerLink.supported && executor.leader) row.append(button('Connect Cardputer', () => void connectCardputer(), 'primary'));
     if (r.needs.includes('midi') && !midi.enabled && MidiBridge.supported) row.append(button('Enable MIDI', () => void enableMidi(), 'primary'));
@@ -310,9 +314,29 @@ function renderDevice(): void {
   fact('channel', channel ? channel.toUpperCase() : undefined);
   fact('port', port ? `"${port}"` : undefined);
   fact('via', deviceName(lr?.executorDeviceId ?? drv?.executor.deviceId));
-  if (card) fact('confidence', `${Math.round(card.confidence * 100)} %`);
-  const verdict = lr ? chip(lr.verdict === 'mismatch' ? 'wrong device · refused' : `link ${lr.verdict}`, lr.verdict === 'confirmed' || lr.verdict === 'consistent' ? 'ok' : lr.verdict === 'mismatch' ? 'fail' : 'muted') : chip('link: hypothesis', 'muted');
-  box.append(el('div', { className: 'name', text: name }), verdict, facts);
+  // opinion (the camera's reading) and proof (what the wire says): never a numeric model confidence
+  const chips = el('span', { className: 'row' });
+  if (card) chips.append(chip(`camera says ${card.name}`, 'opinion'));
+  chips.append(proofChip(lr));
+  box.append(el('div', { className: 'name', text: name }), chips, facts);
+}
+
+/** The wire's verdict as words: "USB says OP-1 ✓", "wrong device · refused", or still a hypothesis. */
+function proofChip(lr: LinkResultPayload | undefined): HTMLElement {
+  if (!lr || lr.verdict === 'none' || lr.verdict === 'unknown') return chip('link: hypothesis', 'muted');
+  if (lr.verdict === 'mismatch') return chip('wrong device · refused', 'fail');
+  const ok = lr.evidence.filter((e) => e.ok);
+  const id = ok.find((e) => e.kind === 'midi-identity' && !/no reply/i.test(e.detail));
+  if (id) return chip(`MIDI identity says ${cards.get(lr.cardId)?.name ?? 'match'} ✓`, 'ok');
+  if (ok.some((e) => e.kind === 'port-name') && lr.port) return chip(`USB says ${lr.port.name} ✓`, 'ok');
+  if (ok.some((e) => e.kind === 'ir-reply')) return chip('IR seen ✓', 'ok');
+  if (ok.some((e) => e.kind === 'sim')) return chip('sim linked ✓', 'ok');
+  return chip(`${(lr.channel ?? 'link').toUpperCase()} linked ✓`, 'ok');
+}
+
+/** Development clients (simulators, mocks, emulators) stay out of stage-mode takes. */
+function isDevDevice(d: DeviceInfo): boolean {
+  return d.kind === 'sim' || /\(sim\)|\bsim\b|mock|emulator/i.test(d.name);
 }
 
 function setTab(t: typeof mainTab, byUser = false): void {
@@ -659,8 +683,9 @@ function renderLinks(): void {
   // other paired devices
   for (const d of devices) {
     if (d.deviceId === identity?.deviceId) continue;
+    if (stage && isDevDevice(d)) continue;
     const acts: Node[] = [];
-    if (canApprove) {
+    if (canApprove && !stage) {
       acts.push(
         button('Revoke', async () => {
           if (!confirm(`Revoke ${d.name}? It will have to pair again.`)) return;
@@ -1142,12 +1167,19 @@ function setupForms(): void {
 
 export async function bootWorkbench(): Promise<void> {
   $('workbench').hidden = false;
+  document.body.classList.toggle('stage', stage);
+  if (replaying) {
+    const tag = el('a', { className: 'cornertag', text: 'REPLAY · display only', title: 'A scripted run injected into this page; nothing is executed or sent. Click to leave.' });
+    tag.href = location.pathname;
+    document.body.append(tag);
+  }
   $('drawer').toggleAttribute('open', !isLocalPage());
   setupForms();
   setupExecutors();
   renderAll();
   requestAnimationFrame(meterLoop);
-  executor.claim();
+  // a replay tab never executes, so it must not take the executor role from the real workbench
+  if (!replaying) executor.claim();
   try {
     health = await api.health();
   } catch {

@@ -3,6 +3,43 @@
  * intend, magenta = what persists, ok/fail = only a verdict a camera, mic or wire produced.
  * Nothing blinks faster than 1 Hz. Every word sits on a plate.
  */
+/* OFL fonts served from this app (src/fonts, licences beside them): the demo never needs the network */
+@font-face {
+  font-family: 'Chakra Petch';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('./fonts/chakra-petch-latin-600-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Chakra Petch';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./fonts/chakra-petch-latin-700-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Share Tech Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/share-tech-mono-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/jetbrains-mono-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./fonts/jetbrains-mono-latin-500-normal.woff2') format('woff2');
+}
+
 :root {
   --void: #0a0e12;
   --plate: #101820;
@@ -216,6 +253,31 @@ input::placeholder {
   border-color: rgba(255, 61, 190, 0.5);
   color: var(--magenta);
 }
+.chip.volt {
+  border-color: var(--volt-a);
+  color: var(--volt);
+}
+.chip.opinion {
+  border-color: var(--cyan-a);
+  color: var(--cyan);
+  border-style: dashed;
+}
+.pill.standby {
+  border-color: var(--faint);
+  color: var(--dim);
+}
+.cornertag {
+  position: fixed;
+  right: 14px;
+  bottom: 44px;
+  z-index: 5;
+  font: 12px var(--mono);
+  padding: 3px 8px;
+  border: 1px solid var(--volt-a);
+  color: var(--volt);
+  background: var(--void);
+  border-radius: 2px;
+}
 .chip.ok {
   border-color: rgba(92, 255, 163, 0.5);
   color: var(--ok);
@@ -311,8 +373,8 @@ input::placeholder {
   border-radius: 3px;
 }
 .banner.link {
-  border-color: rgba(255, 61, 190, 0.45);
-  border-left-color: var(--magenta);
+  border-color: var(--volt-a);
+  border-left-color: var(--volt);
 }
 .banner.info {
   border-color: var(--cyan-a);
@@ -929,6 +991,78 @@ table.sweep tr.current td {
   font: 15px var(--mono);
   color: var(--bone);
   overflow-wrap: anywhere;
+}
+
+/* --- stage mode (?stage=1): sizes for a two-up recording at 1512 x 982 pt ------------------ */
+
+body.stage {
+  font-size: 18px;
+}
+body.stage h2 {
+  font-size: 18px;
+}
+body.stage h2 small {
+  font-size: 15px;
+}
+body.stage .wordmark {
+  font-size: 19px;
+}
+body.stage .pill,
+body.stage button {
+  font-size: 15px;
+}
+body.stage .chip {
+  font-size: 15px;
+}
+body.stage .device-card .name {
+  font-size: 28px;
+}
+body.stage .device-card .facts {
+  font-size: 17px;
+}
+body.stage .code {
+  font: 18px/26px var(--code);
+}
+body.stage .tape,
+body.stage .worklog {
+  font-size: 17px;
+}
+body.stage .worklog .r .title {
+  font-size: 17px;
+}
+body.stage .worklog .r .detail {
+  font-size: 14px;
+}
+body.stage .worklog .r {
+  grid-template-columns: 86px 96px minmax(0, 1fr) auto;
+}
+body.stage .ev {
+  min-height: 56px;
+  padding: 10px 0;
+}
+body.stage .ev .hack {
+  font-size: 18px;
+}
+body.stage .seg {
+  font-size: 13px;
+  padding: 4px 0;
+}
+body.stage .sentence {
+  font-size: 18px;
+}
+body.stage .links .proof,
+body.stage .links .state {
+  font-size: 16px;
+}
+body.stage .glyph {
+  font-size: 15px;
+}
+body.stage .drawer,
+body.stage .dev-only {
+  display: none !important;
+}
+body.stage .agent {
+  max-height: 30vh;
 }
 
 /* --- small screens ------------------------------------------------------------------------ */

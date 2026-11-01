@@ -37,7 +37,7 @@ function steps(): Step[] {
       type: 'device.card',
       payload: { cardId: CARD, name: 'OP-1 Field', maker: 'Teenage Engineering', model: 'TE002AS002', category: 'synthesizer', confidence: 0.91, protocols: ['midi'], evidence: ['OP-1 field logo', 'four coloured encoders', 'tape screen'], requires: ['midi'], companion: 'computer_usb', modelId: 'muse-spark-1.3' },
     },
-    { at: 2600, type: 'agent.step', payload: s('st2', 'identify', 'ok', 'IDENTIFY → OP-1 Field (0.91)', { model: 'muse-spark-1.3', effort: 'low', startedAt: now + 1000, endedAt: now + 2600, latencyMs: 1600, kind: 'opinion', evidence: 'logo + 4 encoders' }) },
+    { at: 2600, type: 'agent.step', payload: s('st2', 'identify', 'ok', 'IDENTIFY → camera says OP-1 Field', { model: 'muse-spark-1.3', effort: 'low', startedAt: now + 1000, endedAt: now + 2600, latencyMs: 1600, kind: 'opinion', evidence: 'logo + 4 encoders' }) },
     { at: 2800, type: 'link.request', payload: { linkId: 'lk1', cardId: CARD, needs: ['midi'], reason: 'needs a USB-MIDI companion: plug the synth into the Mac', suggestedClients: ['mac'], status: 'waiting' } },
     {
       at: 4200,
