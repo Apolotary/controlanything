@@ -154,7 +154,19 @@ export async function verifyOnce(deps: VerifyDeps, t: Target, driver: Driver, a:
 
   if (sense === 'audio') {
     if (!o.micDeviceId) throw new ExecError('no microphone sensor online', 'offline');
-    const before = await audioWindow(d, o.micDeviceId, t.cardId, -600, o.signal);
+    // a CC sweep is only audible while something sounds: hold a note through the before/after windows
+    const holdsNote = op.kind === 'midi' && op.msg !== 'note' && op.msg !== 'panic';
+    if (holdsNote) {
+      const noteAction = driver.actions.find((x) => x.encode.kind === 'midi' && x.encode.msg === 'note');
+      const noteOp: ExecOp = noteAction && noteAction.encode.kind === 'midi' ? { ...noteAction.encode, durationMs: 3000 } : { kind: 'midi', msg: 'note', channel: (op as { channel: number }).channel, number: 60, velocity: 100, durationMs: 3000 };
+      try {
+        await d.exec(exec.deviceId, noteOp, { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: `${a.actionId}:hold`, waitForSlot: true, signal: o.signal, timeoutMs: 4000 });
+      } catch (e) {
+        deps.log?.(`[verify] could not hold a note for ${a.actionId}: ${(e as Error).message}`);
+      }
+      await sleep(400, o.signal);
+    }
+    const before = await audioWindow(d, o.micDeviceId, t.cardId, holdsNote ? undefined : -600, o.signal);
     const ack = await d.exec(exec.deviceId, op, { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: a.actionId, waitForSlot: true, signal: o.signal, timeoutMs: 4000 });
     await sleep(deps.settleMs?.(t, a) ?? 350, o.signal);
     const after = await audioWindow(d, o.micDeviceId, t.cardId, undefined, o.signal);
