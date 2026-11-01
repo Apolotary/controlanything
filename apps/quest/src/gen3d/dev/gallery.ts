@@ -25,20 +25,20 @@ camera.position.set(0, 1.42, 0.05);
 const target = new Vector3(0, 1.2, -0.6);
 camera.lookAt(target);
 
-scene.add(new HemisphereLight(0xcfe6ff, 0x1a1e24, 0.9));
+scene.add(new HemisphereLight(0xfff4e0, 0x6b655d, 1.3));
 const sun = new DirectionalLight(0xffffff, 1.2);
 sun.position.set(0.6, 2.2, 1.2);
 scene.add(sun, new AmbientLight(0x404850, 0.5));
 
 // a desk and a floor grid stand in for the room (passthrough)
 const room = new Group();
-const desk = new Mesh(new BoxGeometry(1.2, 0.03, 0.6), new MeshStandardMaterial({ color: 0x4f4a44, roughness: 0.9 }));
+const desk = new Mesh(new BoxGeometry(1.2, 0.03, 0.6), new MeshStandardMaterial({ color: 0x8a6f52, roughness: 0.85 }));
 desk.position.set(0, 0.72, -0.62);
 room.add(desk);
-const floor = new Mesh(new PlaneGeometry(6, 6), new MeshStandardMaterial({ color: 0x1a1e24, roughness: 1 }));
+const floor = new Mesh(new PlaneGeometry(6, 6), new MeshStandardMaterial({ color: 0x6b655d, roughness: 1 }));
 floor.rotation.x = -Math.PI / 2;
 room.add(floor);
-const grid = new GridHelper(6, 24, 0x2a3440, 0x1f262e);
+const grid = new GridHelper(6, 24, 0x8a847a, 0x7a746c);
 grid.position.y = 0.001;
 room.add(grid);
 scene.add(room);

@@ -30,10 +30,10 @@
   },
   "state": {
     "armed": true,
-    "reason": "USB says OP-1 Field ✓ · CC 1-4 echoed ✓",
+    "reason": "USB says OP-1 Field ✓ · CC 46-49 heard ✓",
     "verifiedBy": [
       "usb-descriptor",
-      "cc-echo"
+      "audio-oracle"
     ]
   },
   "controls": [
@@ -41,6 +41,7 @@
       "id": "blue",
       "kind": "continuous",
       "label": "BLUE",
+      "description": "T1 engine page, blue encoder (CC 46, community-verified)",
       "range": {
         "min": 0,
         "max": 127,
@@ -51,13 +52,14 @@
       "binding": {
         "action": "midi.cc",
         "channel": 1,
-        "cc": 1
+        "cc": 46
       }
     },
     {
       "id": "green",
       "kind": "continuous",
       "label": "GREEN",
+      "description": "T1 engine page, green encoder (CC 47)",
       "range": {
         "min": 0,
         "max": 127,
@@ -68,13 +70,14 @@
       "binding": {
         "action": "midi.cc",
         "channel": 1,
-        "cc": 2
+        "cc": 47
       }
     },
     {
       "id": "white",
       "kind": "continuous",
       "label": "WHITE",
+      "description": "T1 engine page, white encoder (CC 48)",
       "range": {
         "min": 0,
         "max": 127,
@@ -85,13 +88,14 @@
       "binding": {
         "action": "midi.cc",
         "channel": 1,
-        "cc": 3
+        "cc": 48
       }
     },
     {
       "id": "orange",
       "kind": "continuous",
       "label": "ORANGE",
+      "description": "T1 engine page, orange encoder (CC 49)",
       "range": {
         "min": 0,
         "max": 127,
@@ -102,7 +106,7 @@
       "binding": {
         "action": "midi.cc",
         "channel": 1,
-        "cc": 4
+        "cc": 49
       }
     }
   ],
@@ -112,22 +116,22 @@
       "kind": "primitive",
       "shape": "box",
       "dims": {
-        "w": 0.4,
-        "h": 0.15,
+        "w": 0.44,
+        "h": 0.17,
         "d": 0.004,
         "radius": 0.006
       },
       "transform": {
         "position": [
           0,
-          0,
+          -0.012,
           -0.004
         ]
       },
       "material": {
         "style": "holo",
         "color": "#101820",
-        "opacity": 0.92,
+        "opacity": 0.9,
         "edges": true,
         "edgeColor": "#38F0FF",
         "scanlines": true,
@@ -159,7 +163,7 @@
       "controlId": "blue",
       "transform": {
         "position": [
-          -0.14,
+          -0.15,
           0,
           0
         ]
@@ -172,7 +176,7 @@
       "controlId": "green",
       "transform": {
         "position": [
-          -0.047,
+          -0.05,
           0,
           0
         ]
@@ -185,7 +189,7 @@
       "controlId": "white",
       "transform": {
         "position": [
-          0.047,
+          0.05,
           0,
           0
         ]
@@ -198,7 +202,7 @@
       "controlId": "orange",
       "transform": {
         "position": [
-          0.14,
+          0.15,
           0,
           0
         ]

@@ -6,7 +6,7 @@
  * decor (rims, beams, particles). Scanlines are computed in object-local space (never screen space, which
  * shimmers in stereo). Glitch is position jitter only; luminance never flashes above 3 Hz. No bloom pass.
  */
-import { AdditiveBlending, BackSide, Color, DoubleSide, FrontSide, LineBasicMaterial, MeshBasicMaterial, MeshStandardMaterial, NormalBlending, ShaderMaterial, type Material as ThreeMaterial, type Side } from 'three';
+import { AdditiveBlending, Color, DoubleSide, FrontSide, LineBasicMaterial, MeshBasicMaterial, MeshStandardMaterial, NormalBlending, ShaderMaterial, type Material as ThreeMaterial, type Side } from 'three';
 import type { Material as SpecMaterial, PartRole } from '@ce/gen3d';
 import { NEON } from '@ce/gen3d';
 
@@ -68,7 +68,7 @@ const holoFragment = /* glsl */ `
   void main() {
     float ndv = abs(dot(normalize(vNormalW), normalize(vViewDir)));
     float rim = pow(clamp(1.0 - ndv, 0.0, 1.0), max(uFresnel, 0.5));
-    vec3 col = uColor * (0.55 + 0.45 * rim) + uRim * rim * uGlow * 0.8;
+    vec3 col = uColor * (0.6 + 0.5 * rim) + uRim * rim * uGlow * 1.1;
     // object-local scanlines, slow drift (0.3 Hz), 15 % depth; fade out when lines get dense on screen
     float lines = fract(vLocal.y * 180.0 - uTime * 0.3);
     float sl = step(0.5, lines) * 0.15 * uScan;
@@ -195,7 +195,8 @@ export function buildMaterial(spec: SpecMaterial | undefined, clock: MaterialClo
       });
       out.material = m;
       if ((spec?.glow ?? 0) >= 0.8) {
-        out.glowMaterial = new MeshBasicMaterial({ color: spec?.emissive ?? color, transparent: true, opacity: 0.18, blending: AdditiveBlending, depthWrite: false, side: BackSide, toneMapped: false });
+        // fake bloom: the renderer draws two enlarged additive copies with this material
+        out.glowMaterial = new MeshBasicMaterial({ color: spec?.emissive ?? color, transparent: true, opacity: 0.28, blending: AdditiveBlending, depthWrite: false, side: DoubleSide, toneMapped: false });
       }
       break;
     }

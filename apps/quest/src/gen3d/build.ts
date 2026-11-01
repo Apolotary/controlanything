@@ -202,16 +202,13 @@ export class SpecObject extends Group {
     this.applyVisuals(0);
     this.applyArmed();
 
-    // build-up
+    // build-up: 40 ms stagger per part, but the whole object materialises within ~1.6 s however many parts
     if (animate !== 'none') {
-      let i = 0;
+      const fresh = this.expanded.parts.filter((p) => !(animate === 'diff' && prevIds.has(p.id)));
+      const stagger = Math.min(0.04, 1.6 / Math.max(1, fresh.length));
       const t0 = this.now;
-      for (const p of this.expanded.parts) {
-        if (animate === 'diff' && prevIds.has(p.id)) continue;
-        this.births.set(p.id, t0 + i * 0.04);
-        i++;
-      }
-      if (i > 0) this.audio?.play('step');
+      fresh.forEach((p, i) => this.births.set(p.id, t0 + i * stagger));
+      if (fresh.length) this.audio?.play('step');
     }
   }
 
@@ -267,10 +264,16 @@ export class SpecObject extends Group {
           mesh.add(edges);
         }
         if (built.glowMaterial) {
-          const glow = new Mesh(geo, built.glowMaterial);
-          glow.scale.setScalar(1.15);
-          glow.renderOrder = mesh.renderOrder - 1;
-          mesh.add(glow);
+          // layered additive copies stand in for a bloom pass (no post-processing at 72 Hz)
+          const inner = new Mesh(geo, built.glowMaterial);
+          inner.scale.setScalar(1.07);
+          inner.renderOrder = mesh.renderOrder - 1;
+          const outerMat = (built.glowMaterial as MeshBasicMaterial).clone();
+          outerMat.opacity = 0.12;
+          const outer = new Mesh(geo, outerMat);
+          outer.scale.setScalar(1.22);
+          outer.renderOrder = mesh.renderOrder - 2;
+          mesh.add(inner, outer);
         }
         this.meshes.push(mesh);
         node = mesh;
@@ -1058,7 +1061,7 @@ export function formatValue(c: Control, v: ControlValue, format = '{value}'): st
     label = value;
   }
   if (c.stepLabels?.length && format === '{value}{unit}') format = '{label}';
-  return format.replace('{value}', value).replace('{unit}', c.unit ?? '').replace('{percent}', percent).replace('{label}', label).replace('{x}', xs).replace('{y}', ys);
+  return format.replace('{value}', value).replace('{unit}', c.unit ?? '').replace('{percent}', percent).replace('{label}', label).replace('{name}', c.label).replace('{x}', xs).replace('{y}', ys);
 }
 
 function colorForValue(c: ControlState): string {

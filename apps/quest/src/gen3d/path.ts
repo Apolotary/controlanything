@@ -3,7 +3,11 @@
  * dash patterns in the shader, IR cones, flowing data particles and a ≤ 1 Hz pulse.
  * Tubes instead of fat lines: no resolution uniforms, correct in stereo, cheap at these lengths.
  */
-import { AdditiveBlending, BufferAttribute, BufferGeometry, Color, CurvePath, Group, LineCurve3, Mesh, NormalBlending, Points, PointsMaterial, QuadraticBezierCurve3, ShaderMaterial, TubeGeometry, Vector3, type Curve } from 'three';
+import { AdditiveBlending, BufferAttribute, BufferGeometry, Color, CurvePath, Group, LineCurve3, Mesh, MeshBasicMaterial, NormalBlending, Points, PointsMaterial, QuadraticBezierCurve3, ShaderMaterial, TubeGeometry, Vector3, type Curve } from 'three';
+
+const _tan = new Vector3();
+const _side = new Vector3();
+const _up = new Vector3();
 import type { PathStyle } from '@ce/gen3d';
 import { NEON } from '@ce/gen3d';
 import { voidKeylineMaterial } from './materials';
@@ -34,7 +38,10 @@ const frag = /* glsl */ `
 
 export class PathObject extends Group {
   private neon: Mesh<TubeGeometry, ShaderMaterial>;
+  private halo?: Mesh<TubeGeometry, MeshBasicMaterial>;
   private key?: Mesh<TubeGeometry>;
+  private spread = 0;
+  private jitter: Float32Array = new Float32Array(0);
   private particles?: Points<BufferGeometry, PointsMaterial>;
   private offsets: Float32Array = new Float32Array(0);
   private curve: Curve<Vector3>;
@@ -63,6 +70,10 @@ export class PathObject extends Group {
     });
     this.neon = new Mesh(new TubeGeometry(this.curve, segments, r, 6, !!style.closed), mat);
     this.neon.renderOrder = 46;
+    // fake bloom around the stroke
+    this.halo = new Mesh(new TubeGeometry(this.curve, segments, r * (cone ? 1.6 : 2.6), 6, !!style.closed), new MeshBasicMaterial({ color: style.color ?? NEON.cyan, transparent: true, opacity: cone ? 0.1 : 0.16, blending: AdditiveBlending, depthWrite: false, toneMapped: false }));
+    this.halo.renderOrder = 45;
+    this.add(this.halo);
     if ((style.keyline ?? true) && !cone) {
       this.key = new Mesh(new TubeGeometry(this.curve, segments, r + 0.001, 6, !!style.closed), voidKeylineMaterial());
       this.key.renderOrder = 44;
@@ -71,13 +82,19 @@ export class PathObject extends Group {
     this.add(this.neon);
     this.speed = style.speed ?? 0.6;
     this.animate = style.animate ?? 'none';
-    const n = this.animate === 'flow' ? (style.particles ?? 8) : 0;
+    const n = this.animate === 'flow' ? (style.particles ?? 8) * (cone ? 3 : 1) : 0;
+    this.spread = cone ? width * 10 : 0;
     if (n > 0) {
       const geo = new BufferGeometry();
       geo.setAttribute('position', new BufferAttribute(new Float32Array(n * 3), 3));
       this.offsets = new Float32Array(n);
-      for (let i = 0; i < n; i++) this.offsets[i] = i / n;
-      const pm = new PointsMaterial({ color: style.color ?? NEON.cyan, size: 0.008, sizeAttenuation: true, transparent: true, opacity: 0.95, blending: AdditiveBlending, depthWrite: false, toneMapped: false });
+      this.jitter = new Float32Array(n * 2);
+      for (let i = 0; i < n; i++) {
+        this.offsets[i] = i / n;
+        this.jitter[i * 2] = Math.random() * 2 - 1;
+        this.jitter[i * 2 + 1] = Math.random() * 2 - 1;
+      }
+      const pm = new PointsMaterial({ color: style.color ?? NEON.cyan, size: cone ? 0.009 : 0.012, sizeAttenuation: true, transparent: true, opacity: 0.95, blending: AdditiveBlending, depthWrite: false, toneMapped: false });
       this.particles = new Points(geo, pm);
       this.particles.renderOrder = 47;
       this.particles.frustumCulled = false;
@@ -87,12 +104,14 @@ export class PathObject extends Group {
 
   setBirth(b: number): void {
     this.neon.material.uniforms.uBirth!.value = b;
+    if (this.halo) this.halo.material.opacity = 0.16 * b;
     if (this.key) (this.key.material as { opacity: number }).opacity = 0.9 * b;
     if (this.particles) this.particles.material.opacity = 0.95 * b;
   }
 
   setColor(hex: string): void {
     (this.neon.material.uniforms.uColor!.value as Color).set(hex);
+    this.halo?.material.color.set(hex);
     if (this.particles) this.particles.material.color.set(hex);
   }
 
@@ -104,6 +123,14 @@ export class PathObject extends Group {
       for (let i = 0; i < n; i++) {
         const t = (this.offsets[i]! + (time * this.speed) / this.length) % 1;
         this.curve.getPointAt(t, this.tmp);
+        if (this.spread > 0) {
+          // IR cone: particles fan out toward the target
+          const tan = this.curve.getTangentAt(t, _tan);
+          const side = _side.set(-tan.z, 0, tan.x).normalize();
+          const up = _up.crossVectors(tan, side).normalize();
+          const k = this.spread * t;
+          this.tmp.addScaledVector(side, this.jitter[i * 2]! * k).addScaledVector(up, this.jitter[i * 2 + 1]! * k);
+        }
         pos.setXYZ(i, this.tmp.x, this.tmp.y, this.tmp.z);
       }
       pos.needsUpdate = true;
@@ -113,6 +140,8 @@ export class PathObject extends Group {
   override dispose(): void {
     this.neon.geometry.dispose();
     this.neon.material.dispose();
+    this.halo?.geometry.dispose();
+    this.halo?.material.dispose();
     this.key?.geometry.dispose();
     (this.key?.material as { dispose?: () => void } | undefined)?.dispose?.();
     this.particles?.geometry.dispose();

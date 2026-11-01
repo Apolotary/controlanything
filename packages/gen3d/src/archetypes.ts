@@ -89,6 +89,35 @@ function plate(color: HexColor = NEON.panel, edgeColor: HexColor = NEON.cyan): M
 function dim(color: HexColor): Material {
   return { style: 'holo', color, opacity: 0.5, fresnel: 2, glow: 0.2 };
 }
+/** Bright holographic glass (knob bodies, caps): dark cyan body, strong cyan rim. */
+function glass(rim: HexColor = NEON.cyan, extra: Partial<Material> = {}): Material {
+  return { style: 'holo', color: '#0E4F5C', emissive: rim, opacity: 0.72, fresnel: 2.2, scanlines: true, glow: 1.4, ...extra };
+}
+/** A plate with four angular corner brackets: the HUD's panel language. Returns the plate followed by the brackets. */
+function panel(id: string, parentId: string, w: number, h: number, d: number, position: Vec3, edgeColor: HexColor, extra: Partial<Part> = {}): Part[] {
+  const out: Part[] = [box(id, parentId, w, h, d, position, plate(NEON.plate, edgeColor), { role: 'base', dims: { radius: 0.003 }, ...extra })];
+  const arm = Math.max(0.008, Math.min(0.02, w * 0.1, h * 0.35));
+  const t = 0.0022;
+  const z = position[2]! + d / 2 + 0.0008;
+  let n = 0;
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+    const cx = position[0]! + sx * (w / 2 + 0.0025);
+    const cy = position[1]! + sy * (h / 2 + 0.0025);
+    out.push(box(`${id}.c${n}h`, parentId, arm, t, 0.0008, [cx - (sx * arm) / 2, cy, z], solidGlow(edgeColor, { emissiveIntensity: 1.6 })));
+    out.push(box(`${id}.c${n}v`, parentId, t, arm, 0.0008, [cx, cy - (sy * arm) / 2, z], solidGlow(edgeColor, { emissiveIntensity: 1.6 })));
+    n++;
+  }
+  return out;
+}
+/** "LABEL  97" readout plate: label left in bone, value right in large volt mono (role readout). */
+function readoutPlate(id: string, parentId: string, position: Vec3, label: string, value: string, accent: HexColor, w = 0.1): Part[] {
+  const lbl = label.slice(0, 12);
+  const out = panel(`${id}.rp`, parentId, w, 0.03, 0.003, position, accent, { role: 'decor' });
+  const labelH = Math.min(0.0068, Math.max(0.0045, (w * 0.42) / Math.max(3, lbl.length) / 0.72));
+  if (lbl) out.push(text(`${id}.name`, parentId, lbl, [position[0]! - w / 2 + 0.005, position[1]!, position[2]! + 0.0025], { heightM: labelH, color: NEON.bone, align: 'left' }, { role: 'label' }));
+  out.push(text(`${id}.value`, parentId, value, [position[0]! + w / 2 - 0.005, position[1]!, position[2]! + 0.0025], { heightM: w >= 0.09 ? 0.0125 : 0.011, color: NEON.volt, align: 'right', font: 'mono' }, { role: 'readout' }));
+  return out;
+}
 
 function part(p: P): Part {
   return p as Part;
@@ -166,25 +195,25 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
       const skirtH = p.thickness ?? 0.014;
       const sweep = p.sweepDeg ?? 270;
       const half = sweep / 2;
-      parts.push(cyl(`${id}.skirt`, id, r, skirtH, [0, 0, skirtH / 2], holo(body), { role: 'base', transform: { position: [0, 0, skirtH / 2], rotationDeg: [90, 0, 0] } }));
+      parts.push(cyl(`${id}.skirt`, id, r, skirtH, [0, 0, skirtH / 2], glass(NEON.cyan, { color: p.body ?? '#0E4F5C' }), { role: 'base', transform: { position: [0, 0, skirtH / 2], rotationDeg: [90, 0, 0] } }));
+      // the glowing rim ring (fake bloom copies are added by the renderer for glow >= 1)
+      parts.push(part({ id: `${id}.rim`, parentId: id, kind: 'primitive', shape: 'torus', dims: { r: r - 0.001, tube: 0.0022, segments: 64 }, transform: { position: [0, 0, skirtH] }, material: solidGlow(NEON.cyan, { emissiveIntensity: 2 }), role: 'indicator' }));
       // the cap rotates: a group so the pointer turns with it
       parts.push(group(`${id}.cap`, id, [0, 0, skirtH], { role: 'cap' }));
-      parts.push(cyl(`${id}.capface`, `${id}.cap`, r - 0.004, 0.008, [0, 0, 0.004], holo(body, { fresnel: 3, opacity: 0.9 }), { transform: { position: [0, 0, 0.004], rotationDeg: [90, 0, 0] } }));
-      parts.push(box(`${id}.pointer`, `${id}.cap`, 0.005, r - 0.012, 0.0025, [0, (r - 0.012) / 2 + 0.004, 0.0085], solidGlow(accent), { role: 'indicator' }));
-      parts.push(ring(`${id}.track`, id, r + 0.003, r + 0.009, [0, 0, 0.001], dim(accent), sweep, cwArc(-half, half).startDeg, { role: 'track' }));
-      parts.push(ring(`${id}.arc`, id, r + 0.003, r + 0.009, [0, 0, 0.0015], solidGlow(accent), 1, cwArc(-half, -half + 1).startDeg, { role: 'arc' }));
-      // detent ticks at the ends
-      parts.push(box(`${id}.tick0`, id, 0.002, 0.008, 0.002, onRing(-half, r + 0.016, 0.001), solidGlow(accent), { transform: { position: onRing(-half, r + 0.016, 0.001), rotationDeg: [0, 0, half] } }));
-      parts.push(box(`${id}.tick1`, id, 0.002, 0.008, 0.002, onRing(half, r + 0.016, 0.001), solidGlow(accent), { transform: { position: onRing(half, r + 0.016, 0.001), rotationDeg: [0, 0, -half] } }));
-      if (showLabel && label) parts.push(text(`${id}.label`, id, label, [0, -(r + 0.024), 0.002], { heightM: 0.008, background: NEON.panel, color: NEON.text }, { role: 'label' }));
-      if (showValue) parts.push(text(`${id}.value`, id, fmtDefault(c), [0, r + 0.026, 0.002], { heightM: 0.009, color: accent, font: 'mono', background: NEON.ink }, { role: 'readout' }));
+      parts.push(cyl(`${id}.capface`, `${id}.cap`, r - 0.005, 0.008, [0, 0, 0.004], glass(NEON.cyan, { opacity: 0.6, fresnel: 3 }), { transform: { position: [0, 0, 0.004], rotationDeg: [90, 0, 0] } }));
+      parts.push(box(`${id}.pointer`, `${id}.cap`, 0.0055, r - 0.012, 0.0025, [0, (r - 0.012) / 2 + 0.003, 0.0085], solidGlow(NEON.bone, { emissiveIntensity: 1.8 }), { role: 'indicator' }));
+      parts.push(ring(`${id}.track`, id, r + 0.004, r + 0.013, [0, 0, 0.001], dim(accent), sweep, cwArc(-half, half).startDeg, { role: 'track' }));
+      parts.push(ring(`${id}.arc`, id, r + 0.004, r + 0.013, [0, 0, 0.0015], solidGlow(accent, { emissiveIntensity: 1.6 }), 1, cwArc(-half, -half + 1).startDeg, { role: 'arc' }));
+      parts.push(box(`${id}.tick0`, id, 0.0022, 0.008, 0.002, onRing(-half, r + 0.019, 0.001), solidGlow(accent), { transform: { position: onRing(-half, r + 0.019, 0.001), rotationDeg: [0, 0, half] } }));
+      parts.push(box(`${id}.tick1`, id, 0.0022, 0.008, 0.002, onRing(half, r + 0.019, 0.001), solidGlow(accent), { transform: { position: onRing(half, r + 0.019, 0.001), rotationDeg: [0, 0, -half] } }));
+      if (showLabel || showValue) parts.push(...readoutPlate(id, id, [0, -(r + 0.038), 0.002], showLabel ? label : '', showValue ? fmtDefault(c) : '', accent, dia + 0.016));
       if (c?.minLabel) parts.push(text(`${id}.min`, id, c.minLabel, onRing(-half, r + 0.03, 0.002), { heightM: 0.0045, color: NEON.dim }));
       if (c?.maxLabel) parts.push(text(`${id}.max`, id, c.maxLabel, onRing(half, r + 0.03, 0.002), { heightM: 0.0045, color: NEON.dim }));
-      parts.push(text(`${id}.hint`, id, c?.hint ?? 'PINCH · DRAG UP/DOWN', [0, -(r + 0.04), 0.002], { heightM: 0.0045, color: NEON.volt, background: NEON.void }, { role: 'decor', visibleWhen: 'hover' }));
+      parts.push(text(`${id}.hint`, id, c?.hint ?? 'PINCH · DRAG UP/DOWN', [0, -(r + 0.062), 0.002], { heightM: 0.005, color: NEON.volt, background: NEON.void }, { role: 'decor', visibleWhen: 'hover' }));
       if (cid) {
         behaviors.push({ id: `${id}.rotate`, partId: `${id}.cap`, controlId: cid, type: 'rotate', axis: 'z', sweepDeg: [-half, half], gestures: ['pinch-drag', 'pinch-twist'], dragGain: 0.1, grabRadius: r + 0.02, ...(p.detents ? { detents: p.detents } : {}) });
         fb('arc-fill', `${id}.arc`);
-        fb('glow', `${id}.skirt`, { on: 'hover', color: accent });
+        fb('glow', `${id}.skirt`, { on: 'hover', color: NEON.volt });
         fb('tick', undefined, { every: 0.05, sound: 'tick' });
         if (showValue) fb('readout', `${id}.value`, { format: '{value}{unit}' });
       }
@@ -200,17 +229,16 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
       parts.push(box(`${id}.slot`, `${id}.rail`, 0.004, len, 0.002, [0, 0, 0.007], dim(accent)));
       parts.push(box(`${id}.fill`, `${id}.rail`, 0.006, 0.002, 0.0025, [0, -len / 2, 0.0075], solidGlow(accent), { role: 'arc' }));
       parts.push(group(`${id}.cap`, `${id}.rail`, [0, -len / 2, 0.012], { role: 'cap' }));
-      parts.push(box(`${id}.capbody`, `${id}.cap`, 0.030, 0.016, 0.012, [0, 0, 0], holo(body, { fresnel: 3, opacity: 0.95 }), { dims: { radius: 0.003 } }));
-      parts.push(box(`${id}.capline`, `${id}.cap`, 0.030, 0.0025, 0.002, [0, 0, 0.0065], solidGlow(accent), { role: 'indicator' }));
+      parts.push(box(`${id}.capbody`, `${id}.cap`, 0.032, 0.018, 0.012, [0, 0, 0], glass(NEON.cyan, { opacity: 0.8 }), { dims: { radius: 0.003 } }));
+      parts.push(box(`${id}.capline`, `${id}.cap`, 0.032, 0.003, 0.002, [0, 0, 0.0065], solidGlow(accent, { emissiveIntensity: 1.8 }), { role: 'indicator' }));
       for (let i = 0; i <= 4; i++) {
         const y = -len / 2 + (len * i) / 4;
         parts.push(box(`${id}.t${i}`, `${id}.rail`, 0.006, 0.0015, 0.001, [0.013, y, 0.0065], dim(accent)));
       }
-      if (showLabel && label) parts.push(text(`${id}.label`, id, label, vertical ? [0, -(len / 2 + 0.03), 0.004] : [0, -0.03, 0.004], { heightM: 0.008, background: NEON.panel }, { role: 'label' }));
-      if (showValue) parts.push(text(`${id}.value`, id, fmtDefault(c), vertical ? [0, len / 2 + 0.03, 0.004] : [0, 0.03, 0.004], { heightM: 0.009, color: accent, font: 'mono', background: NEON.ink }, { role: 'readout' }));
+      if (showLabel || showValue) parts.push(...readoutPlate(id, id, vertical ? [0, -(len / 2 + 0.04), 0.004] : [0, -0.04, 0.004], showLabel ? label : '', showValue ? fmtDefault(c) : '', accent, 0.1));
       if (c?.minLabel) parts.push(text(`${id}.min`, `${id}.rail`, c.minLabel, [0.03, -len / 2, 0.004], { heightM: 0.0045, color: NEON.dim, align: 'left' }));
       if (c?.maxLabel) parts.push(text(`${id}.max`, `${id}.rail`, c.maxLabel, [0.03, len / 2, 0.004], { heightM: 0.0045, color: NEON.dim, align: 'left' }));
-      parts.push(text(`${id}.hint`, id, c?.hint ?? 'PINCH THE CAP · DRAG', vertical ? [0, -(len / 2 + 0.046), 0.004] : [0, -0.046, 0.004], { heightM: 0.0045, color: NEON.volt, background: NEON.void }, { role: 'decor', visibleWhen: 'hover' }));
+      parts.push(text(`${id}.hint`, id, c?.hint ?? 'PINCH THE CAP · DRAG', vertical ? [0, -(len / 2 + 0.066), 0.004] : [0, -0.066, 0.004], { heightM: 0.005, color: NEON.volt, background: NEON.void }, { role: 'decor', visibleWhen: 'hover' }));
       if (cid) {
         behaviors.push({ id: `${id}.slide`, partId: `${id}.cap`, controlId: cid, type: 'slide', axis: 'y', travel: [-len / 2, len / 2], gestures: ['pinch-drag', 'grab'], grabRadius: 0.035, ...(p.detents ? { detents: p.detents } : {}) });
         fb('arc-fill', `${id}.fill`);
@@ -290,11 +318,11 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
       const half = sweep / 2;
       const rMid = (rIn + rOut) / 2;
       parts.push(ring(`${id}.track`, id, rIn, rOut, [0, 0, 0], dim(accent), sweep, cwArc(-half, half).startDeg, { role: 'track' }));
-      parts.push(ring(`${id}.arc`, id, rIn + 0.002, rOut - 0.002, [0, 0, 0.001], solidGlow(accent), 1, cwArc(-half, -half + 1).startDeg, { role: 'arc' }));
+      parts.push(ring(`${id}.arc`, id, rIn + 0.002, rOut - 0.002, [0, 0, 0.001], solidGlow(accent, { emissiveIntensity: 1.6 }), 1, cwArc(-half, -half + 1).startDeg, { role: 'arc' }));
       parts.push(ring(`${id}.inner`, id, rIn - 0.004, rIn - 0.0015, [0, 0, 0], dim(NEON.dim), 360, 0));
       parts.push(group(`${id}.cap`, id, [0, 0, 0.004], { role: 'cap', transform: { position: [0, 0, 0.004], rotationDeg: [0, 0, half] } }));
       parts.push(sphere(`${id}.bead`, `${id}.cap`, 0.014, [0, rMid, 0.004], solidGlow(capColor), { role: 'indicator' }));
-      parts.push(text(`${id}.value`, id, fmtDefault(c), [0, 0.004, 0.002], { heightM: 0.03, font: 'display', color: accent }, { role: 'readout' }));
+      parts.push(text(`${id}.value`, id, fmtDefault(c), [0, 0.004, 0.002], { heightM: 0.034, font: 'mono', color: NEON.volt }, { role: 'readout' }));
       if (showLabel && label) parts.push(text(`${id}.label`, id, label, [0, -(rOut + 0.02), 0.002], { heightM: 0.008, background: NEON.panel }, { role: 'label' }));
       if (cid) {
         behaviors.push({ id: `${id}.rotate`, partId: `${id}.cap`, controlId: cid, type: 'rotate', axis: 'z', sweepDeg: [-half, half], gestures: ['pinch-drag', 'pinch-twist', 'grab'], dragGain: 0.12, grabRadius: rOut + 0.03, ...(p.detents ? { detents: p.detents } : {}) });
@@ -458,12 +486,12 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
 
     case 'tag': {
       const col = statusColor(p.status, accent);
-      const w = p.width ?? 0.17;
-      const h = 0.036;
-      parts.push(box(`${id}.plate`, id, w, h, 0.003, [0, 0, 0], plate(NEON.plate, col), { role: 'label', dims: { radius: 0.004 } }));
-      parts.push(sphere(`${id}.pip`, id, 0.004, [-w / 2 + 0.014, 0, 0.003], solidGlow(col), { role: 'indicator' }));
-      parts.push(text(`${id}.title`, id, (p.title ?? label) || 'DEVICE', [-w / 2 + 0.026, 0.0065, 0.003], { heightM: 0.0085, color: NEON.bone, align: 'left' }));
-      parts.push(text(`${id}.sub`, id, p.subtitle ?? p.status ?? 'scanned', [-w / 2 + 0.026, -0.0075, 0.003], { heightM: 0.0055, color: col, align: 'left' }));
+      const w = p.width ?? 0.19;
+      const h = 0.038;
+      parts.push(...panel(`${id}.plate`, id, w, h, 0.003, [0, 0, 0], col, { role: 'label' }));
+      parts.push(sphere(`${id}.pip`, id, 0.004, [-w / 2 + 0.014, 0, 0.003], solidGlow(col, { emissiveIntensity: 1.8 }), { role: 'indicator' }));
+      parts.push(text(`${id}.title`, id, (p.title ?? label) || 'DEVICE', [-w / 2 + 0.026, 0.007, 0.003], { heightM: 0.0095, color: NEON.volt, align: 'left' }));
+      parts.push(text(`${id}.sub`, id, p.subtitle ?? p.status ?? 'scanned', [-w / 2 + 0.026, -0.0085, 0.003], { heightM: 0.0058, color: col === NEON.volt ? NEON.bone : col, align: 'left' }));
       if (p.channel) parts.push(text(`${id}.chan`, id, channelGlyph(p.channel), [w / 2 - 0.012, 0, 0.003], { heightM: 0.0065, color: NEON.dim, align: 'right', font: 'mono' }));
       break;
     }
@@ -510,7 +538,7 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
       const h = 0.028;
       const v = p.verdict ?? 'pending';
       const col = v === 'ok' ? NEON.ok : v === 'fail' ? NEON.fail : NEON.volt;
-      parts.push(box(`${id}.plate`, id, w, h, 0.003, [0, 0, 0], plate(NEON.plate, col), { role: 'base', dims: { radius: 0.004 } }));
+      parts.push(...panel(`${id}.plate`, id, w, h, 0.003, [0, 0, 0], col));
       const line = `SENT ${p.sent ?? '—'} · EXPECT ${p.expect ?? '—'} · SEEN ${p.seen ?? '…'}`;
       parts.push(text(`${id}.t`, id, line, [-w / 2 + 0.008, 0, 0.003], { heightM: 0.006, color: NEON.bone, align: 'left', font: 'mono', uppercase: false }, { role: 'readout' }));
       parts.push(sphere(`${id}.pip`, id, 0.0045, [w / 2 - 0.012, 0, 0.003], v === 'pending' ? dim(NEON.volt) : solidGlow(col), { role: 'indicator' }));
@@ -523,23 +551,23 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
       const all = p.items ?? [];
       const items = all.slice(0, 6);
       const more = all.length - items.length;
-      const w = p.width ?? 0.24;
-      const rowH = 0.044;
-      const headH = 0.03;
+      const w = p.width ?? 0.26;
+      const rowH = 0.046;
+      const headH = 0.032;
       const h = headH + Math.max(1, items.length + (more > 0 ? 1 : 0)) * rowH + 0.012;
-      parts.push(box(`${id}.plate`, id, w, h, 0.004, [0, 0, 0], plate(NEON.plate, accent), { role: 'base', dims: { radius: 0.004 } }));
+      parts.push(...panel(`${id}.plate`, id, w, h, 0.004, [0, 0, 0], accent));
       parts.push(box(`${id}.headbar`, id, w - 0.012, 0.0015, 0.001, [0, h / 2 - headH, 0.0025], solidGlow(accent)));
-      parts.push(text(`${id}.title`, id, (p.title ?? label) || 'HACKS', [-w / 2 + 0.008, h / 2 - headH / 2, 0.003], { heightM: 0.008, color: accent, align: 'left' }));
+      parts.push(text(`${id}.title`, id, (p.title ?? label) || 'HACKS', [-w / 2 + 0.008, h / 2 - headH / 2, 0.003], { heightM: 0.0095, color: accent, align: 'left' }));
       if (p.subtitle) parts.push(text(`${id}.sub`, id, p.subtitle, [w / 2 - 0.008, h / 2 - headH / 2, 0.003], { heightM: 0.0055, color: NEON.dim, align: 'right', uppercase: false }));
       items.forEach((it, i) => {
         const y = h / 2 - headH - rowH / 2 - i * rowH - 0.004;
         const st = it.status ?? 'ready';
         const col = st === 'verified' ? NEON.ok : st === 'failed' ? NEON.fail : st === 'locked' ? NEON.dim : st === 'ready' ? accent : NEON.volt;
         parts.push(group(`${id}.row${i}`, id, [0, y, 0.0025], { role: 'cap' }));
-        parts.push(box(`${id}.row${i}.hit`, `${id}.row${i}`, w - 0.012, rowH - 0.004, 0.003, [0, 0, 0], { style: 'holo', color: NEON.void, opacity: 0.9, fresnel: 1, glow: 0, edges: true, edgeColor: st === 'locked' ? NEON.dim : col }, { dims: { radius: 0.003 } }));
-        parts.push(text(`${id}.row${i}.glyph`, `${id}.row${i}`, kindGlyph(it.kind), [-w / 2 + 0.018, 0, 0.003], { heightM: 0.0075, color: it.kind === 'daemon' ? NEON.magenta : col, font: 'mono', uppercase: false }));
-        parts.push(text(`${id}.row${i}.label`, `${id}.row${i}`, it.label, [-w / 2 + 0.034, it.detail ? 0.006 : 0, 0.003], { heightM: 0.0085, color: st === 'locked' ? NEON.dim : NEON.bone, align: 'left' }));
-        if (it.detail) parts.push(text(`${id}.row${i}.detail`, `${id}.row${i}`, it.detail, [-w / 2 + 0.034, -0.0085, 0.003], { heightM: 0.0055, color: NEON.dim, align: 'left', uppercase: false }));
+        parts.push(box(`${id}.row${i}.hit`, `${id}.row${i}`, w - 0.012, rowH - 0.005, 0.003, [0, 0, 0], { style: 'holo', color: NEON.void, opacity: 0.92, fresnel: 1, glow: 0.2, edges: true, edgeColor: st === 'locked' ? NEON.dim : col }, { dims: { radius: 0.003 } }));
+        parts.push(text(`${id}.row${i}.glyph`, `${id}.row${i}`, kindGlyph(it.kind), [-w / 2 + 0.018, 0, 0.003], { heightM: 0.008, color: it.kind === 'daemon' ? NEON.magenta : col, font: 'mono', uppercase: false }));
+        parts.push(text(`${id}.row${i}.label`, `${id}.row${i}`, it.label, [-w / 2 + 0.034, it.detail ? 0.0065 : 0, 0.003], { heightM: 0.011, color: st === 'locked' ? NEON.dim : NEON.volt, align: 'left' }));
+        if (it.detail) parts.push(text(`${id}.row${i}.detail`, `${id}.row${i}`, it.detail, [-w / 2 + 0.034, -0.0095, 0.003], { heightM: 0.0058, color: NEON.dim, align: 'left', uppercase: false }));
         const verdict = it.verdict === 'seen' ? 'SEEN ✓' : it.verdict === 'heard' ? 'HEARD ✓' : it.verdict === 'wired' ? 'WIRED ✓' : it.verdict === 'pending' ? 'AWAITING' : it.channel ? channelGlyph(it.channel) : '—';
         parts.push(text(`${id}.row${i}.verdict`, `${id}.row${i}`, verdict, [w / 2 - 0.028, 0, 0.003], { heightM: 0.0055, color: it.verdict && it.verdict !== 'pending' && it.verdict !== 'none' ? NEON.ok : NEON.dim, align: 'right', font: 'mono', uppercase: false }));
         parts.push(sphere(`${id}.row${i}.pip`, `${id}.row${i}`, 0.0035, [w / 2 - 0.016, 0, 0.003], st === 'ready' || st === 'locked' ? dim(col) : solidGlow(col), { role: st === 'uploading' ? 'indicator' : 'decor' }));
@@ -583,8 +611,8 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
       const w = p.width ?? p.size ?? 0.22;
       const segW = (w - (steps.length - 1) * 0.004) / steps.length;
       const col = failed ? NEON.fail : done >= steps.length ? NEON.ok : NEON.volt;
-      parts.push(box(`${id}.plate`, id, w + 0.016, 0.04, 0.004, [0, 0, 0], plate(NEON.plate, col), { role: 'base', dims: { radius: 0.004 } }));
-      parts.push(text(`${id}.title`, id, (p.title ?? label) || 'UPLOAD', [-w / 2, 0.011, 0.003], { heightM: 0.0065, color: NEON.bone, align: 'left' }));
+      parts.push(...panel(`${id}.plate`, id, w + 0.016, 0.04, 0.004, [0, 0, 0], col));
+      parts.push(text(`${id}.title`, id, (p.title ?? label) || 'UPLOAD', [-w / 2, 0.011, 0.003], { heightM: 0.0072, color: NEON.bone, align: 'left' }));
       parts.push(text(`${id}.state`, id, failed ? 'FAILED' : done >= steps.length ? 'VERIFIED' : `${done}/${steps.length}`, [w / 2, 0.011, 0.003], { heightM: 0.0065, color: col, align: 'right', font: 'mono' }, { role: 'readout' }));
       steps.forEach((s, i) => {
         const x = -w / 2 + segW / 2 + i * (segW + 0.004);
@@ -612,13 +640,13 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
       const w = items.length * key + (items.length - 1) * gap + 0.024;
       const anySub = items.some((it) => it.subtitle);
       const h = key + 0.044 + (anySub ? 0.012 : 0);
-      parts.push(box(`${id}.plate`, id, w, h, 0.004, [0, 0, 0], plate(NEON.plate, accent), { role: 'base', dims: { radius: 0.006 } }));
-      parts.push(text(`${id}.title`, id, p.title ?? 'DECK', [-w / 2 + 0.012, h / 2 - 0.01, 0.003], { heightM: 0.0065, color: accent, align: 'left' }));
+      parts.push(...panel(`${id}.plate`, id, w, h, 0.004, [0, 0, 0], accent));
+      parts.push(text(`${id}.title`, id, p.title ?? 'DECK', [-w / 2 + 0.012, h / 2 - 0.01, 0.003], { heightM: 0.0072, color: accent, align: 'left' }));
       items.forEach((it, i) => {
         const x = -w / 2 + 0.012 + key / 2 + i * (key + gap);
         parts.push(group(`${id}.k${i}`, id, [x, -0.004 + (anySub ? 0.004 : 0), 0.0025], { role: 'cap' }));
         parts.push(box(`${id}.k${i}.face`, `${id}.k${i}`, key, key, 0.008, [0, 0, 0.004], holo(NEON.void, { opacity: 0.95, edges: true, edgeColor: it.kind === 'daemon' ? NEON.magenta : accent }), { dims: { radius: 0.005 } }));
-        parts.push(text(`${id}.k${i}.t`, `${id}.k${i}`, it.label, [0, it.subtitle ? 0.004 : 0, 0.0085], { heightM: 0.0062, color: NEON.bone }));
+        parts.push(text(`${id}.k${i}.t`, `${id}.k${i}`, it.label, [0, it.subtitle ? 0.004 : 0, 0.0085], { heightM: 0.0066, color: NEON.volt }));
         if (it.subtitle) parts.push(text(`${id}.k${i}.s`, `${id}.k${i}`, it.subtitle, [0, -0.011, 0.0085], { heightM: 0.0036, color: NEON.dim, uppercase: false }));
         const target = it.controlId ?? cid;
         if (target) {
@@ -670,7 +698,7 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
       const h = rows * cell + (rows - 1) * gap;
       const picked = new Set(p.picked ?? []);
       const solved = new Set(p.solved ?? []);
-      parts.push(box(`${id}.plate`, id, w + 0.024, h + 0.05, 0.004, [0, -0.012, 0], plate(NEON.panel, NEON.magenta), { role: 'base' }));
+      parts.push(...panel(`${id}.plate`, id, w + 0.024, h + 0.05, 0.004, [0, -0.012, 0], NEON.magenta));
       parts.push(text(`${id}.title`, id, p.title ?? 'LINK', [-w / 2, h / 2 + 0.014, 0.003], { heightM: 0.007, color: NEON.magenta, align: 'left', font: 'display' }));
       if (p.subtitle) parts.push(text(`${id}.sub`, id, p.subtitle, [w / 2, h / 2 + 0.014, 0.003], { heightM: 0.005, color: NEON.dim, align: 'right', uppercase: false }));
       for (let i = 0; i < rows * cols; i++) {
@@ -728,15 +756,15 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
       const headH = 0.036;
       const chipsH = models.length ? 0.03 : 0;
       const h = headH + rows.length * rowH + chipsH + 0.016;
-      parts.push(box(`${id}.plate`, id, w, h, 0.005, [0, 0, 0], plate(NEON.panel, accent), { role: 'base', dims: { radius: 0.006 } }));
-      parts.push(text(`${id}.title`, id, (p.title ?? label) || 'AGENT', [-w / 2 + 0.014, h / 2 - headH / 2, 0.0035], { heightM: 0.0095, color: accent, align: 'left', font: 'display' }));
+      parts.push(...panel(`${id}.plate`, id, w, h, 0.005, [0, 0, 0], accent));
+      parts.push(text(`${id}.title`, id, (p.title ?? label) || 'AGENT', [-w / 2 + 0.014, h / 2 - headH / 2, 0.0035], { heightM: 0.011, color: accent, align: 'left', font: 'display' }));
       if (p.subtitle) parts.push(text(`${id}.sub`, id, p.subtitle, [w / 2 - 0.014, h / 2 - headH / 2, 0.0035], { heightM: 0.006, color: NEON.dim, align: 'right', uppercase: false }));
       parts.push(box(`${id}.headbar`, id, w - 0.028, 0.0015, 0.001, [0, h / 2 - headH, 0.0035], solidGlow(accent)));
       rows.forEach((row, i) => {
         const y = h / 2 - headH - rowH / 2 - i * rowH - 0.004;
         const col = statusColor(row.status, NEON.dim);
         parts.push(text(`${id}.r${i}.n`, id, String(i + 1), [-w / 2 + 0.018, y, 0.0035], { heightM: 0.0065, color: NEON.dim, font: 'mono' }));
-        parts.push(text(`${id}.r${i}.t`, id, row.title, [-w / 2 + 0.03, y, 0.0035], { heightM: 0.0085, color: row.status === 'pending' ? NEON.dim : NEON.text, align: 'left' }));
+        parts.push(text(`${id}.r${i}.t`, id, row.title, [-w / 2 + 0.03, y, 0.0035], { heightM: 0.0095, color: row.status === 'pending' ? NEON.dim : row.status === 'running' ? NEON.volt : NEON.text, align: 'left' }));
         if (row.status === 'ok') parts.push(text(`${id}.r${i}.s`, id, '✓', [w / 2 - 0.018, y, 0.0035], { heightM: 0.0085, color: NEON.green, font: 'mono', uppercase: false }));
         else if (row.status === 'fail') parts.push(text(`${id}.r${i}.s`, id, '✕', [w / 2 - 0.018, y, 0.0035], { heightM: 0.0085, color: NEON.red, font: 'mono', uppercase: false }));
         else parts.push(sphere(`${id}.r${i}.s`, id, 0.0035, [w / 2 - 0.018, y, 0.004], row.status === 'running' ? solidGlow(NEON.yellow) : dim(NEON.dim), { role: row.status === 'running' ? 'indicator' : 'decor' }));
