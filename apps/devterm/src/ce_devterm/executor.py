@@ -186,6 +186,8 @@ class Executor(object):
             return time.time(), "dry run: %d x %d Hz" % (count, freq)
         sent_at = time.time()
         ok, detail = self.sound.beep(freq, ms, count, interval_ms=1000)
+        if not ok and getattr(self.sound, "mute", False):
+            raise ExecError(detail, "refused")  # --mute: no sound and no terminal bell either
         self.ui("bell", {"count": count})
         if not ok:
             detail += "; rang the terminal bell instead"

@@ -61,7 +61,9 @@ def speech_command():
 class Sound(object):
     """Starts sounds without blocking; remembers the running process so panic can stop it."""
 
-    def __init__(self):
+    def __init__(self, mute=False):
+        # --mute: never start a player or a speech engine (for a machine that must stay silent); acks say so
+        self.mute = mute
         self._proc = None
         self._lock = threading.Lock()
         self._tmp = None
@@ -74,6 +76,8 @@ class Sound(object):
 
     def beep(self, freq=2000.0, ms=120, count=1, interval_ms=1000):
         """Returns (started, detail). Falls back to the terminal bell when no audio player exists."""
+        if self.mute:
+            return False, "muted (--mute): %d x %d Hz not played" % (max(1, int(count)), int(freq))
         cmd = player_command()
         if not cmd:
             return False, "no audio player (aplay/afplay)"
@@ -87,6 +91,8 @@ class Sound(object):
         return True, "%d x %d Hz %d ms via %s" % (count, int(freq), int(ms), cmd[0])
 
     def say(self, text):
+        if self.mute:
+            return False, "muted (--mute): not spoken"
         cmd = speech_command()
         if not cmd:
             return False, "no speech engine (install espeak: sudo apt install espeak)"

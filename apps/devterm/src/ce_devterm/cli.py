@@ -25,7 +25,7 @@ def _color_ok(stream=sys.stdout):
 DEFAULTS = {
     "server": None, "demo": False, "pair_via_lan": False, "name": None, "headless": False, "printer": "auto",
     "print_dir": None, "open_receipts": False, "ticket": "auto", "density": None, "identity": None, "ascii": False,
-    "mono": False, "no_self_test": False, "qr": "short",
+    "mono": False, "no_self_test": False, "qr": "short", "mute": False,
 }
 
 
@@ -50,6 +50,7 @@ def _common():
     c.add_argument("--ascii", action="store_true", default=S, help="ASCII only (no box drawing or block characters)")
     c.add_argument("--mono", action="store_true", default=S, help="no colours")
     c.add_argument("--no-self-test", action="store_true", default=S, help="hide the DevTerm's built-in self-test hacks")
+    c.add_argument("--mute", action="store_true", default=S, help="never play a sound: beep and say are refused with an honest ack (printing and the screen still work)")
     return c
 
 
@@ -95,7 +96,7 @@ def _options(args):
     return Options(server=server, name=args.name, demo=args.demo, printer=args.printer, print_dir=args.print_dir,
                    open_receipts=args.open_receipts, ticket=args.ticket,
                    identity_path=args.identity or config.identity_path(args.demo), density=args.density,
-                   self_test=not args.no_self_test, qr=args.qr)
+                   self_test=not args.no_self_test, qr=args.qr, mute=args.mute)
 
 
 def _lan_server(local):

@@ -22,8 +22,9 @@ END_AFTER = 0.4  # 'end' after this long without a key press
 
 class Options(object):
     def __init__(self, server=None, name=None, demo=False, printer="auto", print_dir=None, open_receipts=False,
-                 ticket="auto", identity_path=None, role=None, density=None, self_test=True, qr="short"):
+                 ticket="auto", identity_path=None, role=None, density=None, self_test=True, qr="short", mute=False):
         self.server = server  # ServerAddress or None
+        self.mute = mute  # --mute: beep and say are refused with an honest ack (a machine that must stay silent)
         self.name = name
         self.demo = demo
         self.printer = printer
@@ -75,7 +76,7 @@ class App(object):
         self.events = queue.Queue()
         self.printer = printer_mod.make_printer(opts.printer, out_dir=opts.print_dir, density=opts.density,
                                                 open_viewer=opts.open_receipts)
-        self.sound = Sound()
+        self.sound = Sound(mute=getattr(opts, "mute", False))
         self.executor = Executor(self.printer, self.sound, send=self.send, ui=self._ui, device_id=self.my_device_id,
                                  device_name=name)
         self.link = None
