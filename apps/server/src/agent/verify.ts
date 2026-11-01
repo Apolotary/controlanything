@@ -23,6 +23,8 @@ export interface VerifyDeps {
   sam: Sam;
   /** hears a spoken line back (the "say" oracle: Muse Voice Transcribe) */
   heard?: (line: string, wav: Uint8Array, signal?: AbortSignal) => Promise<HeardResult>;
+  /** the Mac's current output volume, so a volume probe can put it back afterwards */
+  readVolume?: () => Promise<number | undefined>;
   log?: (line: string) => void;
   /** wait after an action before the "after" measurement (IR lamps fade ~3 s; the sim is instant) */
   settleMs?: (t: Target, a: DriverAction) => number;
@@ -76,7 +78,8 @@ async function captureFrame(d: Dispatcher, sensorDeviceId: string, cardId: strin
   const [r] = await d.sense(sensorDeviceId, 'frame', { cardId, signal, timeoutMs: 6000 });
   if (!r?.frame) throw new ExecError(`no frame from ${sensorDeviceId}${r?.error ? ` (${r.error})` : ''}`, 'device');
   const src = r.frame.camera?.source;
-  return { img: decodeJpeg(r.frame.jpeg), jpeg: r.frame.jpeg, width: r.frame.width, height: r.frame.height, exposureLocked: src === 'synthetic' || src === 'replay' };
+  // absolute luma is only comparable at a fixed exposure: synthetic/replay frames, or a headset that locked it
+  return { img: decodeJpeg(r.frame.jpeg), jpeg: r.frame.jpeg, width: r.frame.width, height: r.frame.height, exposureLocked: src === 'synthetic' || src === 'replay' || r.frame.camera?.exposure === 'locked' };
 }
 
 /** Re-find the target's outline on a fresh frame with SAM (nearest to the stored box); fall back to the stored polygon. */
@@ -218,9 +221,19 @@ export async function verifyOnce(deps: VerifyDeps, t: Target, driver: Driver, a:
       await sleep(400, o.signal);
     }
     const before = await audioWindow(d, o.micDeviceId, t.cardId, holdsNote ? undefined : -600, o.signal);
+    // a volume probe must not leave the Mac muted or blaring: remember the level and put it back
+    const isVolume = op.kind === 'local' && op.op === 'volume';
+    const prevVolume = isVolume ? await deps.readVolume?.() : undefined;
     const ack = await d.exec(exec.deviceId, op, { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: a.actionId, waitForSlot: true, signal: o.signal, timeoutMs: 4000 });
     await sleep(deps.settleMs?.(t, a) ?? 350, o.signal);
     const after = await audioWindow(d, o.micDeviceId, t.cardId, undefined, o.signal);
+    if (isVolume && prevVolume !== undefined) {
+      try {
+        await d.exec(exec.deviceId, { kind: 'local', op: 'volume', arg: prevVolume }, { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: `${a.actionId}:restore`, waitForSlot: true, signal: o.signal, timeoutMs: 4000 });
+      } catch (e) {
+        deps.log?.(`[verify] could not restore the volume to ${prevVolume}: ${(e as Error).message}`);
+      }
+    }
     const obs = observeAudio(before!, after!);
     const pass = audioMatches(obs, expected);
     const evidence: Evidence = { ...base, execId: ack.execId, sent: { op, at: ack.sentAt }, observed: { ...audioEvidence(obs, expected), sensorDeviceId: o.micDeviceId }, pass };

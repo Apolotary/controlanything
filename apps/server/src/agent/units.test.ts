@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type { AgentStepPayload, ControlEventPayload, Driver, HackSet, PayloadOf, UiSpecPayload } from '@ce/protocol';
 import { describe, expect, it, vi } from 'vitest';
 import { classify, wavFromPcm16 } from '../voice/relay';
@@ -6,6 +7,8 @@ import { ArmService } from './arm';
 import { ControlRouter } from './control';
 import { Dispatcher, RateLimiter } from './dispatch';
 import { pickExecutor, pickSensor, type Roster } from './executors';
+import { hearBack, similarity } from './heard';
+import { cropForSkin } from './identify';
 import { MacLocalExecutor, planLocal } from './maclocal';
 import { scanPrompts } from './scan';
 import { StepLog } from './steps';
@@ -257,5 +260,62 @@ describe('voice relay helpers and scan prompts', () => {
   it('never asks SAM for people', () => {
     expect(scanPrompts({ CE_SCAN_PROMPTS: 'ceiling light, person, synthesizer' })).toEqual(['ceiling light', 'synthesizer']);
     expect(scanPrompts({})).toContain('electronic device');
+  });
+});
+
+// --- the Mac's audible ops, dry: the command that would run, never run; a recorded WAV stands in for the room ----
+
+describe('say line, dry-run', () => {
+  const fixtures = new URL('../../fixtures/', import.meta.url).pathname;
+  const line = 'make it brighter, but keep the note tail.';
+
+  it('plans the exact say / volume / music commands without executing anything', () => {
+    expect(planLocal({ kind: 'local', op: 'say', arg: line })).toEqual({ file: 'say', args: [line] });
+    expect(planLocal({ kind: 'local', op: 'say', arg: { text: line, voice: 'ignored' } })).toEqual({ file: 'say', args: [line] });
+    expect(planLocal({ kind: 'local', op: 'volume', arg: 0 })).toEqual({ file: 'osascript', args: ['-e', 'set volume output volume 0'] });
+    expect(planLocal({ kind: 'local', op: 'volume', arg: 140 })).toEqual({ file: 'osascript', args: ['-e', 'set volume output volume 100'] });
+    expect(planLocal({ kind: 'local', op: 'music', arg: 'pause' })).toEqual({ file: 'osascript', args: ['-e', 'tell application "Music" to pause'] });
+    expect(planLocal({ kind: 'local', op: 'music', arg: 'open /System' })).toMatchObject({ ok: false });
+  });
+
+  it('feeds a recorded WAV of the line to the transcriber and replays what Muse Voice Transcribe heard', async () => {
+    const wav = new Uint8Array(readFileSync(`${fixtures}audio/make-it-brighter-but-keep-the-note-tail.wav`));
+    expect(inspectWav(wav)).toMatchObject({ channels: 1, sampleRate: 24_000, bitsPerSample: 16 });
+    expect(inspectWav(wav).durationMs).toBeGreaterThan(2000);
+    const calls: number[] = [];
+    const transcriber = { mode: 'fixture' as const, model: 'fixture', transcribe: async (w: Uint8Array) => (calls.push(w.length), { text: '[FIXTURE] what is this device?', source: 'fixture' as const, model: 'fixture', durationMs: 1 }) };
+    // FIXTURE: the transcript recorded from the real model for this very recording, labelled as such
+    const heard = await hearBack({ transcriber, replayDir: `${fixtures}recorded` }, line, wav);
+    expect(heard).toMatchObject({ source: 'fixture', recordedFrom: 'muse-voice-transcribe-1.0', pass: true });
+    expect(heard.transcript).toMatch(/keep the note tail/);
+    expect(heard.similarity).toBeCloseTo(similarity(line, heard.transcript), 3);
+    expect(calls).toEqual([]); // the recording answered; no model call
+    // a line nobody recorded falls back to the fixture transcriber: an honest miss
+    const miss = await hearBack({ transcriber, replayDir: `${fixtures}recorded` }, 'Hello from this Mac', wav);
+    expect(miss.pass).toBe(false);
+    expect(calls).toEqual([wav.length]);
+  });
+});
+
+describe('scan crop for the panel skin', () => {
+  it('pads the SAM box, clamps to the frame and keeps the long edge at or under 1024', () => {
+    const width = 1600;
+    const height = 1200;
+    const data = new Uint8Array(width * height * 4);
+    for (let i = 0; i < width * height; i++) {
+      data[i * 4] = (i % width) >> 3; // a gradient so the JPEG is not trivial
+      data[i * 4 + 1] = 80;
+      data[i * 4 + 2] = 200 - ((i / width) >> 3);
+      data[i * 4 + 3] = 255;
+    }
+    const img = { width, height, data };
+    const big = cropForSkin(img, [100, 100, 1400, 1000]);
+    expect([big.width, big.height]).toEqual([1024, 768]); // padding reaches the frame edge: the whole 1600x1200 frame, scaled
+    expect(big.jpegBase64.startsWith('data:')).toBe(false);
+    const small = cropForSkin(img, [0, 0, 100, 50]);
+    expect([small.width, small.height]).toEqual([110, 55]); // padded 10 % of the box on the free sides, clamped at the frame edge
+    const corner = cropForSkin(img, [1550, 1150, 100, 100]);
+    expect(corner.width).toBeLessThanOrEqual(60);
+    expect(corner.height).toBeLessThanOrEqual(60);
   });
 });

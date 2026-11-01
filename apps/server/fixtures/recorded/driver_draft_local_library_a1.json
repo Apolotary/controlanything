@@ -1,0 +1,14 @@
+{
+  "name": "driver_draft:local:library:a1",
+  "model": "muse-spark-1.3",
+  "recordedAt": "2026-11-01T22:30:47.503Z",
+  "latencyMs": 6009,
+  "usage": {
+    "promptTokens": 1458,
+    "completionTokens": 1465,
+    "totalTokens": 2923,
+    "reasoningTokens": 1014,
+    "cachedTokens": 0
+  },
+  "text": "{\"actions\": [{\"actionId\": \"volume\", \"encode\": {\"arg\": \"$value\", \"kind\": \"local\", \"op\": \"volume\"}, \"expect\": {\"effect\": \"any\", \"sense\": \"audio\"}, \"kind\": \"set\", \"label\": \"Volume\", \"range\": {\"max\": 100, \"min\": 0, \"step\": 5}}, {\"actionId\": \"music-toggle\", \"encode\": {\"arg\": \"playpause\", \"kind\": \"local\", \"op\": \"music\"}, \"expect\": {\"effect\": \"any\", \"sense\": \"audio\"}, \"inverseActionId\": \"music-toggle\", \"kind\": \"toggle\", \"label\": \"Play / Pause\"}, {\"actionId\": \"music-next\", \"encode\": {\"arg\": \"next\", \"kind\": \"local\", \"op\": \"music\"}, \"expect\": {\"effect\": \"any\", \"sense\": \"audio\"}, \"inverseActionId\": \"music-prev\", \"kind\": \"trigger\", \"label\": \"Next Track\"}, {\"actionId\": \"music-prev\", \"encode\": {\"arg\": \"prev\", \"kind\": \"local\", \"op\": \"music\"}, \"expect\": {\"effect\": \"any\", \"sense\": \"audio\"}, \"inverseActionId\": \"music-next\", \"kind\": \"trigger\", \"label\": \"Previous Track\"}, {\"actionId\": \"say-hello\", \"encode\": {\"arg\": \"Hello from Mac\", \"kind\": \"local\", \"op\": \"say\"}, \"expect\": {\"effect\": \"any\", \"sense\": \"audio\"}, \"kind\": \"trigger\", \"label\": \"Speak Hello\"}, {\"actionId\": \"beep\", \"encode\": {\"kind\": \"local\", \"op\": \"beep\"}, \"expect\": {\"effect\": \"any\", \"sense\": \"audio\"}, \"kind\": \"trigger\", \"label\": \"Beep\"}], \"cardId\": \"dev-mac-local\", \"name\": \"This Mac\", \"notes\": \"device:mac-local\", \"provenance\": [{\"ref\": \"device:mac-local\", \"source\": \"curated\"}], \"transport\": \"local\"}"
+}

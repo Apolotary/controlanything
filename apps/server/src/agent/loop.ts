@@ -17,14 +17,14 @@ import { ArmService } from './arm';
 import type { Dispatcher } from './dispatch';
 import { drive, dryResolve, templateIrDraft, templateLocalDraft, templateMidiDraft } from './drive';
 import { candidatesFor, online, pickSensor, type Roster, suggestedClients } from './executors';
-import { cropJpeg, identify } from './identify';
+import { cropForSkin, cropJpeg, identify, type SkinCropImage } from './identify';
 import { learnCodes } from './learn';
 import { type LinkCapability, neededCapability, tryLink } from './link';
 import { research as doResearch } from './research';
 import type { StepLog } from './steps';
 import type { TargetStore } from './targets';
 import type { Target } from './types';
-import { verifyDriver } from './verify';
+import { type VerifyDeps, verifyDriver } from './verify';
 
 export interface LoopDeps {
   hub: Pick<Hub, 'broadcast' | 'sendToDevice'>;
@@ -39,6 +39,9 @@ export interface LoopDeps {
   profiles: Profiles;
   forge: () => Forge | undefined;
   arm: ArmService;
+  /** the "say" oracle: Muse Voice Transcribe hears a spoken line back */
+  heard?: VerifyDeps['heard'];
+  readVolume?: VerifyDeps['readVolume'];
   log?: (line: string) => void;
   /** how long LINK waits for a companion to appear */
   companionWaitMs?: number;
@@ -204,7 +207,7 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
     const mic = pickSensor(d.roster, 'mic');
     const vstep = d.steps.begin('verify', `verifying on the real ${card.name}`, { ...base, kind: 'proof' });
     const summary = await verifyDriver(
-      { dispatcher: d.dispatcher, sam: d.sam, log, settleMs: (tt, a) => d.settleMs?.(tt, a.encode.kind === 'ir' ? 'ir' : driver.transport) ?? (driver.transport === 'ir' ? 1500 : 350) },
+      { dispatcher: d.dispatcher, sam: d.sam, heard: d.heard, readVolume: d.readVolume, log, settleMs: (tt, a) => d.settleMs?.(tt, a.encode.kind === 'ir' ? 'ir' : driver.transport) ?? (driver.transport === 'ir' ? 1500 : 350) },
       t,
       driver,
       {
@@ -242,7 +245,16 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
     }
     d.targets.setState(t, 'forging', 'generating hacks and 3D controls');
     const fstep = d.steps.begin('forge', 'forging hacks and controls', { ...base, kind: 'opinion' });
-    const fr = await forge.generate({ device: { cardId: card.cardId, name: card.name.slice(0, 80), maker: card.maker.slice(0, 80), model: card.model.slice(0, 80), category: card.category, notes: card.notes?.slice(0, 600) }, driver: summary.driver, verification: summary.verification, runId: t.runId, signal });
+    // the scan crop (SAM box padded 10 %, long edge <= 1024) lets Muse Image paint the panel skin; controls arm first, the skin lands as the next revision
+    let crop: SkinCropImage | undefined;
+    if (t.detection?.jpeg) {
+      try {
+        crop = cropForSkin(decodeJpeg(t.detection.jpeg), t.detection.box);
+      } catch (e) {
+        log(`[forge] no scan crop for the skin: ${(e as Error).message}`);
+      }
+    }
+    const fr = await forge.generate({ device: { cardId: card.cardId, name: card.name.slice(0, 80), maker: card.maker.slice(0, 80), model: card.model.slice(0, 80), category: card.category, notes: card.notes?.slice(0, 600) }, driver: summary.driver, verification: summary.verification, ...(crop ? { crop } : {}), runId: t.runId, signal });
     if (!fr.ok || !fr.uiSpec) {
       fstep.fail(fr.error ?? 'forge failed', { model: fr.model, effort: fr.effort, latencyMs: fr.latencyMs, source: fr.source, recordedFrom: fr.recordedFrom });
       d.targets.setState(t, 'verified', `verified, but no controls could be generated: ${fr.error ?? 'forge failed'}`);

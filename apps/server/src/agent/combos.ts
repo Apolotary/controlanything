@@ -6,6 +6,8 @@
  *                 devices that are not online are skipped and said so; each step produces its own evidence;
  *                 one tap confirms; UNDO restores what can be restored (light, volume) and names what cannot (paper).
  *   Breathe       a daemon: the light's brightness breathes to the synth's tempo (see daemons.ts).
+ *   Say line      the Mac speaks its driver's line; a microphone client records it and Muse Voice Transcribe
+ *                 must hear it back (evidence: transcript similarity, see heard.ts). Nothing to undo.
  *
  * The room is published as ui.spec "spec_room" (hack set + a small gen3d hack-list and daemon-link).
  */
@@ -28,6 +30,7 @@ export const ROOM_SPEC_ID = 'spec_room';
 export const BLACKOUT_ID = 'blackout';
 export const BREATHE_ID = 'breathe';
 export const BREATHE_DAEMON_ID = 'd_breathe';
+export const SAY_LINE_ID = 'say-line';
 
 export interface RoomDevices {
   light?: Target;
@@ -93,6 +96,23 @@ export function buildRoomSpec(targets: Target[], specOf: (specId: string) => UiS
       confirm: 'tap',
       max_rate_hz: 0.2,
       status: 'ready',
+    });
+  }
+
+  // Say line: the Mac speaks its driver's line; a microphone client records it and Muse Voice Transcribe must hear it back
+  const say = verifiedAction(dev.mac, (a) => a.encode.kind === 'local' && a.encode.op === 'say') ?? dev.mac?.driver?.actions.find((a) => a.encode.kind === 'local' && a.encode.op === 'say');
+  if (say && dev.mac) {
+    hacks.push({
+      id: SAY_LINE_ID,
+      name: 'Say line',
+      kind: 'action',
+      blurb: 'Mac speaks; the mic must hear it back',
+      commands: [{ cardId: dev.mac.cardId, action: say.actionId }],
+      oracle: { type: 'mic', expect: 'louder' },
+      reversible: false,
+      confirm: 'tap',
+      max_rate_hz: 0.2,
+      status: dev.mac.verification[say.actionId] === 'pass' ? 'verified' : 'ready',
     });
   }
 
@@ -278,6 +298,8 @@ export class ComboRunner {
     for (const step of [...run.steps].reverse()) {
       if (!step.ok || step.undone) continue;
       const t = this.d.targets.get(step.cardId);
+      const said = t?.driver?.actions.find((x) => x.actionId === step.actionId)?.encode;
+      if (said?.kind === 'local' && said.op === 'say') continue; // words are not undone, and nothing is left to restore
       if (!step.undo || step.undo === 'none' || !t?.driver) {
         cannot.push(step.actionId === 'print' ? 'paper' : `${step.name}: ${step.actionId}`);
         continue;

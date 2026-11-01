@@ -210,7 +210,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     },
   });
 
-  const loopDeps = { hub, targets, steps, dispatcher, roster, sam, spark: muse, wonder, web, profiles, forge, arm, log, companionWaitMs: opts.companionWaitMs, settleMs: opts.settleMs, learnIr: opts.learnIr };
+  const loopDeps = { hub, targets, steps, dispatcher, roster, sam, spark: muse, wonder, web, profiles, forge, arm, heard, readVolume: () => macLocal.currentVolume(), log, companionWaitMs: opts.companionWaitMs, settleMs: opts.settleMs, learnIr: opts.learnIr };
 
   const select = (p: TargetSelectPayload, from: { deviceId: string; name?: string }): Target | undefined => {
     if (p.cardId) {

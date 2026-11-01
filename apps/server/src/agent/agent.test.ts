@@ -18,7 +18,7 @@ import { createContext, type RunningServers, type ServerContext, startServers } 
 import { decodeFrame, encodeFrame } from '../devices/ir';
 import type { Forge, ForgeRequest, ForgeResult } from '../gen3d/forge';
 import { resolveMuseConfig } from '../muse';
-import { encodeJpeg } from '../oracle/image';
+import { decodeJpeg, encodeJpeg } from '../oracle/image';
 import { roomImage } from '../oracle/oracle.test';
 import { getAgent } from './index';
 
@@ -28,6 +28,9 @@ afterEach(async () => {
 });
 
 // --- a fake forge: turns the verified driver into one hack per action, no model ------------------------
+
+/** every forge request the loop made (the scan crop for the panel skin rides along) */
+const forgeRequests: ForgeRequest[] = [];
 
 function fakeForge(ctx: ServerContext): Forge {
   const specs = new Map<string, UiSpecPayload>();
@@ -53,6 +56,7 @@ function fakeForge(ctx: ServerContext): Forge {
   const f: Forge = {
     mode: 'fixture',
     async generate(req) {
+      forgeRequests.push(req);
       const spec = build(req);
       specs.set(spec.specId, spec);
       ctx.hub.broadcast('ui.spec', spec);
@@ -299,6 +303,14 @@ describe('discovery loop end to end (sim mode, FIXTURE models)', () => {
     expect(off.encode.kind).toBe('ir');
     const forged = await quest.next('target.status', 20_000, (p) => p.cardId === cardId && (p.state === 'forged' || p.state === 'failed' || p.state === 'arming'));
     expect(forged.state, forged.detail).not.toBe('failed');
+    // FORGE got the scan crop for the panel skin: the SAM box padded 10 %, long edge <= 1024, plain base64 JPEG
+    const forgeReq = forgeRequests.find((r) => r.device.cardId === cardId)!;
+    expect(forgeReq?.crop?.jpegBase64, 'forge request carries the scan crop').toBeTruthy();
+    expect(forgeReq.crop!.jpegBase64.startsWith('data:')).toBe(false);
+    const cropImg = decodeJpeg(forgeReq.crop!.jpegBase64);
+    expect(Math.max(cropImg.width, cropImg.height)).toBeLessThanOrEqual(1024);
+    expect([cropImg.width, cropImg.height]).toEqual([forgeReq.crop!.width, forgeReq.crop!.height]);
+    expect(cropImg.width).toBeGreaterThan(light!.box[2]); // padded beyond the detection box
     const evidence = quest.seen.filter((m) => m.type === 'verify.result').map((m) => m.payload as PayloadOf<'verify.result'>);
     expect(evidence.length).toBeGreaterThanOrEqual(4);
     const offEv = evidence.find((e) => e.actionId === 'off' && e.pass);

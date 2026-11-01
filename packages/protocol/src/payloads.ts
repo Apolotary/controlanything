@@ -167,6 +167,8 @@ export const CameraInfo = z.object({
   intrinsics: z.object({ fx: z.number(), fy: z.number(), cx: z.number(), cy: z.number() }).optional(),
   eye: z.enum(['left', 'right', 'mono']).optional(),
   source: z.enum(['passthrough', 'synthetic', 'replay', 'handheld']).optional(),
+  /** "locked": the client held a manual exposure across the before/after pair, so absolute luma is comparable */
+  exposure: z.enum(['locked', 'auto']).optional(),
   /** world pose of the camera at capture (head pose x head->camera offset), same space as `pose` */
   cameraPose: Pose.optional(),
 });

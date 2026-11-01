@@ -245,7 +245,10 @@ export class SimDevice {
     if (p.kind === 'audio-clip') {
       // the "say line" oracle: record the laptop microphone so the server can hear the Mac speak
       try {
-        const clip = await recordClip(Math.min(10_000, Math.max(1000, p.durationMs ?? 3000)));
+        const ms = Math.min(10_000, Math.max(1000, p.durationMs ?? 3000));
+        // a permission bubble nobody clicks must not stall the agent: answer "unavailable" soon after the window
+        const deadline = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('no microphone permission within the window; allow the microphone in the browser and run the hack again')), ms + 2500));
+        const clip = await Promise.race([recordClip(ms), deadline]);
         this.sendSense({ senseId: p.senseId, kind: 'audio-clip', clip, at: Date.now(), ok: true });
         this.log('sense', `recorded ${clip.durationMs} ms from "${clip.input ?? 'microphone'}" → server (Muse Voice Transcribe listens)`);
       } catch (e) {

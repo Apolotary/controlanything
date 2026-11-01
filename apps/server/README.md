@@ -37,6 +37,19 @@ Every step is an `agent.step` with the model id, effort and latency; every model
 from `fixtures/recorded/` (SAM, identification, driver drafts, forge runs), each labelled `FIXTURE` with the
 model that produced it.
 
+### The room (`combos.ts`, `daemons.ts`, `heard.ts`)
+
+Once two or more devices are verified, the server assembles `ui.spec` **`spec_room`** from their drivers
+(no model writes a combo): **Blackout** (light off by IR + Mac muted + a receipt on the DevTerm; offline
+devices are skipped and named; every step runs through the same oracles and produces its own evidence; one tap
+confirms; UNDO restores the light and the volume and says the paper cannot be unprinted), **Breathe to tempo**
+(a daemon: the light's brightness follows the synth's MIDI clock, or a bpm set by voice or the menu, as a sine
+no faster than 0.5 Hz, written at ≤ 1 Hz under the IR cap; `daemon.status` reports it) and **Say line** (the
+Mac speaks its driver's line, a microphone client records it (`sense.request` `audio-clip`) and
+`muse-voice-transcribe-1.0` must hear it back; the evidence is the transcript similarity). In FIXTURE mode the
+transcript recorded for that recording replays from `fixtures/recorded/transcribe/`.
+`POST /api/agent/room/run {hackId}` and `/room/undo` drive them without a headset.
+
 ## HTTP views (besides the pairing API in `src/app.ts`)
 
 ```

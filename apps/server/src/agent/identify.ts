@@ -38,6 +38,61 @@ export function cropJpeg(img: DecodedImage, box: readonly number[], pad = 0.02):
   return Buffer.from(encodeJpeg({ width: w, height: h, data }, 88)).toString('base64');
 }
 
+export interface SkinCropImage {
+  /** base64 JPEG, no data: prefix */
+  jpegBase64: string;
+  width: number;
+  height: number;
+}
+
+/**
+ * The crop Muse Image paints a panel skin from (FORGE): the SAM box padded ~10 %, clamped to the frame and
+ * box-filtered down so the long edge is at most 1024 px. Pure; the frame stays untouched.
+ */
+export function cropForSkin(img: DecodedImage, box: readonly number[], opts: { pad?: number; maxEdge?: number; quality?: number } = {}): SkinCropImage {
+  const pad = opts.pad ?? 0.1;
+  const maxEdge = opts.maxEdge ?? 1024;
+  const px = Math.round(box[2] * pad);
+  const py = Math.round(box[3] * pad);
+  const x0 = Math.max(0, Math.floor(box[0] - px));
+  const y0 = Math.max(0, Math.floor(box[1] - py));
+  const x1 = Math.min(img.width, Math.ceil(box[0] + box[2] + px));
+  const y1 = Math.min(img.height, Math.ceil(box[1] + box[3] + py));
+  const w = Math.max(1, x1 - x0);
+  const h = Math.max(1, y1 - y0);
+  const scale = Math.min(1, maxEdge / Math.max(w, h));
+  const ow = Math.max(1, Math.round(w * scale));
+  const oh = Math.max(1, Math.round(h * scale));
+  const data = new Uint8Array(ow * oh * 4);
+  for (let oy = 0; oy < oh; oy++) {
+    const sy0 = y0 + Math.floor((oy / oh) * h);
+    const sy1 = Math.min(y0 + h, Math.max(sy0 + 1, y0 + Math.floor(((oy + 1) / oh) * h)));
+    for (let ox = 0; ox < ow; ox++) {
+      const sx0 = x0 + Math.floor((ox / ow) * w);
+      const sx1 = Math.min(x0 + w, Math.max(sx0 + 1, x0 + Math.floor(((ox + 1) / ow) * w)));
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let n = 0;
+      for (let y = sy0; y < sy1; y++) {
+        let i = (y * img.width + sx0) * 4;
+        for (let x = sx0; x < sx1; x++, i += 4) {
+          r += img.data[i];
+          g += img.data[i + 1];
+          b += img.data[i + 2];
+          n++;
+        }
+      }
+      const o = (oy * ow + ox) * 4;
+      data[o] = Math.round(r / n);
+      data[o + 1] = Math.round(g / n);
+      data[o + 2] = Math.round(b / n);
+      data[o + 3] = 255;
+    }
+  }
+  return { jpegBase64: Buffer.from(encodeJpeg({ width: ow, height: oh, data }, opts.quality ?? 88)).toString('base64'), width: ow, height: oh };
+}
+
 export function identifyMessages(det: Pick<TargetDetection, 'label' | 'prompt' | 'score' | 'width' | 'height' | 'box'>, cropB64: string, frameB64: string, userText?: string): ChatMessage[] {
   const context = [
     `SAM 3.1 found this object with the concept "${det.prompt}" (label "${det.label}", confidence ${det.score.toFixed(2)}) in a ${det.width}x${det.height} passthrough frame; box ${det.box.map(Math.round).join(',')} (x,y,w,h).`,

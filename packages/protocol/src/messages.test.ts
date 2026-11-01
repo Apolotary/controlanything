@@ -136,7 +136,7 @@ describe('protocol v1: discovery loop', () => {
       ...minimal,
       space: 'local-floor',
       pose: { position: { x: 0, y: 1.6, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } },
-      camera: { width: 1280, height: 960, fovY: 58, intrinsics: { fx: 868.3, fy: 868.3, cx: 640.2, cy: 482.1 }, eye: 'left', source: 'passthrough', cameraPose: { position: { x: 0, y: 1.6, z: -0.05 }, orientation: { x: 0, y: 0, z: 0, w: 1 } } },
+      camera: { width: 1280, height: 960, fovY: 58, intrinsics: { fx: 868.3, fy: 868.3, cx: 640.2, cy: 482.1 }, eye: 'left', source: 'passthrough', exposure: 'locked', cameraPose: { position: { x: 0, y: 1.6, z: -0.05 }, orientation: { x: 0, y: 0, z: 0, w: 1 } } },
       senseId: 's1',
     };
     expect(PayloadSchemas['scan.frame'].safeParse(quest).success).toBe(true);

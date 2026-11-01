@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type { Daemon, Driver, HackSet, PayloadOf, UiSpecPayload } from '@ce/protocol';
 import { describe, expect, it, vi } from 'vitest';
 import { CallLog } from '../muse/callLog';
@@ -5,7 +6,7 @@ import { decodeJpeg, encodeJpeg } from '../oracle/image';
 import { roomImage } from '../oracle/oracle.test';
 import { FixtureSam } from '../scan/sam';
 import { ArmService } from './arm';
-import { BLACKOUT_ID, BREATHE_DAEMON_ID, BREATHE_ID, buildRoomSpec, ComboRunner } from './combos';
+import { BLACKOUT_ID, BREATHE_DAEMON_ID, BREATHE_ID, buildRoomSpec, ComboRunner, SAY_LINE_ID } from './combos';
 import { ControlRouter } from './control';
 import { DaemonRunner, periodMs, waveValue } from './daemons';
 import { Dispatcher } from './dispatch';
@@ -13,6 +14,11 @@ import { clipDurationMs, hearBack, similarity } from './heard';
 import { StepLog } from './steps';
 import { TargetStore } from './targets';
 import type { Target } from './types';
+
+const FIXTURES = new URL('../../fixtures/', import.meta.url).pathname;
+/** A real recording of a spoken line (macOS TTS, 24 kHz mono WAV) that Muse Voice Transcribe heard once for real; the transcript replays from fixtures/recorded/transcribe. */
+const SAID_LINE = 'make it brighter, but keep the note tail.';
+const SAID_WAV = readFileSync(`${FIXTURES}audio/make-it-brighter-but-keep-the-note-tail.wav`).toString('base64');
 
 /** A hub whose "devices" answer exec.command and sense.request in-process. */
 class RoomHub {
@@ -44,6 +50,11 @@ class RoomHub {
       if (op.kind === 'local' && op.op === 'print') this.printed.push(op.arg);
       setTimeout(() => this.dispatcher.onAck({ execId: payload.execId, ok: true, sentAt: Date.now() }), 0);
     }
+    if (type === 'sense.request' && payload.kind === 'audio-clip') {
+      // the microphone client "hears" the Mac: a real recording of the line, which the real model transcribed once
+      setTimeout(() => this.dispatcher.onSense({ senseId: payload.senseId, kind: 'audio-clip', at: Date.now(), ok: true, clip: { wav: SAID_WAV, sampleRate: 24_000, durationMs: 2454, input: 'test microphone' } }), 0);
+      return 1;
+    }
     if (type === 'sense.request' && payload.kind === 'frame') {
       const img = roomImage({ bg: this.lamp.on ? 70 + this.lamp.level * 12 : 50, lamp: this.lamp.on ? 120 + this.lamp.level * 40 : 60 });
       const jpeg = Buffer.from(encodeJpeg(img, 90)).toString('base64');
@@ -55,7 +66,7 @@ class RoomHub {
     return [
       { deviceId: 'card-1', name: 'Cardputer', kind: 'cardputer' as const, role: 'device' as const, capabilities: ['ir' as const], canApprove: false, online: this.online.has('card-1'), connections: 1, pairedAt: 1 },
       { deviceId: 'devterm-1', name: 'DevTerm', kind: 'devterm' as const, role: 'device' as const, capabilities: ['local' as const, 'printer' as const], canApprove: false, online: this.online.has('devterm-1'), connections: 1, pairedAt: 2 },
-      { deviceId: 'quest-1', name: 'Quest', kind: 'quest' as const, role: 'hmd' as const, capabilities: ['camera' as const], canApprove: true, online: true, connections: 1, pairedAt: 3 },
+      { deviceId: 'quest-1', name: 'Quest', kind: 'quest' as const, role: 'hmd' as const, capabilities: ['camera' as const, 'mic' as const], canApprove: true, online: true, connections: 1, pairedAt: 3 },
     ];
   }
   of(type: string): any[] {
@@ -98,7 +109,7 @@ const macDriver: Driver = {
   provenance: [],
   actions: [
     { actionId: 'volume', label: 'Volume', kind: 'set', range: { min: 0, max: 100, step: 5 }, encode: { kind: 'local', op: 'volume', arg: '$value' }, expect: { sense: 'ack', effect: 'any' } },
-    { actionId: 'say', label: 'Say hello', kind: 'trigger', encode: { kind: 'local', op: 'say', arg: 'Control everything is online.' }, expect: { sense: 'audio', effect: 'louder' } },
+    { actionId: 'say', label: 'Say hello', kind: 'trigger', encode: { kind: 'local', op: 'say', arg: SAID_LINE }, expect: { sense: 'audio', effect: 'louder' } },
   ],
 };
 const devtermDriver: Driver = {
@@ -147,7 +158,10 @@ function setup(opts: { devterm?: boolean; mac?: boolean } = {}) {
   const sam = new FixtureSam({ callLog: new CallLog(() => {}) });
   const calls: { spec: string; hack: string; value: number }[] = [];
   const daemons = new DaemonRunner({ hub, steps, drive: { setParam: (spec, hack, _p, value) => (calls.push({ spec, hack, value }), true) } });
-  const combos = new ComboRunner({ hub, targets, steps, dispatcher, sam, roster, arm, daemons, readVolume: () => mac.currentVolume() });
+  // the say-line oracle in FIXTURE mode: the transcript Muse Voice Transcribe produced for this very recording replays from fixtures/recorded
+  const transcriber = { mode: 'fixture' as const, model: 'fixture', transcribe: async () => ({ text: '[FIXTURE] what is this device?', source: 'fixture' as const, model: 'fixture', durationMs: 1 }) };
+  const heard = (line: string, wav: Uint8Array) => hearBack({ transcriber, replayDir: `${FIXTURES}recorded` }, line, wav);
+  const combos = new ComboRunner({ hub, targets, steps, dispatcher, sam, roster, arm, daemons, heard, readVolume: () => mac.currentVolume() });
   const control = new ControlRouter({ targets, dispatcher, specs, steps, hub });
   room = buildRoomSpec(targets.list(), specs.get);
   return { hub, targets, steps, dispatcher, arm, combos, daemons, control, room, calls, macCalls, light };
@@ -166,6 +180,11 @@ describe('room spec', () => {
     expect(blackout.inverse?.commands?.map((c) => c.action)).toEqual(['full', 'volume']);
     const breathe = room!.hackset!.hacks.find((h) => h.id === BREATHE_ID)!;
     expect(breathe.kind).toBe('daemon');
+    const sayLine = room!.hackset!.hacks.find((h) => h.id === SAY_LINE_ID)!;
+    expect(sayLine.commands).toEqual([{ cardId: 'dev-mac-local', action: 'say' }]);
+    expect(sayLine.oracle.type).toBe('mic');
+    expect(sayLine.status).toBe('verified');
+    expect(setup({ mac: false }).room!.hackset!.hacks.some((h) => h.id === SAY_LINE_ID)).toBe(false);
     const daemon = room!.hackset!.daemons!.find((d) => d.id === BREATHE_DAEMON_ID)!;
     expect(daemon.targets).toEqual([{ hack: 'h_bright', param: 'p' }]);
     expect(daemon.max_rate_hz).toBeLessThanOrEqual(1);
@@ -226,6 +245,32 @@ describe('Blackout combo', () => {
     expect(run.confirmed).toBe(false);
     expect(run.steps).toHaveLength(0);
     expect(s.hub.lamp.on).toBe(true);
+  });
+});
+
+describe('Say line hack', () => {
+  it('speaks after a tap, the mic client records, Muse Voice Transcribe (recorded) hears the line back; nothing to undo', async () => {
+    const s = setup();
+    const sayLine = s.room!.hackset!.hacks.find((h) => h.id === SAY_LINE_ID)!;
+    const p = s.combos.run(sayLine, s.room!);
+    await new Promise((r) => setTimeout(r, 20));
+    const req = s.hub.of('arm.request').at(-1) as PayloadOf<'arm.request'>;
+    expect(req.title).toMatch(/Say line/);
+    expect(s.arm.onConfirm({ armId: req.armId, approve: true }, { deviceId: 'quest-1', name: 'Quest', canApprove: true })).toBe(true);
+    const run = await p;
+    expect(run.confirmed).toBe(true);
+    expect(run.steps.map((st) => [st.name, st.ok, st.skipped])).toEqual([['This Mac', true, undefined]]);
+    // the Mac was asked to say exactly the line, nothing else reached it
+    const said = s.hub.of('exec.command').filter((e) => e.op?.kind === 'local' && e.op.op === 'say');
+    expect(said).toHaveLength(0); // mac-local runs in-process, not through the hub
+    const evidence = (s.hub.of('verify.result') as PayloadOf<'verify.result'>[]).find((e) => e.actionId === 'say')!;
+    expect(evidence.pass).toBe(true);
+    expect(evidence.observed.metric).toBe('transcript');
+    expect(evidence.observed.after).toBeGreaterThanOrEqual(0.5);
+    expect(evidence.observed.note).toMatch(/muse-voice-transcribe-1\.0 \(FIXTURE replay\) heard "make it brighter/);
+    expect(evidence.note).toMatch(/heard back by muse-voice-transcribe-1\.0/);
+    const undo = await s.combos.undo();
+    expect(undo).toEqual({ restored: [], cannot: [] });
   });
 });
 
