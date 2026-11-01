@@ -1,0 +1,79 @@
+{
+  "title": "arm.result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "arm.result"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "armId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "cardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "driverId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "armed": {
+          "type": "boolean"
+        },
+        "by": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 300
+        }
+      },
+      "required": [
+        "armId",
+        "cardId",
+        "driverId",
+        "armed"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

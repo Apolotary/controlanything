@@ -23,7 +23,7 @@ export interface ServerConfig {
   publicHost?: string;
   certDir: string;
   dataDir: string;
-  staticDirs: { companion: string; quest: string };
+  staticDirs: { companion: string; quest: string; sim: string };
   /** auto-approve the first device while the registry is empty */
   trustFirstDevice: boolean;
   /** treat requests from 127.0.0.1/::1 as the owner (approve, auto-pair) */
@@ -66,7 +66,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     publicHost: env.PUBLIC_HOST?.trim() || undefined,
     certDir: join(SERVER_ROOT, '.certs'),
     dataDir: join(SERVER_ROOT, '.data'),
-    staticDirs: { companion: join(REPO_ROOT, 'apps/companion/dist'), quest: join(REPO_ROOT, 'apps/quest/dist') },
+    staticDirs: { companion: join(REPO_ROOT, 'apps/companion/dist'), quest: join(REPO_ROOT, 'apps/quest/dist'), sim: join(REPO_ROOT, 'apps/sim/dist') },
     trustFirstDevice: env.CE_TRUST_FIRST_DEVICE === '1',
     trustLoopback: env.CE_TRUST_LOOPBACK !== '0',
     consoleApprove: env.CE_CONSOLE_APPROVE !== '0',

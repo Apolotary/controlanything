@@ -1,0 +1,100 @@
+{
+  "title": "target.status",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "target.status"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "cardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "scanned",
+            "identifying",
+            "identified",
+            "linking",
+            "needs-companion",
+            "linked",
+            "researching",
+            "driving",
+            "verifying",
+            "verified",
+            "forging",
+            "forged",
+            "arming",
+            "armed",
+            "controlling",
+            "failed"
+          ]
+        },
+        "since": {
+          "type": "number"
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "driverId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "specId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "executorDeviceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "cardId",
+        "state",
+        "since"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

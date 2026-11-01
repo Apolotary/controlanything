@@ -14,7 +14,7 @@
  *   GET    /api/me                        the device a Bearer token belongs to
  *   POST   /api/transcribe                audio/wav body (paired device or localhost)
  *   GET    /p/:pairingId                  QR target -> /companion/?approve=<id> (the #code fragment is kept)
- *   /companion/, /quest/                  built apps (apps/companion/dist, apps/quest/dist)
+ *   /companion/, /quest/, /sim/           built apps (apps/companion/dist, apps/quest/dist, apps/sim/dist)
  *
  * Approver = a paired device with canApprove (Authorization: Bearer <deviceToken>) or any localhost request.
  */
@@ -201,7 +201,7 @@ export function createApp(ctx: ServerContext): express.Express {
 
   // static client apps
   app.use((req, res, next) => {
-    const m = /^\/(companion|quest)$/.exec(req.path);
+    const m = /^\/(companion|quest|sim)$/.exec(req.path);
     if (m) {
       res.redirect(301, `/${m[1]}/${req.originalUrl.slice(req.path.length)}`);
       return;

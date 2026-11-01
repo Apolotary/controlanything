@@ -42,6 +42,7 @@ export const DEFAULT_ROLE: Record<DeviceKind, Role> = {
   devterm: 'device',
   cardputer: 'device',
   web: 'controller',
+  sim: 'device',
 };
 
 /** Only these kinds may approve new devices. */
@@ -61,6 +62,12 @@ export const PairStartRequest = z.object({
   name: z.string().min(1).max(120),
   kind: DeviceKind,
   capabilities: z.array(Capability).max(32).optional(),
+  /**
+   * true = never auto-approve this request (not for localhost, not for trust-first-device): it stays pending
+   * until the Quest looks at the QR or the owner types the code. Used when the companion pairs on behalf of
+   * a Cardputer so the QR moment really happens.
+   */
+  requireApproval: z.boolean().optional(),
 });
 export type PairStartRequest = z.infer<typeof PairStartRequest>;
 

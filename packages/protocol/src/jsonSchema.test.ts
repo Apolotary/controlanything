@@ -35,6 +35,7 @@ describe('JSON Schema export', () => {
     for (const [name, schema] of [
       ['device_card', PayloadSchemas['device.card']],
       ['ui_spec', PayloadSchemas['ui.spec']],
+      ['driver_spec', PayloadSchemas['driver.spec']],
       ['driver_deploy', PayloadSchemas['driver.deploy']],
       ['agent_step', PayloadSchemas['agent.step']],
     ] as const) {

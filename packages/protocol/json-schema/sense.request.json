@@ -1,0 +1,89 @@
+{
+  "title": "sense.request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "sense.request"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "senseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "sensorDeviceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "frame",
+            "audio-features",
+            "ir-capture"
+          ]
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60000
+        },
+        "offsetMs": {
+          "type": "integer",
+          "minimum": -10000,
+          "maximum": 10000
+        },
+        "cardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "prompt": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "senseId",
+        "sensorDeviceId",
+        "kind"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

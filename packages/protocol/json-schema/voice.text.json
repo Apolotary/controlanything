@@ -1,0 +1,100 @@
+{
+  "title": "voice.text",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "voice.text"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "utteranceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "final": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "live",
+            "fixture"
+          ]
+        },
+        "modelId": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "latencyMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "specId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "intent": {
+          "type": "string",
+          "enum": [
+            "edit",
+            "hack",
+            "scan",
+            "undo",
+            "panic",
+            "question",
+            "none"
+          ]
+        }
+      },
+      "required": [
+        "text",
+        "final"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

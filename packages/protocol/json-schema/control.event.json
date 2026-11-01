@@ -73,7 +73,7 @@
         "index": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 63
+          "maximum": 127
         },
         "phase": {
           "type": "string",

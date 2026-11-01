@@ -16,7 +16,11 @@ export const Id = z.string().min(1).max(128);
 export const Role = z.enum(['hmd', 'companion', 'controller', 'device']);
 export type Role = z.infer<typeof Role>;
 
-/** What a client can do for the agent. Extend this list when a new client type appears. */
+/**
+ * What a client can do for the agent. Extend this list when a new client type appears.
+ * The server picks executors and sensors by capability, never by kind: midi/ir/local = executes
+ * exec.command ops of that kind; camera/mic = answers sense.request; printer = LocalOp "print".
+ */
 export const Capability = z.enum([
   'midi',
   'serial',
@@ -29,6 +33,9 @@ export const Capability = z.enum([
   'speaker',
   'gpio',
   'wifi',
+  /** executes LocalOp (volume, music, say, torch, haptic, screen, beep) on itself */
+  'local',
+  'printer',
 ]);
 export type Capability = z.infer<typeof Capability>;
 
@@ -49,7 +56,7 @@ export type Port = z.infer<typeof Port>;
  * The kind of paired client device. Comes from the server's registry (set at pairing time),
  * never from what a connected client claims later.
  */
-export const DeviceKind = z.enum(['quest', 'mac', 'iphone', 'devterm', 'cardputer', 'web']);
+export const DeviceKind = z.enum(['quest', 'mac', 'iphone', 'devterm', 'cardputer', 'web', 'sim']);
 export type DeviceKind = z.infer<typeof DeviceKind>;
 
 /** One paired client device as seen in `presence`. */
@@ -104,7 +111,39 @@ export const CameraIntrinsics = z.object({
 });
 export type CameraIntrinsics = z.infer<typeof CameraIntrinsics>;
 
-/** An on-device detection (e.g. YOLO on the headset) attached to a snapshot. */
+/** Pixel box of the image it refers to: [x, y, w, h], origin top-left. A 4-element array, not a tuple, for JSON Schema. */
+export const PxBox = z.array(z.number()).min(4).max(4);
+export type PxBox = z.infer<typeof PxBox>;
+
+/** Simplified outline in pixels: [[x, y], ...], <= 64 points, closed implicitly. */
+export const Polygon = z.array(z.array(z.number()).min(2).max(2)).min(3).max(64);
+export type Polygon = z.infer<typeof Polygon>;
+
+/**
+ * Where a target (an identified physical device) is in the discovery loop:
+ * SCAN -> IDENTIFY -> LINK -> RESEARCH -> DRIVE -> VERIFY -> FORGE -> ARM -> CONTROL.
+ */
+export const TargetState = z.enum([
+  'scanned',
+  'identifying',
+  'identified',
+  'linking',
+  'needs-companion',
+  'linked',
+  'researching',
+  'driving',
+  'verifying',
+  'verified',
+  'forging',
+  'forged',
+  'arming',
+  'armed',
+  'controlling',
+  'failed',
+]);
+export type TargetState = z.infer<typeof TargetState>;
+
+/** An on-device detection attached to a legacy `snapshot` (scan.result carries the SAM detections). */
 export const Detection = z.object({
   label: z.string().max(120),
   score: z.number().min(0).max(1),

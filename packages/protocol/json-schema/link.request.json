@@ -1,0 +1,160 @@
+{
+  "title": "link.request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "link.request"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "linkId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "cardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "needs": {
+          "minItems": 1,
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "midi",
+              "serial",
+              "ble",
+              "ir",
+              "camera",
+              "mic",
+              "hands",
+              "display",
+              "speaker",
+              "gpio",
+              "wifi",
+              "local",
+              "printer"
+            ]
+          }
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "suggestedClients": {
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "quest",
+              "mac",
+              "iphone",
+              "devterm",
+              "cardputer",
+              "web",
+              "sim"
+            ]
+          }
+        },
+        "candidates": {
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "deviceId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "quest",
+                  "mac",
+                  "iphone",
+                  "devterm",
+                  "cardputer",
+                  "web",
+                  "sim"
+                ]
+              },
+              "online": {
+                "type": "boolean"
+              },
+              "port": {
+                "type": "string",
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "deviceId",
+              "name",
+              "kind",
+              "online"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "needs-companion",
+            "candidates",
+            "waiting"
+          ]
+        }
+      },
+      "required": [
+        "linkId",
+        "cardId",
+        "needs",
+        "reason",
+        "suggestedClients",
+        "status"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

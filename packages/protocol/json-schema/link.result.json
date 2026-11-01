@@ -1,0 +1,166 @@
+{
+  "title": "link.result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "link.result"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "linkId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "cardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "confirmed",
+            "consistent",
+            "mismatch",
+            "unknown",
+            "none"
+          ]
+        },
+        "executorDeviceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "channel": {
+          "type": "string",
+          "enum": [
+            "midi",
+            "ir",
+            "local",
+            "sim"
+          ]
+        },
+        "port": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "midi-in",
+                "midi-out",
+                "serial",
+                "ble",
+                "ir",
+                "usb"
+              ]
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "manufacturer": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "connected",
+                "disconnected"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "name"
+          ],
+          "additionalProperties": false
+        },
+        "evidence": {
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "port-name",
+                  "midi-identity",
+                  "audio-label",
+                  "ir-reply",
+                  "user",
+                  "sim"
+                ]
+              },
+              "ok": {
+                "type": "boolean"
+              },
+              "detail": {
+                "type": "string",
+                "maxLength": 300
+              }
+            },
+            "required": [
+              "kind",
+              "ok",
+              "detail"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 300
+        }
+      },
+      "required": [
+        "linkId",
+        "cardId",
+        "verdict",
+        "evidence"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

@@ -39,7 +39,7 @@ async function start(over: Partial<ServerConfig> = {}): Promise<Harness> {
     publicHost: '127.0.0.1',
     certDir: join(tmp, 'certs'),
     dataDir: join(tmp, 'data'),
-    staticDirs: { companion, quest: join(tmp, 'quest-missing') },
+    staticDirs: { companion, quest: join(tmp, 'quest-missing'), sim: join(tmp, 'sim-missing') },
     trustFirstDevice: false,
     trustLoopback: true,
     consoleApprove: false,

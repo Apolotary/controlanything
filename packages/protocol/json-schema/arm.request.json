@@ -1,0 +1,123 @@
+{
+  "title": "arm.request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "arm.request"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "armId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "cardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "driverId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "specId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "actions": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "actionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 40
+              },
+              "verified": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "pass",
+                  "fail",
+                  "untested"
+                ]
+              }
+            },
+            "required": [
+              "actionId",
+              "label",
+              "verified"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "irreversible": {
+          "type": "boolean"
+        },
+        "expiresAt": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "armId",
+        "cardId",
+        "driverId",
+        "title",
+        "summary",
+        "actions",
+        "expiresAt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

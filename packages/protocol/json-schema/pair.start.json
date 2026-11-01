@@ -44,7 +44,8 @@
             "iphone",
             "devterm",
             "cardputer",
-            "web"
+            "web",
+            "sim"
           ]
         },
         "capabilities": {
@@ -63,9 +64,14 @@
               "display",
               "speaker",
               "gpio",
-              "wifi"
+              "wifi",
+              "local",
+              "printer"
             ]
           }
+        },
+        "requireApproval": {
+          "type": "boolean"
         }
       },
       "required": [

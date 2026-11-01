@@ -5,16 +5,28 @@
  *
  * - `from` is overwritten by the hub with the sender's deviceId (or "server"), so clients may send "".
  * - `to` targets one device; without it a relayed message goes to every other connection in the space.
+ *   `to: "server"` means "for the server only": the hub does not relay it (use it for scan.frame, voice.audio,
+ *   sense.result, exec.ack, arm.confirm).
  * - Types starting with "x." are experimental: the hub checks only the envelope and relays them.
  */
 import { z } from 'zod';
 import {
   AgentStepPayload,
+  ArmConfirmPayload,
+  ArmRequestPayload,
+  ArmResultPayload,
   ControlEventPayload,
   DeviceCardPayload,
   DriverDeployPayload,
+  DriverSpecPayload,
   DriverStatusPayload,
+  ExecAckPayload,
+  ExecCommandPayload,
+  Gen3dEditPayload,
+  Gen3dGeneratePayload,
   HelloPayload,
+  LinkRequestPayload,
+  LinkResultPayload,
   LogPayload,
   PairApprovedPayload,
   PairApprovePayload,
@@ -23,9 +35,19 @@ import {
   PairPendingPayload,
   PairStartPayload,
   PairStatusPayload,
+  PanicPayload,
   PresencePayload,
+  ScanFramePayload,
+  ScanResultPayload,
+  SenseRequestPayload,
+  SenseResultPayload,
   SnapshotPayload,
+  TargetSelectPayload,
+  TargetStatusPayload,
   UiSpecPayload,
+  VerifyResultPayload,
+  VoiceAudioPayload,
+  VoiceTextPayload,
   WelcomePayload,
 } from './payloads';
 import { Id, PROTOCOL_VERSION } from './primitives';
@@ -46,6 +68,7 @@ export type Envelope = z.infer<typeof Envelope>;
 
 /** Payload schema for every known message type. */
 export const PayloadSchemas = {
+  // connection and pairing
   hello: HelloPayload,
   welcome: WelcomePayload,
   presence: PresencePayload,
@@ -56,13 +79,38 @@ export const PayloadSchemas = {
   'pair.pending': PairPendingPayload,
   'pair.approved': PairApprovedPayload,
   'pair.denied': PairDeniedPayload,
+  // perception
   snapshot: SnapshotPayload,
+  'scan.frame': ScanFramePayload,
+  'scan.result': ScanResultPayload,
+  'target.select': TargetSelectPayload,
+  'target.status': TargetStatusPayload,
+  // the agent
   'agent.step': AgentStepPayload,
   'device.card': DeviceCardPayload,
+  'link.request': LinkRequestPayload,
+  'link.result': LinkResultPayload,
+  'driver.spec': DriverSpecPayload,
+  'driver.status': DriverStatusPayload,
+  'driver.deploy': DriverDeployPayload,
+  'exec.command': ExecCommandPayload,
+  'exec.ack': ExecAckPayload,
+  'sense.request': SenseRequestPayload,
+  'sense.result': SenseResultPayload,
+  'verify.result': VerifyResultPayload,
+  'arm.request': ArmRequestPayload,
+  'arm.confirm': ArmConfirmPayload,
+  'arm.result': ArmResultPayload,
+  panic: PanicPayload,
+  // generated controls
   'ui.spec': UiSpecPayload,
   'control.event': ControlEventPayload,
-  'driver.deploy': DriverDeployPayload,
-  'driver.status': DriverStatusPayload,
+  'gen3d.generate': Gen3dGeneratePayload,
+  'gen3d.edit': Gen3dEditPayload,
+  // voice
+  'voice.audio': VoiceAudioPayload,
+  'voice.text': VoiceTextPayload,
+  // logging
   log: LogPayload,
 } as const;
 
@@ -93,12 +141,32 @@ export const MessageSchemas = {
   'pair.approved': message('pair.approved'),
   'pair.denied': message('pair.denied'),
   snapshot: message('snapshot'),
+  'scan.frame': message('scan.frame'),
+  'scan.result': message('scan.result'),
+  'target.select': message('target.select'),
+  'target.status': message('target.status'),
   'agent.step': message('agent.step'),
   'device.card': message('device.card'),
+  'link.request': message('link.request'),
+  'link.result': message('link.result'),
+  'driver.spec': message('driver.spec'),
+  'driver.status': message('driver.status'),
+  'driver.deploy': message('driver.deploy'),
+  'exec.command': message('exec.command'),
+  'exec.ack': message('exec.ack'),
+  'sense.request': message('sense.request'),
+  'sense.result': message('sense.result'),
+  'verify.result': message('verify.result'),
+  'arm.request': message('arm.request'),
+  'arm.confirm': message('arm.confirm'),
+  'arm.result': message('arm.result'),
+  panic: message('panic'),
   'ui.spec': message('ui.spec'),
   'control.event': message('control.event'),
-  'driver.deploy': message('driver.deploy'),
-  'driver.status': message('driver.status'),
+  'gen3d.generate': message('gen3d.generate'),
+  'gen3d.edit': message('gen3d.edit'),
+  'voice.audio': message('voice.audio'),
+  'voice.text': message('voice.text'),
   log: message('log'),
 } as const;
 
@@ -114,12 +182,32 @@ export const Message = z.discriminatedUnion('type', [
   MessageSchemas['pair.approved'],
   MessageSchemas['pair.denied'],
   MessageSchemas.snapshot,
+  MessageSchemas['scan.frame'],
+  MessageSchemas['scan.result'],
+  MessageSchemas['target.select'],
+  MessageSchemas['target.status'],
   MessageSchemas['agent.step'],
   MessageSchemas['device.card'],
+  MessageSchemas['link.request'],
+  MessageSchemas['link.result'],
+  MessageSchemas['driver.spec'],
+  MessageSchemas['driver.status'],
+  MessageSchemas['driver.deploy'],
+  MessageSchemas['exec.command'],
+  MessageSchemas['exec.ack'],
+  MessageSchemas['sense.request'],
+  MessageSchemas['sense.result'],
+  MessageSchemas['verify.result'],
+  MessageSchemas['arm.request'],
+  MessageSchemas['arm.confirm'],
+  MessageSchemas['arm.result'],
+  MessageSchemas.panic,
   MessageSchemas['ui.spec'],
   MessageSchemas['control.event'],
-  MessageSchemas['driver.deploy'],
-  MessageSchemas['driver.status'],
+  MessageSchemas['gen3d.generate'],
+  MessageSchemas['gen3d.edit'],
+  MessageSchemas['voice.audio'],
+  MessageSchemas['voice.text'],
   MessageSchemas.log,
 ]);
 export type Message = z.infer<typeof Message>;
@@ -130,14 +218,30 @@ export const ExperimentalMessage = Envelope.extend({ type: z.string().regex(EXPE
 export type ExperimentalMessage = z.infer<typeof ExperimentalMessage>;
 export type AnyMessage = Message | ExperimentalMessage;
 
-/** Messages only the server may send; the hub refuses them from clients. */
+/**
+ * Messages only the server may send; the hub refuses them from clients. The agent's own verdicts and every
+ * command to an executor come from the server, so nothing bypasses validation, allowlists and rate limits.
+ */
 export const SERVER_ONLY_TYPES: readonly MessageType[] = [
   'welcome',
   'presence',
   'pair.pending',
   'pair.approved',
   'pair.denied',
+  'scan.result',
+  'target.status',
+  'link.request',
+  'link.result',
+  'driver.spec',
+  'exec.command',
+  'sense.request',
+  'verify.result',
+  'arm.request',
+  'arm.result',
 ];
+
+/** Frequent or large client -> server payloads: the hub drops them for a backed-up receiver (latest wins). */
+export const DROPPABLE_TYPES: readonly MessageType[] = ['control.event', 'snapshot', 'scan.frame', 'voice.audio'];
 
 // --- ids ------------------------------------------------------------------------------------
 

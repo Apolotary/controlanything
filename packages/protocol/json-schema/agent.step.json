@@ -46,15 +46,25 @@
           "minLength": 1,
           "maxLength": 128
         },
+        "cardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
         "phase": {
           "type": "string",
           "enum": [
             "capture",
+            "scan",
             "identify",
+            "link",
             "research",
             "plan",
+            "drive",
             "codegen",
             "verify",
+            "forge",
+            "arm",
             "deploy",
             "ui",
             "control",
@@ -78,9 +88,28 @@
           "type": "string",
           "maxLength": 4000
         },
+        "evidence": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "proof",
+            "opinion"
+          ]
+        },
         "model": {
           "type": "string",
           "maxLength": 120
+        },
+        "effort": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "latencyMs": {
+          "type": "number",
+          "minimum": 0
         },
         "source": {
           "type": "string",
@@ -88,6 +117,10 @@
             "live",
             "fixture"
           ]
+        },
+        "recordedFrom": {
+          "type": "string",
+          "maxLength": 120
         },
         "startedAt": {
           "type": "number"

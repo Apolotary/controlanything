@@ -148,7 +148,8 @@ export class PairingManager {
       pollSecret: p.pollSecret,
     };
     const trustFirst = this.opts.trustFirstDevice && this.registry.size === 0;
-    if (ctx.autoApprove || trustFirst) {
+    // requireApproval: the companion pairs on behalf of a Cardputer and wants the QR moment to really happen
+    if ((ctx.autoApprove || trustFirst) && !req.requireApproval) {
       const device = this.complete(p, ctx.autoApprove ? 'localhost' : 'trust-first-device');
       const deviceToken = this.takeToken(p.pairingId);
       return { ...base, status: 'approved', deviceId: device.deviceId, deviceToken };

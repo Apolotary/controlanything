@@ -1,0 +1,431 @@
+{
+  "title": "sense.result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "sense.result"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "senseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "frame",
+            "audio-features",
+            "ir-capture"
+          ]
+        },
+        "frame": {
+          "type": "object",
+          "properties": {
+            "frameId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "jpeg": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 12000000
+            },
+            "width": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "height": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "capturedAt": {
+              "type": "number"
+            },
+            "space": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "pose": {
+              "type": "object",
+              "properties": {
+                "position": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    },
+                    "z": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y",
+                    "z"
+                  ],
+                  "additionalProperties": false
+                },
+                "orientation": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    },
+                    "z": {
+                      "type": "number"
+                    },
+                    "w": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y",
+                    "z",
+                    "w"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "position",
+                "orientation"
+              ],
+              "additionalProperties": false
+            },
+            "camera": {
+              "type": "object",
+              "properties": {
+                "width": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "height": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "fovY": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 180
+                },
+                "intrinsics": {
+                  "type": "object",
+                  "properties": {
+                    "fx": {
+                      "type": "number"
+                    },
+                    "fy": {
+                      "type": "number"
+                    },
+                    "cx": {
+                      "type": "number"
+                    },
+                    "cy": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "fx",
+                    "fy",
+                    "cx",
+                    "cy"
+                  ],
+                  "additionalProperties": false
+                },
+                "eye": {
+                  "type": "string",
+                  "enum": [
+                    "left",
+                    "right",
+                    "mono"
+                  ]
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "passthrough",
+                    "synthetic",
+                    "replay",
+                    "handheld"
+                  ]
+                },
+                "cameraPose": {
+                  "type": "object",
+                  "properties": {
+                    "position": {
+                      "type": "object",
+                      "properties": {
+                        "x": {
+                          "type": "number"
+                        },
+                        "y": {
+                          "type": "number"
+                        },
+                        "z": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "x",
+                        "y",
+                        "z"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "orientation": {
+                      "type": "object",
+                      "properties": {
+                        "x": {
+                          "type": "number"
+                        },
+                        "y": {
+                          "type": "number"
+                        },
+                        "z": {
+                          "type": "number"
+                        },
+                        "w": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "x",
+                        "y",
+                        "z",
+                        "w"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "position",
+                    "orientation"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "purpose": {
+              "type": "string",
+              "enum": [
+                "scan",
+                "verify",
+                "pair"
+              ]
+            },
+            "cardId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "senseId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "frameId",
+            "jpeg",
+            "width",
+            "height",
+            "capturedAt",
+            "purpose"
+          ],
+          "additionalProperties": false
+        },
+        "audio": {
+          "type": "object",
+          "properties": {
+            "rms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "rmsDb": {
+              "type": "number"
+            },
+            "peak": {
+              "type": "number",
+              "minimum": 0
+            },
+            "centroidHz": {
+              "type": "number",
+              "minimum": 0
+            },
+            "bands": {
+              "maxItems": 32,
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "bandEdgesHz": {
+              "maxItems": 33,
+              "type": "array",
+              "items": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "spec": {
+              "maxItems": 128,
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "windowMs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "sampleRate": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "input": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "silent": {
+              "type": "boolean"
+            },
+            "clipped": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "rms",
+            "centroidHz",
+            "bands"
+          ],
+          "additionalProperties": false
+        },
+        "ir": {
+          "type": "object",
+          "properties": {
+            "rawUs": {
+              "minItems": 2,
+              "maxItems": 1024,
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200000
+              }
+            },
+            "khz": {
+              "type": "number",
+              "minimum": 30,
+              "maximum": 60
+            },
+            "repeats": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8
+            },
+            "frameGapUs": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 500000
+            },
+            "protocol": {
+              "type": "string",
+              "enum": [
+                "NEC",
+                "AEHA",
+                "SONY",
+                "RC5",
+                "RC6",
+                "KASEIKYO",
+                "RAW",
+                "UNKNOWN"
+              ]
+            },
+            "bytes": {
+              "maxItems": 16,
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255
+              }
+            },
+            "unitUs": {
+              "type": "number",
+              "minimum": 200,
+              "maximum": 1000
+            }
+          },
+          "required": [
+            "rawUs"
+          ],
+          "additionalProperties": false
+        },
+        "at": {
+          "type": "number"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "string",
+          "maxLength": 300
+        }
+      },
+      "required": [
+        "senseId",
+        "kind",
+        "at"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

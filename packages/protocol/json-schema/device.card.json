@@ -97,6 +97,60 @@
             "maxLength": 300
           }
         },
+        "alternatives": {
+          "maxItems": 4,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "maker": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "model": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            },
+            "required": [
+              "maker",
+              "model",
+              "confidence"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "visibleText": {
+          "maxItems": 12,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 120
+          }
+        },
+        "companion": {
+          "type": "string",
+          "enum": [
+            "none",
+            "computer_usb",
+            "ir_blaster",
+            "phone_ble",
+            "network"
+          ]
+        },
+        "followUp": {
+          "maxItems": 4,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
         "requires": {
           "maxItems": 8,
           "type": "array",
@@ -113,11 +167,23 @@
               "display",
               "speaker",
               "gpio",
-              "wifi"
+              "wifi",
+              "local",
+              "printer"
             ]
           }
         },
         "snapshotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "frameId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "detId": {
           "type": "string",
           "minLength": 1,
           "maxLength": 128
@@ -156,6 +222,10 @@
             "live",
             "fixture"
           ]
+        },
+        "modelId": {
+          "type": "string",
+          "maxLength": 120
         }
       },
       "required": [

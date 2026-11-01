@@ -1,9 +1,21 @@
 /**
  * Payload schemas, one per message type. Direction: C = client, S = server.
- * Payloads that a Meta model may generate (device.card, ui.spec, driver.deploy, agent.step)
+ * Payloads that a Meta model may generate (device.card, driver.spec, ui.spec, agent.step)
  * are kept flat and JSON-Schema-friendly so they can be passed as `response_format` json_schema.
+ *
+ * Protocol v1 adds the discovery loop (SPEC §3.1): scan.frame/scan.result, target.select/target.status,
+ * link.request/link.result, driver.spec (+ driver.status), exec.command/exec.ack, sense.request/sense.result,
+ * verify.result (Evidence), arm.request/arm.confirm/arm.result, panic, voice.audio/voice.text,
+ * gen3d.generate/gen3d.edit, and ui.spec v1 (gen3d spec + hack set).
+ *
+ * Naming: the identified physical device is always `cardId` (the device.card id); a paired client is
+ * `deviceId`. Large or frequent client -> server payloads (scan.frame, voice.audio, sense.result, exec.ack)
+ * should be sent with envelope `to: "server"` so the hub does not relay them to every other client.
  */
+import { Gen3dSpec } from '@ce/gen3d';
 import { z } from 'zod';
+import { Driver, Evidence, ExecOp, IrCapture, VerifyState } from './driver';
+import { HackSet } from './hackset';
 import {
   PairApproveRequest,
   PairDenyRequest,
@@ -21,9 +33,12 @@ import {
   DeviceKind,
   Id,
   ModelSource,
+  Polygon,
   Port,
   Pose,
+  PxBox,
   Role,
+  TargetState,
 } from './primitives';
 
 // --- connection -----------------------------------------------------------------------------
@@ -115,7 +130,7 @@ export const PairDeniedPayload = z.object({
 });
 export type PairDeniedPayload = z.infer<typeof PairDeniedPayload>;
 
-// --- perception -----------------------------------------------------------------------------
+// --- perception (legacy snapshot) -----------------------------------------------------------
 
 /** C->S (usually the HMD). A passthrough frame for the agent, optionally with pose and detections. */
 export const SnapshotPayload = z.object({
@@ -138,15 +153,134 @@ export const SnapshotPayload = z.object({
 });
 export type SnapshotPayload = z.infer<typeof SnapshotPayload>;
 
+// --- perception v1: scan frames and SAM results ---------------------------------------------
+
+export const FramePurpose = z.enum(['scan', 'verify', 'pair']);
+export type FramePurpose = z.infer<typeof FramePurpose>;
+
+/** Camera facts for one frame. Everything is optional: a handheld scanner (iPhone) has no pose. */
+export const CameraInfo = z.object({
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  /** vertical field of view, degrees */
+  fovY: z.number().positive().max(180).optional(),
+  intrinsics: z.object({ fx: z.number(), fy: z.number(), cx: z.number(), cy: z.number() }).optional(),
+  eye: z.enum(['left', 'right', 'mono']).optional(),
+  source: z.enum(['passthrough', 'synthetic', 'replay', 'handheld']).optional(),
+  /** world pose of the camera at capture (head pose x head->camera offset), same space as `pose` */
+  cameraPose: Pose.optional(),
+});
+export type CameraInfo = z.infer<typeof CameraInfo>;
+
+/**
+ * C->S, send with `to: "server"`. One frame for SCAN (<= 1 Hz while scanning), VERIFY (before/after an action,
+ * usually inside sense.result) or PAIR (the server decodes pairing QR codes in every frame anyway).
+ */
+export const ScanFramePayload = z.object({
+  frameId: Id,
+  /** base64 JPEG bytes, no "data:" prefix; <= 1280 px wide */
+  jpeg: z.string().min(1).max(12_000_000),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  /** epoch ms when the camera frame was captured */
+  capturedAt: z.number(),
+  /** reference space of the poses, e.g. WebXR "local-floor" */
+  space: z.string().max(64).optional(),
+  /** viewer (head) pose at capture */
+  pose: Pose.optional(),
+  camera: CameraInfo.optional(),
+  purpose: FramePurpose,
+  /** verify frames: the target this frame is about */
+  cardId: Id.optional(),
+  /** when this frame answers a sense.request */
+  senseId: Id.optional(),
+});
+export type ScanFramePayload = z.infer<typeof ScanFramePayload>;
+
+/** One SAM 3.1 detection in a scan frame. Boxes and polygons are in pixels of the JPEG that was sent. */
+export const ScanDetection = z.object({
+  detId: Id,
+  /** device category label, e.g. "ceiling light"; never a person */
+  label: z.string().max(60),
+  /** the SAM concept prompt that found it */
+  prompt: z.string().max(60),
+  score: z.number().min(0).max(1),
+  box: PxBox,
+  polygon: Polygon.optional(),
+  /** matched to a known target (device.card) */
+  cardId: Id.optional(),
+  /** matched to a paired client device (its screen was in view, e.g. the Cardputer) */
+  deviceId: Id.optional(),
+  /** stable across frames while the object stays in view */
+  trackId: Id.optional(),
+});
+export type ScanDetection = z.infer<typeof ScanDetection>;
+
+/** A pairing QR code seen in a frame (the server approves it when the sender may approve). */
+export const SeenQr = z.object({
+  text: z.string().max(512),
+  pairingId: Id.optional(),
+  approved: z.boolean().optional(),
+  box: PxBox.optional(),
+});
+export type SeenQr = z.infer<typeof SeenQr>;
+
+/** S->C (the frame's sender, and other HUD clients). Detections for one frame; an empty list is a valid "nothing found". */
+export const ScanResultPayload = z.object({
+  frameId: Id,
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  detections: z.array(ScanDetection).max(64),
+  qr: z.array(SeenQr).max(8).optional(),
+  /** Meta model id, e.g. "sam-3.1" */
+  modelId: z.string().max(120),
+  source: ModelSource,
+  latencyMs: z.number().min(0),
+  /** the concept prompts that were run on this frame */
+  prompts: z.array(z.string().max(60)).max(16).optional(),
+});
+export type ScanResultPayload = z.infer<typeof ScanResultPayload>;
+
+/** C->S. The user picked a detection (pinch) or a known device; starts the discovery loop for it. */
+export const TargetSelectPayload = z.object({
+  frameId: Id.optional(),
+  detId: Id.optional(),
+  /** a target already identified earlier */
+  cardId: Id.optional(),
+  /** a paired client device (the Mac itself, the iPhone...) */
+  deviceId: Id.optional(),
+  /** what the user said with it, e.g. "control this" */
+  text: z.string().max(500).optional(),
+});
+export type TargetSelectPayload = z.infer<typeof TargetSelectPayload>;
+
+/** S->all. Where a target is in the loop (drives tag/outline status in the HUD). */
+export const TargetStatusPayload = z.object({
+  cardId: Id,
+  state: TargetState,
+  since: z.number(),
+  detail: z.string().max(300).optional(),
+  driverId: Id.optional(),
+  specId: Id.optional(),
+  /** which paired client reaches the device, once linked */
+  executorDeviceId: Id.optional(),
+});
+export type TargetStatusPayload = z.infer<typeof TargetStatusPayload>;
+
 // --- agent work log -------------------------------------------------------------------------
 
 export const AgentPhase = z.enum([
   'capture',
+  'scan',
   'identify',
+  'link',
   'research',
   'plan',
+  'drive',
   'codegen',
   'verify',
+  'forge',
+  'arm',
   'deploy',
   'ui',
   'control',
@@ -162,13 +296,24 @@ export const AgentStepPayload = z.object({
   stepId: Id,
   runId: Id.optional(),
   parentId: Id.optional(),
+  /** the target this step is about */
+  cardId: Id.optional(),
   phase: AgentPhase,
   status: StepStatus,
   title: z.string().max(200),
   detail: z.string().max(4000).optional(),
+  /** short evidence for the worklog row, e.g. "USB says OP-1 ✓" */
+  evidence: z.string().max(64).optional(),
+  /** proof = deterministic check; opinion = a model's reading */
+  kind: z.enum(['proof', 'opinion']).optional(),
   /** Meta model that did the work, e.g. "muse-spark-1.3" */
   model: z.string().max(120).optional(),
+  /** reasoning effort used for that call */
+  effort: z.string().max(16).optional(),
+  latencyMs: z.number().min(0).optional(),
   source: ModelSource.optional(),
+  /** fixture replay: the Meta model that produced the recorded answer */
+  recordedFrom: z.string().max(120).optional(),
   startedAt: z.number().optional(),
   endedAt: z.number().optional(),
 });
@@ -197,9 +342,13 @@ export type DeviceCategory = z.infer<typeof DeviceCategory>;
 export const DeviceProtocol = z.enum(['midi', 'ble', 'serial', 'ir', 'http', 'osc', 'hid', 'other']);
 export type DeviceProtocol = z.infer<typeof DeviceProtocol>;
 
+/** What kind of paired client is needed to reach the device. */
+export const CompanionNeed = z.enum(['none', 'computer_usb', 'ir_blaster', 'phone_ble', 'network']);
+export type CompanionNeed = z.infer<typeof CompanionNeed>;
+
 /**
  * S->C. A physical device the agent identified. Not a paired client: `cardId` names the card;
- * ui.spec and driver.deploy refer to it.
+ * ui.spec, driver.spec and every loop message refer to it.
  */
 export const DeviceCardPayload = z.object({
   cardId: Id,
@@ -212,16 +361,63 @@ export const DeviceCardPayload = z.object({
   protocols: z.array(DeviceProtocol).max(8),
   /** visible cues and facts behind the identification */
   evidence: z.array(z.string().max(300)).max(12),
+  /** other plausible identifications */
+  alternatives: z.array(z.object({ maker: z.string().max(120), model: z.string().max(120), confidence: z.number().min(0).max(1) })).max(4).optional(),
+  /** legible text seen on the device, quoted */
+  visibleText: z.array(z.string().max(120)).max(12).optional(),
+  companion: CompanionNeed.optional(),
+  /** what to photograph or ask next to raise confidence */
+  followUp: z.array(z.string().max(200)).max(4).optional(),
   /** client capabilities needed to control it, e.g. ["midi"]: no such client online = ask for a companion */
   requires: z.array(Capability).max(8).optional(),
   snapshotId: Id.optional(),
+  frameId: Id.optional(),
+  detId: Id.optional(),
   bbox: BBox.optional(),
   notes: z.string().max(2000).optional(),
   source: ModelSource.optional(),
+  modelId: z.string().max(120).optional(),
 });
 export type DeviceCardPayload = z.infer<typeof DeviceCardPayload>;
 
-// --- generated control surface (v0) ---------------------------------------------------------
+// --- linking: which paired client reaches the device --------------------------------------------
+
+/**
+ * S->all. The target needs a channel: either no suitable client is online ("needs a companion: Cardputer (IR)")
+ * or several could do it. The HUD shows it; the owner plugs in / pairs / picks.
+ */
+export const LinkRequestPayload = z.object({
+  linkId: Id,
+  cardId: Id,
+  needs: z.array(Capability).min(1).max(8),
+  reason: z.string().max(300),
+  suggestedClients: z.array(DeviceKind).max(8),
+  /** paired clients that could do it (online or not) */
+  candidates: z
+    .array(z.object({ deviceId: Id, name: z.string().max(120), kind: DeviceKind, online: z.boolean(), port: z.string().max(256).optional() }))
+    .max(16)
+    .optional(),
+  status: z.enum(['needs-companion', 'candidates', 'waiting']),
+});
+export type LinkRequestPayload = z.infer<typeof LinkRequestPayload>;
+
+export const LinkEvidenceKind = z.enum(['port-name', 'midi-identity', 'audio-label', 'ir-reply', 'user', 'sim']);
+export type LinkEvidenceKind = z.infer<typeof LinkEvidenceKind>;
+
+/** S->all. The channel verdict: confirmed / consistent (port name only) / mismatch (wrong device) / unknown. */
+export const LinkResultPayload = z.object({
+  linkId: Id,
+  cardId: Id,
+  verdict: z.enum(['confirmed', 'consistent', 'mismatch', 'unknown', 'none']),
+  executorDeviceId: Id.optional(),
+  channel: z.enum(['midi', 'ir', 'local', 'sim']).optional(),
+  port: Port.optional(),
+  evidence: z.array(z.object({ kind: LinkEvidenceKind, ok: z.boolean(), detail: z.string().max(300) })).max(8),
+  reason: z.string().max(300).optional(),
+});
+export type LinkResultPayload = z.infer<typeof LinkResultPayload>;
+
+// --- generated control surface --------------------------------------------------------------
 
 export const WidgetKind = z.enum(['knob', 'fader', 'button', 'toggle', 'xy', 'pads']);
 export type WidgetKind = z.infer<typeof WidgetKind>;
@@ -290,19 +486,43 @@ export const Widget = z.object({
 });
 export type Widget = z.infer<typeof Widget>;
 
-/** S->C. A generated control surface: a flat list of widgets. */
+/** Result of the forge's deterministic checks on a spec. */
+export const SpecCheck = z.object({
+  ok: z.boolean(),
+  attempts: z.number().int().min(0),
+  errors: z.number().int().min(0),
+  warnings: z.number().int().min(0),
+});
+export type SpecCheck = z.infer<typeof SpecCheck>;
+
+/**
+ * S->C. A generated control surface. v1: `gen3d` (ce.gen3d/1, rendered by the Quest in 3D and by 2D clients
+ * through its `controls`) + `hackset` (ce.hackset/1, the hack menu). v0 `widgets` stays for 2D clients that
+ * only know the flat widget list. Controls bound to unverified actions render disarmed.
+ */
 export const UiSpecPayload = z.object({
   specId: Id,
-  title: z.string().max(120),
+  title: z.string().max(120).optional(),
   cardId: Id.optional(),
   driverId: Id.optional(),
-  widgets: z.array(Widget).min(1).max(64),
+  /** revision; edits and undo produce rev + 1 */
+  rev: z.number().int().min(1).optional(),
+  widgets: z.array(Widget).min(1).max(64).optional(),
+  gen3d: Gen3dSpec.optional(),
+  hackset: HackSet.optional(),
   notes: z.string().max(2000).optional(),
   source: ModelSource.optional(),
+  /** the Meta model that generated it, e.g. "muse-spark-1.3" */
+  modelId: z.string().max(120).optional(),
+  recordedFrom: z.string().max(120).optional(),
+  check: SpecCheck.optional(),
 });
 export type UiSpecPayload = z.infer<typeof UiSpecPayload>;
 
-/** C->C (relayed, low latency). A widget moved. */
+/**
+ * C->S (and relayed C->C, low latency). A control moved. `widgetId` is the gen3d control id, which equals the
+ * hack id for hack-bound controls; a 2D client fires an action hack with {widgetId: hackId, value: true, phase: "end"}.
+ */
 export const ControlEventPayload = z.object({
   widgetId: z.string().min(1).max(64),
   value: ControlValue,
@@ -310,23 +530,39 @@ export const ControlEventPayload = z.object({
   ts: z.number(),
   specId: Id.optional(),
   /** pads only: which pad */
-  index: z.number().int().min(0).max(63).optional(),
+  index: z.number().int().min(0).max(127).optional(),
   phase: z.enum(['start', 'move', 'end']).optional(),
 });
 export type ControlEventPayload = z.infer<typeof ControlEventPayload>;
+
+/** C->S. Ask the forge for a hack set + 3D spec for a target (the loop does this itself after VERIFY). */
+export const Gen3dGeneratePayload = z.object({
+  requestId: Id,
+  cardId: Id,
+  request: z.string().max(500).optional(),
+});
+export type Gen3dGeneratePayload = z.infer<typeof Gen3dGeneratePayload>;
+
+/** C->S. A typed (or transcribed) edit of an existing spec: "make resonance a big red lever". */
+export const Gen3dEditPayload = z.object({
+  requestId: Id,
+  specId: Id,
+  instruction: z.string().min(1).max(500),
+});
+export type Gen3dEditPayload = z.infer<typeof Gen3dEditPayload>;
 
 // --- drivers --------------------------------------------------------------------------------
 
 export const DriverRuntime = z.enum(['browser-js', 'node', 'micropython', 'arduino', 'other']);
 export type DriverRuntime = z.infer<typeof DriverRuntime>;
 
-export const DriverAction = z.object({
+export const DriverActionName = z.object({
   name: z.string().min(1).max(120),
   description: z.string().max(500).optional(),
 });
-export type DriverAction = z.infer<typeof DriverAction>;
+export type DriverActionName = z.infer<typeof DriverActionName>;
 
-/** S->C (usually targeted with `to`). Generated driver code for a client to load. */
+/** S->C (usually targeted with `to`). Legacy: generated driver code for a client to load. v1 uses driver.spec. */
 export const DriverDeployPayload = z.object({
   driverId: Id,
   version: z.number().int().min(1),
@@ -336,20 +572,220 @@ export const DriverDeployPayload = z.object({
   code: z.string().max(500_000),
   /** exported function/class name to call, if the runtime needs one */
   entry: z.string().max(120).optional(),
-  actions: z.array(DriverAction).max(128),
+  actions: z.array(DriverActionName).max(128),
   notes: z.string().max(2000).optional(),
   source: ModelSource.optional(),
 });
 export type DriverDeployPayload = z.infer<typeof DriverDeployPayload>;
 
-/** C->S. What happened to a deployed driver. */
+/** S->all. The declarative, validated driver (SPEC §3.2) for a target. Re-sent when actions get verified. */
+export const DriverSpecPayload = Driver;
+export type DriverSpecPayload = z.infer<typeof DriverSpecPayload>;
+
+export const DriverPhase = z.enum(['drafting', 'validating', 'verifying', 'verified', 'armed', 'disarmed', 'failed']);
+export type DriverPhase = z.infer<typeof DriverPhase>;
+
+/**
+ * S->all (v1): where a driver is and which of its actions are verified. Also C->S (legacy): what happened to
+ * a deployed code driver (`status`).
+ */
 export const DriverStatusPayload = z.object({
   driverId: Id,
+  cardId: Id.optional(),
   version: z.number().int().min(1).optional(),
-  status: z.enum(['received', 'loading', 'running', 'stopped', 'error']),
+  phase: DriverPhase.optional(),
+  actions: z.array(z.object({ actionId: Id, label: z.string().max(40).optional(), verified: VerifyState })).max(64).optional(),
+  /** legacy code-driver lifecycle */
+  status: z.enum(['received', 'loading', 'running', 'stopped', 'error']).optional(),
+  modelId: z.string().max(120).optional(),
   detail: z.string().max(4000).optional(),
 });
 export type DriverStatusPayload = z.infer<typeof DriverStatusPayload>;
+
+// --- execution and sensing ------------------------------------------------------------------
+
+/**
+ * S->executor (targeted with `to`). One resolved op ("$value" already substituted). `port` = the MIDI output
+ * (id, exact name or case-insensitive substring from the executor's hello.ports). `dryRun` = validate and ack
+ * without touching the device.
+ */
+export const ExecCommandPayload = z.object({
+  execId: Id,
+  executorDeviceId: Id,
+  op: ExecOp,
+  port: z.string().max(256).optional(),
+  dryRun: z.boolean().optional(),
+  cardId: Id.optional(),
+  driverId: Id.optional(),
+  actionId: Id.optional(),
+});
+export type ExecCommandPayload = z.infer<typeof ExecCommandPayload>;
+
+export const ExecErrorCode = z.enum(['no_port', 'no_midi', 'no_ir', 'bad_args', 'rate_limited', 'unsupported', 'serial_offline', 'timeout', 'device_error', 'refused']);
+export type ExecErrorCode = z.infer<typeof ExecErrorCode>;
+
+/** executor->S, send with `to: "server"`. */
+export const ExecAckPayload = z.object({
+  execId: Id,
+  ok: z.boolean(),
+  /** executor clock, epoch ms, when the bytes went out */
+  sentAt: z.number(),
+  detail: z.string().max(1000).optional(),
+  error: ExecErrorCode.optional(),
+  /** bytes that came back (MIDI identity reply) */
+  reply: z.array(z.number().int().min(0).max(255)).max(256).optional(),
+  /** receipt -> bytes out, ms */
+  latencyMs: z.number().min(0).optional(),
+});
+export type ExecAckPayload = z.infer<typeof ExecAckPayload>;
+
+export const SenseKind = z.enum(['frame', 'audio-features', 'ir-capture']);
+export type SenseKind = z.infer<typeof SenseKind>;
+
+/**
+ * S->sensor (targeted with `to`). frame: send one verify frame (sense.result.frame). audio-features: measure a
+ * window of `durationMs` (default 600); `offsetMs` < 0 = take it from the sensor's rolling buffer (e.g. -500 =
+ * the 500 ms before now, a free "before"). ir-capture: listen for remote presses for `durationMs`, one
+ * sense.result per frame seen; `prompt` is shown to the user ("press 全灯 once").
+ */
+export const SenseRequestPayload = z.object({
+  senseId: Id,
+  sensorDeviceId: Id,
+  kind: SenseKind,
+  durationMs: z.number().int().min(0).max(60_000).optional(),
+  offsetMs: z.number().int().min(-10_000).max(10_000).optional(),
+  cardId: Id.optional(),
+  prompt: z.string().max(200).optional(),
+});
+export type SenseRequestPayload = z.infer<typeof SenseRequestPayload>;
+
+/** Audio features of one window (companion mic or the synth's own USB audio input). */
+export const AudioFeatures = z.object({
+  /** linear RMS 0..1 */
+  rms: z.number().min(0),
+  /** dBFS */
+  rmsDb: z.number().optional(),
+  peak: z.number().min(0).optional(),
+  /** magnitude-weighted spectral centroid, Hz */
+  centroidHz: z.number().min(0),
+  /** mean power per band, dB */
+  bands: z.array(z.number()).max(32),
+  bandEdgesHz: z.array(z.number().min(0)).max(33).optional(),
+  /** mean log spectrum, for A-B-A-B comparisons */
+  spec: z.array(z.number()).max(128).optional(),
+  windowMs: z.number().min(0).optional(),
+  sampleRate: z.number().positive().optional(),
+  /** input label, e.g. "OP-1" (USB audio) or "MacBook Pro Microphone" */
+  input: z.string().max(120).optional(),
+  silent: z.boolean().optional(),
+  clipped: z.boolean().optional(),
+});
+export type AudioFeatures = z.infer<typeof AudioFeatures>;
+
+/** sensor->S, send with `to: "server"`. */
+export const SenseResultPayload = z.object({
+  senseId: Id,
+  kind: SenseKind,
+  frame: ScanFramePayload.optional(),
+  audio: AudioFeatures.optional(),
+  ir: IrCapture.optional(),
+  /** sensor clock, epoch ms, when the measurement was taken */
+  at: z.number(),
+  ok: z.boolean().optional(),
+  error: z.string().max(300).optional(),
+});
+export type SenseResultPayload = z.infer<typeof SenseResultPayload>;
+
+/** S->all. One verification attempt: sent / expected / observed (SPEC §3.3). */
+export const VerifyResultPayload = Evidence;
+export type VerifyResultPayload = z.infer<typeof VerifyResultPayload>;
+
+// --- human confirmation (ARM) and panic -----------------------------------------------------
+
+/**
+ * S->approvers. One-tap human confirmation before the first real drive of a target: "Arm 4 verified controls
+ * for OP-1 Field?". Answered with arm.confirm; expires on its own.
+ */
+export const ArmRequestPayload = z.object({
+  armId: Id,
+  cardId: Id,
+  driverId: Id,
+  specId: Id.optional(),
+  title: z.string().max(120),
+  summary: z.string().max(500),
+  actions: z.array(z.object({ actionId: Id, label: z.string().max(40), verified: VerifyState })).max(64),
+  /** contains an action that cannot be undone on the device: needs a pinch-and-hold */
+  irreversible: z.boolean().optional(),
+  expiresAt: z.number(),
+});
+export type ArmRequestPayload = z.infer<typeof ArmRequestPayload>;
+
+/** approver->S, send with `to: "server"`. */
+export const ArmConfirmPayload = z.object({
+  armId: Id,
+  approve: z.boolean(),
+  /** the confirmation was a hold (required when arm.request.irreversible) */
+  hold: z.boolean().optional(),
+});
+export type ArmConfirmPayload = z.infer<typeof ArmConfirmPayload>;
+
+/** S->all. */
+export const ArmResultPayload = z.object({
+  armId: Id,
+  cardId: Id,
+  driverId: Id,
+  armed: z.boolean(),
+  by: z.string().max(120).optional(),
+  reason: z.string().max(300).optional(),
+});
+export type ArmResultPayload = z.infer<typeof ArmResultPayload>;
+
+/**
+ * Any direction. C->S: stop everything (the server sends MIDI panic + IR off to every executor and disarms).
+ * S->executors: the fan-out. Scope it with cardId to one target.
+ */
+export const PanicPayload = z.object({
+  reason: z.string().max(300).optional(),
+  cardId: Id.optional(),
+});
+export type PanicPayload = z.infer<typeof PanicPayload>;
+
+// --- voice ----------------------------------------------------------------------------------
+
+/**
+ * C->S, send with `to: "server"`. PCM16 little-endian mono chunks (~100 ms) while push-to-talk is held;
+ * `final: true` on the last chunk. The server transcribes with Muse Voice Transcribe (the key stays here)
+ * and answers with voice.text. Optional cardId/specId say what the words are about (an edit target).
+ */
+export const VoiceAudioPayload = z.object({
+  utteranceId: Id,
+  seq: z.number().int().min(0),
+  sampleRate: z.union([z.literal(16_000), z.literal(24_000)]),
+  /** base64 PCM16LE mono */
+  pcm16: z.string().max(2_000_000),
+  final: z.boolean().optional(),
+  cardId: Id.optional(),
+  specId: Id.optional(),
+});
+export type VoiceAudioPayload = z.infer<typeof VoiceAudioPayload>;
+
+/**
+ * S->C: a transcript (partial while `final` is false; the final one is punctuated) with the model id.
+ * C->S: a typed command, same fields, treated like a final transcript.
+ */
+export const VoiceTextPayload = z.object({
+  utteranceId: Id.optional(),
+  text: z.string().max(2000),
+  final: z.boolean(),
+  source: ModelSource.optional(),
+  modelId: z.string().max(120).optional(),
+  latencyMs: z.number().min(0).optional(),
+  cardId: Id.optional(),
+  specId: Id.optional(),
+  /** what the server did with it */
+  intent: z.enum(['edit', 'hack', 'scan', 'undo', 'panic', 'question', 'none']).optional(),
+});
+export type VoiceTextPayload = z.infer<typeof VoiceTextPayload>;
 
 // --- logging --------------------------------------------------------------------------------
 

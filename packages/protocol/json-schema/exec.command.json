@@ -1,0 +1,294 @@
+{
+  "title": "exec.command",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "exec.command"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "execId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "executorDeviceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "op": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "midi"
+                },
+                "msg": {
+                  "type": "string",
+                  "enum": [
+                    "cc",
+                    "note",
+                    "pc",
+                    "sysex-identity",
+                    "panic"
+                  ]
+                },
+                "channel": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 16
+                },
+                "number": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 127
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 127
+                    },
+                    {
+                      "type": "string",
+                      "const": "$value"
+                    }
+                  ]
+                },
+                "velocity": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 127
+                },
+                "durationMs": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                }
+              },
+              "required": [
+                "kind",
+                "msg",
+                "channel"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "ir"
+                },
+                "protocol": {
+                  "type": "string",
+                  "enum": [
+                    "NEC",
+                    "AEHA",
+                    "SONY",
+                    "RC5",
+                    "RC6",
+                    "KASEIKYO",
+                    "RAW"
+                  ]
+                },
+                "bytes": {
+                  "maxItems": 16,
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 255
+                  }
+                },
+                "address": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65535
+                },
+                "command": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "unitUs": {
+                  "type": "number",
+                  "minimum": 200,
+                  "maximum": 1000
+                },
+                "repeats": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 8
+                },
+                "frameGapUs": {
+                  "type": "integer",
+                  "minimum": 1000,
+                  "maximum": 500000
+                },
+                "rawUs": {
+                  "maxItems": 1024,
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200000
+                  }
+                },
+                "khz": {
+                  "type": "number",
+                  "minimum": 30,
+                  "maximum": 60
+                },
+                "ref": {
+                  "type": "string",
+                  "maxLength": 120
+                }
+              },
+              "required": [
+                "kind",
+                "protocol"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "local"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "volume",
+                    "music",
+                    "say",
+                    "torch",
+                    "haptic",
+                    "print",
+                    "screen",
+                    "beep"
+                  ]
+                },
+                "arg": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 2000
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "string",
+                      "const": "$value"
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "maxItems": 32,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "maxLength": 256
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "op"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "port": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "cardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "driverId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "actionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "execId",
+        "executorDeviceId",
+        "op"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

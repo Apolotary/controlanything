@@ -36,10 +36,59 @@
           "minLength": 1,
           "maxLength": 128
         },
+        "cardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
         "version": {
           "type": "integer",
           "minimum": 1,
           "maximum": 9007199254740991
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "drafting",
+            "validating",
+            "verifying",
+            "verified",
+            "armed",
+            "disarmed",
+            "failed"
+          ]
+        },
+        "actions": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "actionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 40
+              },
+              "verified": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "pass",
+                  "fail",
+                  "untested"
+                ]
+              }
+            },
+            "required": [
+              "actionId",
+              "verified"
+            ],
+            "additionalProperties": false
+          }
         },
         "status": {
           "type": "string",
@@ -51,14 +100,17 @@
             "error"
           ]
         },
+        "modelId": {
+          "type": "string",
+          "maxLength": 120
+        },
         "detail": {
           "type": "string",
           "maxLength": 4000
         }
       },
       "required": [
-        "driverId",
-        "status"
+        "driverId"
       ],
       "additionalProperties": false
     }
