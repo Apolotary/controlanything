@@ -100,6 +100,15 @@ describe('compile hack set -> ce.gen3d/1', () => {
     expect(spec.anchor.mode).toBe('floating');
   });
 
+  it('keeps neighbouring controls >= 0.10 m apart and the row centred', () => {
+    const { spec } = compileLight();
+    const xs = spec.parts.filter((p) => p.controlId && p.archetype !== 'hack-list').map((p) => p.transform!.position![0]);
+    for (let i = 1; i < xs.length; i++) expect(xs[i] - xs[i - 1]).toBeGreaterThanOrEqual(0.1 - 1e-9);
+    const op1 = compileHackset({ specId: 's', rev: 1, title: 'OP-1', hackset: { ...lightHackset(), hacks: [0, 1, 2, 3].map((i) => ({ ...draftToHack(LIGHT_DRAFT.hacks[0]), id: `h_k${i}`, control: { archetype: 'knob' as const, size: 'm' as const, param: 'p_lvl' } })) }, device: FORGE_LIGHT_DEVICE, driver: FORGE_LIGHT_DRIVER, verification: verificationOf(FORGE_LIGHT_DRIVER, FORGE_LIGHT_VERIFIED), modelIds: ['muse-spark-1.3'], source: 'live' });
+    expect(op1.ok).toBe(true);
+    expect(op1.spec.parts.filter((p) => p.archetype === 'knob').map((p) => p.transform!.position![0])).toEqual([-0.15, -0.05, 0.05, 0.15]);
+  });
+
   it('rearms from new evidence without touching anything else', () => {
     const { spec } = compileLight();
     const r = rearmSpec(spec, lightHackset(), verificationOf(FORGE_LIGHT_DRIVER, { ...FORGE_LIGHT_VERIFIED, 'ir.warmer': 'pass', 'ir.cooler': 'pass' }));

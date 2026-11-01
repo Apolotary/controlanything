@@ -30,6 +30,8 @@ const SIZE_PARAM: Record<HackArchetypeName, ['size' | 'length' | 'width', number
 };
 const SCALE = { s: 0.8, m: 1, l: 1.3 } as const;
 const GAP_M = 0.03;
+/** centre-to-centre minimum between neighbouring controls: knob readout plates are diameter + 16 mm wide */
+export const MIN_PITCH_M = 0.1;
 const HACK_LIST_W = 0.22;
 
 const CHANNEL: Record<ForgeDriver['transport'], Channel> = { midi: 'usb', ir: 'ir', local: 'wifi' };
@@ -137,15 +139,18 @@ export function compileHackset(c: CompileInput): CompileResult {
   const controlHacks = hackset.hacks.filter((h) => h.kind === 'control' && h.control);
   const actionHacks = hackset.hacks.filter((h) => !(h.kind === 'control' && h.control));
 
-  // row of control archetypes, centred on x = 0
+  // row of control archetypes, centred on x = 0; neighbours at least MIN_PITCH_M apart (readout plates)
   const widths = controlHacks.map((h) => WIDTH[h.control!.archetype] * SCALE[h.control!.size ?? 'm']);
-  const rowW = widths.reduce((a, b) => a + b, 0) + GAP_M * Math.max(0, widths.length - 1);
-  let x = -rowW / 2;
+  const centres: number[] = [];
+  widths.forEach((w, i) => centres.push(i === 0 ? 0 : centres[i - 1] + Math.max(MIN_PITCH_M, (widths[i - 1] + w) / 2 + GAP_M)));
+  const rowLeft = widths.length ? centres[0] - widths[0] / 2 : 0;
+  const rowRight = widths.length ? centres[centres.length - 1] + widths[widths.length - 1] / 2 : 0;
+  const shift = -(rowLeft + rowRight) / 2;
+  const rowW = rowRight - rowLeft;
   controlHacks.forEach((h, i) => {
     const accent = c.accents?.[h.id] ?? (deviceAccents.length ? deviceAccents[i % deviceAccents.length] : undefined);
     controls.push(controlFor(h, driver, hackArmed(h, verification), accent));
-    parts.push(partFor(h, accent, x + widths[i] / 2));
-    x += widths[i] + GAP_M;
+    parts.push(partFor(h, accent, centres[i] + shift));
   });
 
   // one-shot hacks -> trigger controls + one hack list to the right of the row
