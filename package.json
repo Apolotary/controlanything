@@ -18,7 +18,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "start": "npm run start -w @ce/server",
-    "smoke": "npm run smoke -w @ce/server"
+    "smoke": "npm run smoke -w @ce/server",
+    "demo:sim": "tsx apps/sim/scripts/demo-sim.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

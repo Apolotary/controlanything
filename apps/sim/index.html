@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>ControlEverything · Sim room</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <div id="app">
+      <header class="top">
+        <div class="brand"><b>CONTROLEVERYTHING</b><span>SIM ROOM</span></div>
+        <p class="tag">A virtual room with a ceiling light, its IR remote and a synth. It pairs like real hardware, so the whole loop runs without a headset or devices.</p>
+        <div class="badges">
+          <span id="b-mode" class="pill">SERVER …</span>
+          <span id="b-conn" class="pill">OFFLINE</span>
+          <span id="b-role" class="pill" hidden></span>
+        </div>
+      </header>
+
+      <section id="pair" class="plate pairbar" hidden>
+        <div id="pair-qr" class="qr" aria-label="Pairing QR code"></div>
+        <div>
+          <h2>PAIR THIS SIM</h2>
+          <div id="pair-code" class="code">———-———</div>
+          <p class="dim">Approve it from a paired Quest, iPhone or Mac (look at the QR or type the code), or type <kbd>y</kbd> in the server terminal. On this Mac (localhost) it pairs instantly.</p>
+          <p id="pair-msg" class="small"></p>
+        </div>
+      </section>
+
+      <main class="grid">
+        <section class="plate cam">
+          <div class="plate-h">
+            <h2>ROOM CAMERA</h2>
+            <span class="dim small">virtual headset camera · 1280×960 · fx 868 px · fixed pose</span>
+          </div>
+          <div class="stage" id="stage">
+            <canvas id="room" aria-label="Rendered view of the virtual room"></canvas>
+            <canvas id="overlay" aria-hidden="true"></canvas>
+            <div id="loading" class="loading">LOADING THE ROOM…</div>
+          </div>
+          <div class="row tools">
+            <div class="seg" id="views" role="group" aria-label="Where the camera looks">
+              <button type="button" data-view="room" class="on">CEILING LIGHT</button>
+              <button type="button" data-view="desk">DESK</button>
+            </div>
+            <button type="button" id="scan" class="toggle" aria-pressed="false">SCAN 1 HZ</button>
+            <button type="button" id="shot">SEND ONE FRAME</button>
+            <span class="spacer"></span>
+            <span id="lamp-state" class="value"></span>
+          </div>
+          <p id="ir-last" class="mono small dim irlast">IR receiver: waiting</p>
+        </section>
+
+        <section class="plate remote-panel">
+          <div class="plate-h"><h2>VIRTUAL REMOTE</h2><span class="dim small" id="codeset-name"></span></div>
+          <div class="remote-wrap">
+            <div class="remote" id="remote">
+              <div class="remote-led" id="remote-led"></div>
+              <div class="remote-grid">
+                <button type="button" data-cmd="fullOn" aria-label="Remote: 全灯, full on" class="rb rb-hot"><b>全灯</b><i>FULL</i></button>
+                <button type="button" data-cmd="off" aria-label="Remote: 消灯, off" class="rb"><b>消灯</b><i>OFF</i></button>
+                <button type="button" data-cmd="brighter" aria-label="Remote: 明るく, brighter" class="rb"><b>明るく</b><i>BRIGHTER</i></button>
+                <button type="button" data-cmd="dimmer" aria-label="Remote: 暗く, dimmer" class="rb"><b>暗く</b><i>DIMMER</i></button>
+                <button type="button" data-cmd="warmer" aria-label="Remote: 暖かい光, warmer" class="rb"><b>暖かい光</b><i>WARMER</i></button>
+                <button type="button" data-cmd="cooler" aria-label="Remote: 白い光, cooler" class="rb"><b>白い光</b><i>COOLER</i></button>
+                <button type="button" data-cmd="night" aria-label="Remote: 常夜灯, night light" class="rb"><b>常夜灯</b><i>NIGHT</i></button>
+                <button type="button" data-cmd="on" aria-label="Remote: 点灯, on" class="rb"><b>点灯</b><i>ON</i></button>
+              </div>
+              <div class="remote-ch" role="group" aria-label="Remote channel">
+                <span>CH</span>
+                <button type="button" data-ch="1" class="on" aria-label="Remote channel 1">1</button>
+                <button type="button" data-ch="2" aria-label="Remote channel 2">2</button>
+              </div>
+            </div>
+            <div class="remote-side">
+              <div id="learn" class="learn" hidden>
+                <h3>LEARNING</h3>
+                <p id="learn-prompt" class="learn-prompt"></p>
+                <p id="learn-left" class="mono small dim"></p>
+              </div>
+              <label class="small"><input type="checkbox" id="autopress" /> auto-press the button a learn prompt names</label>
+              <h3>FIXTURE</h3>
+              <div class="row small">
+                <span>listens on</span>
+                <div class="seg seg-s" id="lamp-ch" role="group" aria-label="Lamp channel">
+                  <button type="button" data-ch="1" class="on">CH1</button>
+                  <button type="button" data-ch="2">CH2</button>
+                </div>
+              </div>
+              <div class="row small">
+                <label for="codeset">codes</label>
+                <select id="codeset"></select>
+              </div>
+              <p id="codeset-note" class="small dim"></p>
+              <button type="button" id="wall" class="small-btn">WALL SWITCH (power cycle)</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="plate synth-panel">
+          <div class="plate-h"><h2>VIRTUAL SYNTH</h2><span class="dim small">Web Audio · OP-1 Field CC map · port "CE Sim Synth"</span></div>
+          <div class="synth-row">
+            <canvas id="screen" class="screen" aria-label="Synth screen"></canvas>
+            <div class="synth-ctl">
+              <button type="button" id="audio" class="primary">START AUDIO</button>
+              <button type="button" id="loop" class="toggle" aria-pressed="false">LOOP</button>
+              <button type="button" id="panic">PANIC</button>
+              <label class="small">notes on <select id="midi-ch"></select></label>
+              <div id="meter" class="meter" aria-label="Output level"><i></i></div>
+            </div>
+          </div>
+          <div class="encoders" id="encoders"></div>
+          <div class="keys" id="keys" aria-label="Keyboard"></div>
+        </section>
+
+        <section class="plate log-panel">
+          <div class="plate-h"><h2>WHAT THE SIM SEES AND DOES</h2><button type="button" id="log-clear" class="small-btn">CLEAR</button></div>
+          <ol id="log" class="log mono"></ol>
+        </section>
+
+        <section class="plate agent-panel">
+          <div class="plate-h"><h2>AGENT</h2><span class="dim small">messages from the server</span></div>
+          <ol id="agent" class="log mono"></ol>
+        </section>
+
+        <section class="plate replay-panel">
+          <div class="plate-h"><h2>REPLAY A RECORDED TAKE</h2></div>
+          <div class="row small">
+            <input id="take-url" class="grow" spellcheck="false" placeholder="/quest/takes/&lt;take&gt;/session.jsonl" />
+            <button type="button" id="take-load">LOAD</button>
+            <button type="button" id="take-play" disabled>PLAY</button>
+            <button type="button" id="take-stop" disabled>STOP</button>
+          </div>
+          <div class="row small">
+            <label class="filebtn">OPEN FILES…<input id="take-files" type="file" multiple accept=".jsonl,.json,.jpg,.jpeg" /></label>
+            <label><input type="checkbox" id="take-fast" /> 4× speed</label>
+            <span id="take-info" class="dim"></span>
+          </div>
+          <ol id="take-log" class="log mono short"></ol>
+        </section>
+      </main>
+      <footer class="foot dim small">
+        Simulated devices for judges. The lamp only obeys its own clearly labelled synthetic IR codes (SIM-KZ), not the real KOIZUMI codes, so the agent has to learn them; other brands' codes do nothing. The synth answers MIDI identity with the non-commercial ID 7D and never claims to be a real device.
+      </footer>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
