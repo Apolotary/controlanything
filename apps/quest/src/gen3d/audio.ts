@@ -12,9 +12,18 @@ export type Cue = 'tick' | 'click' | 'lock' | 'step' | 'ok' | 'fail' | 'blip' | 
  */
 let MUTED = true;
 try {
-  if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('audio') === '1') MUTED = false;
+  if (typeof location !== 'undefined') {
+    const q = new URLSearchParams(location.search);
+    if (q.get('audio') === '1') MUTED = false;
+    if (q.get('mute') === '1') MUTED = true;
+  }
 } catch {
   /* non-browser */
+}
+/** `window.__ceMute = true` (set by the shell or a test) always wins over the URL. */
+function muted(): boolean {
+  const w = globalThis as { __ceMute?: boolean };
+  return w.__ceMute === true || MUTED;
 }
 
 export class UiAudio {
@@ -24,7 +33,7 @@ export class UiAudio {
   enabled = true;
 
   static get muted(): boolean {
-    return MUTED;
+    return muted();
   }
   static set muted(v: boolean) {
     MUTED = v;
@@ -32,7 +41,7 @@ export class UiAudio {
 
   /** Call from a user gesture (first pinch / click) so the context may start. No-op while muted. */
   unlock(): void {
-    if (MUTED) return;
+    if (muted()) return;
     if (this.ctx) {
       if (this.ctx.state === 'suspended') void this.ctx.resume();
       return;
@@ -64,7 +73,7 @@ export class UiAudio {
   }
 
   play(cue: Cue, at?: Vector3): void {
-    if (MUTED || !this.enabled || !this.ctx || !this.bus) return;
+    if (muted() || !this.enabled || !this.ctx || !this.bus) return;
     const ctx = this.ctx;
     const t0 = ctx.currentTime;
     let dest: AudioNode = this.bus;

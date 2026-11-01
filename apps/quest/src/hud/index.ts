@@ -133,6 +133,23 @@ class HudImpl implements Hud {
     return this.headForward(out).cross(new Vector3(0, 1, 0)).normalize();
   }
 
+  /** A target beyond comfortable reach (a ceiling light at 2.3 m): its menus and controls come to arm's length. */
+  private isFar(t: HudTarget): boolean {
+    this.camera.getWorldPosition(_v);
+    return _v.distanceTo(new Vector3(...t.position)) > 1.2;
+  }
+
+  /** 0.65 m along the line of sight toward the target, pitch clamped to ±25°, shifted sideways by `dx` (user's right). */
+  private armsLength(t: HudTarget | undefined, dx: number): Vector3 {
+    const head = this.camera.getWorldPosition(new Vector3());
+    const dir = t ? new Vector3(...t.position).sub(head).normalize() : this.headForward(new Vector3());
+    const flat = Math.hypot(dir.x, dir.z) || 1e-6;
+    const pitch = Math.max(-25, Math.min(25, (Math.atan2(dir.y, flat) * 180) / Math.PI)) * (Math.PI / 180);
+    const yaw = Math.atan2(dir.x, dir.z);
+    const out = new Vector3(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)).multiplyScalar(0.65).add(head);
+    return out.addScaledVector(this.rightOfHead(new Vector3()), dx);
+  }
+
   private hudSpec(id: string, title: string, parts: Part[], extra: Partial<Gen3dSpec> = {}): Gen3dSpec {
     return { spec: 'ce.gen3d/1', specId: id, rev: 1, title, anchor: { mode: 'world', position: [0, 0, 0], grabbable: false }, controls: [], parts, ...extra };
   }
@@ -297,8 +314,11 @@ class HudImpl implements Hud {
     const items = menu.items.map((it) => ({ ...it, controlId: `hack_${it.id}` }));
     const spec: Gen3dSpec = { ...this.hudSpec(`hack_${targetId}`, menu.title, [{ id: 'list', kind: 'archetype', archetype: 'hack-list', params: { title: menu.title, ...(menu.subtitle ? { subtitle: menu.subtitle } : {}), items, width: 0.24 } }]), controls };
     // the hack menu takes the user's LEFT of the target; generated controls (renderSpec) take the right
-    const pos = t ? new Vector3(...t.position).addScaledVector(this.rightOfHead(new Vector3()), -((t.sizeM?.[0] ?? 0.25) / 2 + 0.19)) : this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.6);
-    if (t) pos.y += 0.1;
+    let pos: Vector3;
+    if (t && !this.isFar(t)) {
+      pos = new Vector3(...t.position).addScaledVector(this.rightOfHead(new Vector3()), -((t.sizeM?.[0] ?? 0.25) / 2 + 0.19));
+      pos.y += 0.1;
+    } else pos = this.armsLength(t, -0.16);
     const m = this.mount(`hack_${targetId}`, spec, { position: pos, faceHead: true }, 'buildup', targetId);
     m.obj.emitter.on('control', (e: ControlEvent) => {
       if (e.phase !== 'start') return;
@@ -385,9 +405,12 @@ class HudImpl implements Hud {
     if (at.position) position = new Vector3(...at.position);
     else if (at.targetId && this.targets.has(at.targetId)) {
       const t = this.targets.get(at.targetId)!;
-      const side = spec.anchor.side === 'left' ? -1 : 1;
-      position = new Vector3(...t.position).addScaledVector(this.rightOfHead(new Vector3()), side * ((t.sizeM?.[0] ?? 0.25) / 2 + (spec.anchor.offset?.[0] ?? 0.2)));
-      position.y += spec.anchor.offset?.[1] ?? 0.06;
+      if (this.isFar(t)) position = this.armsLength(t, 0.16);
+      else {
+        const side = spec.anchor.side === 'left' ? -1 : 1;
+        position = new Vector3(...t.position).addScaledVector(this.rightOfHead(new Vector3()), side * ((t.sizeM?.[0] ?? 0.25) / 2 + (spec.anchor.offset?.[0] ?? 0.2)));
+        position.y += spec.anchor.offset?.[1] ?? 0.06;
+      }
     } else if (existed) position = existed.obj.position.clone();
     else {
       const d = spec.anchor.distance ?? 0.6;
