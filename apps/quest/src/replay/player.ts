@@ -17,6 +17,9 @@ import { frameBytes, type InputLine, isInput, isMsg, isPose, type MsgLine, type 
 
 export type ReplayMode = 'playback' | 'pipeline';
 
+/** Recorded messages that describe the recorded connection itself; never re-dispatched. */
+const SESSION_ONLY = new Set(['welcome', 'presence', 'pair.pending', 'pair.approved', 'pair.denied', 'pair.status', 'log', 'arm.request']);
+
 export interface PlayerEvents extends Record<string, unknown> {
   pose: PoseLine['head'];
   in: Envelope;
@@ -130,8 +133,9 @@ export class TakePlayer extends Emitter<PlayerEvents> {
       this.emit('out', line.msg);
       return;
     }
-    // 'in': only playback re-dispatches what the server said; pipeline gets live answers instead
-    if (this.mode === 'playback') this.emit('in', line.msg);
+    // 'in': only playback re-dispatches what the server said; pipeline gets live answers instead.
+    // Connection-level messages belong to the recorded session, not this one.
+    if (this.mode === 'playback' && !SESSION_ONLY.has(line.msg.type)) this.emit('in', line.msg);
   }
 }
 

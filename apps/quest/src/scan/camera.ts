@@ -30,6 +30,10 @@ export interface CameraInfo {
   /** every video input after permission, for the spike report */
   devices?: { label: string; deviceId: string }[];
   warning?: string;
+  /** MediaTrackCapabilities summary (exposure/white balance/focus modes), for the spike report */
+  capabilities?: string;
+  /** exposureMode 'manual' is available: verify frames can be taken at a fixed exposure */
+  canLockExposure?: boolean;
 }
 
 export interface CameraStats {
@@ -148,6 +152,11 @@ export class LiveCamera implements CameraSource {
     await this.element.play().catch(() => undefined);
     await this.waitForFirstFrame();
     const settings = track.getSettings();
+    const caps = (track.getCapabilities?.() ?? {}) as Record<string, unknown>;
+    const capSummary = ['exposureMode', 'exposureTime', 'whiteBalanceMode', 'focusMode', 'frameRate', 'width', 'height']
+      .filter((k) => caps[k] !== undefined)
+      .map((k) => `${k}=${JSON.stringify(caps[k])}`)
+      .join(' ');
     this.info = {
       width: settings.width ?? this.element.videoWidth,
       height: settings.height ?? this.element.videoHeight,
@@ -156,10 +165,27 @@ export class LiveCamera implements CameraSource {
       frameRate: settings.frameRate,
       devices: await this.listVideoInputs(),
       warning,
+      capabilities: capSummary || 'none reported',
+      canLockExposure: Array.isArray(caps.exposureMode) && (caps.exposureMode as string[]).includes('manual'),
     };
     this.running = true;
     this.watchFrames();
     return this.info;
+  }
+
+  /**
+   * Freeze auto-exposure for before/after verify frames (the camera oracle then compares absolute luma).
+   * Returns true when the track accepted it; Quest Browser support is unknown until spike S2.
+   */
+  async setExposureLock(lock: boolean): Promise<boolean> {
+    const track = this.stream?.getVideoTracks()[0];
+    if (!track || !this.info?.canLockExposure) return false;
+    try {
+      await track.applyConstraints({ advanced: [{ exposureMode: lock ? 'manual' : 'continuous' } as MediaTrackConstraintSet] });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   stop(): void {

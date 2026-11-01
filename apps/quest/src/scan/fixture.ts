@@ -24,6 +24,26 @@ export async function loadSamFixture(url: string): Promise<SamFixture> {
   return (await res.json()) as SamFixture;
 }
 
+/**
+ * The sim room's exact device boxes (from its render's id mask) as a fixture. NOT model output: labelled
+ * "sim-layout" so nothing on screen pretends a Meta model produced it. For client-side tests only.
+ */
+export function fixtureFromSimLayout(layout: { width: number; height: number; devices: { id: string; kind: string; label: string; box: [number, number, number, number] }[] }): SamFixture {
+  return {
+    source: 'sim room layout (exact boxes from the render id mask)',
+    modelId: 'sim-layout',
+    imageWidth: layout.width,
+    imageHeight: layout.height,
+    wallMs: 600,
+    detections: layout.devices.map((d) => ({
+      prompt: d.kind,
+      label: d.label || d.kind,
+      score: 1,
+      box: [d.box[0] * layout.width, d.box[1] * layout.height, d.box[2] * layout.width, d.box[3] * layout.height],
+    })),
+  };
+}
+
 /** Detections of the fixture that are visible in this frame, in this frame's pixels. */
 export function projectFixture(fix: SamFixture, room: VirtualRoom, rec: FrameRecord): Det[] {
   const s = room.imageWidth / fix.imageWidth;

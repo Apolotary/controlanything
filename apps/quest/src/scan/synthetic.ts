@@ -31,6 +31,14 @@ import { cameraPoseFromHead, type PoseLike, projectionFromIntrinsics, QUEST3_128
 /** IWER's default headset position; the backdrop is framed for it. */
 export const DEFAULT_HEAD = { position: new Vector3(0, 1.6, 0), quaternion: new Quaternion() };
 
+/** What /sim/?embed=room exposes (agreed with the sim lane). */
+export interface CeSim {
+  version?: number;
+  canvas: HTMLCanvasElement;
+  view?: string;
+  layout?: { width: number; height: number; devices: { id: string; kind: string; label: string; box: [number, number, number, number] }[] };
+}
+
 export interface RoomSource {
   kind: 'photo' | 'sim';
   /** photo URL, or the sim embed URL */
@@ -52,6 +60,8 @@ export class VirtualRoom {
   private readonly material = new MeshBasicMaterial({ color: 0xffffff, side: DoubleSide, depthWrite: false });
   private readonly planes: Mesh[] = [];
   private simCanvas?: HTMLCanvasElement;
+  /** the sim embed's API when the source is the sim room */
+  sim?: CeSim;
   private lastCanvasUpdate = 0;
   ready: Promise<void>;
   label = '';
@@ -66,7 +76,8 @@ export class VirtualRoom {
 
   private async load(distance: number, k: Intrinsics): Promise<void> {
     if (this.source.kind === 'sim') {
-      const canvas = await loadSimCanvas(this.source.url);
+      this.sim = await loadSim(this.source.url);
+      const canvas = this.sim.canvas;
       this.simCanvas = canvas;
       const t = new CanvasTexture(canvas);
       t.colorSpace = SRGBColorSpace;
@@ -102,6 +113,8 @@ export class VirtualRoom {
       m.name = 'virtual-room-backdrop';
       m.renderOrder = -100;
       target.add(m);
+      // static: world matrices must be valid for raycasts even before anything renders this scene
+      m.updateMatrixWorld(true);
       this.planes.push(m);
     }
     const grid = new GridHelper(8, 16, 0x2a3540, 0x1c252d);
@@ -129,6 +142,7 @@ export class VirtualRoom {
   raycast(ray: WorldRay): { point: Vector3; normal: Vector3 } | null {
     const plane = this.planes[0];
     if (!plane) return null;
+    plane.updateMatrixWorld(true);
     const rc = new Raycaster(ray.origin, ray.dir.clone().normalize(), 0.05, 20);
     const hit = rc.intersectObject(plane, false)[0];
     if (!hit) return null;
@@ -143,8 +157,8 @@ export class VirtualRoom {
   }
 }
 
-/** Same-origin iframe to /sim/?embed=room that exposes window.ceSim.canvas (agreed with the sim lane). */
-async function loadSimCanvas(url: string): Promise<HTMLCanvasElement> {
+/** Same-origin iframe to /sim/?embed=room that exposes window.ceSim (agreed with the sim lane). */
+async function loadSim(url: string): Promise<CeSim> {
   const iframe = document.createElement('iframe');
   iframe.src = url;
   iframe.title = 'sim room (camera source)';
@@ -154,8 +168,8 @@ async function loadSimCanvas(url: string): Promise<HTMLCanvasElement> {
   while (performance.now() < deadline) {
     await new Promise((r) => setTimeout(r, 200));
     try {
-      const sim = (iframe.contentWindow as unknown as { ceSim?: { canvas?: HTMLCanvasElement } } | null)?.ceSim;
-      if (sim?.canvas && sim.canvas.width > 0) return sim.canvas;
+      const sim = (iframe.contentWindow as unknown as { ceSim?: CeSim } | null)?.ceSim;
+      if (sim?.canvas && sim.canvas.width > 0) return sim;
     } catch {
       // not same-origin or not loaded yet
     }

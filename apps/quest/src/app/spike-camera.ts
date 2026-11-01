@@ -143,6 +143,10 @@ export async function runCameraSpike(params: URLSearchParams): Promise<void> {
       const info = await camera.start();
       setCheck('camera', !info.warning, `${info.label} · ${info.width}×${info.height}${info.frameRate ? ` @ ${Math.round(info.frameRate)} fps` : ''}${info.warning ? ` · ${info.warning}` : ''}`);
       if (info.devices) log(`video inputs (${info.devices.length}): ${info.devices.map((d) => `"${d.label}"`).join(', ')}`);
+      if (info.capabilities) {
+        setCheck('exposure lock', info.canLockExposure ?? false, `${info.canLockExposure ? 'exposureMode manual available' : 'not available'} · ${info.capabilities}`);
+        log(`track capabilities: ${info.capabilities}`);
+      }
       if (camera instanceof LiveCamera) {
         camTex = new VideoTexture(camera.element);
         const prev = camera.element;

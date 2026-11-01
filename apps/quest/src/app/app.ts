@@ -43,7 +43,7 @@ import { type AimTarget, aimAt, touching } from '../scan/aim';
 import { type CameraSource, CameraError, LiveCamera } from '../scan/camera';
 import { FrameCapture } from '../scan/capture';
 import { JpegEncoder } from '../scan/encode';
-import { loadSamFixture, type SamFixture } from '../scan/fixture';
+import { fixtureFromSimLayout, loadSamFixture, type SamFixture } from '../scan/fixture';
 import { VirtualRoomDepth, XrHitTester } from '../scan/hittest';
 import type { DepthProvider } from '../scan/placement';
 import { PoseRing } from '../scan/poses';
@@ -255,6 +255,17 @@ export class QuestApp {
         .catch((e) => this.page.log(`virtual room failed: ${(e as Error).message}`, 'error'));
       if (this.emulator) this.scene.add(this.room.backdropGroup);
       this.camera = new SyntheticCamera(this.room, headPose);
+      if (this.params.get('scan') === 'fixture' && src.kind === 'sim') {
+        void this.room.ready.then(() => {
+          const layout = this.room?.sim?.layout;
+          if (!layout?.devices?.length) {
+            this.page.log('scan fixture: the sim embed exposes no layout', 'warn');
+            return;
+          }
+          this.fixture = fixtureFromSimLayout(layout);
+          this.page.log(`scan fixture: ${layout.devices.length} exact boxes from the sim layout (labelled sim-layout, not a model)`, 'warn');
+        });
+      }
       if (this.params.get('scan') === 'fixture' && src.kind === 'photo') {
         this.fixture = await loadSamFixture(`${import.meta.env.BASE_URL}test/scan-scene.sam.json`).catch((e) => {
           this.page.log(`scan fixture: ${(e as Error).message}`, 'error');
@@ -275,6 +286,7 @@ export class QuestApp {
       depth: () => this.depthProviders(),
       log: (m, l) => this.page.log(m, l),
       fixture: () => (this.fixture && this.room ? { fix: this.fixture, room: this.room } : null),
+      local: (dir, type, payload) => this.recorder.message(dir, { v: 1, type, id: `local-${type}-${Date.now()}`, ts: Date.now(), from: dir === 'in' ? 'fixture' : '', payload }),
     });
     this.scanner.on('frame', (fr) => this.rememberJpeg(fr.frameId, fr.jpeg));
     this.scanner.on('result', (r) => {
@@ -282,7 +294,7 @@ export class QuestApp {
       this.lastShown = { frameId: r.frameId, dets: r.dets };
       if (r.rejected.length) this.page.log(`dropped ${r.rejected.length}: ${r.rejected.map((x) => `${x.det.label} (${x.reason})`).join(', ')}`, 'warn');
       this.page.log(`scan.result ${r.frameId.slice(-6)}: ${r.placed.length} device(s) · ${this.scanner.stats.lastModelId} ${this.scanner.stats.lastLatencyMs} ms${this.scanner.stats.lastSource === 'fixture' ? ' · FIXTURE' : ''}`);
-      if (rec) this.chip('sam-3.1', 'done');
+      if (rec && this.scanner.stats.lastModelId) this.chip(this.scanner.stats.lastModelId, 'done');
       if (this.pingVisible) this.refreshPing();
     });
     this.scanner.on('state', ({ on }) => {
@@ -583,11 +595,24 @@ export class QuestApp {
     this.page.log(`ui.spec ${p.title ?? p.specId} rev ${p.rev ?? 1}${p.modelId ? ` · ${p.modelId}` : ''}${p.source === 'fixture' ? ' · FIXTURE' : ''}`, 'ok');
   }
 
+  private exposureLocked = false;
+  private exposureTimer?: ReturnType<typeof setTimeout>;
+
   private async onSenseRequest(p: SenseRequestPayload): Promise<void> {
     if (!this.identity || p.sensorDeviceId !== this.identity.deviceId) return;
     if (p.kind !== 'frame') {
       this.ws.send('sense.result', { senseId: p.senseId, kind: p.kind, at: Date.now(), ok: false, error: 'the headset senses frames only' }, { to: 'server' });
       return;
+    }
+    // fixed exposure across the before/after pair when the camera allows it (released 4 s after the last request)
+    if (this.camera instanceof LiveCamera && this.camera.info?.canLockExposure) {
+      const cam = this.camera;
+      if (!this.exposureLocked) this.exposureLocked = await cam.setExposureLock(true);
+      clearTimeout(this.exposureTimer);
+      this.exposureTimer = setTimeout(() => {
+        void cam.setExposureLock(false);
+        this.exposureLocked = false;
+      }, 4000);
     }
     let r: Awaited<ReturnType<FrameCapture['capture']>> = null;
     for (let i = 0; i < 30 && !r; i++) {
@@ -737,7 +762,8 @@ export class QuestApp {
     }
   }
 
-  lock(id: string, how = 'api'): void {
+  /** Lock a target; `send: false` only shows it (replay playback must not drive the live server). */
+  lock(id: string, how = 'api', opts: { send?: boolean } = {}): void {
     const t = this.targets.get(id);
     if (!t) return;
     if (this.lockedId && this.lockedId !== id) this.release();
@@ -751,6 +777,10 @@ export class QuestApp {
     this.hud.setLocked(id);
     this.hud.upsertTarget(toHudTarget(t));
     if (this.scanner.active) this.scanner.stop();
+    if (opts.send === false) {
+      this.page.log(`replay: locked ${t.label} (shown only, nothing sent)`);
+      return;
+    }
     const sel: TargetSelectPayload = t.cardId ? { cardId: t.cardId } : t.deviceId ? { deviceId: t.deviceId } : { frameId: t.frameId, detId: t.detId };
     const sent = this.ws.send('target.select', sel, { to: 'server' });
     this.pendingSelect = { targetId: id, frameId: t.frameId, detId: t.detId, at: Date.now() };
@@ -837,6 +867,7 @@ export class QuestApp {
       this.page.log(`camera: ${this.cameraNote}`, 'ok');
       if (info.warning) this.page.log(info.warning, 'warn');
       if (info.devices?.length) this.page.log(`video inputs: ${info.devices.map((d) => d.label || d.deviceId.slice(0, 6)).join(' | ')}`);
+      if (info.capabilities) this.page.log(`camera capabilities: ${info.capabilities}${info.canLockExposure ? ' · exposure lock available' : ''}`);
     } catch (e) {
       this.cameraState = 'error';
       this.cameraNote = (e as Error).message;
@@ -931,10 +962,10 @@ export class QuestApp {
     player.on('frame', ({ record }) => this.capture.remember(record));
     player.on('in', (env: Envelope) => this.ws.inject(env));
     player.on('input', (i) => {
-      if (i.type === 'lock' && mode === 'pipeline' && Array.isArray(i.position)) {
+      if (i.type === 'lock' && Array.isArray(i.position)) {
         const p = new Vector3(...(i.position as [number, number, number]));
         const near = this.targets.list().sort((a, b) => a.position.distanceTo(p) - b.position.distanceTo(p))[0];
-        if (near && near.position.distanceTo(p) < 0.5) this.lock(near.id, 'replay');
+        if (near && near.position.distanceTo(p) < 0.5) this.lock(near.id, 'replay', { send: mode === 'pipeline' });
       }
       if (i.type === 'scan' && mode === 'pipeline') {
         if (i.on && !this.scanner.active) this.toggleScan();

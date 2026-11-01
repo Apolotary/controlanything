@@ -26,6 +26,8 @@ export interface ScannerDeps {
   log: (msg: string, level?: 'info' | 'warn' | 'error') => void;
   /** local fixture detector (desktop emulator + test photo) */
   fixture?: () => { fix: SamFixture; room: VirtualRoom } | null;
+  /** messages that never cross the socket (fixture mode), so the recorder still sees them */
+  local?: (dir: 'in' | 'out', type: string, payload: unknown) => void;
 }
 
 export interface ScannerStats {
@@ -120,8 +122,9 @@ export class Scanner extends Emitter<ScannerEvents> {
       this.stats.sent++;
       const dets = projectFixture(fx.fix, fx.room, r.record);
       const latency = Math.min(fx.fix.wallMs, 1800);
+      this.d.local?.('out', 'scan.frame', r.payload);
       setTimeout(() => {
-        void this.onResult({
+        const result: ScanResultPayload = {
           frameId: r.payload.frameId,
           width: r.payload.width,
           height: r.payload.height,
@@ -129,7 +132,9 @@ export class Scanner extends Emitter<ScannerEvents> {
           modelId: fx.fix.modelId,
           source: 'fixture',
           latencyMs: latency,
-        });
+        };
+        this.d.local?.('in', 'scan.result', result);
+        void this.onResult(result);
       }, latency);
     } else {
       const id = this.d.ws.send('scan.frame', r.payload, { to: 'server', droppable: true });
