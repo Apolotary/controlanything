@@ -1,0 +1,96 @@
+{
+  "kind": "gen3d-run",
+  "kit": "ce.hackset/1+ce.gen3d/1",
+  "task": "generate",
+  "cardId": "electronic-device-1",
+  "request": "generate a hack set for the OP-1 portable synthesizer",
+  "mode": "json",
+  "category": "synthesizer",
+  "transport": "midi",
+  "deviceName": "OP-1 portable synthesizer",
+  "actions": [
+    {
+      "actionId": "eng1",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 46
+    },
+    {
+      "actionId": "eng2",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 47
+    },
+    {
+      "actionId": "eng3",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 48
+    },
+    {
+      "actionId": "eng4",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 49
+    },
+    {
+      "actionId": "fx1",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 54
+    },
+    {
+      "actionId": "fx4",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 57
+    },
+    {
+      "actionId": "env-attack",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 50
+    },
+    {
+      "actionId": "demo-note",
+      "kind": "trigger",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "note",
+      "number": 60
+    }
+  ],
+  "recordedAt": "2026-11-01T21:59:23.466Z",
+  "calls": [
+    {
+      "label": "gen3d.forge",
+      "model": "muse-spark-1.3",
+      "effort": "low",
+      "text": "{\"hacks\": [{\"blurb\": \"engine brightness morph\", \"commands\": [{\"action\": \"eng1\", \"delayMs\": 0, \"param\": \"p_shape\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"knob\", \"param\": \"p_shape\", \"size\": \"m\"}, \"id\": \"h_shape\", \"inverse\": {\"commands\": [], \"restore\": \"p_shape\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Shape engine\", \"oracle\": {\"expect\": \"centroid_up\", \"reason\": \"engine timbre brightens\", \"type\": \"wire\"}, \"params\": [{\"default\": 64, \"id\": \"p_shape\", \"max\": 127, \"min\": 0, \"name\": \"Shape\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"second engine character\", \"commands\": [{\"action\": \"eng4\", \"delayMs\": 0, \"param\": \"p_color\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"knob\", \"param\": \"p_color\", \"size\": \"m\"}, \"id\": \"h_color\", \"inverse\": {\"commands\": [], \"restore\": \"p_color\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Tweak engine\", \"oracle\": {\"expect\": \"centroid_down\", \"reason\": \"engine tone darkens\", \"type\": \"wire\"}, \"params\": [{\"default\": 64, \"id\": \"p_color\", \"max\": 127, \"min\": 0, \"name\": \"Color\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"fx wet dry balance\", \"commands\": [{\"action\": \"fx4\", \"delayMs\": 0, \"param\": \"p_fxmix\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"ring\", \"param\": \"p_fxmix\", \"size\": \"m\"}, \"id\": \"h_fxmix\", \"inverse\": {\"commands\": [], \"restore\": \"p_fxmix\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Ride FX mix\", \"oracle\": {\"expect\": \"louder\", \"reason\": \"fx mix raises level\", \"type\": \"wire\"}, \"params\": [{\"default\": 30, \"id\": \"p_fxmix\", \"max\": 127, \"min\": 0, \"name\": \"FX mix\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"slower envelope attack\", \"commands\": [{\"action\": \"env-attack\", \"delayMs\": 0, \"param\": \"p_atk\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"slider\", \"param\": \"p_atk\", \"size\": \"m\"}, \"id\": \"h_attack\", \"inverse\": {\"commands\": [], \"restore\": \"p_atk\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Soften attack\", \"oracle\": {\"expect\": \"quieter\", \"reason\": \"longer attack softens\", \"type\": \"wire\"}, \"params\": [{\"default\": 20, \"id\": \"p_atk\", \"max\": 127, \"min\": 0, \"name\": \"Attack\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"play middle C to audition\", \"commands\": [{\"action\": \"eng1\", \"delayMs\": 0, \"param\": \"\", \"value\": 100}, {\"action\": \"demo-note\", \"delayMs\": 50, \"param\": \"\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_hit\", \"inverse\": {\"commands\": [{\"action\": \"eng1\", \"delayMs\": 0, \"param\": \"\", \"value\": 64}], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 3, \"name\": \"Play test note\", \"oracle\": {\"expect\": \"louder\", \"reason\": \"note sounds over USB\", \"type\": \"wire\"}, \"params\": [], \"reversible\": true}, {\"blurb\": \"soaked fx test note\", \"commands\": [{\"action\": \"fx4\", \"delayMs\": 0, \"param\": \"\", \"value\": 110}, {\"action\": \"demo-note\", \"delayMs\": 50, \"param\": \"\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_wash\", \"inverse\": {\"commands\": [{\"action\": \"fx4\", \"delayMs\": 0, \"param\": \"\", \"value\": 30}], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 3, \"name\": \"Hear FX wash\", \"oracle\": {\"expect\": \"louder\", \"reason\": \"wet fx note sounds\", \"type\": \"wire\"}, \"params\": [], \"reversible\": true}], \"title\": \"OP-1 portable synth\"}",
+      "finishReason": "stop",
+      "latencyMs": 22931,
+      "ttftMs": 19046,
+      "usage": {
+        "promptTokens": 3116,
+        "completionTokens": 3803,
+        "reasoningTokens": 2603,
+        "cachedTokens": 2545
+      }
+    }
+  ],
+  "ok": true
+}

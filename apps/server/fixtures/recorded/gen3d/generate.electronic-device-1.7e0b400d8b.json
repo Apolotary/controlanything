@@ -1,0 +1,96 @@
+{
+  "kind": "gen3d-run",
+  "kit": "ce.hackset/1+ce.gen3d/1",
+  "task": "generate",
+  "cardId": "electronic-device-1",
+  "request": "generate a hack set for the mini keyboard synthesizer",
+  "mode": "json",
+  "category": "synthesizer",
+  "transport": "midi",
+  "deviceName": "mini keyboard synthesizer",
+  "actions": [
+    {
+      "actionId": "eng1",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 46
+    },
+    {
+      "actionId": "eng2",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 47
+    },
+    {
+      "actionId": "env-atk",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 50
+    },
+    {
+      "actionId": "fx1",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 54
+    },
+    {
+      "actionId": "fx4",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 57
+    },
+    {
+      "actionId": "vol-t1",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "cc",
+      "number": 7
+    },
+    {
+      "actionId": "eq-low",
+      "kind": "set",
+      "sense": "audio",
+      "effect": "tone-down",
+      "msg": "cc",
+      "number": 90
+    },
+    {
+      "actionId": "note-c4",
+      "kind": "trigger",
+      "sense": "audio",
+      "effect": "any",
+      "msg": "note",
+      "number": 60
+    }
+  ],
+  "recordedAt": "2026-11-01T21:55:19.293Z",
+  "calls": [
+    {
+      "label": "gen3d.forge",
+      "model": "muse-spark-1.3",
+      "effort": "low",
+      "text": "{\"hacks\": [{\"blurb\": \"engine voice character\", \"commands\": [{\"action\": \"eng1\", \"delayMs\": 0, \"param\": \"p_eng1\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"knob\", \"param\": \"p_eng1\", \"size\": \"m\"}, \"id\": \"h_eng1\", \"inverse\": {\"commands\": [], \"restore\": \"p_eng1\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Ride engine 1\", \"oracle\": {\"expect\": \"centroid_up\", \"reason\": \"\", \"type\": \"wire\"}, \"params\": [{\"default\": 64, \"id\": \"p_eng1\", \"max\": 127, \"min\": 0, \"name\": \"Engine 1\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"engine tone variation\", \"commands\": [{\"action\": \"eng2\", \"delayMs\": 0, \"param\": \"p_eng2\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"knob\", \"param\": \"p_eng2\", \"size\": \"m\"}, \"id\": \"h_eng2\", \"inverse\": {\"commands\": [], \"restore\": \"p_eng2\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Twist engine 2\", \"oracle\": {\"expect\": \"centroid_down\", \"reason\": \"\", \"type\": \"wire\"}, \"params\": [{\"default\": 64, \"id\": \"p_eng2\", \"max\": 127, \"min\": 0, \"name\": \"Engine 2\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"track 1 loudness level\", \"commands\": [{\"action\": \"vol-t1\", \"delayMs\": 0, \"param\": \"p_vol\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"slider\", \"param\": \"p_vol\", \"size\": \"m\"}, \"id\": \"h_vol\", \"inverse\": {\"commands\": [], \"restore\": \"p_vol\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Ride volume\", \"oracle\": {\"expect\": \"louder\", \"reason\": \"\", \"type\": \"wire\"}, \"params\": [{\"default\": 90, \"id\": \"p_vol\", \"max\": 127, \"min\": 0, \"name\": \"Volume\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"master low tone weight\", \"commands\": [{\"action\": \"eq-low\", \"delayMs\": 0, \"param\": \"p_low\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"knob\", \"param\": \"p_low\", \"size\": \"m\"}, \"id\": \"h_low\", \"inverse\": {\"commands\": [], \"restore\": \"p_low\"}, \"kind\": \"control\", \"max_rate_hz\": 3, \"name\": \"Boost low end\", \"oracle\": {\"expect\": \"centroid_down\", \"reason\": \"\", \"type\": \"wire\"}, \"params\": [{\"default\": 64, \"id\": \"p_low\", \"max\": 127, \"min\": 0, \"name\": \"Low\", \"step\": 1, \"unit\": \"\"}], \"reversible\": true}, {\"blurb\": \"sound middle C once\", \"commands\": [{\"action\": \"note-c4\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_play\", \"inverse\": {\"commands\": [{\"action\": \"vol-t1\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 3, \"name\": \"Play C note\", \"oracle\": {\"expect\": \"louder\", \"reason\": \"\", \"type\": \"wire\"}, \"params\": [], \"reversible\": true}, {\"blurb\": \"bright swell then C note\", \"commands\": [{\"action\": \"eng1\", \"delayMs\": 0, \"param\": \"\", \"value\": 110}, {\"action\": \"eng2\", \"delayMs\": 0, \"param\": \"\", \"value\": 90}, {\"action\": \"note-c4\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_swell\", \"inverse\": {\"commands\": [{\"action\": \"eng1\", \"delayMs\": 0, \"param\": \"\", \"value\": 64}, {\"action\": \"eng2\", \"delayMs\": 0, \"param\": \"\", \"value\": 64}], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 3, \"name\": \"Swell patch\", \"oracle\": {\"expect\": \"centroid_up\", \"reason\": \"\", \"type\": \"wire\"}, \"params\": [], \"reversible\": true}], \"title\": \"Mini Synth\"}",
+      "finishReason": "stop",
+      "latencyMs": 18216,
+      "ttftMs": 14259,
+      "usage": {
+        "promptTokens": 3107,
+        "completionTokens": 3098,
+        "reasoningTokens": 1901,
+        "cachedTokens": 2545
+      }
+    }
+  ],
+  "ok": true
+}
