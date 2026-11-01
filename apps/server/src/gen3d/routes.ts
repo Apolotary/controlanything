@@ -1,7 +1,8 @@
 /**
  * Server wiring for FORGE: one shared forge per server context (so the discovery loop, the WebSocket
  * gen3d.* messages and these HTTP routes see the same specs and undo history), a bridge that broadcasts
- * every progress step as `agent.step` and every published spec as `ui.spec`, and the HTTP routes:
+ * every progress step as `agent.step`, every hack previewed while the model writes as `ui.partial`, and
+ * every published spec as `ui.spec`, and the HTTP routes:
  *
  *   POST /api/gen3d/generate  {device, driver, verification?, room?, request?, model?, effort?}
  *                             or {cardId, request?} for a device forged before (or a sample card: card_light, card_op1f)
@@ -38,8 +39,13 @@ export function useForge(ctx: ServerContext, f: Forge): Forge {
 function bridge(ctx: ServerContext, f: Forge): void {
   f.subscribe((e) => {
     try {
-      if (e.type === 'progress') ctx.hub.broadcast('agent.step', toAgentStep(e.progress));
-      else ctx.hub.broadcast('ui.spec', e.uiSpec);
+      if (e.type === 'spec') {
+        ctx.hub.broadcast('ui.spec', e.uiSpec);
+        return;
+      }
+      ctx.hub.broadcast('agent.step', toAgentStep(e.progress));
+      const it = e.progress.item;
+      if (it) ctx.hub.broadcast('ui.partial', { specId: f.specIdFor(e.progress.cardId), cardId: e.progress.cardId, runId: e.progress.runId, seq: it.seq, control: it.control, ...(it.part ? { part: it.part } : {}), ...(it.hackItem ? { hackItem: it.hackItem } : {}), hack: it.hack });
     } catch (err) {
       ctx.log(`[gen3d] broadcast failed: ${(err as Error).message}`);
     }

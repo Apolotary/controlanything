@@ -60,8 +60,8 @@ export interface ForgeProgress {
   recordedFrom?: string;
   startedAt: number;
   endedAt?: number;
-  /** a finished piece of the object while the model is still writing */
-  item?: { kind: 'hack'; hack: Hack; control: Control; part?: Part; hackItem?: HackItem };
+  /** a finished piece of the object while the model is still writing (broadcast as ui.partial) */
+  item?: { kind: 'hack'; seq: number; hack: Hack; control: Control; part?: Part; hackItem?: HackItem };
 }
 
 export interface StageSummary {
@@ -479,8 +479,9 @@ export function createForge(deps: ForgeDeps): Forge {
               const d = HackDraft.safeParse(it.value);
               if (!d.success) continue;
               const h = draftToHack(d.data);
-              const pv = previewHack(h, streamed++, device, driver, verification);
-              step({ phase: 'forge', status: 'ok', title: `+ ${h.name}`, detail: h.blurb, model, effort, latencyMs: Date.now() - t0, source: transport.source, item: { kind: 'hack', hack: h, control: pv.control, part: pv.part, hackItem: pv.item } });
+              const seq = streamed++;
+              const pv = previewHack(h, seq, device, driver, verification, draftAccent(d.data));
+              step({ phase: 'forge', status: 'ok', title: `+ ${h.name}`, detail: h.blurb, model, effort, latencyMs: Date.now() - t0, source: transport.source, item: { kind: 'hack', seq, hack: h, control: pv.control, part: pv.part, hackItem: pv.item } });
             }
           },
           req.signal,

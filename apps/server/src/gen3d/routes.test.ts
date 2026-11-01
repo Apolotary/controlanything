@@ -76,6 +76,9 @@ describe('gen3d HTTP routes', () => {
     const specs = sent.filter(([t]) => t === 'ui.spec').map(([, p]) => p);
     expect(specs).toHaveLength(2);
     for (const p of specs) expect(PayloadSchemas['ui.spec'].safeParse(p).success).toBe(true);
+    const partials = sent.filter(([t]) => t === 'ui.partial').map(([, p]) => p as { seq: number });
+    expect(partials.map((p) => p.seq)).toEqual([0, 1, 2, 3, 4]);
+    for (const p of partials) expect(PayloadSchemas['ui.partial'].safeParse(p).success).toBe(true);
     const steps = sent.filter(([t]) => t === 'agent.step').map(([, p]) => p);
     expect(steps.length).toBeGreaterThan(5);
     for (const p of steps) expect(PayloadSchemas['agent.step'].safeParse(p).success).toBe(true);
