@@ -4,7 +4,10 @@ import { defineConfig } from 'vite';
 // `npm run dev:hmr -w @ce/companion` runs Vite's own dev server on :5173 with /api and /ws proxied.
 export default defineConfig({
   base: '/companion/',
-  build: { outDir: 'dist', emptyOutDir: true, target: 'es2022', sourcemap: true },
+  build: {
+    outDir: 'dist', emptyOutDir: true, target: 'es2022', sourcemap: true,
+    rollupOptions: { input: { companion: 'index.html', vsynth: 'vsynth/index.html' } },
+  },
   server: {
     port: 5173,
     proxy: {

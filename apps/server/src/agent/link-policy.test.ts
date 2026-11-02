@@ -35,4 +35,16 @@ describe('selected executor and instrument identity', () => {
     const oneMac = { macLocal: false, devices: () => [{ ...device, ports: [...device.ports!, { id: 'out-2', name: 'EP-133', kind: 'midi-out' as const }] }] };
     expect(pickExecutor(oneMac, 'midi', { portHint: 'EP-133' })?.port).toBeUndefined();
   });
+  it('does not turn an unknown physical instrument into the silent visual output', () => {
+    const visual = { id: 'ce-visual-synth', name: 'ControlAnything Visual Synth', kind: 'midi-out' as const };
+    const onlyVisual = { macLocal: false, devices: () => [{ ...device, ports: [visual] }] };
+    expect(pickExecutor(onlyVisual, 'midi')?.port).toBeUndefined();
+    expect(pickExecutor(onlyVisual, 'midi', { preferDeviceId: 'mac' })?.port).toBeUndefined();
+    expect(pickExecutor(onlyVisual, 'midi', { portHint: 'Synth' })?.port).toBeUndefined();
+    expect(pickExecutor(onlyVisual, 'midi', { portHint: 'ControlAnything Visual Synth' })?.port).toEqual(visual);
+    expect(pickExecutor(onlyVisual, 'midi', { portHint: visual.id, preferDeviceId: 'mac' })?.port).toEqual(visual);
+    const withPhysical = { macLocal: false, devices: () => [{ ...device, ports: [visual, ...device.ports!] }] };
+    expect(pickExecutor(withPhysical, 'midi')?.port?.id).toBe('out');
+    expect(pickExecutor(withPhysical, 'midi', { preferDeviceId: 'mac' })?.port?.id).toBe('out');
+  });
 });

@@ -8,7 +8,7 @@
  *   camera=live|photo|sim   camera source (default: live on a headset, photo in the emulator)
  *   photo=<url>        backdrop photo for camera=photo (default test/scan-scene.jpg)
  *   sim=<url>          sim embed for camera=sim (default /sim/?embed=room)
- *   scan=fixture       answer scan frames locally with recorded SAM 3.1 boxes (emulator + photo only)
+ *   scan=fixture       use recorded photo boxes or projected sim layout (automatic for sim + fixture server)
  *   replay=<url>       a take (session.jsonl or .zip); replayMode=playback|pipeline
  *   record=1           start recording at load
  *   mic=0              never open the microphone (no AudioContext at all)
@@ -50,7 +50,7 @@ import { type AimHit, type AimTarget, aimAt, touching } from '../scan/aim';
 import { type CameraSource, CameraError, LiveCamera } from '../scan/camera';
 import { FrameCapture } from '../scan/capture';
 import { JpegEncoder } from '../scan/encode';
-import { fixtureFromSimLayout, loadSamFixture, type SamFixture } from '../scan/fixture';
+import { fixtureFromSimLayout, loadSamFixture, projectFixture, type SamFixture } from '../scan/fixture';
 import { VirtualRoomDepth, XrHitTester } from '../scan/hittest';
 import type { DepthProvider } from '../scan/placement';
 import { HandheldTracker, type WristPose } from '../scan/handheld';
@@ -313,6 +313,24 @@ export class QuestApp {
     window.addEventListener('pointerup', () => (this.input.pointer.down = false));
   }
 
+  private async useSimFixture(): Promise<void> {
+    const room = this.room;
+    if (!room || room.source.kind !== 'sim') return;
+    try {
+      await room.ready;
+      if (this.params.get('scan') !== 'fixture' && this.serverMode !== 'fixture') return;
+      const layout = room.sim?.layout;
+      if (!layout?.devices.length) {
+        this.page.log('scan fixture: the sim embed exposes no layout', 'warn');
+        return;
+      }
+      this.fixture = fixtureFromSimLayout(layout);
+      this.page.log(`scan fixture: ${layout.devices.length} exact boxes from the sim layout (labelled sim-layout, not a model)`, 'warn');
+    } catch (error) {
+      this.page.log(`scan fixture unavailable: ${(error as Error).message}`, 'warn');
+    }
+  }
+
   private async setupCamera(): Promise<void> {
     const want = this.params.get('camera') ?? (this.emulator ? 'photo' : 'live');
     const headPose = () => (this.lastFrame ? { position: this.lastFrame.head.position, quaternion: this.lastFrame.head.quaternion } : null);
@@ -330,15 +348,7 @@ export class QuestApp {
       if (this.emulator) this.scene.add(this.room.backdropGroup);
       this.camera = new SyntheticCamera(this.room, headPose);
       if (this.params.get('scan') === 'fixture' && src.kind === 'sim') {
-        void this.room.ready.then(() => {
-          const layout = this.room?.sim?.layout;
-          if (!layout?.devices?.length) {
-            this.page.log('scan fixture: the sim embed exposes no layout', 'warn');
-            return;
-          }
-          this.fixture = fixtureFromSimLayout(layout);
-          this.page.log(`scan fixture: ${layout.devices.length} exact boxes from the sim layout (labelled sim-layout, not a model)`, 'warn');
-        });
+        void this.useSimFixture();
       }
       if (this.params.get('scan') === 'fixture' && src.kind === 'photo') {
         this.fixture = await loadSamFixture(`${import.meta.env.BASE_URL}test/scan-scene.sam.json`).catch((e) => {
@@ -661,7 +671,7 @@ export class QuestApp {
   }
 
   private observeTarget(target: HudTarget): void {
-    if (/\b(person|people|human)\b/i.test(target.label)) return;
+    if (/\b(person|people|human)\b/i.test(target.rawLabel ?? target.label)) return;
     const tag = this.modes.tags.get(target.id);
     if (tag) {
       tag.position = { x: target.position[0], y: target.position[1], z: target.position[2] };
@@ -692,7 +702,7 @@ export class QuestApp {
     }
     if (this.modes.mode === 'annotate') {
       const candidates = [...this.observed.values()].filter(({ target, at }) => !this.modes.tags.has(target.id)
-        && now - at <= annotationFadeMs(isLiveId(target.id)) && (target.score ?? 0) >= 0.5 && matchesAnnotationFilter(target.label, this.filter)
+        && now - at <= annotationFadeMs(isLiveId(target.id)) && (target.score ?? 0) >= 0.5 && matchesAnnotationFilter(target.rawLabel ?? target.label, this.filter)
         && inAnnotationRange(target.position, head, range));
       const rank = (target: HudTarget) => {
         const x = target.position[0] - head.x, y = target.position[1] - head.y, z = target.position[2] - head.z;
@@ -969,6 +979,10 @@ export class QuestApp {
       this.welcome = m.payload as PayloadOf<'welcome'>;
       void this.loadHelper();
       this.serverMode = this.welcome.mode;
+      if (this.room?.source.kind === 'sim' && !this.params.has('scan')) {
+        if (this.serverMode === 'fixture') void this.useSimFixture();
+        else this.fixture = undefined;
+      }
       this.pendingMode = this.modes.mode;
       this.ws.send('mode.set', { mode: this.modes.mode }, { to: 'server' });
       for (const tag of this.modes.tags.values()) if (tag.pending) this.ws.send('tag.add', tag.pending, { to: 'server' });
@@ -1295,6 +1309,11 @@ export class QuestApp {
       return;
     }
     if (p.cardId) r.payload.cardId = p.cardId;
+    if (this.fixture && this.room) {
+      r.payload.fixtureDetections = projectFixture(this.fixture, this.room, r.record).map((d) => ({
+        detId: d.detId, label: d.label, prompt: d.prompt ?? d.label, score: d.score, box: d.box,
+      }));
+    }
     // tells the camera oracle whether absolute luma is comparable across the before/after pair
     if (r.payload.camera && this.camera instanceof LiveCamera) r.payload.camera.exposure = this.exposureLocked ? 'locked' : 'auto';
     this.ws.send('sense.result', { senseId: p.senseId, kind: 'frame', frame: r.payload, at: Date.now(), ok: true }, { to: 'server' });

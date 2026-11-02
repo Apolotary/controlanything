@@ -5,9 +5,10 @@
  * IR from the library: when nothing reacts, the next candidate brand is tried (bounded); an honest miss is
  * expected and reported as evidence with pass=false. Every attempt is a verify.result broadcast.
  */
-import type { Driver, DriverAction, Effect, Evidence, ExecOp, Polygon, SenseResultPayload, VerifyState } from '@ce/protocol';
+import type { Driver, DriverAction, Effect, Evidence, ExecOp, Polygon, ScanFramePayload, SenseResultPayload, VerifyState } from '@ce/protocol';
 import { newId } from '@ce/protocol';
 import { cancellableDelay as sleep, throwIfCancelled } from '../muse/cancellation';
+import { isVisualSynthPort } from '../devices/visualSynth';
 import { resolveOp } from '../devices/encode';
 import type { IrCandidate } from '../devices/profiles';
 import { audioEvidence, audioMatches, observeAudio } from '../oracle/audio';
@@ -74,16 +75,16 @@ function effectFor(a: DriverAction): Effect {
 }
 
 /** Ask the camera for one verify frame. */
-async function captureFrame(d: Dispatcher, sensorDeviceId: string, cardId: string, signal?: AbortSignal): Promise<{ img: DecodedImage; jpeg: string; width: number; height: number; exposureLocked: boolean }> {
+async function captureFrame(d: Dispatcher, sensorDeviceId: string, cardId: string, signal?: AbortSignal): Promise<{ img: DecodedImage; jpeg: string; width: number; height: number; exposureLocked: boolean; fixtures?: ScanFramePayload['fixtureDetections']; pose?: { position: { x: number; y: number; z: number } } }> {
   const [r] = await d.sense(sensorDeviceId, 'frame', { cardId, signal, timeoutMs: 6000 });
   if (!r?.frame) throw new ExecError(`no frame from ${sensorDeviceId}${r?.error ? ` (${r.error})` : ''}`, 'device');
   const src = r.frame.camera?.source;
   // absolute luma is only comparable at a fixed exposure: synthetic/replay frames, or a headset that locked it
-  return { img: decodeJpeg(r.frame.jpeg), jpeg: r.frame.jpeg, width: r.frame.width, height: r.frame.height, exposureLocked: src === 'synthetic' || src === 'replay' || r.frame.camera?.exposure === 'locked' };
+  return { fixtures: src === 'synthetic' ? r.frame.fixtureDetections : undefined, pose: r.frame.camera?.cameraPose ?? r.frame.pose, img: decodeJpeg(r.frame.jpeg), jpeg: r.frame.jpeg, width: r.frame.width, height: r.frame.height, exposureLocked: src === 'synthetic' || src === 'replay' || r.frame.camera?.exposure === 'locked' };
 }
 
 /** Re-find the selected target in a fresh frame before sending a camera-verified command. */
-export async function refreshPolygon(sam: Sam, t: Target, jpeg: string, width: number, height: number, signal?: AbortSignal): Promise<{ polygon: Polygon; fresh: boolean; latencyMs: number; model: string }> {
+export async function refreshPolygon(sam: Sam, t: Target, jpeg: string, width: number, height: number, signal?: AbortSignal, pose?: { position: { x: number; y: number; z: number } }): Promise<{ polygon: Polygon; fresh: boolean; latencyMs: number; model: string }> {
   throwIfCancelled(signal);
   const det = t.detection;
   // Paired devices selected without a detection use the centre of the camera view.
@@ -91,7 +92,7 @@ export async function refreshPolygon(sam: Sam, t: Target, jpeg: string, width: n
   let r;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      r = await sam.segment(det.prompt, jpeg, { width, height, signal, label: `sam:verify:${det.prompt}` });
+      r = await sam.segment(det.prompt, jpeg, { width, height, pose, signal, label: `sam:verify:${det.prompt}` });
       throwIfCancelled(signal);
       break;
     } catch (e) {
@@ -231,12 +232,33 @@ async function observeOnce(deps: VerifyDeps, t: Target, driver: Driver, a: Drive
 
   if (sense === 'camera') {
     if (!o.cameraDeviceId) throw new ExecError('no camera sensor online', 'offline');
-    const before = await captureFrame(d, o.cameraDeviceId, t.cardId, o.signal);
+    let before = await captureFrame(d, o.cameraDeviceId, t.cardId, o.signal);
     let poly = polygon;
+    if (deps.sam.mode === 'fixture' && before.fixtures && t.detection) {
+      const matches = before.fixtures.filter((det) => det.label === t.detection!.label);
+      const selected = matches.length === 1 ? matches[0] : undefined;
+      if (!selected) throw new ExecError('the synthetic camera cannot see the selected device', 'device');
+      const [x, y, w, h] = selected.box;
+      if (![x, y, w, h].every(Number.isFinite) || x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > before.width || y + h > before.height) throw new ExecError('invalid synthetic target bounds', 'device');
+      poly = selected.polygon ?? polygonFor(null, selected.box);
+    }
     if (!poly) {
-      const r = await refreshPolygon(deps.sam, t, before.jpeg, before.width, before.height, o.signal);
+      const r = await refreshPolygon(deps.sam, t, before.jpeg, before.width, before.height, o.signal, before.pose);
       poly = r.polygon;
       o.onStep?.(r.fresh ? `outline re-found by ${r.model}` : 'outline from the scan frame', `${poly.length} points`);
+    }
+    // A repeatable baseline prevents a pattern already selected from producing a false miss.
+    // Only this repo's silent virtual instrument supports these preparation commands.
+    if (isVisualSynthPort(exec.port) && op.kind === 'midi') {
+      const baseline: ExecOp | undefined = op.msg === 'pc' && op.number !== undefined
+        ? { ...op, number: (op.number + 1) % 3 }
+        : op.msg === 'cc' && typeof op.value === 'number'
+          ? { ...op, value: op.value < 64 ? 127 : 0 } : undefined;
+      if (baseline) {
+        await d.exec(exec.deviceId, baseline, { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: `${a.actionId}:baseline`, waitForSlot: true, signal: o.signal });
+        await sleep(350, o.signal);
+        before = await captureFrame(d, o.cameraDeviceId, t.cardId, o.signal);
+      }
     }
     const ack = await d.exec(exec.deviceId, op, { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: a.actionId, lightCap, waitForSlot: true, signal: o.signal, timeoutMs: 4000 });
     const settle = deps.settleMs?.(t, a) ?? 1200;

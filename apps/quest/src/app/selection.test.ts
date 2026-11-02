@@ -311,6 +311,14 @@ describe('explicit annotation and control', () => {
     expect(visible.size).toBe(0);
   });
 
+  it('filters annotations on the raw label, not the shortened display label', () => {
+    const { app, receive } = shell();
+    Object.assign(app, { drawTarget: vi.fn(), eraseTarget: vi.fn() });
+    receive('observeTarget', { id: 'vsynth', label: 'Controlanything visua…', rawLabel: 'ControlAnything Visual Synth', score: 0.9,
+      position: [0, 1.4, -1.5], confirmed: true, status: 'scanned' });
+    expect((Reflect.get(app, 'visibleTargets') as Set<string>).has('vsynth')).toBe(true);
+  });
+
   it('a HUD-consumed pinch never tags an object behind the panel', () => {
     const { app, target, ws } = shell();
     Reflect.set(app, 'consumed', { left: false, right: true });

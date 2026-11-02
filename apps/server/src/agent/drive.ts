@@ -6,6 +6,7 @@
  * resort so the loop keeps going (clearly labelled: no Meta model wrote it). Nothing executes until VERIFY.
  */
 import { type Driver, DriverDraft, newId } from '@ce/protocol';
+import { visualSynthDraft, VISUAL_SYNTH_ID } from '../devices/visualSynth';
 import { resolveOp } from '../devices/encode';
 import type { LearnedCode } from './types';
 import type { MidiProfile } from '../devices/profiles';
@@ -28,6 +29,7 @@ export const DRIVE_SYSTEM =
   'IR codes are named by ref ("lib:<brand>/ch<n>/<key>" from the brief, or "learned:<id>"), never invented; the server fills bytes and timings. ' +
   'For a dimmable light with brighter/dimmer triggers also add one "set" action with range {"min":0,"max":100,"step":10} whose encode is {"kind":"step","upActionId":...,"downActionId":...,"steps":10}. ' +
   'For a synth prefer the parameters the brief marks as best for a demo: 4-8 "set" actions on the most audible CCs plus one note trigger. Never send SysEx other than the identity request, never tempo/record/randomize controls. ' +
+  'For a silent visual instrument follow its chart instead: camera verification only, no notes, exactly Warp plus three pattern triggers, and include the CC action range and curve from the chart. ' +
   'provenance: cite the brief\'s sources. Keep it to at most 12 actions.';
 
 export interface DriveResult {
@@ -184,6 +186,7 @@ export function postProcess(draft: DriverDraft, cardId: string, transport: Drive
 // --- curated templates (FIXTURE fallback + the deterministic baseline the model is compared against) ------
 
 export function templateMidiDraft(card: DeviceCardPayload, profile: MidiProfile, research: Research): DriverDraft {
+  if (profile.id === VISUAL_SYNTH_ID) return visualSynthDraft(card.cardId, research.provenance);
   const best = profile.demo?.bestParameters ?? [];
   const ccs: number[] = [];
   for (const line of best) for (const m of line.matchAll(/CC (\d+)(?:-(\d+))?/g)) {
@@ -273,6 +276,7 @@ export function fixtureDriverDraft(messages: ChatMessage[]): DriverDraft {
   const executorKind = /via a (\w+)/.exec(text)?.[1];
   const card: DeviceCardPayload = { cardId, name: 'FIXTURE device', maker: 'unknown', model: 'unknown', category: transport === 'midi' ? 'synthesizer' : transport === 'ir' ? 'lighting' : 'computer', confidence: 0.5, protocols: [transport === 'local' ? 'other' : transport], evidence: [] };
   const research: Research = { brief: text, provenance: [{ source: 'fixture', ref: 'fixture:driver_draft' }] };
+  if (transport === 'midi' && text.includes('ControlAnything Visual Synth')) return visualSynthDraft(cardId, research.provenance);
   if (transport === 'midi') {
     // CCs mentioned in the brief's chart lines "  46: ..." -> allowed set
     const ccs = [...text.matchAll(/^\s+(\d+): /gm)].map((m) => Number(m[1]));

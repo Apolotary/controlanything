@@ -16,6 +16,7 @@ export interface MidiParameter {
   name: string;
   group?: string;
   cc: number | null;
+  curve?: 'linear' | 'exponential' | 'step';
   nrpn?: number | null;
   range?: [number, number];
   channel?: string;
@@ -28,6 +29,7 @@ export interface MidiProfile {
   device: string;
   manufacturer: string;
   firmwareNotes?: string;
+  sense?: 'camera' | 'audio';
   sources: { title: string; url: string; confidence?: string }[];
   usb?: { classCompliantMidi?: boolean; classCompliantAudio?: boolean; portNameHint?: string; notes?: string };
   identity?: { respondsToUniversalInquiry: boolean | null; manufacturerId?: number[]; replyExample?: string | null; notes?: string };
@@ -172,6 +174,7 @@ export function parameterForCc(profile: MidiProfile, cc: number): MidiParameter 
 export function matchMidiProfile(profiles: Profiles, card: { maker: string; model: string; name: string }): MidiProfile | undefined {
   const text = `${card.maker} ${card.model} ${card.name}`.toLowerCase();
   const rules: [RegExp, string][] = [
+    [/controlanything visual synth|visual synth/, 'controlanything-visual-synth'],
     [/op-?1/, 'op-1-field'],
     [/ep-?133|k\.?o\.? ?ii|k\.o\. 2/, 'ep-133'],
     [/\bmove\b/, 'ableton-move'],
@@ -187,6 +190,7 @@ export function midiBrief(profile: MidiProfile, maxParams = 40): string {
     `${profile.device} (${profile.manufacturer}). ${profile.firmwareNotes ?? ''}`.trim(),
     profile.channels?.receive ? `Channels: ${profile.channels.receive}` : '',
     profile.usb?.portNameHint ? `USB MIDI port name contains "${profile.usb.portNameHint}".` : '',
+    profile.sense ? `Verification sensor: ${profile.sense}.` : '',
     'Incoming CC chart (cc: parameter [range]):',
     ...profile.parameters
       .filter((p) => typeof p.cc === 'number')
