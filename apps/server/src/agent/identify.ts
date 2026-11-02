@@ -179,10 +179,15 @@ export function fixtureDeviceCard(messages: ChatMessage[]): DeviceCardDraft {
     .map((m) => (typeof m.content === 'string' ? m.content : m.content.map((p) => (p.type === 'text' ? p.text : '')).join(' ')))
     .join(' ')
     .toLowerCase();
-  if (/ceiling light|lamp|light/.test(text)) {
+  // the SAM label is the strongest cue; the system prompt names every category, so the whole text only decides
+  // when the label says nothing (a synth selected in FIXTURE mode used to come back as a ceiling light)
+  const label = /label "([^"]+)"/.exec(text)?.[1] ?? '';
+  const kindOf = (s: string) => (/ceiling light|lamp|\blight\b/.test(s) ? 'light' : /synth|keyboard|op-1|electronic device/.test(s) ? 'synth' : undefined);
+  const kind = kindOf(label) ?? kindOf(text);
+  if (kind === 'light') {
     return { name: 'FIXTURE ceiling light', maker: 'unknown', model: 'unknown', category: 'lighting', confidence: 0.55, protocols: ['ir'], evidence: ['FIXTURE: canned identification, no Meta model was called', 'round LED ceiling fixture'], companion: 'ir_blaster', requires: ['ir'], followUp: ['photograph the remote control'] };
   }
-  if (/synth|keyboard|op-1|electronic device/.test(text)) {
+  if (kind === 'synth') {
     return { name: 'FIXTURE OP-1 Field', maker: 'teenage engineering', model: 'OP-1 Field', category: 'synthesizer', confidence: 0.6, protocols: ['midi'], evidence: ['FIXTURE: canned identification, no Meta model was called', 'grey portable synth with four colour encoders'], companion: 'computer_usb', requires: ['midi'], visibleText: ['OP-1'] };
   }
   return { name: 'FIXTURE unknown device', maker: 'unknown', model: 'unknown', category: 'other', confidence: 0.2, protocols: ['other'], evidence: ['FIXTURE: canned identification, no Meta model was called'], companion: 'none', requires: [] };
