@@ -76,6 +76,7 @@ export class Hub {
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES, perMessageDeflate: false });
   private readonly conns = new Map<string, Connection>();
   private readonly messageListeners = new Set<(e: HubMessageEvent) => void>();
+  private readonly presenceListeners = new Set<(p: PresencePayload) => void>();
   private readonly log: (line: string) => void;
   private readonly heartbeat: ReturnType<typeof setInterval>;
   private readonly unsubscribe: (() => void)[] = [];
@@ -111,6 +112,12 @@ export class Hub {
   onMessage(fn: (e: HubMessageEvent) => void): () => void {
     this.messageListeners.add(fn);
     return () => this.messageListeners.delete(fn);
+  }
+
+  /** Includes hello/port updates, disconnects, pairing and revocation. */
+  onPresence(fn: (p: PresencePayload) => void): () => void {
+    this.presenceListeners.add(fn);
+    return () => this.presenceListeners.delete(fn);
   }
 
   /** Send from the server to every connection of one device. Returns the number of sockets reached. */
@@ -416,6 +423,7 @@ export class Hub {
     const payload: PresencePayload = { spaceId: this.o.registry.spaceId, devices: this.devices(), reason };
     if (deviceId) payload.deviceId = deviceId;
     this.broadcast('presence', payload);
+    for (const fn of this.presenceListeners) fn(payload);
   }
 
   private send<T extends MessageType>(c: Connection, type: T, payload: PayloadOf<T>): void {

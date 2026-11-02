@@ -46,6 +46,8 @@ export interface ScanDeps {
   log?: (line: string) => void;
   prompts?: string[];
   maxInFlight?: number;
+  /** Pairing and verification still work while discovery is paused. */
+  enabled?: () => boolean;
 }
 
 export interface FrameSender {
@@ -91,10 +93,24 @@ export class ScanService {
     return this.lastBySender.get(deviceId);
   }
 
+  /** A local detector may use its own id; use its label against the referenced frame. */
+  tagDetection(frameId: string, detId: string | undefined, label: string): TargetDetection | undefined {
+    const f = this.frames.get(frameId);
+    if (!f || FORBIDDEN.test(label)) return undefined;
+    const byLabel = f.detections.filter((d) => d.label.toLowerCase() === label.toLowerCase());
+    const det = (detId ? f.detections.find((d) => d.detId === detId || d.trackId === detId || d.cardId === detId) : undefined)
+      ?? (byLabel.length === 1 ? byLabel[0] : undefined);
+    if (det) return this.detection(frameId, det.detId);
+    return { frameId, detId: detId ?? frameId, sensorDeviceId: f.deviceId, label, prompt: label, score: 1,
+      box: [0, 0, f.frame.width, f.frame.height], width: f.frame.width, height: f.frame.height,
+      jpeg: f.frame.jpeg, capturedAt: f.frame.capturedAt };
+  }
+
   async onFrame(frame: ScanFramePayload, from: FrameSender): Promise<ScanResultPayload | undefined> {
     // an answer to sense.request {kind: 'frame'} that arrived as a bare scan.frame
     if (frame.senseId && this.d.dispatcher.onSense({ senseId: frame.senseId, kind: 'frame', frame, at: frame.capturedAt })) return undefined;
     if (frame.purpose === 'verify' && !frame.senseId) return undefined;
+    if (frame.purpose !== 'pair' && this.d.enabled?.() === false) return undefined;
     const busy = this.inFlight.get(from.deviceId) ?? 0;
     if (busy >= (this.d.maxInFlight ?? 2)) {
       this.dropped++;
@@ -104,12 +120,15 @@ export class ScanService {
     const started = Date.now();
     try {
       const stored: StoredFrame = { frame, deviceId: from.deviceId, detections: [], masks: new Map() };
+      // The on-device detector can tag this frame while SAM is still working.
+      this.rememberFrame(stored);
       const qr = this.lookForQr(stored, from);
       let result: ScanResultPayload;
       if (frame.purpose === 'pair') {
         result = { frameId: frame.frameId, width: frame.width, height: frame.height, detections: [], modelId: 'none', source: this.d.sam.mode, latencyMs: Date.now() - started, prompts: [] };
       } else {
         const runs = await this.d.sam.segmentAll(this.prompts, frame.jpeg, { width: frame.width, height: frame.height, pose: frame.camera?.cameraPose ?? frame.pose, label: 'scan' });
+        if (this.d.enabled?.() === false) return undefined;
         const detections = this.toDetections(stored, runs.flatMap((r) => r.records.map((rec) => ({ rec, prompt: r.prompt }))));
         this.track(stored, detections, from.deviceId);
         this.matchTargets(stored, detections);
@@ -208,8 +227,12 @@ export class ScanService {
   }
 
   private remember(s: StoredFrame): void {
-    this.frames.set(s.frame.frameId, s);
+    this.rememberFrame(s);
     this.lastBySender.set(s.deviceId, s);
+  }
+
+  private rememberFrame(s: StoredFrame): void {
+    this.frames.set(s.frame.frameId, s);
     if (this.frames.size > 12) {
       const oldest = this.frames.keys().next().value;
       if (oldest !== undefined) this.frames.delete(oldest);
