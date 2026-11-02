@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { roster as devices, type Roster } from './executors';
 import { neededCapability, type LinkCapability } from './link';
 import { MAC_LOCAL_ID } from './maclocal';
+import { synthConnectionGuidance } from './guidance';
 import type { Target } from './types';
 
 const StoredTagSchema = z.object({
@@ -116,17 +117,17 @@ export function tagCapability(t: Target): LinkCapability | undefined {
 }
 
 /** Recompute from current presence on every snapshot; an old link is never proof of a live bridge. */
-export function evaluateConnection(t: Target, roster: Roster): Pick<TaggedDevice, 'connection' | 'hint'> {
+export function evaluateConnection(t: Target, roster: Roster): Pick<TaggedDevice, 'connection' | 'hint' | 'action'> {
   if (!t.card) return { connection: 'offline', hint: 'Identify this tagged device before setting up control' };
   const cap = tagCapability(t);
-  const hint = cap === 'midi'
-    ? 'To control it you need a companion: open the Mac app and connect the synth with USB-C'
-    : cap === 'ir'
+  const hint = cap === 'ir'
       ? 'Pair the Cardputer IR node or connect a Nature Remo bridge'
       : cap === 'local'
         ? 'Open the Mac app and enable control of this Mac'
         : 'Connect a companion that can reach this device';
-  const offline = { connection: 'offline' as const, hint };
+  let offline: Pick<TaggedDevice, 'connection' | 'hint' | 'action'> = {
+    connection: 'offline', hint, ...(cap === 'ir' ? { action: 'pair-device' } : cap === 'local' ? { action: 'open-companion' } : {}),
+  };
   if (!cap) return offline;
   const present = devices(roster);
   // Scan selection also carries the requesting headset; it is not the device being controlled.
@@ -136,6 +137,14 @@ export function evaluateConnection(t: Target, roster: Roster): Pick<TaggedDevice
     : undefined;
   const assigned = t.driver?.executor.deviceId ?? t.link?.executorDeviceId ?? selectedLocal;
   const portId = t.driver?.executor.port ?? t.link?.port?.id;
+  if (cap === 'midi') {
+    // A connected companion can have no MIDI capability yet (permission pending, or a standby tab).
+    // The internal Mac executor never hosts browser MIDI ports.
+    const companionOnline = present.some((d) => d.online && d.deviceId !== MAC_LOCAL_ID
+      && (!assigned || d.deviceId === assigned) && (d.role === 'companion' || d.capabilities.includes('midi')));
+    const guidance = synthConnectionGuidance(companionOnline);
+    offline = { connection: 'offline', hint: guidance.hint, ...(guidance.action ? { action: guidance.action } : {}) };
+  }
   const online = present.filter((d) => d.online && d.capabilities.includes(cap));
   const reachable = online.some((d) => {
     if (assigned && d.deviceId !== assigned) return false;

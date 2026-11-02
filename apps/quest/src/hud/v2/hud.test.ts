@@ -485,6 +485,60 @@ describe('HUD button interaction feedback', () => {
 });
 
 describe('explicit annotation and control modes', () => {
+  it('shows only the requested connection action and updates the open synth card in place', () => {
+    const { hud, frame, pinch } = setup();
+    hud.upsertTarget({ ...target, label: 'OP-1 Field', connection: 'offline' }); hud.setLocked(target.id);
+    const card = hud.root.getObjectByName('device-card');
+    const state = { targetId: target.id, connection: 'offline' as const, hint: 'Open ControlEverything on your Mac and plug in the synth', action: 'open-companion' as const };
+    const actions: string[] = [];
+    hud.on('pair', ({ targetId }) => actions.push(`pair:${targetId}`));
+    hud.on('pairCancel', ({ targetId }) => actions.push(`cancel:${targetId}`));
+    hud.setDeviceState?.(state); hud.update(frame());
+    const primary = hud.root.getObjectByName('control-pair')!;
+    expect(primary.getObjectByName('sdf')).toMatchObject({ text: 'Connect Mac' });
+    pinch(primary);
+    hud.setDeviceState?.({ ...state, pairingSeconds: 30 });
+    const cancel = hud.root.getObjectByName('control-pair-cancel')!;
+    expect(hud.root.getObjectByName('device-status')).toMatchObject({ text: "Look at the companion's QR code · 30s" });
+    expect(hud.root.getObjectByName('pair-code-hint')).toMatchObject({ text: 'or type the code shown on your Mac' });
+    hud.setDeviceState?.({ ...state, pairingSeconds: 29 });
+    expect(hud.root.getObjectByName('control-pair-cancel')).toBe(cancel);
+    pinch(cancel);
+    expect(actions).toEqual(['pair:device', 'cancel:device']);
+    hud.setDeviceState?.({ targetId: target.id, connection: 'offline', hint: 'Plug the synth into your Mac' });
+    expect(hud.root.getObjectByName('control-pair')).toBeUndefined();
+    expect(hud.root.getObjectByName('control-pair-code')).toBeUndefined();
+    expect(hud.root.getObjectByName('device-status')).toMatchObject({ text: 'Plug the synth into your Mac' });
+    hud.setDeviceState?.({ targetId: target.id, connection: 'setup' });
+    expect(hud.root.getObjectByName('device-card')).toBe(card);
+    expect(hud.root.getObjectByName('control-setup')).toBeTruthy();
+    hud.dispose();
+  });
+
+  it('lets a hand type and explicitly submit a Mac code without leaving XR', () => {
+    const { hud, frame, pinch } = setup();
+    hud.upsertTarget({ ...target, connection: 'offline' }); hud.setLocked(target.id);
+    hud.setDeviceState?.({ targetId: target.id, connection: 'offline', action: 'open-companion' }); hud.update(frame());
+    const submitted: string[] = [];
+    hud.on('pairCode', ({ code }) => submitted.push(code));
+    pinch(hud.root.getObjectByName('control-pair-code')!);
+    expect(hud.root.getObjectByName('device-card')!.visible).toBe(false);
+    expect(hud.root.getObjectByName('pair-code-submit')).toBeUndefined();
+    const lastKey = hud.root.getObjectByName('pair-key:Z')!;
+    const cancel = hud.root.getObjectByName('pair-code-close')!;
+    expect(lastKey.position.y - cancel.position.y).toBeGreaterThan(THEME.control.buttonHeight);
+    pinch(lastKey);
+    expect(hud.root.getObjectByName('pair-code-value')).toMatchObject({ text: 'Z··-···' });
+    pinch(hud.root.getObjectByName('pair-code-back')!);
+    for (const key of 'K7Q4M2') pinch(hud.root.getObjectByName(`pair-key:${key}`)!);
+    expect(submitted).toEqual([]);
+    expect(hud.root.getObjectByName('pair-code-value')).toMatchObject({ text: 'K7Q-4M2' });
+    pinch(hud.root.getObjectByName('pair-code-submit')!);
+    expect(submitted).toEqual(['K7Q4M2']);
+    expect(hud.root.getObjectByName('device-card')!.visible).toBe(true);
+    hud.dispose();
+  });
+
   it('starts with only the home bar, automatically scans without adding a card, and offers tag removal', () => {
     const scene = new Scene(), camera = new PerspectiveCamera();
     const hud = createHud({ scene, camera, renderer: {} as WebGLRenderer });
@@ -511,7 +565,7 @@ describe('explicit annotation and control modes', () => {
     expect((hud.root.getObjectByName('device-status') as Object3D & { text: string }).text).toBe('Checking the physical response.');
     expect(hud.root.getObjectByName('control-setup')).toBeUndefined();
     pinch(hud.root.getObjectByName('control-cancel')!);
-    hud.setDeviceState?.({ targetId: target.id, connection: 'offline', hint: 'Pair the Cardputer IR node.' });
+    hud.setDeviceState?.({ targetId: target.id, connection: 'offline', hint: 'Pair the Cardputer IR node.', action: 'pair-device' });
     expect((hud.root.getObjectByName('device-status') as Object3D & { text: string }).text).toBe('Pair the Cardputer IR node.');
     pinch(hud.root.getObjectByName('control-pair')!);
     expect(actions).toEqual(['setup:device', 'cancel:device', 'pair:device']);

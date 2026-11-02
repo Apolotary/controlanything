@@ -257,8 +257,9 @@ describe('discovery retries and consent', () => {
     expect(exec).not.toHaveBeenCalled();
     if (!hasPort) {
       expect(hub.of('target.status').at(-1)).toMatchObject({
-        sentence: 'Plug the synth into your Mac and open the Mac app', action: 'open-companion',
+        sentence: 'Plug the synth into your Mac',
       });
+      expect(hub.of('target.status').at(-1)?.action).toBeUndefined();
     }
     target.abort!.abort();
     await running;

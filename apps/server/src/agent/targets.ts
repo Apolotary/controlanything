@@ -69,18 +69,23 @@ export class TargetStore {
     t.sentence = words.sentence;
     t.hint = words.hint;
     t.action = words.action;
-    const payload: TargetStatusPayload = { cardId: t.cardId, runId: t.runId, state, since: t.since, ...words };
-    if (detail) payload.detail = detail.slice(0, 300);
-    if (t.driver) payload.driverId = t.driver.driverId;
-    if (t.specId) payload.specId = t.specId;
-    if (t.link?.executorDeviceId) payload.executorDeviceId = t.link.executorDeviceId;
     this.log(`[target] ${t.cardId} -> ${state}${detail ? `: ${detail}` : ''}`);
     try {
-      this.hub.broadcast('target.status', payload);
+      this.hub.broadcast('target.status', this.status(t));
     } catch (e) {
       this.log(`[target] status broadcast failed: ${(e as Error).message}`);
     }
     for (const fn of this.listeners) fn(t);
+  }
+
+  /** Current wire state for a reconnect; reading it never starts work. */
+  status(t: Target): TargetStatusPayload {
+    return {
+      cardId: t.cardId, runId: t.runId, state: t.state, since: t.since,
+      sentence: t.sentence, hint: t.hint, action: t.action, detail: t.detail?.slice(0, 300),
+      driverId: t.driver?.driverId, specId: t.specId,
+      executorDeviceId: t.link?.executorDeviceId ?? t.driver?.executor.deviceId,
+    };
   }
 
   /** Public view (no frame bytes). */

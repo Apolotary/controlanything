@@ -21,6 +21,7 @@ import {
   type PayloadOf,
   type PendingPairing,
   type Port,
+  type TargetStatusPayload,
   type UiSpecPayload,
   type VerifyResultPayload,
 } from '@ce/protocol';
@@ -33,6 +34,7 @@ import { clearIdentity, defaultDevice, type Identity, isLocalPage, loadIdentity,
 import { MidiBridge } from './midi';
 import { describeMidi, isRealtimeNoise, toHex } from './midiDecode';
 import { MidiExecutor } from './midiExec';
+import { clearPendingPairing, loadPendingPairing, savePendingPairing } from './pairing';
 import { CardputerBridge } from './serial/bridge';
 import { CardputerLink } from './serial/cardputer';
 import { $, ago, appendLine, button, clock, el, scheduler, secs, untilText } from './ui/dom';
@@ -40,6 +42,7 @@ import { jsonView } from './ui/json';
 import { pulseTrain, sparkline } from './ui/spark';
 import { evidenceSentence, linkProof, opSummary } from './ui/words';
 import { createStatusPresenter, type CalmStatus } from './ui/status';
+import { companionPorts, companionView, setupActivity, type SetupActivity } from './ui/onboarding';
 import { replayArmResult, runReplay } from './replay';
 
 const APP = 'companion@0.2.0';
@@ -55,6 +58,8 @@ let welcome: PayloadOf<'welcome'> | undefined;
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
 let selfExpiresAt = 0;
 let selfPairing = false;
+let selfPairingError = false;
+let selfPairGeneration = 0;
 const pending = new Map<string, PendingPairing>();
 const settledPairings = new Set<string>();
 let devices: DeviceInfo[] = [];
@@ -81,6 +86,9 @@ let mainTab: 'code' | 'tape' | 'spec' = 'code';
 let tabChosenByUser = false;
 let addTarget: 'phone' | 'quest' | 'devterm' = 'phone';
 let qrShown = '';
+let headsetQrShown = '';
+const targets = new Map<string, TargetStatusPayload>();
+let currentSetup: SetupActivity | undefined;
 let serverDown = false;
 const presenter = createStatusPresenter();
 let activity: CalmStatus = { text: 'Idle', working: false };
@@ -231,6 +239,7 @@ function renderStatus(text: string): void {
 }
 
 function renderCalm(): void {
+  renderOnboarding();
   const learning = bridge.learning && bridge.learning.until > Date.now() ? bridge.learning : undefined;
   const status: CalmStatus = !replaying && serverDown
     ? { text: 'Waiting for the server to reconnect', working: false }
@@ -258,6 +267,51 @@ function renderCalm(): void {
   pill('serial', 'Cardputer', link.ready, CardputerLink.supported, link.lastError);
   pill('mic', 'Microphone', oracle.state === 'on', AudioOracle.supported, oracle.error);
   $('details-open').classList.toggle('attention', Boolean(arm));
+}
+
+function renderOnboarding(): void {
+  const ownId = identity?.deviceId;
+  const ports = companionPorts(ownId, devices, midi.ports(), executor.leader);
+  currentSetup = undefined;
+  for (const target of [...targets.values()].reverse()) {
+    const result = linkResults.get(target.cardId);
+    const candidate = [...linkRequests.values()].some((request) => request.cardId === target.cardId && request.needs.includes('midi') && request.candidates?.some((c) => c.deviceId === ownId));
+    if (!ownId || (target.executorDeviceId ?? result?.executorDeviceId) !== ownId && !(target.state === 'linking' && candidate)) continue;
+    const card = cards.get(target.cardId);
+    if (card && !card.protocols.includes('midi')) continue;
+    const step = [...steps.values()].reverse().find((s) => s.cardId === target.cardId);
+    const next = setupActivity(card?.name ?? ports[0]?.name ?? 'your synth', target, step);
+    if (next) { currentSetup = next; break; }
+  }
+  const view = companionView({
+    connected: replaying || Boolean(conn?.open), authenticated: Boolean(identity), pairing: selfPairing || selfPairingError,
+    devices, ports, midiSupported: MidiBridge.supported, midiEnabled: midi.enabled, leader: executor.leader, activity: currentSetup,
+  });
+  $('onboarding').dataset.state = view.stage;
+  $('onboarding-title').textContent = view.title;
+  $('onboarding-next').textContent = view.next;
+  $('headset-status').textContent = view.headset;
+  $('headset-status').classList.toggle('connected', devices.some((d) => d.kind === 'quest' && d.online));
+  $('synth-status').textContent = view.synth;
+  $('synth-status').classList.toggle('connected', ports.length > 0);
+  $('connection-steps').hidden = view.stage === 'pairing' || view.stage === 'connecting';
+  $('pairscreen').hidden = view.stage !== 'pairing';
+  $('headset-open').hidden = view.stage !== 'headset';
+  const questUrl = health?.urls.https ? `${health.urls.https}/quest/` : undefined;
+  $('headset-url').textContent = questUrl ?? 'Open the server’s Quest address in Quest Browser.';
+  $('headset-qr').hidden = !questUrl;
+  if (questUrl && questUrl !== headsetQrShown) {
+    headsetQrShown = questUrl;
+    void renderQr($('headset-qr'), questUrl);
+  }
+  $('approve-panel').hidden = !canApprove || view.stage !== 'headset';
+  $('enable-midi').hidden = !view.enableMidi;
+  $<HTMLButtonElement>('enable-midi').disabled = replaying || bridgeBusy.has('midi');
+  const showActivity = Boolean(currentSetup && ports.length && conn?.open);
+  $('setup-activity').hidden = !showActivity;
+  $('setup-activity-text').textContent = currentSetup?.text ?? '';
+  $('setup-stop').hidden = !showActivity || !currentSetup?.canStop;
+  $<HTMLButtonElement>('setup-stop').disabled = replaying;
 }
 
 function removePending(pairingId: string): void {
@@ -313,6 +367,21 @@ function setupCalm(): void {
     });
   };
   bind('midi', () => midi.enabled ? openDialog('drawer') : enableMidi());
+  $('enable-midi').addEventListener('click', async () => {
+    if (replaying || !executor.leader || bridgeBusy.has('midi')) return;
+    bridgeBusy.add('midi');
+    render('calm');
+    try { await enableMidi(); }
+    finally { bridgeBusy.delete('midi'); render('calm'); }
+  });
+  $('setup-stop').addEventListener('click', () => {
+    if (replaying || !currentSetup?.canStop) return;
+    if (conn?.send('control.cancel', { cardId: currentSetup.cardId, ...(currentSetup.runId ? { runId: currentSetup.runId } : {}) }, { to: 'server' })) {
+      currentSetup = { ...currentSetup, text: 'Stopping setup and controls…', working: false, canStop: false };
+      $('setup-activity-text').textContent = currentSetup.text;
+      $<HTMLButtonElement>('setup-stop').disabled = true;
+    }
+  });
   bind('serial', () => link.hasPort ? link.close() : connectCardputer());
   bind('mic', () => oracle.state === 'on' ? oracle.stop() : startOracle());
 }
@@ -858,7 +927,7 @@ function renderApprove(): void {
   const input = $('code-input') as HTMLInputElement;
   input.disabled = !canApprove || replaying;
   ($('code-form').querySelector('button') as HTMLButtonElement).disabled = !canApprove || replaying || pairingBusy;
-  $('approve-panel').hidden = false;
+  renderOnboarding();
   renderPairSheet();
   const tabs = $('add-tabs');
   tabs.replaceChildren();
@@ -956,15 +1025,17 @@ function renderDaemons(): void {
 
 // --- executors: MIDI, Cardputer, oracle ------------------------------------------------------
 
-async function enableMidi(): Promise<void> {
+async function enableMidi(restore = false): Promise<void> {
   if (replaying || !executor.leader) return;
   try {
-    await midi.enable();
+    $('midi-message').textContent = '';
+    await midi.enable(restore);
     log('info', `Web MIDI on${midi.sysex ? ' with SysEx' : ' (no SysEx: identity checks off)'}`);
     conn?.resendHello();
   } catch (e) {
     log('warn', (e as Error).message);
     $('bridge-msg').textContent = (e as Error).message;
+    $('midi-message').textContent = 'USB access was not enabled. Choose Allow USB MIDI and allow access in your browser.';
   }
   ['calm', 'links', 'device', 'banners'].forEach(render);
 }
@@ -1068,7 +1139,7 @@ let armedOnce = false;
 /** Re-open what this Mac had granted before (no prompts): MIDI, the Cardputer port, the microphone. */
 async function takeDevices(): Promise<void> {
   if (replaying || !executor.leader) return;
-  if (MidiBridge.supported && !midi.enabled && (await MidiBridge.alreadyGranted())) await enableMidi();
+  if (MidiBridge.supported && !midi.enabled && (await MidiBridge.alreadyGranted())) await enableMidi(true);
   if (CardputerLink.supported && !link.hasPort) await link.reconnect();
   if (AudioOracle.supported && oracle.state === 'off') {
     try {
@@ -1094,65 +1165,101 @@ function meterLoop(): void {
 async function pairThisBrowser(): Promise<void> {
   if (selfPairing) return;
   selfPairing = true;
+  selfPairingError = false;
+  const generation = ++selfPairGeneration;
   clearTimeout(pollTimer);
   conn?.stop();
   conn = undefined;
   canApprove = false;
   const screen = $('pairscreen');
   screen.hidden = false;
-  $('workbench').hidden = true;
+  $('workbench').hidden = false;
   $('self-retry').hidden = true;
   $('self-msg').textContent = '';
-  const me = defaultDevice();
-  const requireApproval = params.get('pair') === '1';
+  $('self-qr').replaceChildren();
+  $('self-code').textContent = 'Creating code…';
+  $('self-expiry').textContent = '';
+  render('calm');
+  const resumed = loadPendingPairing();
+  const me = resumed?.device ?? defaultDevice();
+  // A new Mac joins the headset's existing room through an explicit owner approval.
+  // An empty room retains the local bootstrap so the owner can pair their first headset.
+  const requireApproval = params.get('pair') === '1' || (health?.space?.pairedDevices ?? 0) > 0;
   try {
-    const r = await api.pairStart({ name: me.name, kind: me.kind, capabilities: hello().capabilities ?? [], ...(requireApproval ? { requireApproval } : {}) });
+    const r = resumed?.request ?? await api.pairStart({ name: me.name, kind: me.kind, capabilities: hello().capabilities ?? [], ...(requireApproval ? { requireApproval } : {}) });
+    if (generation !== selfPairGeneration) return;
     if (r.status === 'approved' && r.deviceId && r.deviceToken) {
       log('info', `paired instantly as the owner (${isLocalPage() ? 'localhost' : 'trusted'})`);
       adopt({ deviceId: r.deviceId, deviceToken: r.deviceToken, kind: me.kind, name: me.name });
       return;
     }
     $('self-code').textContent = r.display;
+    savePendingPairing({ request: r, device: me });
     selfExpiresAt = r.expiresAt;
     $('self-expiry').textContent = untilText(r.expiresAt);
     await renderQr($('self-qr'), r.qr);
     log('info', `waiting for approval · code ${r.display}`);
     const poll = async () => {
+      if (generation !== selfPairGeneration) return;
       try {
         const s = await api.pairStatus(r.pairingId, r.pollSecret);
+        if (generation !== selfPairGeneration) return;
         if (s.status === 'approved' && s.deviceId && s.deviceToken) {
           adopt({ deviceId: s.deviceId, deviceToken: s.deviceToken, kind: me.kind, name: me.name });
           return;
         }
+        if (s.status === 'expired') {
+          clearPendingPairing();
+          selfPairing = false;
+          void pairThisBrowser();
+          return;
+        }
         if (s.status !== 'pending') {
-          pairingFailed(s.status === 'expired' ? 'The code expired.' : 'The request was denied.');
+          pairingFailed('Pairing was declined. Choose Try again when you are ready.');
           return;
         }
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) {
-          pairingFailed('The server forgot this request (restarted?).');
+          clearPendingPairing();
+          selfPairing = false;
+          void pairThisBrowser();
           return;
         }
       }
-      pollTimer = setTimeout(poll, 1500);
+      if (Date.now() >= r.expiresAt) {
+        clearPendingPairing();
+        selfPairing = false;
+        void pairThisBrowser();
+        return;
+      }
+      pollTimer = setTimeout(poll, 500);
     };
-    pollTimer = setTimeout(poll, 1500);
+    pollTimer = setTimeout(poll, 500);
   } catch (e) {
     pairingFailed(`Could not start pairing: ${(e as Error).message}`);
+    if (!(e instanceof ApiError) || e.status >= 500) pollTimer = setTimeout(() => void pairThisBrowser(), 1500);
   }
 }
 
 function pairingFailed(message: string): void {
+  clearPendingPairing();
   selfPairing = false;
+  selfPairingError = true;
   selfExpiresAt = 0;
   $('self-msg').textContent = message;
   $('self-msg').className = 'small fail-text';
   $('self-retry').hidden = false;
+  $('self-qr').replaceChildren();
+  $('self-code').textContent = 'No active code';
+  $('self-expiry').textContent = '';
+  render('calm');
   log('warn', message);
 }
 
 function adopt(id: Identity): void {
+  clearPendingPairing();
   selfPairing = false;
+  selfPairingError = false;
   identity = id;
   saveIdentity(id);
   selfExpiresAt = 0;
@@ -1240,7 +1347,17 @@ function connect(): void {
   c.on('device.card', (m) => {
     cards.set(m.payload.cardId, m.payload);
     focusCardId = m.payload.cardId;
-    ['device', 'evidence', 'links', 'banners'].forEach(render);
+    ['calm', 'device', 'evidence', 'links', 'banners'].forEach(render);
+  });
+  c.on('target.status', (m) => {
+    targets.delete(m.payload.cardId);
+    targets.set(m.payload.cardId, m.payload);
+    render('calm');
+  });
+  c.on('tags.state', (m) => {
+    const tagged = new Set(m.payload.tags.map((tag) => tag.cardId));
+    for (const cardId of targets.keys()) if (!tagged.has(cardId)) targets.delete(cardId);
+    render('calm');
   });
   c.on('driver.spec', (m) => {
     drivers.set(m.payload.driverId, m.payload);
@@ -1260,7 +1377,7 @@ function connect(): void {
   c.on('link.request', (m) => {
     linkRequests.set(m.payload.linkId, m.payload);
     setFocus(m.payload.cardId);
-    render('banners');
+    ['calm', 'banners'].forEach(render);
   });
   c.on('link.result', (m) => {
     linkResults.set(m.payload.cardId, m.payload);
@@ -1269,7 +1386,7 @@ function connect(): void {
       if (refusals.length > 3) refusals.shift();
     }
     log(m.payload.verdict === 'mismatch' ? 'warn' : 'info', `link ${m.payload.verdict}: ${m.payload.reason ?? m.payload.evidence.map((e) => e.detail).join(' · ')}`);
-    ['links', 'evidence', 'device', 'banners'].forEach(render);
+    ['calm', 'links', 'evidence', 'device', 'banners'].forEach(render);
   });
   c.on('arm.request', (m) => {
     arm = m.payload;

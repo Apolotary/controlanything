@@ -15,33 +15,46 @@
       </header>
 
       <main class="calm-center">
-        <div id="agent-status" class="agent-status" role="status" aria-live="polite" aria-atomic="true">
-          <span id="status-dot" class="dot" aria-hidden="true"></span>
-          <span id="status-text">Idle</span>
-        </div>
-        <ul id="device-dots" class="device-dots" aria-label="Paired devices"></ul>
-      </main>
-
-      <footer class="app-footer">
-        <section id="approve-panel" class="pair-box" aria-label="Pair a device" hidden>
-          <form id="code-form" class="codeform" autocomplete="off">
-            <label for="code-input">Enter the code shown on your device</label>
-            <div class="row">
-              <input id="code-input" placeholder="K7Q-4M2" maxlength="9" spellcheck="false" autocapitalize="characters" aria-describedby="code-msg" />
-              <button class="primary" type="submit">Approve</button>
+        <section id="onboarding" class="onboarding panel" data-state="connecting" aria-labelledby="onboarding-title">
+          <p class="eyebrow">Your Mac + Quest</p>
+          <h1 id="onboarding-title">Connecting to your room</h1>
+          <p id="onboarding-next" class="onboarding-next" role="status" aria-live="polite"></p>
+          <div id="pairscreen" class="pairing-content" hidden>
+            <div id="pairplate" class="pairing-code">
+              <div id="self-qr" class="qr" aria-label="Pairing QR code"></div>
+              <p class="dim small">Or type this code in your headset</p>
+              <div id="self-code" class="passcode">———-———</div>
+              <p id="self-expiry" class="dim small"></p>
+              <p id="self-msg" class="small" role="status"></p>
+              <button id="self-retry" type="button" hidden>Try again</button>
             </div>
-          </form>
-          <p id="code-msg" class="small" role="status" aria-live="polite"></p>
-        </section>
-        <div class="bridge-corner">
-          <div class="bridge-pills" aria-label="Bridges">
-            <button id="bridge-midi" class="bridge-pill" type="button" aria-pressed="false" title="Enable MIDI">MIDI</button>
-            <button id="bridge-serial" class="bridge-pill" type="button" aria-pressed="false" title="Connect Cardputer">Cardputer</button>
-            <button id="bridge-mic" class="bridge-pill" type="button" aria-pressed="false" title="Enable microphone">Microphone</button>
           </div>
-          <p id="bridge-msg" class="small dim" role="status" aria-live="polite"></p>
-        </div>
-      </footer>
+          <div id="headset-open" class="pairing-code" hidden>
+            <div id="headset-qr" class="qr" aria-label="Open ControlEverything in Quest Browser"></div>
+            <p id="headset-url" class="small dim"></p>
+          </div>
+          <div id="connection-steps" class="connection-steps" hidden>
+            <p id="headset-status">Waiting for your headset</p>
+            <p id="synth-status">Plug in a synth (USB)</p>
+          </div>
+          <button id="enable-midi" class="primary" type="button" hidden>Allow USB MIDI</button>
+          <p id="midi-message" class="small dim" role="status"></p>
+          <div id="setup-activity" class="setup-activity" hidden>
+            <p id="setup-activity-text" role="status" aria-live="polite"></p>
+            <button id="setup-stop" type="button" hidden>Stop</button>
+          </div>
+          <section id="approve-panel" class="pair-box" aria-label="Pair a device" hidden>
+            <form id="code-form" class="codeform" autocomplete="off">
+              <label for="code-input">Code shown in your headset</label>
+              <div class="row">
+                <input id="code-input" placeholder="K7Q-4M2" maxlength="9" spellcheck="false" autocapitalize="characters" aria-describedby="code-msg" />
+                <button class="primary" type="submit">Approve</button>
+              </div>
+            </form>
+            <p id="code-msg" class="small" role="status" aria-live="polite"></p>
+          </section>
+        </section>
+      </main>
 
       <dialog id="drawer" class="drawer" aria-labelledby="details-title">
         <header class="drawer-header">
@@ -50,6 +63,17 @@
         </header>
         <div class="drawer-content">
           <div class="connection-details">
+            <div id="agent-status" class="agent-status" role="status" aria-live="polite" aria-atomic="true">
+              <span id="status-dot" class="dot" aria-hidden="true"></span>
+              <span id="status-text">Idle</span>
+            </div>
+            <ul id="device-dots" class="device-dots" aria-label="Paired devices"></ul>
+            <div class="bridge-pills" aria-label="Bridges">
+              <button id="bridge-midi" class="bridge-pill" type="button" aria-pressed="false" title="Enable MIDI">MIDI</button>
+              <button id="bridge-serial" class="bridge-pill" type="button" aria-pressed="false" title="Connect Cardputer">Cardputer</button>
+              <button id="bridge-mic" class="bridge-pill" type="button" aria-pressed="false" title="Enable microphone">Microphone</button>
+            </div>
+            <p id="bridge-msg" class="small dim" role="status" aria-live="polite"></p>
             <div id="session" class="session">space —</div>
             <div class="row">
               <span id="pill" class="pill"><span id="conn-dot" class="dot"></span><span id="pill-text">connecting</span></span>
@@ -137,21 +161,6 @@
       <dialog id="pair-sheet" class="pair-sheet" aria-label="Pair device">
         <div id="pending" class="pending"></div>
       </dialog>
-    </div>
-
-    <div id="pairscreen" class="pairscreen" hidden>
-      <div id="pairplate" class="pairplate">
-        <div class="qrwrap"><div id="self-qr" class="qr" aria-label="Pairing QR code"></div></div>
-        <div class="side">
-          <div class="wordmark">ControlEverything</div>
-          <div class="look">Look at this code from the headset</div>
-          <div class="dim small">Or enter the code on a paired Mac or iPhone.</div>
-          <div id="self-code" class="code36">———-———</div>
-          <div id="self-expiry" class="dim small"></div>
-          <div id="self-msg" class="small" role="status"></div>
-          <button id="self-retry" type="button" hidden>Start again</button>
-        </div>
-      </div>
     </div>
 
     <div id="spike" class="spike" hidden></div>

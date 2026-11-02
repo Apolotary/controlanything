@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   midiEnable: vi.fn(), serialChoose: vi.fn(), serialReconnect: vi.fn(), serialListen: vi.fn(), micStart: vi.fn(),
   replay: vi.fn(),
   identity: vi.fn(), bridgeOnline: false, serialReady: false,
+  leader: true, midiEnabled: false,
+  midiPorts: [] as { id: string; kind: 'midi-out'; name: string; state: 'connected' }[],
 }));
 
 vi.mock('./api', () => ({ api: mocks.api, ApiError: class extends Error {} }));
@@ -48,7 +50,7 @@ vi.mock('./executor', () => ({
     leader = false;
     tape = [];
     onLeader?: (leader: boolean) => void;
-    claim() { mocks.claim(); this.leader = true; this.onLeader?.(true); }
+    claim() { mocks.claim(); this.leader = mocks.leader; this.onLeader?.(this.leader); }
     attach = mocks.attach;
     panicLocal = vi.fn();
   },
@@ -57,10 +59,10 @@ vi.mock('./midi', () => ({
   MidiBridge: class {
     static supported = true;
     static alreadyGranted = async () => false;
-    enabled = false;
-    outputs = () => [];
+    get enabled() { return mocks.midiEnabled; }
+    outputs = () => mocks.midiPorts;
     inputs = () => [];
-    ports = () => [];
+    ports = () => mocks.midiPorts;
     enable = mocks.midiEnable;
   },
 }));
@@ -206,12 +208,22 @@ beforeEach(() => {
   });
   vi.stubGlobal('location', new URL('http://localhost/companion/'));
   vi.stubGlobal('navigator', { permissions: { query: mocks.permission } });
+  vi.stubGlobal('history', { replaceState: vi.fn() });
+  const sessionValues = new Map<string, string>();
+  vi.stubGlobal('sessionStorage', {
+    getItem: (key: string) => sessionValues.get(key) ?? null,
+    setItem: (key: string, value: string) => sessionValues.set(key, value),
+    removeItem: (key: string) => sessionValues.delete(key),
+  });
   vi.stubGlobal('matchMedia', () => ({ matches: true }));
   vi.stubGlobal('requestAnimationFrame', (callback: () => void) => setTimeout(callback, 16));
   mocks.permission.mockResolvedValue({ state: 'prompt' });
   mocks.identity.mockReturnValue({ deviceId: 'mac-1', deviceToken: 'owner-token', kind: 'mac', name: 'Mac' });
   mocks.bridgeOnline = false;
   mocks.serialReady = false;
+  mocks.leader = true;
+  mocks.midiEnabled = false;
+  mocks.midiPorts = [];
   mocks.serialReconnect.mockResolvedValue(false);
   mocks.api.health.mockResolvedValue({ mode: 'live', models: { chat: 'meta-model' }, urls: { lan: [] } });
   mocks.api.calls.mockResolvedValue({ calls: [], totals: { calls: 0 } });
@@ -251,6 +263,83 @@ const pairButton = (name: string) => {
 };
 
 describe('Calm companion behavior', () => {
+  it('shows a QR for a new Mac joining an existing room and refreshes it after expiry despite poll errors', async () => {
+    mocks.identity.mockReturnValue(undefined);
+    mocks.api.health.mockResolvedValue({ mode: 'live', models: { chat: 'meta-model' }, urls: { lan: [] }, space: { pairedDevices: 1 } });
+    const request = { status: 'pending', pairingId: 'p1', code: 'K7Q4M2', display: 'K7Q-4M2', qr: 'https://localhost/p/p1#K7Q4M2', pollSecret: 'secret', expiresAt: Date.now() + 1000 };
+    mocks.api.pairStart.mockResolvedValueOnce(request).mockResolvedValue({ ...request, pairingId: 'p2', code: 'ABC234', display: 'ABC-234', expiresAt: Date.now() + 30_000 });
+    mocks.api.pairStatus.mockRejectedValue(new Error('server restarting'));
+    await boot();
+    expect(mocks.api.pairStart).toHaveBeenCalledWith(expect.objectContaining({ requireApproval: true }));
+    expect(byId('onboarding').dataset.state).toBe('pairing');
+    expect(byId('self-code').textContent).toBe('K7Q-4M2');
+    expect(byId('self-qr').htmlWrites[0]).toContain('<svg');
+    expect(byId('self-expiry').textContent).toContain('expires in');
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(mocks.api.pairStart).toHaveBeenCalledTimes(2);
+    expect(byId('self-code').textContent).toBe('ABC-234');
+  });
+
+  it('does not reopen an explicitly declined pairing request', async () => {
+    mocks.identity.mockReturnValue(undefined);
+    mocks.api.pairStart.mockResolvedValue({ status: 'pending', pairingId: 'p1', code: 'K7Q4M2', display: 'K7Q-4M2', qr: 'https://localhost/p/p1#K7Q4M2', pollSecret: 'secret', expiresAt: Date.now() + 5000 });
+    mocks.api.pairStatus.mockResolvedValue({ status: 'denied' });
+    await boot();
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(mocks.api.pairStart).toHaveBeenCalledOnce();
+    expect(byId('self-code').textContent).toBe('No active code');
+    expect(byId('self-retry').hidden).toBe(false);
+  });
+
+  it('updates the primary panel on headset connection, USB appearance and unplug', async () => {
+    const app = await live();
+    expect(byId('onboarding').dataset.state).toBe('headset');
+    const quest = { deviceId: 'quest', name: 'Quest 3', kind: 'quest', online: true, capabilities: [], ports: [] };
+    await app.emit('presence', { devices: [quest] });
+    expect(byId('onboarding').dataset.state).toBe('midi-permission');
+    expect(byId('enable-midi').hidden).toBe(false);
+    mocks.midiEnable.mockImplementation(async () => { mocks.midiEnabled = true; });
+    await byId('enable-midi').fire('click');
+    await flush();
+    expect(byId('onboarding').dataset.state).toBe('usb');
+    mocks.midiPorts = [{ id: 'op1', kind: 'midi-out', name: 'OP-1 Field', state: 'connected' }];
+    await app.emit('presence', { devices: [quest] });
+    expect(byId('onboarding-title').textContent).toBe('Set it up from the headset');
+    expect(byId('synth-status').textContent).toBe('OP-1 Field on USB');
+    mocks.midiPorts = [];
+    await app.emit('presence', { devices: [quest] });
+    expect(byId('onboarding').dataset.state).toBe('usb');
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('shows only this Mac’s setup activity and stops the matching run', async () => {
+    mocks.midiEnabled = true;
+    mocks.midiPorts = [{ id: 'op1', kind: 'midi-out', name: 'OP-1 Field', state: 'connected' }];
+    const app = await live();
+    await app.emit('presence', { devices: [{ deviceId: 'quest', name: 'Quest 3', kind: 'quest', online: true, capabilities: [], ports: [] }] });
+    await app.emit('target.status', { cardId: 'other', executorDeviceId: 'mac-2', state: 'verifying', since: 0 });
+    expect(byId('setup-activity').hidden).toBe(true);
+    await app.emit('target.status', { cardId: 'synth', executorDeviceId: 'mac-1', state: 'verifying', runId: 'run-1', sentence: 'Listening through the headset mic…', since: 0 });
+    expect(byId('setup-activity').hidden).toBe(false);
+    expect(byId('setup-activity-text').textContent).toBe('Quest is testing OP-1 Field: listening through the headset mic…');
+    mocks.send.mockReturnValue(true);
+    await byId('setup-stop').fire('click');
+    expect(mocks.send).toHaveBeenCalledWith('control.cancel', { cardId: 'synth', runId: 'run-1' }, { to: 'server' });
+  });
+
+  it('shows same-Mac ports in a standby tab while keeping MIDI access disabled', async () => {
+    mocks.leader = false;
+    const app = await live();
+    await app.emit('presence', { devices: [
+      { deviceId: 'quest', name: 'Quest 3', kind: 'quest', online: true, capabilities: [], ports: [] },
+      { deviceId: 'mac-1', name: 'Mac', kind: 'mac', online: true, capabilities: ['midi'], ports: [{ id: 'op1', kind: 'midi-out', name: 'OP-1 Field', state: 'connected' }] },
+    ] });
+    expect(byId('onboarding').dataset.state).toBe('setup');
+    expect(byId('synth-status').textContent).toBe('OP-1 Field on USB');
+    expect(byId('enable-midi').hidden).toBe(true);
+    expect(mocks.midiEnable).not.toHaveBeenCalled();
+  });
+
   it('shares pairing between a stale-token reconnect and the initial health response', async () => {
     let healthReady!: (result: unknown) => void;
     let paired!: (result: unknown) => void;

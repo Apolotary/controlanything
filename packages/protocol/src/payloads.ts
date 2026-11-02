@@ -942,6 +942,8 @@ export const TaggedDevice = z.object({
   connection: TagConnection,
   /** one plain sentence: what to connect, or what happens next */
   hint: z.string().max(200).optional(),
+  /** Suggested connection action; absent when only a cable is needed. */
+  action: GuidanceAction.optional(),
   specId: Id.optional(),
 });
 export type TaggedDevice = z.infer<typeof TaggedDevice>;

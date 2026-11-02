@@ -49,8 +49,21 @@ describe('socket trust and playback', () => {
 it('never includes a saved headset token in hello for a foreign override', () => {
   vi.stubGlobal('location', { origin: 'https://mac.local:8443' });
   const app = Object.create(QuestApp.prototype) as QuestApp;
-  Object.assign(app, { ws: { url: 'wss://other.test/ws' }, identity: { deviceToken: 'saved-owner-token' } });
+  Object.assign(app, { ws: { url: 'wss://other.test/ws' }, identity: { deviceToken: 'saved-owner-token' }, mic: { ready: false }, params: new URLSearchParams() });
   expect(Reflect.get(app, 'helloPayload').call(app).deviceToken).toBe('');
   Object.assign(app, { freshSocketIdentity: true, identity: { deviceToken: 'new-destination-token' } });
   expect(Reflect.get(app, 'helloPayload').call(app).deviceToken).toBe('new-destination-token');
+});
+
+it('only advertises the headset microphone after it is prepared and enabled', () => {
+  vi.stubGlobal('location', { origin: 'https://mac.local:8443' });
+  const app = Object.create(QuestApp.prototype) as QuestApp;
+  const mic = { ready: false }, params = new URLSearchParams();
+  Object.assign(app, { ws: { url: 'wss://mac.local:8443/ws' }, mic, params });
+  const capabilities = () => Reflect.get(app, 'helloPayload').call(app).capabilities as string[];
+  expect(capabilities()).not.toContain('mic');
+  mic.ready = true;
+  expect(capabilities()).toContain('mic');
+  params.set('mic', '0');
+  expect(capabilities()).not.toContain('mic');
 });

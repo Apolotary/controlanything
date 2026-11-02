@@ -5,6 +5,7 @@ import { handCursor, newCursor, type Cursor } from '../../gen3d/interact';
 import type { AgentStepLike, ConfirmRequest, DeviceState, HomeState, EvidenceState, Hud, HudEvents, HudFrame, HudTarget, PingLine, UploadState } from '../contract';
 import { controlSegmentLabel, homeHint } from '../home';
 import { controlPower, isBrightness } from './control-state';
+import { PairCodeEntry, PAIR_CODE_KEYS } from './pair-code';
 import { targetChipLabel } from './target-chip';
 import { BoxField } from './boxes';
 import { makeText, setText, type SdfText } from './text';
@@ -125,6 +126,7 @@ export class LeanHud implements Hud {
   private pings: PingLine[] = [];
   private confirm: ConfirmRequest | null = null;
   private pairing: { display: string; qr: string; message?: string } | null = null;
+  private codeEntry: PairCodeEntry | null = null;
   private approvals: { pairingId: string; name: string; kind: string; display: string }[] = [];
   private time = 0;
   private noticeUntil = 0;
@@ -269,7 +271,7 @@ export class LeanHud implements Hud {
     const verified = !failed && !pending && (this.evidence?.verdict === 'ok' || this.upload?.verdict === 'ok' || target?.status === 'verified' || target?.status === 'controlled');
     const state = this.deviceState?.targetId === this.locked ? this.deviceState : null;
     const connection = this.selectedConnection();
-    const text = state?.busy ? state.sentence ?? 'Setting up control…' : connection === 'offline' ? state?.hint ?? 'Connect a companion to control this device.' : connection === 'unknown' ? 'Waiting for connection status…' : connection === 'setup' ? state?.hint ?? 'Set up control for this device.' : m?.armed ? 'Ready to control' : 'Confirm to enable controls';
+    const text = state?.pairingSeconds ? `Look at the companion's QR code · ${state.pairingSeconds}s` : state?.busy ? state.sentence ?? 'Setting up control…' : connection === 'offline' ? state?.hint ?? 'Connect a companion to control this device.' : connection === 'unknown' ? 'Waiting for connection status…' : connection === 'setup' ? state?.hint ?? 'Set up control for this device.' : m?.armed ? 'Ready to control' : 'Confirm to enable controls';
     setText(this.status, text.slice(0, 200));
     this.status.visible = !this.details.visible && !(verified && m?.armed && !state?.busy && connection === 'ready');
     this.verdict.visible = verified;
@@ -301,7 +303,16 @@ export class LeanHud implements Hud {
     }
     if (connection !== 'ready') {
       if (connection === 'setup') this.button(this.controls, 'control-setup', 'Set up control', 0, THEME.card.buttonsY, 0.24, 'handle', () => this.events.emit('setup', { targetId: target!.id }));
-      if (connection === 'offline') this.button(this.controls, 'control-pair', 'Look at pairing QR', 0, THEME.card.buttonsY, 0.26, 'handle', () => this.events.emit('pair', { targetId: target!.id }));
+      if (connection === 'offline' && (state?.action === 'open-companion' || state?.action === 'pair-device')) {
+        if (state.pairingSeconds) this.button(this.controls, 'control-pair-cancel', 'Cancel', -0.09, THEME.card.buttonsY, 0.16, 'handle', () => this.events.emit('pairCancel', { targetId: target!.id }));
+        else {
+          const primary = this.button(this.controls, 'control-pair', state.action === 'open-companion' ? 'Connect Mac' : 'Connect device', 0, THEME.card.buttonsY, 0.24, 'handle', () => this.events.emit('pair', { targetId: target!.id }));
+          this.selectButton(primary.group, true, 0.24);
+        }
+        if (state.pairingSeconds) this.button(this.controls, 'control-pair-code', 'Type code', 0.09, THEME.card.buttonsY, 0.16, 'handle', () => this.openPairCode());
+        else this.button(this.controls, 'control-pair-code', 'Type code', 0, THEME.card.detailsY, 0.16, 'handle', () => this.openPairCode());
+        if (state.pairingSeconds) this.label(this.controls, state.action === 'open-companion' ? 'or type the code shown on your Mac' : 'or type the code shown on the device', THEME.card.detailsY, THEME.font.detail).name = 'pair-code-hint';
+      }
       return;
     }
     this.button(this.controls, 'details-toggle', this.detailsOpen ? 'Close details' : 'Details', 0, THEME.card.detailsY, THEME.control.buttonWidth * 1.5, 'handle', () => {
@@ -504,6 +515,7 @@ export class LeanHud implements Hud {
     if (id && this.targets.has(id)) this.refreshTargetLabel(this.targets.get(id)!);
   }
   setLocked(id: string | null): void {
+    if (id !== this.locked && this.codeEntry) this.closePairCode();
     const old = this.locked; this.locked = id;
     if (old !== id) { this.evidence = null; this.upload = null; this.selectedAction = null; this.unfoldStarted = this.time; }
     if (old && this.targets.has(old)) this.refreshTargetLabel(this.targets.get(old)!);
@@ -603,6 +615,7 @@ export class LeanHud implements Hud {
   }
   showApprovals(list: { pairingId: string; name: string; kind: string; display: string }[]): void {
     this.approvals = list;
+    if (this.codeEntry) return;
     if (this.confirm) return;
     if (!list.length && this.pairing) { this.showPairing(this.pairing); return; }
     this.clear(this.modal); this.modal.visible = !!list.length; const first = list[0]; if (!first) return;
@@ -620,6 +633,7 @@ export class LeanHud implements Hud {
     const modeChanged = this.home.mode !== state.mode;
     this.home = { ...state };
     if (modeChanged) {
+      this.codeEntry = null;
       this.detailsOpen = false; this.details.visible = false;
       this.confirm = null; this.clear(this.modal); this.modal.visible = false;
       this.deviceState = null;
@@ -633,8 +647,12 @@ export class LeanHud implements Hud {
   }
   setDeviceState(state: DeviceState | null): void {
     const previous = this.deviceState;
-    if (previous === state || previous && state && previous.targetId === state.targetId && previous.connection === state.connection && previous.hint === state.hint && previous.busy === state.busy && previous.sentence === state.sentence && previous.handControl === state.handControl) return;
+    if (previous === state) return;
+    const sameContent = previous && state && previous.targetId === state.targetId && previous.connection === state.connection && previous.hint === state.hint && previous.action === state.action && previous.busy === state.busy && previous.sentence === state.sentence && previous.handControl === state.handControl;
+    if (sameContent && previous.pairingSeconds === state.pairingSeconds) return;
     this.deviceState = state;
+    if (sameContent && !!previous.pairingSeconds === !!state.pairingSeconds) { this.refreshStatus(); return; }
+    if (this.codeEntry && (!state || state.targetId !== previous?.targetId || state.connection !== 'offline' || !state.action)) this.closePairCode();
     const current = state ? this.targets.get(state.targetId) : undefined;
     if (current && state) this.targets.set(current.id, { ...current, connection: state.connection, busy: state.busy });
     for (const id of new Set([previous?.targetId, state?.targetId])) {
@@ -643,6 +661,38 @@ export class LeanHud implements Hud {
     }
     this.refreshCard();
     this.syncHome();
+  }
+  private openPairCode(): void {
+    if (!this.locked) return;
+    this.events.emit('pairCancel', { targetId: this.locked });
+    this.codeEntry = new PairCodeEntry();
+    this.drawPairCode();
+  }
+  private closePairCode(): void {
+    this.codeEntry = null;
+    this.clear(this.modal); this.modal.visible = false;
+    this.refreshCard();
+  }
+  private drawPairCode(): void {
+    const entry = this.codeEntry;
+    if (!entry) return;
+    this.clear(this.modal); this.modal.visible = true; this.card.visible = false;
+    this.modal.add(this.plate(0.48, 0.48));
+    this.label(this.modal, this.deviceState?.action === 'open-companion' ? 'Code shown on your Mac' : 'Code shown on the device', 0.205, THEME.font.label);
+    this.label(this.modal, entry.display, 0.16, THEME.font.title).name = 'pair-code-value';
+    const update = (key: string) => { entry.key(key); this.drawPairCode(); };
+    PAIR_CODE_KEYS.forEach((key, i) => this.button(this.modal, `pair-key:${key}`, key, (i % 8 - 3.5) * 0.057, 0.10 - Math.floor(i / 8) * 0.056, 0.05, 'handle', () => update(key)));
+    this.button(this.modal, 'pair-code-back', 'Back', 0.09, -0.13, 0.16, 'handle', () => update('Back'));
+    this.button(this.modal, 'pair-code-close', 'Cancel', -0.09, -0.13, 0.16, 'handle', () => this.closePairCode());
+    if (entry.valid) {
+      const submit = this.button(this.modal, 'pair-code-submit', 'Connect', 0, -0.195, 0.16, 'handle', () => {
+        const targetId = this.locked;
+        this.closePairCode();
+        if (targetId) this.events.emit('pairCode', { targetId, code: entry.value });
+      });
+      this.selectButton(submit.group, true, 0.16);
+    }
+    this.place();
   }
   private canStop(): boolean {
     return this.home.mode === 'control' && (this.home.canStop ?? (!!this.deviceState?.busy || [...this.specs.values()].some((m) => m.armed && m.spec.controls.some((c) => c.armed !== false))));

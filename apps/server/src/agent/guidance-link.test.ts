@@ -135,6 +135,29 @@ describe('MIDI connection readiness', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it.each([true, false])('uses the headset microphone when available (%s) and describes the actual sensor', async (headsetOnline) => {
+    const { hub, target, deps } = loopSetup();
+    const mac: DeviceInfo = { ...healthy, capabilities: ['midi', 'mic'] };
+    const quest: DeviceInfo = { ...healthy, deviceId: 'quest', name: 'Quest 3', kind: 'quest', role: 'hmd', capabilities: ['camera', 'mic'], online: headsetOnline };
+    deps.roster.devices = () => [mac, quest];
+    target.selectedBy = quest.deviceId;
+    await runLoop(deps, target);
+    expect(vi.mocked(verifyDriver).mock.calls[0]?.[3].micDeviceId).toBe(headsetOnline ? quest.deviceId : mac.deviceId);
+    const sentence = headsetOnline ? 'Listening through the headset mic…' : 'Listening through the connected microphone…';
+    expect(hub.of<PayloadOf<'target.status'>>('target.status')).toContainEqual(expect.objectContaining({ state: 'verifying', sentence }));
+    expect(hub.of<PayloadOf<'agent.step'>>('agent.step')).toContainEqual(expect.objectContaining({ phase: 'verify', status: 'running', sentence }));
+  });
+
+  it('keeps the simulated synth on its own analyser even with a headset online', async () => {
+    const { target, deps } = loopSetup();
+    const sim: DeviceInfo = { ...healthy, kind: 'sim', capabilities: ['midi', 'mic'] };
+    const quest: DeviceInfo = { ...healthy, deviceId: 'quest', kind: 'quest', role: 'hmd', capabilities: ['camera', 'mic'] };
+    deps.roster.devices = () => [sim, quest];
+    target.selectedBy = quest.deviceId;
+    await runLoop(deps, target);
+    expect(vi.mocked(verifyDriver).mock.calls[0]?.[3].micDeviceId).toBe(sim.deviceId);
+  });
+
   it('refuses a mismatched MIDI identity before any action verification', async () => {
     const rolandReply = [0xf0, 0x7e, 0x7f, 0x06, 0x02, 0x41, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0xf7];
     const { hub, target, deps, exec, dispatchStates } = loopSetup(rolandReply);
