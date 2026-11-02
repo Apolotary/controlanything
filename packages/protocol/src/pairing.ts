@@ -43,6 +43,7 @@ export const DEFAULT_ROLE: Record<DeviceKind, Role> = {
   cardputer: 'device',
   web: 'controller',
   sim: 'device',
+  remo: 'device',
 };
 
 /** Only these kinds may approve new devices. */

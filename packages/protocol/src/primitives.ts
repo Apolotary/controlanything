@@ -56,7 +56,8 @@ export type Port = z.infer<typeof Port>;
  * The kind of paired client device. Comes from the server's registry (set at pairing time),
  * never from what a connected client claims later.
  */
-export const DeviceKind = z.enum(['quest', 'mac', 'iphone', 'devterm', 'cardputer', 'web', 'sim']);
+/** `remo`: a Nature Remo IR blaster/learner on the LAN, bridged by the server itself (no app of its own). */
+export const DeviceKind = z.enum(['quest', 'mac', 'iphone', 'devterm', 'cardputer', 'web', 'sim', 'remo']);
 export type DeviceKind = z.infer<typeof DeviceKind>;
 
 /** One paired client device as seen in `presence`. */

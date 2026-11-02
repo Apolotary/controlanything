@@ -50,6 +50,18 @@ Mac speaks its driver's line, a microphone client records it (`sense.request` `a
 transcript recorded for that recording replays from `fixtures/recorded/transcribe/`.
 `POST /api/agent/room/run {hackId}` and `/room/undo` drive them without a headset.
 
+### Nature Remo bridge (`src/devices/remo.ts`)
+
+A Nature Remo on the LAN (`Remo-XXXXXX`, mDNS `_remo._tcp`, local API `GET`/`POST /messages` with
+`X-Requested-With: local`) is bridged by the server itself as a paired `remo` device with the IR capability: it
+LEARNS (the learn window polls `GET /messages` at 4 Hz; every signal that differs from the previous one is a
+capture, cleaned of receiver noise, and goes through the same replay → verify → label path as a Cardputer
+capture) and SENDS (`IrOp` → raw µs → `POST /messages`, ≥ 1 s apart, under the IR cap). `pickExecutor` prefers
+it for IR; the Cardputer stays the alternative and the pairing story. `REMO_HOST=<ip>` or `CE_REMO=1` (mDNS)
+turns it on; it never probes the Remo at start-up, and **nothing is sent until `REMO_SEND=1`** (the user's
+approval): until then every `exec.command` is acknowledged `refused`. Tests run against a mock Remo
+(`fixtures/remo/`); the sim / judge path has no Remo and is untouched.
+
 ## HTTP views (besides the pairing API in `src/app.ts`)
 
 ```

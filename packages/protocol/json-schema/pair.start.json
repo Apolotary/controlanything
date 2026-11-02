@@ -45,7 +45,8 @@
             "devterm",
             "cardputer",
             "web",
-            "sim"
+            "sim",
+            "remo"
           ]
         },
         "capabilities": {

@@ -80,7 +80,8 @@
               "devterm",
               "cardputer",
               "web",
-              "sim"
+              "sim",
+              "remo"
             ]
           }
         },
@@ -108,7 +109,8 @@
                   "devterm",
                   "cardputer",
                   "web",
-                  "sim"
+                  "sim",
+                  "remo"
                 ]
               },
               "online": {

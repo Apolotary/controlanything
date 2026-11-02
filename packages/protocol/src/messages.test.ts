@@ -200,5 +200,6 @@ describe('protocol v1: discovery loop', () => {
     expect(PayloadSchemas.panic.safeParse({}).success).toBe(true);
     expect(PayloadSchemas['pair.start'].safeParse({ name: 'Cardputer', kind: 'cardputer', capabilities: ['ir', 'display'], requireApproval: true }).success).toBe(true);
     expect(PayloadSchemas['pair.start'].safeParse({ name: 'Sim room', kind: 'sim', capabilities: ['ir', 'midi', 'camera', 'mic', 'local', 'printer'] }).success).toBe(true);
+    expect(PayloadSchemas['pair.start'].safeParse({ name: 'Nature Remo (Remo-E61798)', kind: 'remo', capabilities: ['ir'] }).success).toBe(true);
   });
 });

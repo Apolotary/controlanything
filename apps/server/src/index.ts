@@ -4,6 +4,7 @@ import { loadConfig, loadDotEnv, SERVER_VERSION } from './config';
 import { startConsoleApprovals } from './console';
 import { createContext, startServers } from './context';
 import { getAgent } from './agent';
+import { resolveRemoConfig, startRemoBridge } from './devices/remo';
 
 const envFiles = loadDotEnv();
 const config = loadConfig(process.env);
@@ -43,6 +44,17 @@ if (config.trustFirstDevice) lines.push('  CE_TRUST_FIRST_DEVICE=1: the first de
 if (servers.certRegenerated) lines.push(`  generated a new dev certificate for ${servers.certAltNames?.join(', ')}`);
 const agent = getAgent(ctx);
 lines.push(`  agent     scan prompts: ${agent.scan.prompts.join(' · ')} · profiles: ${agent.profiles.files.length} · sam=${agent.sam.mode} · mac-local=${agent.roster.macLocal ? 'on' : 'off'}`);
+// a Nature Remo on the LAN as IR learner + blaster (REMO_HOST=<ip> or CE_REMO=1); it never sends until REMO_SEND=1
+const remoConfig = resolveRemoConfig(process.env);
+const remo = ctx.bound.http
+  ? await startRemoBridge({ config: remoConfig, serverBase: `http://127.0.0.1:${ctx.bound.http}`, dataDir: config.dataDir, log: ctx.log }).catch((e) => {
+      console.error(`[remo] bridge not started: ${(e as Error).message}`);
+      return undefined;
+    })
+  : undefined;
+if (remo) lines.push(`  remo      ${remo.name} at ${remo.remoBase} as ${remo.deviceId} · IR learn: GET only · IR send: ${remo.allowSend ? 'ON (REMO_SEND=1)' : 'OFF until the user approves (REMO_SEND=1)'}`);
+else if (remoConfig.host || remoConfig.discover) lines.push('  remo      not bridged (see the [remo] line above)');
+else lines.push('  remo      off (REMO_HOST=<ip> or CE_REMO=1 bridges a Nature Remo as IR learner + blaster)');
 for (const w of m.warnings) lines.push(`  warning   ${w}`);
 if (config.consoleApprove) lines.push('  pairing   new requests print here with their code; type "y" to approve, "n" to deny');
 console.log(lines.join('\n'));
@@ -55,6 +67,7 @@ async function shutdown(signal: string): Promise<void> {
   closing = true;
   console.log(`\n[server] ${signal}: shutting down`);
   stopConsole();
+  remo?.stop();
   await servers.close();
   process.exit(0);
 }

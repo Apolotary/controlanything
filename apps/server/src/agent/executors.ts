@@ -58,7 +58,7 @@ export function suggestedClients(cap: Capability): DeviceKind[] {
 
 /**
  * Pick an executor for a transport. MIDI: the device whose ports include an output matching `portHint`
- * (else the only MIDI device). IR: prefer a device whose kind is cardputer, then anything with "ir".
+ * (else the only MIDI device). IR: prefer a Nature Remo bridge, then a Cardputer, then anything with "ir".
  * local: the device the user pointed at (`preferDeviceId`), else the Mac.
  */
 export function pickExecutor(r: Roster, cap: 'midi' | 'ir' | 'local', opts: { portHint?: string; preferDeviceId?: string } = {}): ExecutorPick | undefined {
@@ -81,8 +81,10 @@ export function pickExecutor(r: Roster, cap: 'midi' | 'ir' | 'local', opts: { po
     return toPick(cands[0]);
   }
   if (cap === 'ir') {
+    // a Nature Remo on the LAN blasts further than the Cardputer's unit; the Cardputer stays the alternative
+    const remo = cands.find((d) => d.kind === 'remo');
     const card = cands.find((d) => d.kind === 'cardputer');
-    return toPick(card ?? cands[0]);
+    return toPick(remo ?? card ?? cands[0]);
   }
   const mac = cands.find((d) => d.deviceId === MAC_LOCAL_ID) ?? cands.find((d) => d.kind === 'mac');
   return toPick(mac ?? cands[0]);
@@ -101,7 +103,7 @@ export function pickSensor(r: Roster, cap: 'camera' | 'mic' | 'ir', opts: { pref
   }
   if (cap === 'camera') return cands.find((d) => d.kind === 'quest') ?? cands.find((d) => d.kind === 'sim') ?? cands[0];
   if (cap === 'mic') return cands.find((d) => d.kind === 'mac') ?? cands.find((d) => d.kind === 'sim') ?? cands[0];
-  return cands.find((d) => d.kind === 'cardputer') ?? cands[0];
+  return cands.find((d) => d.kind === 'cardputer') ?? cands.find((d) => d.kind === 'remo') ?? cands[0];
 }
 
 /** All paired devices (online or not) that could serve a capability, for link.request.candidates. */
