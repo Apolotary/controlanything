@@ -248,7 +248,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       const info = p.deviceId === macLocalInfo().deviceId ? macLocalInfo() : hub.devices().find((d) => d.deviceId === p.deviceId);
       if (!info) return undefined;
       const existing = targets.list().find((t) => t.card?.notes === `device:${info.deviceId}`);
-      if (existing) return existing;
+      if (existing) return select({ cardId: existing.cardId, text: p.text }, from); // retry, re-arm or resume like any known card
       const card: DeviceCardPayload = {
         cardId: `dev-${info.deviceId}`,
         name: info.name,
