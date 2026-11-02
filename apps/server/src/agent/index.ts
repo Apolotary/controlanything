@@ -121,7 +121,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       }
       const bpm = typeof value === 'number' && value > 1 ? value : undefined;
       if (daemons.isRunning(daemon.id)) {
+        // a new tempo retunes it; a plain second pinch on the menu row stops it (the row is a toggle)
         if (bpm) daemons.setBpm(daemon.id, bpm, from === 'voice' ? 'voice' : 'menu');
+        else daemons.stop(daemon.id, `stopped by ${from ?? 'the menu'}`);
         return { ok: true, hackId: hack.id, fired: 0, ms: 0 };
       }
       const roomT = combos.roomTarget(spec.specId);
