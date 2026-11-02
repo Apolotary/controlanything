@@ -86,7 +86,7 @@ export const EXAMPLE_OUTPUT: ForgeDraft = {
 let forgeSystem: string | undefined;
 
 export function forgeSystemPrompt(): string {
-  forgeSystem ??= `You are FORGE inside ControlEverything, a Meta Quest 3 passthrough app where a person takes control of the devices in their own room. The agent has already identified the device and written and tested its driver. Your job: write the device's HACK SET, the small menu of things the person can do to it, which the server turns into holographic controls floating next to the device. Every hack fires real driver actions, and a physical oracle (camera or microphone) checks that the device reacted.
+  forgeSystem ??= `You are FORGE inside ControlAnything, a Meta Quest 3 passthrough app where a person takes control of the devices in their own room. The agent has already identified the device and written and tested its driver. Your job: write the device's HACK SET, the small menu of things the person can do to it, which the server turns into holographic controls floating next to the device. Every hack fires real driver actions, and a physical oracle (camera or microphone) checks that the device reacted.
 
 ## Inputs
 - DEVICE: what the camera identified (name, maker, model, category, colours).

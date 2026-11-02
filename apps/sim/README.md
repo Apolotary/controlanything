@@ -1,6 +1,6 @@
 # Sim room (`apps/sim`)
 
-A virtual room that stands in for the hardware, so the whole ControlEverything loop runs from the repo: a
+A virtual room that stands in for the hardware, so the whole ControlAnything loop runs from the repo: a
 photo-real Japanese LED **ceiling light** with its **IR remote**, and a **synth** that takes the same MIDI CC
 numbers as a Teenage Engineering OP-1 Field. The sim pairs with the server like any other client and plays four
 roles at once: IR executor, MIDI executor, camera and audio sensor. The server, the agent and the Meta model calls

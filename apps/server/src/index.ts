@@ -23,7 +23,7 @@ const u = ctx.urls();
 const m = config.muse;
 const lines = [
   '',
-  `ControlEverything server ${SERVER_VERSION}`,
+  `ControlAnything server ${SERVER_VERSION}`,
   `  mode      ${m.mode === 'live' ? `LIVE (Meta Model API, key from ${envFiles.length ? 'env/.env' : 'env'})` : 'FIXTURE (no MODEL_API_KEY; replies are canned and labelled FIXTURE)'}`,
   `  models    chat=${m.model} transcribe=${m.transcribeModel}${m.reasoningEffort ? ` effort=${m.reasoningEffort}` : ''}`,
   `  space     ${ctx.registry.spaceId} · ${ctx.registry.size} paired device(s)`,

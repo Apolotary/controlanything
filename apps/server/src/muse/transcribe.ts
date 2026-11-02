@@ -23,7 +23,7 @@ export const MAX_AUDIO_MS = 10 * 60 * 1000;
 export const MAX_AUDIO_BYTES = 32 * 1024 * 1024;
 const ALLOWED_RATES = [16_000, 24_000];
 
-/** Vocabulary bias: device names and control words people say to ControlEverything. */
+/** Vocabulary bias: device names and control words people say to ControlAnything. */
 export const TRANSCRIBE_KEYWORDS: readonly string[] = [
   'synth', 'synthesizer', 'MIDI', 'knob', 'fader', 'cutoff', 'resonance', 'filter', 'envelope', 'tempo',
   'Digitakt', 'Elektron', 'OP-1', 'Teenage Engineering', 'K.O.', 'EP-133', 'Ableton', 'Move', 'Kastle', 'Bastl',

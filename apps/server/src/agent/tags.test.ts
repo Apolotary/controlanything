@@ -98,7 +98,7 @@ describe('tag connection evaluation', () => {
     ['only a headset', [device({ kind: 'quest', role: 'hmd', capabilities: ['camera', 'mic'], ports: [] })]],
   ])('offers Connect Mac for %s, without mistaking the server Mac for a MIDI bridge', (_name, devices) => {
     expect(evaluateConnection(target(), { devices: () => devices, macLocal: true })).toEqual({
-      connection: 'offline', hint: 'Open ControlEverything on your Mac and plug in the synth', action: 'open-companion',
+      connection: 'offline', hint: 'Open ControlAnything on your Mac and plug in the synth', action: 'open-companion',
     });
   });
 
@@ -110,7 +110,7 @@ describe('tag connection evaluation', () => {
 
   it('requires the original companion when a saved synth is assigned to it', () => {
     expect(evaluateConnection(ready(target()), { devices: () => [device({ deviceId: 'another-mac' })], macLocal: false })).toEqual({
-      connection: 'offline', hint: 'Open ControlEverything on your Mac and plug in the synth', action: 'open-companion',
+      connection: 'offline', hint: 'Open ControlAnything on your Mac and plug in the synth', action: 'open-companion',
     });
   });
 

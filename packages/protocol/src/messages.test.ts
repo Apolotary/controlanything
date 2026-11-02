@@ -180,7 +180,7 @@ describe('protocol v1: discovery loop', () => {
   it('keeps tag connection actions optional and validates an explicit pairing action', () => {
     const tag = { cardId: 'synth', label: 'Synth', connection: 'offline' as const, hint: 'Plug the synth into your Mac' };
     expect(PayloadSchemas['tags.state'].parse({ tags: [tag] })).toEqual({ tags: [tag] });
-    const connecting = { ...tag, hint: 'Open ControlEverything on your Mac and plug in the synth', action: 'open-companion' };
+    const connecting = { ...tag, hint: 'Open ControlAnything on your Mac and plug in the synth', action: 'open-companion' };
     expect(PayloadSchemas['tags.state'].parse({ tags: [connecting] })).toEqual({ tags: [connecting] });
     expect(PayloadSchemas['tags.state'].safeParse({ tags: [{ ...tag, action: 'send-command' }] }).success).toBe(false);
   });

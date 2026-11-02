@@ -96,7 +96,7 @@ async function startServer() {
   for (const stream of [server.stdout, server.stderr]) stream.on('data', (chunk) => {
     serverLog = (serverLog + chunk.toString()).slice(-250_000);
     // HTTP starts before HTTPS: wait until the entry point has finished starting both.
-    serverReady ||= serverLog.includes('ControlEverything server ');
+    serverReady ||= serverLog.includes('ControlAnything server ');
   });
   await until('own HTTP/HTTPS fixture server startup', () => serverReady);
   const health = await json('/api/health');

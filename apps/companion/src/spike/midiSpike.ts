@@ -589,7 +589,7 @@ function download(): void {
 }
 
 export async function bootSpike(): Promise<void> {
-  document.title = 'MIDI spike · ControlEverything';
+  document.title = 'MIDI spike · ControlAnything';
   build();
   log('info', 'MIDI spike ready (standalone). Step 1: enable MIDI.');
   realMidi.onChange = () => renderPorts();

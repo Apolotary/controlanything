@@ -1,6 +1,6 @@
 # ce-devterm: the DevTerm client
 
-A terminal client for the ClockworkPi DevTerm. It pairs with the ControlEverything server on the Mac.
+A terminal client for the ClockworkPi DevTerm. It pairs with the ControlAnything server on the Mac.
 It shows the hacks the agent generated for your own devices, with value bars, beside an evidence tape
 of what was sent and what the camera, mic or wire observed. It also works as a device: it prints
 receipts on its thermal printer, beeps, speaks and changes its screen when the agent sends it an

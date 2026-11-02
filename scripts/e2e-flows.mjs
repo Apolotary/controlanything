@@ -105,7 +105,7 @@ async function startServer() {
   for (const stream of [server.stdout, server.stderr]) stream.on('data', (chunk) => {
     serverLog += chunk.toString();
     // HTTP starts before HTTPS: wait until the entry point has finished starting both.
-    serverReady ||= serverLog.slice(logOffset).includes('ControlEverything server ');
+    serverReady ||= serverLog.slice(logOffset).includes('ControlAnything server ');
   });
   await until('own HTTP/HTTPS fixture server startup', () => serverReady);
   const health = await json('/api/health');
@@ -600,7 +600,7 @@ async function run() {
     assert.equal(await quest.evaluate((sent) => window.__flowsRequests.slice(sent).some((e) => e.type === 'scan.frame' && e.payload.purpose === 'pair'), sent), false,
       'Skip must stop the pairing camera loop');
     const hint = await quest.evaluate((id) => window.__ce.modes.byCard(id).hint, synthCardId);
-    assert.equal(hint, 'Open ControlEverything on your Mac and plug in the synth');
+    assert.equal(hint, 'Open ControlAnything on your Mac and plug in the synth');
     await pinch({ targetId: synthId, turn: true });
     await waitQuest((hint) => window.__ce.hud.card.visible && window.__ce.hud.status.text === hint, hint);
     assert.equal(await quest.evaluate(() => !!window.__ce.hud.root.getObjectByName('control-setup')), false,

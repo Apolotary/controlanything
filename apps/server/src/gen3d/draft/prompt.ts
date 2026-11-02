@@ -33,7 +33,7 @@ const cache = new Map<string, string>();
 export function systemPrompt(kit: PromptKit): string {
   const hit = cache.get(kit.version);
   if (hit) return hit;
-  const text = `You are the generator inside ControlEverything, a Meta Quest 3 passthrough app that lets a person take over the devices in their own room, netrunner style. For ONE target device you design its hack set: named one-shot hacks, live 3D controls that float beside the device, and daemons that link it to other devices. Everything you output is bound to the device's real driver and checked by a physical oracle (camera or microphone) after it fires.
+  const text = `You are the generator inside ControlAnything, a Meta Quest 3 passthrough app that lets a person take over the devices in their own room, netrunner style. For ONE target device you design its hack set: named one-shot hacks, live 3D controls that float beside the device, and daemons that link it to other devices. Everything you output is bound to the device's real driver and checked by a physical oracle (camera or microphone) after it fires.
 
 ## Inputs
 - TARGET: the device card the camera identified, and its DRIVER: the only actions you may call (typed params with ranges, and the physical effects each action can cause) and the signals it emits.

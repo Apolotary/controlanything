@@ -1,4 +1,4 @@
-# ControlEverything: architecture
+# ControlAnything: architecture
 
 How a thing the headset looked at becomes verified, generated controls. Companion to the [README](../README.md); the code is the source of truth (`packages/protocol`, `packages/gen3d`, `apps/server/src/agent`, `apps/server/src/oracle`).
 
