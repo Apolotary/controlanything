@@ -21,6 +21,10 @@ export class TargetStore {
     return this.targets.get(cardId);
   }
 
+  remove(cardId: string): boolean {
+    return this.targets.delete(cardId);
+  }
+
   onChange(fn: (t: Target) => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
@@ -56,6 +60,7 @@ export class TargetStore {
 
   /** Move a target to a state and tell every client. */
   setState(t: Target, state: TargetState, detail?: string, guidance?: AgentGuidance): void {
+    if (this.targets.get(t.cardId) !== t) return;
     t.state = state;
     t.since = Date.now();
     t.detail = detail;

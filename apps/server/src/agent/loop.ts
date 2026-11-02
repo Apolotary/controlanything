@@ -64,7 +64,7 @@ const LEARN_WINDOW_MS = 10_000;
 const LEARN_WINDOW_RETRY_MS = 15_000;
 
 /** Run the loop for a target that has a detection (from SCAN) or a card (a paired device the user pointed at). */
-export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string; preferDeviceId?: string } = {}): Promise<void> {
+export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string; preferDeviceId?: string; identifyOnly?: boolean } = {}): Promise<void> {
   const log = d.log ?? (() => {});
   t.abort?.abort();
   const abort = new AbortController();
@@ -98,6 +98,7 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       d.targets.setState(t, 'identified', `${r.card.name}: ${r.card.maker} ${r.card.model}`);
     }
     flow.check();
+    if (opts.identifyOnly) return;
     const card = t.card;
 
     // ---------------------------------------------------------------- LINK
@@ -277,7 +278,6 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
         return;
       }
       vstep.ok(`${summary.passed} verified, ${summary.failed} missed${summary.irMatch ? ` · codes: ${summary.irMatch.brand} CH${summary.irMatch.channel}` : ''}`, { evidence: `${summary.passed} ✓ ${summary.failed} ✗` });
-      d.targets.setState(t, 'verified', `${summary.passed} of ${summary.driver.actions.length} actions verified`);
       verified = summary;
     }
     if (!verified) return;
@@ -296,6 +296,8 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
         }
       }
     }
+
+    d.targets.setState(t, 'verified', `${summary.passed} of ${summary.driver.actions.length} actions verified`);
 
     // ---------------------------------------------------------------- FORGE
     flow.enter('forge');
