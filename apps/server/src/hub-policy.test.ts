@@ -6,6 +6,7 @@ import type { WebSocket } from 'ws';
 import { loadConfig } from './config';
 import { createContext } from './context';
 import { allowedSocketOrigin, sameHostOrigin } from './origin';
+import { createAgent } from './agent';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => cleanup.splice(0).forEach((fn) => fn()));
@@ -56,6 +57,50 @@ describe('browser origin policy', () => {
 });
 
 describe('executor connection presence', () => {
+  it('publishes fresh synth cards immediately for pairing, USB changes, standby tabs and reloads', () => {
+    const { ctx, connect } = harness();
+    const agent = createAgent(ctx, { macLocal: false, tagsFile: null, forge: () => undefined });
+    cleanup.push(() => agent.close());
+    const questIdentity = ctx.registry.add({ name: 'Quest 3', kind: 'quest' });
+    const quest = connect();
+    quest.hello({ deviceToken: questIdentity.token });
+    const target = agent.targets.create({ cardId: 'synth', card: {
+      cardId: 'synth', name: 'OP-1 Field', maker: 'Teenage Engineering', model: 'OP-1 Field', category: 'synthesizer',
+      confidence: 1, protocols: ['midi'], requires: ['midi'], evidence: [],
+    } });
+    agent.addTag({ targetId: target.cardId, label: 'Synth' }, questIdentity.device);
+    const latestTag = () => quest.payloads('tags.state').at(-1)?.tags[0];
+    expect(latestTag()).toMatchObject({ connection: 'offline', action: 'open-companion' });
+
+    const { token } = ctx.registry.add({ name: 'Mac', kind: 'mac' });
+    const mac = connect();
+    mac.hello({ deviceToken: token, executor: true, capabilities: [], ports: [] });
+    expect(latestTag()).toMatchObject({ connection: 'offline', hint: 'Plug the synth into your Mac' });
+    expect(latestTag().action).toBeUndefined();
+    const ports: NonNullable<PayloadOf<'hello'>['ports']> = [{ id: 'out', name: 'OP-1 Field', kind: 'midi-out', state: 'connected' }];
+    mac.hello({ deviceToken: token, executor: true, capabilities: ['midi'], ports });
+    expect(latestTag().connection).toBe('setup');
+    mac.hello({ deviceToken: token, ports: [] });
+    expect(latestTag()).toMatchObject({ connection: 'offline', hint: 'Plug the synth into your Mac' });
+    mac.hello({ deviceToken: token, ports });
+    const standby = connect();
+    standby.hello({ deviceToken: token, executor: false, capabilities: [], ports: [] });
+    expect(latestTag().connection).toBe('setup');
+    standby.close();
+    expect(latestTag().connection).toBe('setup');
+    mac.close();
+    expect(latestTag()).toMatchObject({ connection: 'offline', action: 'open-companion' });
+    const reloadedMac = connect();
+    reloadedMac.hello({ deviceToken: token, executor: true, capabilities: ['midi'], ports });
+    expect(latestTag().connection).toBe('setup');
+    quest.close();
+    const reloadedQuest = connect();
+    reloadedQuest.hello({ deviceToken: questIdentity.token });
+    expect(reloadedQuest.payloads('tags.state').at(-1)?.tags[0]).toMatchObject({ cardId: 'synth', connection: 'setup' });
+    expect(ctx.registry.list()).toHaveLength(2);
+    expect(agent.steps.list()).toEqual([]);
+  });
+
   it('keeps active ports and capabilities when a standby opens, and follows leadership changes', () => {
     const { ctx, connect } = harness();
     const { token } = ctx.registry.add({ name: 'Mac', kind: 'mac' });

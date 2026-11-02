@@ -123,9 +123,11 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
     while (!link.executor) {
       if (!announced) {
         announced = true;
+        const companionOnline = d.roster.devices().some((device) => device.online && (device.role === 'companion' || device.capabilities.includes('midi')));
+        const guidance = linkGuidance(cap, companionOnline);
         d.hub.broadcast('link.request', { linkId, cardId: t.cardId, needs: [cap], reason: `${card.name} is driven over ${cap}; no paired client online can do that`, suggestedClients: suggestedClients(cap), candidates: candidatesFor(d.roster, cap), status: online(d.roster, cap).length ? 'candidates' : 'needs-companion' });
-        d.steps.note('link', `needs a companion: ${suggestedClients(cap).join(' or ')} (${cap})`, { ...base, kind: 'proof', status: 'fail', ...linkGuidance(cap) });
-        d.targets.setState(t, 'needs-companion', `pair a ${suggestedClients(cap)[0]} (${cap})`, linkGuidance(cap));
+        d.steps.note('link', `needs a companion: ${suggestedClients(cap).join(' or ')} (${cap})`, { ...base, kind: 'proof', status: 'fail', ...guidance });
+        d.targets.setState(t, 'needs-companion', `pair a ${suggestedClients(cap)[0]} (${cap})`, guidance);
       }
       await flow.wait(sleep(1500, signal));
       link = await flow.wait(tryLink({ roster: d.roster, dispatcher: d.dispatcher }, card, cap, { linkId, profile, preferDeviceId: opts.preferDeviceId ?? t.selectedBy, signal, probeIdentity: false }));
@@ -233,7 +235,17 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
 
       // ---------------------------------------------------------------- VERIFY
       flow.enter('verify');
-      d.targets.setState(t, 'verifying', `${driver.actions.length} actions to prove`);
+      const camera = pickSensor(d.roster, 'camera', { preferDeviceId: t.detection?.sensorDeviceId });
+      const headsets = online(d.roster, 'mic').filter((device) => device.kind === 'quest');
+      const headset = headsets.find((device) => device.deviceId === t.detection?.sensorDeviceId)
+        ?? headsets.find((device) => device.deviceId === t.selectedBy) ?? headsets[0];
+      // A real synth is heard through the headset; fixture instruments keep their own analyser.
+      const mic = pickSensor(d.roster, 'mic', { preferDeviceId: cap === 'midi' && executor.kind !== 'sim' ? headset?.deviceId : executor.deviceId });
+      const verifyGuidance = stateGuidance(t, 'verifying');
+      if (cap === 'midi' && mic) verifyGuidance.sentence = mic.kind === 'quest'
+        ? 'Listening through the headset mic…'
+        : mic.kind === 'sim' ? 'Checking the simulated synth…' : 'Listening through the connected microphone…';
+      d.targets.setState(t, 'verifying', `${driver.actions.length} actions to prove`, verifyGuidance);
       // The identity query is device output too: keep it inside verification.
       if (cap === 'midi') {
         const identity = await flow.wait(tryLink({ roster: d.roster, dispatcher: d.dispatcher }, card, cap, { linkId, profile, preferDeviceId: executor.deviceId, signal }));
@@ -244,10 +256,7 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
         t.link = identity.result;
         d.hub.broadcast('link.result', identity.result);
       }
-      const camera = pickSensor(d.roster, 'camera', { preferDeviceId: t.detection?.sensorDeviceId });
-      // the device that drives it hears it best (the sim synth's own analyser, the Mac's USB audio for a real synth); a companion whose oracle is off would otherwise be preferred
-      const mic = pickSensor(d.roster, 'mic', { preferDeviceId: executor.deviceId });
-      const vstep = d.steps.begin('verify', `verifying on the real ${card.name}`, { ...base, kind: 'proof', ...stateGuidance(t, 'verifying') });
+      const vstep = d.steps.begin('verify', `verifying on the real ${card.name}`, { ...base, kind: 'proof', ...verifyGuidance });
       const summary = await flow.wait(verifyDriver(
         { dispatcher: d.dispatcher, sam: d.sam, heard: d.heard ? (...args) => flow.retry(() => d.heard!(...args), retryNotice) : undefined, readVolume: d.readVolume, restoreVolume: d.restoreVolume, silentSpeech: d.silentSpeech, log, settleMs: (tt, a) => d.settleMs?.(tt, a.encode.kind === 'ir' ? 'ir' : driver.transport) ?? (driver.transport === 'ir' ? 2000 : 350) },
         t,
@@ -257,13 +266,13 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
           micDeviceId: mic?.deviceId,
           irCandidates: research.irLibrary?.candidates,
           signal,
-          onStep: (title, detail) => !signal.aborted && d.steps.note('verify', title, { ...base, kind: 'proof', detail, ...stateGuidance(t, 'verifying') }),
+          onStep: (title, detail) => !signal.aborted && d.steps.note('verify', title, { ...base, kind: 'proof', detail, ...verifyGuidance }),
           onEvidence: (e) => {
             if (signal.aborted) return;
             t.evidence.push(e);
             d.hub.broadcast('verify.result', e);
             const sent = e.sent.op.kind === 'ir' ? `IR ${e.sent.op.bytes?.map((b) => b.toString(16).padStart(2, '0')).join(' ') ?? 'raw'}` : e.sent.op.kind === 'midi' ? `${e.sent.op.msg.toUpperCase()}${e.sent.op.number !== undefined ? ` ${e.sent.op.number}` : ''}${typeof e.sent.op.value === 'number' ? `=${e.sent.op.value}` : ''}` : `${e.sent.op.op}`;
-            d.steps.note('verify', `${e.actionId}: sent ${sent} · expected ${e.expected.effect} · ${e.observed.note ?? e.observed.metric}`, { ...base, kind: 'proof', status: e.pass ? 'ok' : 'fail', evidence: `${e.pass ? 'seen ✓' : 'not seen ✗'} Δ${e.observed.delta}`, detail: JSON.stringify(e.observed), ...stateGuidance(t, 'verifying') });
+            d.steps.note('verify', `${e.actionId}: sent ${sent} · expected ${e.expected.effect} · ${e.observed.note ?? e.observed.metric}`, { ...base, kind: 'proof', status: e.pass ? 'ok' : 'fail', evidence: `${e.pass ? 'seen ✓' : 'not seen ✗'} Δ${e.observed.delta}`, detail: JSON.stringify(e.observed), ...verifyGuidance });
           },
         },
       ));

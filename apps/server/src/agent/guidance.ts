@@ -33,8 +33,13 @@ export function stepGuidance(phase: AgentPhase, status: StepStatus): AgentGuidan
   return { sentence: PHASE_SENTENCES[phase], hint: 'You can cancel or choose another device', action: 'cancel' };
 }
 
-export function linkGuidance(cap?: LinkCapability): AgentGuidance {
-  if (cap === 'midi') return { sentence: 'Plug the synth into your Mac and open the Mac app', hint: 'Connect its USB cable and enable a MIDI output in the Mac app', action: 'open-companion' };
+export function synthConnectionGuidance(companionOnline = false): AgentGuidance {
+  const sentence = companionOnline ? 'Plug the synth into your Mac' : 'Open ControlEverything on your Mac and plug in the synth';
+  return { sentence, hint: sentence, ...(companionOnline ? {} : { action: 'open-companion' as const }) };
+}
+
+export function linkGuidance(cap?: LinkCapability, companionOnline = false): AgentGuidance {
+  if (cap === 'midi') return synthConnectionGuidance(companionOnline);
   if (cap === 'ir') return { sentence: 'Connect your Remo or IR receiver', hint: 'Pair it in the Mac app and keep it near the device', action: 'pair-device' };
   return { sentence: 'Open the Mac app to connect this device', hint: 'Keep the Mac app open and pair this device', action: 'open-companion' };
 }

@@ -305,6 +305,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     }
     hub.broadcast('mode.state', { mode });
     publishTags();
+    if (mode === 'control') for (const t of targets.list()) if (tags.has(t.cardId) && t.specId) showControls(t);
   };
   // Tagging only names the device (one quiet Muse Spark call, no agent.step / target.status / pipeline messages):
   // the pipeline's own messages flow only after control.setup (research/20-two-modes.md).
@@ -367,13 +368,17 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     publishTags();
     return true;
   };
-  const showControls = (t: Target, deviceId: string) => {
-    if (t.card) hub.sendToDevice(deviceId, 'device.card', t.card);
+  const showControls = (t: Target, deviceId?: string) => {
+    const send = <T extends MessageType>(type: T, payload: PayloadOf<T>) => deviceId
+      ? hub.sendToDevice(deviceId, type, payload) : hub.broadcast(type, payload);
+    if (t.card) send('device.card', t.card);
+    if (t.link) send('link.result', t.link);
+    if (t.driver) send('driver.spec', t.driver);
     if (t.specId) {
       const spec = specs.get(t.specId);
-      if (spec) hub.sendToDevice(deviceId, 'ui.spec', spec);
+      if (spec) send('ui.spec', spec);
     }
-    if (t.driver) hub.sendToDevice(deviceId, 'driver.status', { driverId: t.driver.driverId, cardId: t.cardId, phase: t.armed ? 'armed' : 'disarmed', actions: t.driver.actions.map((a) => ({ actionId: a.actionId, verified: t.verification[a.actionId] ?? 'untested' })), modelId: t.driver.modelId });
+    if (t.driver) send('driver.status', { driverId: t.driver.driverId, cardId: t.cardId, phase: t.armed ? 'armed' : 'disarmed', actions: t.driver.actions.map((a) => ({ actionId: a.actionId, verified: t.verification[a.actionId] ?? 'untested' })), modelId: t.driver.modelId });
   };
   const setup = (cardId: string, from: { deviceId: string; name?: string }): Target | undefined => {
     const t = targets.get(cardId);
@@ -381,9 +386,10 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (!t || !tags.has(cardId) || mode !== 'control' || connection?.connection === 'offline') {
       const hint = !t || !tags.has(cardId) ? 'Tag this device in Annotate mode first' : mode !== 'control' ? 'Switch to Control mode to set up this device' : connection?.hint ?? 'Connect a companion for this device';
       const state = tagsState();
-      state.tags = state.tags.map((tag) => tag.cardId === cardId ? { ...tag, connection: 'offline', hint } : tag);
+      const action = mode === 'control' ? connection?.action : undefined;
+      state.tags = state.tags.map((tag) => tag.cardId === cardId ? { ...tag, connection: 'offline', hint, action } : tag);
       hub.sendToDevice(from.deviceId, 'tags.state', state);
-      steps.note('link', hint, { cardId, kind: 'proof', status: 'fail', sentence: hint, hint, action: mode === 'control' ? 'open-companion' : undefined });
+      steps.note('link', hint, { cardId, kind: 'proof', status: 'fail', sentence: hint, hint, action });
       return undefined;
     }
     if (t.abort && !t.abort.signal.aborted) return t;
@@ -477,6 +483,16 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       control.cancel(t, { preserveArmed: true });
     }
     publishTags();
+    if (presence.reason === 'join' && presence.deviceId) {
+      for (const t of targets.list()) {
+        if (!tags.has(t.cardId)) continue;
+        if (mode === 'control') {
+          showControls(t, presence.deviceId);
+          if (setups.has(t.cardId) || t.specId) hub.sendToDevice(presence.deviceId, 'target.status', targets.status(t));
+        } else if (t.card) hub.sendToDevice(presence.deviceId, 'device.card', t.card);
+      }
+      if (mode === 'control') for (const request of arm.pendingRequests()) hub.sendToDevice(presence.deviceId, 'arm.request', request);
+    }
   });
 
   const onMessage = (e: HubMessageEvent): void => {

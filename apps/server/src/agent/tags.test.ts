@@ -89,7 +89,29 @@ describe('tag connection evaluation', () => {
     ['input only', [{ id: 'input', name: 'Synth', kind: 'midi-in' as const }]],
     ['disconnected output', [{ id: 'output', name: 'Synth', kind: 'midi-out' as const, state: 'disconnected' as const }]],
   ])('requires a connected MIDI output: %s', (_name, ports) => {
-    expect(evaluateConnection(target(), { devices: () => [device({ ports })], macLocal: false })).toMatchObject({ connection: 'offline', hint: expect.stringContaining('USB-C') });
+    expect(evaluateConnection(target(), { devices: () => [device({ ports })], macLocal: false })).toEqual({ connection: 'offline', hint: 'Plug the synth into your Mac' });
+  });
+
+  it.each([
+    ['no companion', []],
+    ['offline companion', [device({ online: false })]],
+    ['only a headset', [device({ kind: 'quest', role: 'hmd', capabilities: ['camera', 'mic'], ports: [] })]],
+  ])('offers Connect Mac for %s, without mistaking the server Mac for a MIDI bridge', (_name, devices) => {
+    expect(evaluateConnection(target(), { devices: () => devices, macLocal: true })).toEqual({
+      connection: 'offline', hint: 'Open ControlEverything on your Mac and plug in the synth', action: 'open-companion',
+    });
+  });
+
+  it('asks for the cable without a pairing action while the companion has no MIDI permission or is a standby', () => {
+    expect(evaluateConnection(target(), { devices: () => [device({ capabilities: [], ports: [] })], macLocal: false })).toEqual({
+      connection: 'offline', hint: 'Plug the synth into your Mac',
+    });
+  });
+
+  it('requires the original companion when a saved synth is assigned to it', () => {
+    expect(evaluateConnection(ready(target()), { devices: () => [device({ deviceId: 'another-mac' })], macLocal: false })).toEqual({
+      connection: 'offline', hint: 'Open ControlEverything on your Mac and plug in the synth', action: 'open-companion',
+    });
   });
 
   it('re-evaluates presence and ports without caching a stale connection', () => {

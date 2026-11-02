@@ -15,6 +15,7 @@ export const ARM_TIMEOUT_MS = 120_000;
 
 interface PendingArm {
   target: Target;
+  payload: ArmRequestPayload;
   driverId: string;
   irreversible: boolean;
   resolve: (r: ArmResultPayload) => void;
@@ -84,7 +85,7 @@ export class ArmService {
       const timer = setTimeout(() => {
         finish({ armId, cardId: target.cardId, driverId, armed: false, reason: 'no confirmation in time' });
       }, this.d.timeoutMs ?? ARM_TIMEOUT_MS);
-      this.pending.set(armId, { target, driverId, irreversible: Boolean(q.irreversible), resolve: finish });
+      this.pending.set(armId, { target, payload, driverId, irreversible: Boolean(q.irreversible), resolve: finish });
       signal?.addEventListener('abort', onAbort, { once: true });
       if (signal?.aborted) return onAbort();
       this.d.targets.setState(target, 'arming', 'waiting for a pinch', {
@@ -145,6 +146,11 @@ export class ArmService {
 
   pendingIds(): string[] {
     return [...this.pending.keys()];
+  }
+
+  /** Replay the same confirmation after a reload, with its original expiry and approval rules. */
+  pendingRequests(): ArmRequestPayload[] {
+    return [...this.pending.values()].map((p) => structuredClone(p.payload));
   }
 
   close(): void {

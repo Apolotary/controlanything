@@ -9,6 +9,7 @@ import type { HubMessageEvent } from '../hub';
 import { encodeJpeg } from '../oracle/image';
 import { createAgent } from './index';
 import { tryLink } from './link';
+import { TagStore } from './tags';
 import type { TargetDetection } from './types';
 
 vi.mock('./link', async (original) => ({ ...await original<typeof import('./link')>(), tryLink: vi.fn() }));
@@ -256,6 +257,69 @@ describe('annotation and control mode boundary', () => {
     s.changePresence([mac], 'update', mac.deviceId);
     expect(s.of('tags.state').at(-1)?.tags[0].connection).toBe('offline');
     expect(tryLink).not.toHaveBeenCalled();
+    expect(s.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('uses the same connection sentence and action for the tag and a rejected setup', () => {
+    const mac: DeviceInfo = { ...remo, deviceId: 'mac', name: 'Mac app', kind: 'mac', role: 'companion', capabilities: ['midi'], ports: [] };
+    const s = setup();
+    const target = s.addKnown({ ...lightCard, cardId: 'synth', name: 'Synth', category: 'synthesizer', protocols: ['midi'], requires: ['midi'] });
+    s.agent.setMode('control');
+    s.emit('control.setup', { cardId: target.cardId });
+    const disconnected = s.agent.tagsState().tags[0];
+    expect(disconnected).toMatchObject({ hint: 'Open ControlEverything on your Mac and plug in the synth', action: 'open-companion' });
+    expect(s.of('agent.step').at(-1)).toMatchObject({ sentence: disconnected.hint, hint: disconnected.hint, action: disconnected.action });
+    s.changePresence([mac], 'join', mac.deviceId);
+    s.emit('control.setup', { cardId: target.cardId });
+    const pluggedOut = s.agent.tagsState().tags[0];
+    expect(pluggedOut.hint).toBe('Plug the synth into your Mac');
+    expect(pluggedOut.action).toBeUndefined();
+    expect(s.of('agent.step').at(-1)).toMatchObject({ sentence: pluggedOut.hint, hint: pluggedOut.hint });
+    expect(s.of('agent.step').at(-1)?.action).toBeUndefined();
+    expect(tryLink).not.toHaveBeenCalled();
+  });
+
+  it('restores a saved control spec after restart and hydrates a reloaded headset without setup', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'ce-control-reload-'));
+    cleanups.push(() => rmSync(dataDir, { recursive: true, force: true }));
+    const first = setup({ dataDir, devices: [remo] });
+    const target = first.addKnown();
+    Object.assign(target, { driver: lightDriver, specId: 'light-spec', verification: { off: 'pass' }, armed: true });
+    const spec = { specId: 'light-spec', cardId: target.cardId, driverId: lightDriver.driverId, title: 'Light controls' };
+    new TagStore(join(dataDir, 'tags.json')).sync(target, spec);
+    first.close();
+    const restored = setup({ dataDir, devices: [remo] });
+    expect(restored.agent.mode()).toBe('annotate');
+    restored.agent.setMode('control');
+    expect(restored.of('ui.spec')).toEqual([spec]);
+    expect(restored.of('driver.status')).toEqual([expect.objectContaining({ phase: 'armed' })]);
+    restored.changePresence([remo], 'join', owner.deviceId);
+    expect(restored.sent).toHaveBeenCalledWith(owner.deviceId, 'device.card', lightCard);
+    expect(restored.sent).toHaveBeenCalledWith(owner.deviceId, 'driver.spec', lightDriver);
+    expect(restored.sent).toHaveBeenCalledWith(owner.deviceId, 'ui.spec', spec);
+    expect(restored.sent).toHaveBeenCalledWith(owner.deviceId, 'driver.status', expect.objectContaining({ phase: 'armed' }));
+    expect(restored.sent).toHaveBeenCalledWith(owner.deviceId, 'target.status', expect.objectContaining({ state: 'armed', executorDeviceId: 'remo' }));
+    expect(tryLink).not.toHaveBeenCalled();
+    expect(restored.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('replays the current setup and pending confirmation on reload without extending approval', async () => {
+    const s = setup({ devices: [remo] });
+    const target = s.addKnown();
+    s.agent.setMode('control');
+    s.agent.setup(target.cardId, owner);
+    const consent = s.agent.arm.ask(target, { title: 'Enable controls', summary: 'Ready', actions: [] });
+    const request = s.of('arm.request').at(-1)!;
+    await vi.advanceTimersByTimeAsync(500);
+    s.changePresence([remo], 'join', owner.deviceId);
+    expect(s.sent).toHaveBeenCalledWith(owner.deviceId, 'target.status', expect.objectContaining({ state: 'arming', runId: target.runId }));
+    expect(s.sent).toHaveBeenCalledWith(owner.deviceId, 'arm.request', request);
+    expect(s.agent.arm.pendingIds()).toEqual([request.armId]);
+    s.agent.cancel({ cardId: target.cardId });
+    await consent;
+    s.sent.mockClear();
+    s.changePresence([remo], 'join', owner.deviceId);
+    expect(s.sent.mock.calls.some(([, type]) => type === 'arm.request')).toBe(false);
     expect(s.dispatch).not.toHaveBeenCalled();
   });
 

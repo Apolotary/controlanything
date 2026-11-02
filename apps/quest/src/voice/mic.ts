@@ -3,6 +3,9 @@
  * MediaRecorder's webm/opus is rejected by the ASR). Prepare it from a 2D-page tap BEFORE entering XR so the
  * permission prompt and the AudioContext unlock happen outside the session; push-to-talk then only gates chunks.
  */
+import type { AudioFeatures } from '@ce/protocol';
+import { wireFeatures } from '../../../companion/src/audio/features';
+import { AudioOracle } from '../../../companion/src/audio/oracle';
 import { Emitter } from '../app/emitter';
 
 export const TARGET_RATE = 16_000;
@@ -74,6 +77,9 @@ export class Mic extends Emitter<MicEvents> {
   private ctx?: AudioContext;
   private node?: AudioWorkletNode;
   private stream?: MediaStream;
+  private preparing?: Promise<void>;
+  /** Shares the prepared input/context with PTT; it only captures and never plays audio. */
+  private readonly oracle = new AudioOracle();
   ready = false;
   rate = TARGET_RATE;
   label = '';
@@ -84,12 +90,28 @@ export class Mic extends Emitter<MicEvents> {
       await this.ctx?.resume();
       return;
     }
+    if (!this.preparing) this.preparing = this.open().finally(() => { this.preparing = undefined; });
+    await this.preparing;
+  }
+
+  private async open(): Promise<void> {
+    try {
+      await this.openInput();
+    } catch (error) {
+      this.close();
+      throw error;
+    }
+  }
+
+  private async openInput(): Promise<void> {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('getUserMedia unavailable (needs a secure context)');
     this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      // Speech processing changes level/timbre and would invalidate a synth comparison.
+      audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
       video: false,
     });
-    this.label = this.stream.getAudioTracks()[0]?.label ?? 'microphone';
+    const track = this.stream.getAudioTracks()[0];
+    this.label = (track?.label || 'Quest 3 microphone').slice(0, 120);
     try {
       this.ctx = new AudioContext({ sampleRate: TARGET_RATE });
     } catch {
@@ -113,7 +135,16 @@ export class Mic extends Emitter<MicEvents> {
     mute.gain.value = 0;
     this.node.connect(mute).connect(this.ctx.destination);
     await this.ctx.resume();
+    await this.oracle.startFromNode(this.ctx, src, this.label);
+    if (this.oracle.state !== 'on') throw new Error(this.oracle.error ?? 'Microphone sensing could not start');
+    track?.addEventListener('ended', () => this.close());
     this.ready = true;
+  }
+
+  /** Verification uses the continuously buffered input without starting/stopping push-to-talk. */
+  async measure(durationMs = 600, offsetMs = 0): Promise<AudioFeatures> {
+    if (!this.ready || this.ctx?.state !== 'running') throw new Error('Enable the headset microphone before setting up the synth');
+    return wireFeatures(await this.oracle.measure(durationMs, offsetMs));
   }
 
   start(): void {
@@ -126,8 +157,14 @@ export class Mic extends Emitter<MicEvents> {
   }
 
   close(): void {
-    this.stream?.getTracks().forEach((t) => t.stop());
-    void this.ctx?.close();
     this.ready = false;
+    void this.oracle.stop();
+    if (this.node) this.node.port.onmessage = null;
+    this.node?.disconnect();
+    this.node = undefined;
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream = undefined;
+    void this.ctx?.close();
+    this.ctx = undefined;
   }
 }

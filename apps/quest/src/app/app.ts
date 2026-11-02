@@ -41,6 +41,7 @@ import { type Envelope, WsClient } from '../io/ws';
 import { Approvals } from '../pair/approvals';
 import { homeHint } from '../hud/home';
 import { PairingFlow } from '../pair/self';
+import { pairingCode } from '../hud/v2/pair-code';
 import { type ReplayMode, ReplayCamera, TakePlayer } from '../replay/player';
 import { Recorder } from '../replay/recorder';
 import { loadTake, type Take } from '../replay/take';
@@ -155,6 +156,7 @@ export class QuestApp {
   private armRequest?: ArmRequestPayload;
   private acceptedArm?: string;
   private pairingUntil = 0;
+  private pairCodeRequest: string | null = null;
   private lastPairFrame = 0;
   private pairCapturing = false;
   private handMapping?: { targetId: string; specId: string; controlId: string; originY?: number; value: number; current: number; lastAt: number };
@@ -513,6 +515,8 @@ export class QuestApp {
     hud.on('setup', (e) => this.setupControl(e.targetId));
     hud.on('cancel', (e) => this.cancelControl(e.targetId));
     hud.on('pair', (e) => this.pairDevice(e.targetId));
+    hud.on('pairCancel', () => { this.pairingUntil = 0; this.pairCodeRequest = null; this.refreshHome(); });
+    hud.on('pairCode', (e) => this.submitPairCode(e.targetId, e.code));
     hud.on('handControl', (e) => this.setHandControl(e.targetId, e.enabled));
     hud.on('deck', (e) => this.onDeck(e.key, e.phase));
     hud.on('hack', (e) => this.onHack(e));
@@ -576,9 +580,11 @@ export class QuestApp {
       if (s.kind === 'paired') this.page.log(`paired as ${s.identity.name} (${s.identity.deviceId.slice(0, 8)}…)${s.verified ? '' : ' · not verified (server offline)'}`, 'ok');
     });
     this.approvals.on('change', (list) => {
-      this.hud.showApprovals(list);
+      const tag = this.lockedId ? this.modes.tags.get(this.lockedId) : undefined;
+      const connectingMac = this.modes.mode === 'control' && tag?.connection === 'offline' && tag.action === 'open-companion';
+      this.hud.showApprovals(this.pairingUntil || connectingMac ? [] : list);
       this.page.showApprovals(list, (id, ok) => (ok ? this.approvals.approve(id) : this.approvals.deny(id)));
-      if (list.length) this.hud.toast(`${list[0].name} wants to join · ${list[0].display}`, 'info');
+      if (list.length && !this.pairingUntil && !connectingMac) this.hud.toast(`${list[0].name} wants to join · ${list[0].display}`, 'info');
     });
     this.approvals.on('resolved', (r) => this.page.log(`pairing ${r.approved ? 'approved' : 'denied'}${r.name ? `: ${r.name}` : ''}`, r.approved ? 'ok' : 'warn'));
     this.ptt.on('listening', ({ listening }) => {
@@ -633,7 +639,8 @@ export class QuestApp {
       status: homeHint(this.modes.mode, this.modes.tags.size, !!this.lockedId),
       canStop: !!this.activeSetup || this.armedCards.size > 0 });
     const tag = this.lockedId ? this.modes.tags.get(this.lockedId) : undefined;
-    this.hud.setDeviceState?.(tag ? { targetId: tag.targetId, connection: tag.connection, hint: tag.hint,
+    this.hud.setDeviceState?.(tag ? { targetId: tag.targetId, connection: tag.connection, hint: tag.hint, action: tag.action,
+      pairingSeconds: this.pairingUntil ? Math.max(1, Math.ceil((this.pairingUntil - performance.now()) / 1000)) : undefined,
       busy: tag.busy, sentence: tag.sentence, handControl: this.handMapping?.targetId === tag.targetId } : null);
   }
 
@@ -696,6 +703,10 @@ export class QuestApp {
       if (active) this.cancelControl(active.targetId);
     }
     const removed = this.modes.snapshot(payload.tags);
+    const pairingTag = this.lockedId ? this.modes.tags.get(this.lockedId) : undefined;
+    if (this.pairingUntil && (!pairingTag || pairingTag.connection !== 'offline' || !pairingTag.action)) {
+      this.pairingUntil = 0; this.pairCodeRequest = null;
+    }
     for (const tag of removed) {
       if (tag.cardId) { this.armedCards.delete(tag.cardId); this.controls.clear(); }
       const target = this.targets.get(tag.targetId);
@@ -787,21 +798,37 @@ export class QuestApp {
   }
 
   private pairDevice(targetId: string): void {
-    if (this.modes.mode !== 'control' || !this.modes.tags.has(targetId)) return;
+    const tag = this.modes.tags.get(targetId);
+    if (this.modes.mode !== 'control' || tag?.connection !== 'offline' || !['open-companion', 'pair-device'].includes(tag.action ?? '')) return;
     this.pairingUntil = performance.now() + 30_000;
+    this.pairCodeRequest = null;
     this.lastPairFrame = 0;
+    this.hud.showApprovals([]);
     void this.startCamera();
     this.refreshHome();
   }
 
   private async capturePairing(time: number): Promise<void> {
-    if (time >= this.pairingUntil || this.modes.mode !== 'control') { this.pairingUntil = 0; this.refreshHome(); return; }
+    if (time >= this.pairingUntil || this.modes.mode !== 'control') {
+      this.pairingUntil = 0; this.pairCodeRequest = null;
+      this.hud.toast('Pairing timed out. Try again or type the code.', 'info');
+      this.refreshHome(); return;
+    }
     if (this.pairCapturing || time - this.lastPairFrame < 1000) return;
+    this.refreshHome();
     this.pairCapturing = true; this.lastPairFrame = time;
     try {
       const frame = await this.capture.capture('pair');
       if (frame && this.pairingUntil && this.modes.mode === 'control') this.ws.send('scan.frame', frame.payload, { to: 'server', droppable: true });
     } finally { this.pairCapturing = false; }
+  }
+
+  private submitPairCode(targetId: string, value: string): void {
+    const code = pairingCode(value), tag = this.modes.tags.get(targetId);
+    if (!code || this.modes.mode !== 'control' || tag?.connection !== 'offline' || !tag.action) return;
+    // Approval goes through the authenticated socket, never a URL from the QR or an input field.
+    this.pairCodeRequest = this.ws.send('pair.approve', { code }, { to: 'server' });
+    this.hud.toast(this.pairCodeRequest ? 'Checking the code…' : 'Waiting for the server connection.', 'info');
   }
 
   private setHandControl(targetId: string, enabled: boolean): void {
@@ -839,7 +866,7 @@ export class QuestApp {
   }
 
   private helloPayload(): PayloadOf<'hello'> {
-    return { deviceToken: WsClient.allowsSavedToken(this.ws.url) || this.freshSocketIdentity ? this.identity?.deviceToken ?? '' : '', role: 'hmd', capabilities: ['camera', 'mic', 'hands', 'display'], app: APP_VERSION };
+    return { deviceToken: WsClient.allowsSavedToken(this.ws.url) || this.freshSocketIdentity ? this.identity?.deviceToken ?? '' : '', role: 'hmd', capabilities: ['camera', ...(this.mic.ready && this.params.get('mic') !== '0' ? ['mic' as const] : []), 'hands', 'display'], app: APP_VERSION };
   }
 
   private async connect(): Promise<void> {
@@ -876,6 +903,10 @@ export class QuestApp {
     ws.on('tags.state', (m) => this.onTagsState(m.payload as PayloadOf<'tags.state'>));
     ws.on('log', (m) => {
       const p = m.payload as PayloadOf<'log'>;
+      if (this.pairCodeRequest && p.ref === this.pairCodeRequest) {
+        this.pairCodeRequest = null;
+        this.hud.toast('That code did not connect. Check the current code on your Mac.', 'warn');
+      }
       if (p.level === 'error' || p.level === 'warn') {
         this.page.log(`server: ${p.message}${p.issues?.length ? ` (${p.issues.slice(0, 3).join('; ')})` : ''}`, p.level === 'error' ? 'error' : 'warn');
       }
@@ -885,6 +916,14 @@ export class QuestApp {
       if (this.modes.mode === 'annotate') void this.scanner.onResult(p);
       if (p.qr?.some((q) => q.approved)) { this.pairingUntil = 0; this.refreshHome(); }
       if (p.qr?.length) for (const q of p.qr) this.page.log(`QR seen${q.approved ? ' → approved' : ''}: ${q.text.slice(0, 60)}`, q.approved ? 'ok' : 'info');
+    });
+    ws.on('pair.approved', (m) => {
+      const p = m.payload as PayloadOf<'pair.approved'>;
+      if ((this.pairingUntil || this.pairCodeRequest) && p.kind === 'mac') {
+        this.pairingUntil = 0; this.pairCodeRequest = null;
+        this.hud.toast('Mac connected. Plug in the synth.', 'info');
+        this.refreshHome();
+      }
     });
     ws.on('target.status', (m) => this.onTargetStatus(m.payload as TargetStatusPayload));
     ws.on('device.card', (m) => this.onDeviceCard(m.payload as PayloadOf<'device.card'>));
@@ -1122,8 +1161,19 @@ export class QuestApp {
   private async onSenseRequest(p: SenseRequestPayload): Promise<void> {
     if (!this.identity || p.sensorDeviceId !== this.identity.deviceId) return;
     if (this.modes.mode !== 'control' || !p.cardId || !this.modes.byCard(p.cardId) || (this.activeSetup !== p.cardId && !this.canControl(p.cardId))) return;
+    if (p.kind === 'audio-features') {
+      try {
+        if (this.params.get('mic') === '0' || !this.mic.ready) throw new Error('Enable the headset microphone before entering AR, then retry setup');
+        const audio = await this.mic.measure(p.durationMs || 600, p.offsetMs ?? 0);
+        if (this.modes.mode !== 'control' || this.activeSetup !== p.cardId && !this.canControl(p.cardId)) return;
+        this.ws.send('sense.result', { senseId: p.senseId, kind: p.kind, at: Date.now(), ok: true, audio }, { to: 'server' });
+      } catch (e) {
+        this.ws.send('sense.result', { senseId: p.senseId, kind: p.kind, at: Date.now(), ok: false, error: (e as Error).message.slice(0, 300) }, { to: 'server' });
+      }
+      return;
+    }
     if (p.kind !== 'frame') {
-      this.ws.send('sense.result', { senseId: p.senseId, kind: p.kind, at: Date.now(), ok: false, error: 'the headset senses frames only' }, { to: 'server' });
+      this.ws.send('sense.result', { senseId: p.senseId, kind: p.kind, at: Date.now(), ok: false, error: 'the headset senses camera frames and microphone features' }, { to: 'server' });
       return;
     }
     // fixed exposure across the before/after pair when the camera allows it (released 4 s after the last request)
@@ -1495,6 +1545,7 @@ export class QuestApp {
     if (this.params.get('mic') === '0') return;
     try {
       await this.mic.prepare();
+      this.ws.send('hello', this.helloPayload(), { to: 'server' });
       this.page.log(`mic: ${this.mic.label} · ${this.mic.rate} Hz PCM16`, 'ok');
     } catch (e) {
       this.page.log(`mic failed: ${(e as Error).message}`, 'warn');

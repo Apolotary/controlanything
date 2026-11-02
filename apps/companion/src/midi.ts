@@ -21,26 +21,38 @@ export class MidiBridge implements MidiIO {
     return typeof navigator !== 'undefined' && 'requestMIDIAccess' in navigator;
   }
 
-  /** True when the browser already granted MIDI (with SysEx), so enabling needs no prompt. */
+  /** Restore either existing grant after reload without asking for new access. */
   static async alreadyGranted(): Promise<boolean> {
-    try {
-      const s = await navigator.permissions.query({ name: 'midi', sysex: true } as unknown as PermissionDescriptor);
-      return s.state === 'granted';
-    } catch {
-      return false;
+    for (const sysex of [true, false]) {
+      try {
+        const s = await navigator.permissions.query({ name: 'midi', sysex } as unknown as PermissionDescriptor);
+        if (s.state === 'granted') return true;
+      } catch {
+        // Older browsers may only recognize the plain MIDI permission.
+      }
     }
+    return false;
   }
 
   get enabled(): boolean {
     return Boolean(this.access);
   }
 
-  async enable(): Promise<void> {
+  async enable(restore = false): Promise<void> {
     if (!MidiBridge.supported) throw new Error('Web MIDI is not available in this browser (use Chrome or Edge, on localhost or https).');
+    let sysex = true;
+    if (restore) {
+      try {
+        sysex = (await navigator.permissions.query({ name: 'midi', sysex: true } as unknown as PermissionDescriptor)).state === 'granted';
+      } catch {
+        sysex = false;
+      }
+    }
     try {
-      this.access = await navigator.requestMIDIAccess({ sysex: true });
-      this.sysex = true;
+      this.access = await navigator.requestMIDIAccess({ sysex });
+      this.sysex = sysex;
     } catch {
+      if (!sysex) throw new Error('USB MIDI access is no longer available. Choose Allow USB MIDI to reconnect.');
       // SysEx refused: plain MIDI still covers notes and CCs (no identity check)
       this.access = await navigator.requestMIDIAccess({ sysex: false });
       this.sysex = false;

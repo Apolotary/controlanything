@@ -52,13 +52,29 @@ code, kbd, pre, .mono { font-family: var(--font); font-variant-numeric: tabular-
 .dot { display: inline-block; width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--faint); }
 .dot.on, .dot.online, .dot.warn { background: var(--accent); }
 
-.app { min-height: 100svh; display: grid; grid-template-rows: auto 1fr auto; }
+.app { min-height: 100svh; display: grid; grid-template-rows: auto 1fr; }
 .app-header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 24px 28px; }
 .app-header .wordmark { grid-column: 2; }
 .app-header > button { justify-self: end; }
 .wordmark { color: var(--muted); font-size: 13px; font-weight: 500; }
 .wordmark span { margin-left: 10px; color: var(--faint); }
 .calm-center { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 26px; padding: 56px 28px 80px; text-align: center; }
+.onboarding.panel { width: min(620px, 100%); padding: 36px; display: flex; flex-direction: column; align-items: center; gap: 22px; }
+.onboarding h1 { font-size: clamp(24px, 3.5vw, 32px); line-height: 1.2; font-weight: 500; }
+.eyebrow { color: var(--muted); font-size: 13px; }
+.onboarding-next { color: var(--muted); max-width: 440px; font-size: 16px; }
+.pairing-content, .pairing-code { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
+.pairing-code .qr { width: min(300px, 58vw); height: min(300px, 58vw); padding: 14px; }
+.pairing-code .passcode { font-family: 'SFMono-Regular', Consolas, monospace; }
+#headset-url { overflow-wrap: anywhere; max-width: 100%; }
+.connection-steps { display: flex; flex-direction: column; gap: 12px; width: 100%; padding: 20px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--muted); }
+.connection-steps p::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 10px; border-radius: 50%; background: var(--faint); }
+.connection-steps p.connected { color: var(--text); }
+.connection-steps p.connected::before { background: var(--accent); }
+.setup-activity { display: flex; align-items: center; justify-content: center; gap: 16px; font-size: 15px; }
+#setup-stop { flex: none; min-width: 80px; }
+#midi-message:empty { display: none; }
+.connection-details .agent-status { justify-content: flex-start; font-size: 16px; text-align: left; }
 .agent-status { display: flex; align-items: center; justify-content: center; gap: 16px; max-width: 850px; font-size: 28px; font-weight: 500; line-height: 1.4; }
 #status-dot { width: 9px; height: 9px; background: var(--accent); }
 #status-dot.working, .agent-status.working #status-dot { animation: working 2s ease-in-out infinite; }
@@ -213,6 +229,8 @@ body.stage .wordmark { font-size: 15px; }
   .app-header { padding: 18px 16px; grid-template-columns: 1fr auto; }
   .app-header .wordmark { grid-column: 1; }
   .calm-center { padding: 48px 24px 64px; }
+  .onboarding.panel { padding: 28px 20px; }
+  .setup-activity { flex-direction: column; }
   .agent-status { font-size: 23px; gap: 12px; }
   .app-footer { padding: 0 20px 22px; }
   .pair-box { width: 100%; }

@@ -4,12 +4,13 @@
  */
 import type { Object3D, Quaternion, Vector3 } from 'three';
 import type { Channel, ControlEvent, Gen3dSpec, HackItem, HudStatus, LogRow, ModelChip, Patch } from '@ce/gen3d';
+import type { TaggedDevice } from '@ce/protocol';
 
 export type AppMode = 'annotate' | 'control';
 export type ObjectFilter = 'electronics' | 'lights' | 'everything';
 export type DeviceConnection = 'ready' | 'setup' | 'offline' | 'unknown';
 export interface HomeState { mode: AppMode; filter: ObjectFilter; tagged: number; status: string; canStop?: boolean }
-export interface DeviceState { targetId: string; connection: DeviceConnection; hint?: string; busy?: boolean; sentence?: string; handControl?: boolean }
+export interface DeviceState { targetId: string; connection: DeviceConnection; hint?: string; action?: TaggedDevice['action']; busy?: boolean; sentence?: string; handControl?: boolean; pairingSeconds?: number }
 
 export interface JointState {
   position: Vector3;
@@ -129,6 +130,8 @@ export interface HudEvents {
   setup: { targetId: string };
   cancel: { targetId: string };
   pair: { targetId: string };
+  pairCancel: { targetId: string };
+  pairCode: { targetId: string; code: string };
   handControl: { targetId: string; enabled: boolean };
   deck: { key: DeckKey; phase: 'press' | 'release' };
   hack: { targetId: string; itemId: string; controlId?: string; index: number; hold?: boolean };

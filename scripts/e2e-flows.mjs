@@ -5,9 +5,9 @@
  * Optional YOLO preview is disabled; detections still use the server's fixture scan path.
  * Scan prompts are limited to ceiling light + synthesizer to avoid generic duplicate boxes.
  * The sim advertises connected sim-midi and sim-ir ports even with audio muted. We only
- * assert synth setup eligibility, never run its audio pipeline. Offline coverage stops
- * that same bridge's socket, then reconnects it: laptop identification is not reliable in
- * the canned fixture (unknown labels fall back to a lighting card).
+ * assert synth setup eligibility, never run its audio pipeline. Companion coverage uses a
+ * separate browser context, its real rendered QR, and silent Web MIDI metadata to exercise
+ * hot-plug and second-tab presence. Recovery reuses the same fixture data across a restart.
  * Helpers are copied from e2e-judge.mjs so its passing path remains unchanged.
  * This script needs sockets and Chrome and cannot run in the coding sandbox.
  */
@@ -26,7 +26,7 @@ const SCREENS = join(ROOT, 'research/screens/v2-flows');
 const BASE = 'http://127.0.0.1:8797';
 const UI_TIMEOUT = 30_000;
 const PIPELINE_TIMEOUT = 180_000;
-let server, browser, quest, sim, dataDir, cardId;
+let server, browser, quest, sim, companion, companionContext, dataDir, cardId;
 let serverReady = false;
 let serverError;
 let serverLog = '';
@@ -71,19 +71,21 @@ async function portMustBeFree(port) {
 }
 
 async function startServer() {
-  for (const app of ['sim', 'quest']) {
+  for (const app of ['sim', 'quest', 'companion']) {
     await access(join(ROOT, `apps/${app}/dist/index.html`)).catch(() => {
       throw new Error(`${app} is not built. Run npm run build before npm run e2e:flows.`);
     });
   }
   await portMustBeFree(8797);
   await portMustBeFree(8447);
-  const freshDir = await mkdtemp(join(tmpdir(), 'ce-e2e-flows-'));
-  if (abort.signal.aborted) {
-    await rm(freshDir, { recursive: true, force: true });
+  const fresh = !dataDir;
+  if (fresh) {
+    dataDir = await mkdtemp(join(tmpdir(), 'ce-e2e-flows-'));
     abort.signal.throwIfAborted();
   }
-  dataDir = freshDir;
+  serverReady = false;
+  serverError = undefined;
+  const logOffset = serverLog.length;
   server = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
     cwd: join(ROOT, 'apps/server'),
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -103,12 +105,12 @@ async function startServer() {
   for (const stream of [server.stdout, server.stderr]) stream.on('data', (chunk) => {
     serverLog += chunk.toString();
     // HTTP starts before HTTPS: wait until the entry point has finished starting both.
-    serverReady ||= serverLog.includes('ControlEverything server ');
+    serverReady ||= serverLog.slice(logOffset).includes('ControlEverything server ');
   });
   await until('own HTTP/HTTPS fixture server startup', () => serverReady);
   const health = await json('/api/health');
   assert.equal(health.mode, 'fixture');
-  assert.equal(health.space.pairedDevices, 0, 'Server must start with an empty registry');
+  if (fresh) assert.equal(health.space.pairedDevices, 0, 'Server must start with an empty registry');
   assert.equal(new URL(health.urls.https).port, '8447');
 }
 
@@ -159,6 +161,78 @@ async function screenshot(name) {
   } finally {
     await canvas.dispose();
   }
+}
+
+async function companionScreenshot(name) {
+  await companion.bringToFront();
+  await companion.screenshot({ path: join(SCREENS, `${name}.png`), fullPage: true });
+  await quest.bringToFront();
+}
+
+async function openCompanion() {
+  // The physical Mac and headset have separate storage, even though both visit this server.
+  companionContext = await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
+  companionContext.setDefaultTimeout(UI_TIMEOUT);
+  companionContext.setDefaultNavigationTimeout(UI_TIMEOUT);
+  await companionContext.addInitScript(() => {
+    window.__ceMute = true;
+    // Only metadata is simulated: an unexpected command fails rather than reaching hardware.
+    const access = { inputs: new Map(), outputs: new Map(), onstatechange: null };
+    const output = { id: 'flows-op1', name: 'OP-1 Field', manufacturer: 'Teenage Engineering', state: 'connected',
+      send() { throw new Error('The pairing flow must never send MIDI'); } };
+    const connect = (connected) => {
+      sessionStorage.setItem('ce.flows.midi.connected', String(connected));
+      if (connected) access.outputs.set(output.id, output);
+      else access.outputs.clear();
+      access.onstatechange?.({ port: output });
+    };
+    connect(sessionStorage.getItem('ce.flows.midi.connected') === 'true');
+    window.__flowsMidi = { connect };
+    Object.defineProperty(navigator, 'requestMIDIAccess', { configurable: true, value: async () => {
+      sessionStorage.setItem('ce.flows.midi.allowed', 'true');
+      return access;
+    } });
+    const query = navigator.permissions.query.bind(navigator.permissions);
+    navigator.permissions.query = (descriptor) => descriptor.name === 'midi'
+      ? Promise.resolve({ state: sessionStorage.getItem('ce.flows.midi.allowed') === 'true' ? 'granted' : 'prompt' })
+      : query(descriptor);
+  });
+  companion = await companionContext.newPage();
+  watchPage(companion, 'companion');
+  // requireApproval overrides trusted-loopback convenience, so the owner must still approve.
+  await companion.goto(`${BASE}/companion/?pair=1`, { waitUntil: 'domcontentloaded' });
+  await companion.locator('#self-qr svg').waitFor({ state: 'visible' });
+}
+
+async function scanCompanionQr() {
+  // The emulator's camera sees the sim. Feed the Mac's rendered QR through the real image
+  // decoder and owner approval path instead of issuing a direct pair.approve request.
+  const png = await companion.locator('#self-qr').screenshot();
+  const frameId = `flows-pair-${Date.now()}`;
+  await quest.evaluate(async ({ png, frameId }) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${png}`;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = 640; canvas.height = 480;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'white'; ctx.fillRect(0, 0, 640, 480);
+    ctx.drawImage(image, 140, 60, 360, 360);
+    const jpeg = canvas.toDataURL('image/jpeg', 0.95).split(',')[1];
+    window.__ce.ws.send('scan.frame', { frameId, jpeg, width: 640, height: 480, capturedAt: Date.now(), purpose: 'pair' }, { to: 'server' });
+  }, { png: png.toString('base64'), frameId });
+  await waitQuest((id) => window.__flowsEvents.some((e) => e.type === 'scan.result'
+    && e.payload.frameId === id && e.payload.qr?.some((q) => q.approved)), frameId);
+}
+
+async function assertSynthConnection(id, connection, action) {
+  const started = Date.now();
+  await action();
+  await waitQuest(({ id, connection }) => window.__ce.modes.byCard(id)?.connection === connection, { id, connection });
+  const elapsed = Date.now() - started;
+  // Allow one extra second for a software-rendered browser, but report the actual latency.
+  assert(elapsed < 2000, `Synth presence took ${elapsed} ms to reach ${connection}`);
+  console.log(`  synth presence: ${connection} in ${elapsed} ms`);
 }
 
 async function phase(name, action, capture = true) {
@@ -364,7 +438,7 @@ async function run() {
       window.__flowsEvents = [];
       window.__flowsControls = [];
       window.__flowsRequests = [];
-      const types = new Set(['mode.state', 'tags.state', 'target.status', 'device.card', 'agent.step', 'verify.result', 'ui.spec', 'arm.request', 'arm.result', 'panic', 'presence', 'log']);
+      const types = new Set(['mode.state', 'tags.state', 'target.status', 'device.card', 'agent.step', 'verify.result', 'ui.spec', 'arm.request', 'arm.result', 'panic', 'presence', 'log', 'scan.result', 'pair.approved']);
       window.__ce.ws.tap('in', ({ type, payload }) => {
         if (!types.has(type)) return;
         window.__flowsEvents.push({ type, payload });
@@ -452,10 +526,9 @@ async function run() {
       'Switching mode alone must not start setup');
   });
   await phase('06-offline-bridge', async () => {
-    await sim.evaluate(() => window.ceSimDebug.device.conn.stop());
-    await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'offline', synthCardId);
+    await assertSynthConnection(synthCardId, 'offline', () => sim.evaluate(() => window.ceSimDebug.device.conn.stop()));
     const hint = await quest.evaluate((id) => window.__ce.modes.byCard(id).hint, synthCardId);
-    assert.equal(hint, 'To control it you need a companion: open the Mac app and connect the synth with USB-C');
+    assert.equal(hint, 'Open ControlEverything on your Mac and plug in the synth');
     await pinch({ targetId: synthId, turn: true });
     await waitQuest((hint) => window.__ce.hud.card.visible && window.__ce.hud.status.text === hint, hint);
     assert.equal(await quest.evaluate(() => !!window.__ce.hud.root.getObjectByName('control-setup')), false,
@@ -465,6 +538,71 @@ async function run() {
     await quest.evaluate((id) => window.__ce.setupControl(id), synthId);
     assert.equal(await quest.evaluate(() => window.__flowsRequests.some((e) => e.type === 'control.setup')), false);
     assert.equal(await quest.evaluate(() => window.__flowsEvents.some((e) => e.type === 'agent.step')), false);
+  });
+  await phase('06a-connect-mac', async () => {
+    await pinch({ nodeName: 'control-pair' });
+    await waitQuest(() => window.__ce.pairingUntil > performance.now()
+      && !!window.__ce.hud.root.getObjectByName('control-pair-cancel')
+      && !!window.__ce.hud.root.getObjectByName('control-pair-code'));
+    const remaining = await quest.evaluate(() => window.__ce.pairingUntil - performance.now());
+    assert(remaining > 0 && remaining <= 30_000, 'QR scan must have a bounded countdown');
+    await screenshot('06a-pairing-countdown');
+    await pinch({ nodeName: 'control-pair-cancel' });
+    await waitQuest(() => window.__ce.pairingUntil === 0 && !!window.__ce.hud.root.getObjectByName('control-pair'));
+    await pinch({ nodeName: 'control-pair-code' });
+    for (const key of 'K7Q4M2') await pinch({ nodeName: `pair-key:${key}` });
+    await waitQuest(() => window.__ce.hud.root.getObjectByName('pair-code-value')?.text === 'K7Q-4M2'
+      && !!window.__ce.hud.root.getObjectByName('pair-code-submit'));
+    await screenshot('06a-pairing-type-code');
+    await pinch({ nodeName: 'pair-code-close' });
+    await waitQuest(() => !window.__ce.hud.modal.visible && window.__ce.hud.card.visible);
+    await pinch({ nodeName: 'control-pair' });
+    await openCompanion();
+    assert.match(await companion.locator('#self-code').innerText(), /^[A-Z0-9]{3}-[A-Z0-9]{3}$/);
+    const expires = await companion.locator('#self-expiry').innerText();
+    assert(expires, 'The Mac must show when its pairing code expires');
+    await companion.waitForFunction((previous) => document.querySelector('#self-expiry')?.textContent !== previous, expires);
+    await companionScreenshot('06b-companion-pair-code');
+    await scanCompanionQr();
+    await companion.waitForFunction(() => document.querySelector('#headset-status')?.textContent.includes('Connected to Quest'));
+    await waitQuest(() => window.__ce.pairingUntil === 0);
+    await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'offline'
+      && window.__ce.modes.byCard(id)?.hint === 'Plug the synth into your Mac', synthCardId);
+    assert.equal(await quest.evaluate(() => !!window.__ce.hud.root.getObjectByName('control-pair')), false,
+      'A paired Mac without a synth must offer cable guidance, without another Connect Mac button');
+    await companionScreenshot('06c-companion-connected-no-usb');
+  });
+  await phase('06d-companion-usb-hotplug', async () => {
+    await companion.locator('#enable-midi').click();
+    await assertSynthConnection(synthCardId, 'setup', () => companion.evaluate(() => window.__flowsMidi.connect(true)));
+    await companion.waitForFunction(() => document.querySelector('#synth-status')?.textContent.includes('OP-1 Field on USB'));
+    await waitQuest(() => !!window.__ce.hud.root.getObjectByName('control-setup'));
+    assert.equal(await companion.locator('#onboarding-title').innerText(), 'Set it up from the headset');
+    assert.equal(await quest.evaluate(() => window.__flowsRequests.some((e) => e.type === 'control.setup')), false,
+      'Plugging in USB must not start setup');
+    await companionScreenshot('06d-companion-usb-ready');
+    const before = await quest.evaluate((id) => ({ lockedId: window.__ce.lockedId, targetId: window.__ce.modes.byCard(id).targetId }), synthCardId);
+    await assertSynthConnection(synthCardId, 'offline', () => companion.evaluate(() => window.__flowsMidi.connect(false)));
+    await waitQuest(() => !window.__ce.hud.root.getObjectByName('control-setup'));
+    assert.equal(await quest.evaluate(() => window.__ce.lockedId), before.lockedId, 'USB removal must update the open card in place');
+    await companionScreenshot('06e-companion-usb-removed');
+    await assertSynthConnection(synthCardId, 'setup', () => companion.evaluate(() => window.__flowsMidi.connect(true)));
+  });
+  await phase('06f-companion-second-tab', async () => {
+    const second = await companionContext.newPage();
+    watchPage(second, 'companion-standby');
+    try {
+      await second.goto(`${BASE}/companion/`, { waitUntil: 'domcontentloaded' });
+      await second.waitForFunction(() => document.querySelector('#exec-role')?.textContent === 'standby'
+        && document.querySelector('#conn-dot')?.classList.contains('on'));
+      await waitQuest(() => window.__flowsEvents.findLast((e) => e.type === 'presence')?.payload.devices
+        .some((d) => d.kind === 'mac' && d.online && d.connections === 2 && d.ports?.some((p) => p.id === 'flows-op1')));
+      assert.equal(await quest.evaluate((id) => window.__ce.modes.byCard(id)?.connection, synthCardId), 'setup',
+        'An empty second tab must not hide the first tab MIDI output');
+      await companionScreenshot('06f-companion-first-tab-still-ready');
+    } finally { await second.close(); }
+    await companion.evaluate(() => window.__flowsMidi.connect(false));
+    await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'offline', synthCardId);
   });
   await phase('07-synth-bridge-restored', async () => {
     await sim.evaluate(() => window.ceSimDebug.device.conn.start());
@@ -478,6 +616,16 @@ async function run() {
       'Synth Set up requires the connected sim MIDI port');
     assert.equal(await quest.evaluate(() => window.__flowsRequests.some((e) => e.type === 'control.setup')), false,
       'Connecting a bridge must never start learning without user intent');
+  });
+  await phase('07a-sim-midi-hotplug', async () => {
+    await assertSynthConnection(synthCardId, 'offline', () => sim.evaluate(() => {
+      const c = window.ceSimDebug.device.conn;
+      const hello = c.hello();
+      c.send('hello', { ...hello, ports: hello.ports.filter((p) => p.kind !== 'midi-out') });
+    }));
+    await waitQuest(() => !window.__ce.hud.root.getObjectByName('control-setup'));
+    await assertSynthConnection(synthCardId, 'setup', () => sim.evaluate(() => window.ceSimDebug.device.conn.resendHello()));
+    await waitQuest(() => !!window.__ce.hud.root.getObjectByName('control-setup'));
   });
   await phase('08-set-up-light', async () => {
     await pinch({ targetId, turn: true });
@@ -740,6 +888,52 @@ async function run() {
       });
     }
   });
+
+  // Recovery is last: reload intentionally ends XR, and restarting discards transient setup work.
+  const storedIdentity = (page) => page.evaluate(() => localStorage.getItem('ce.device'));
+  let macIdentity, questIdentity, spaceId, pairedDevices;
+  let newPairRequests = 0;
+  const watchPairing = (request) => {
+    if (new URL(request.url()).pathname === '/api/pair/start') newPairRequests++;
+  };
+  await phase('18-companion-reload', async () => {
+    companion.on('request', watchPairing);
+    quest.on('request', watchPairing);
+    macIdentity = await storedIdentity(companion);
+    questIdentity = await storedIdentity(quest);
+    assert(macIdentity && questIdentity && macIdentity !== questIdentity, 'Mac and Quest must have separate saved identities');
+    ({ space: { spaceId, pairedDevices } } = await json('/api/health'));
+    await companion.evaluate(() => window.__flowsMidi.connect(true));
+    await companion.reload({ waitUntil: 'domcontentloaded' });
+    await companion.waitForFunction(() => document.querySelector('#conn-dot')?.classList.contains('on')
+      && document.querySelector('#synth-status')?.textContent === 'OP-1 Field on USB');
+    assert(await storedIdentity(companion) === macIdentity, 'Companion reload must keep its saved identity');
+    assert.equal(newPairRequests, 0, 'Companion reload must not begin another pairing');
+    await companionScreenshot('18-companion-reloaded');
+  }, false);
+  await phase('19-quest-reload', async () => {
+    await quest.reload({ waitUntil: 'domcontentloaded' });
+    await waitQuest(() => window.__ce?.welcome && window.__ce.ws.open);
+    assert(await storedIdentity(quest) === questIdentity, 'Quest reload must keep its saved identity');
+    assert.equal(newPairRequests, 0, 'Quest reload must not begin another pairing');
+    await companion.waitForFunction(() => document.querySelector('#headset-status')?.textContent.includes('Connected to Quest'));
+    await companionScreenshot('19-companion-quest-reloaded');
+  }, false);
+  await phase('20-server-restart', async () => {
+    await stopServer();
+    await startServer();
+    await waitQuest(() => window.__ce?.ws.open && window.__ce.welcome);
+    await companion.waitForFunction(() => document.querySelector('#conn-dot')?.classList.contains('on')
+      && document.querySelector('#headset-status')?.textContent.includes('Connected to Quest')
+      && document.querySelector('#synth-status')?.textContent === 'OP-1 Field on USB');
+    const health = await json('/api/health');
+    assert.equal(health.space.spaceId, spaceId, 'Restart must reopen the existing fixture space');
+    assert.equal(health.space.pairedDevices, pairedDevices, 'Restart must not add duplicate paired devices');
+    assert(await storedIdentity(companion) === macIdentity && await storedIdentity(quest) === questIdentity,
+      'Server restart must retain the saved Mac and Quest identities');
+    assert.equal(newPairRequests, 0, 'Recovering after a server restart must not begin another pairing');
+    await companionScreenshot('20-companion-server-restarted');
+  }, false);
 }
 
 async function diagnostics() {
@@ -766,16 +960,32 @@ async function diagnostics() {
   if (sim && !sim.isClosed()) state.sim = await sim.evaluate(() => ({
     lamp: window.ceSim?.lamp(), learn: window.ceSim?.learn(), logs: window.ceSimDebug?.device.logLines,
   })).catch((e) => ({ error: e.message }));
+  if (companion && !companion.isClosed()) {
+    state.companion = await companion.evaluate(() => ({
+      stage: document.querySelector('#onboarding')?.getAttribute('data-state'),
+      title: document.querySelector('#onboarding-title')?.textContent,
+      headset: document.querySelector('#headset-status')?.textContent,
+      synth: document.querySelector('#synth-status')?.textContent,
+      activity: document.querySelector('#setup-activity')?.textContent,
+      log: document.querySelector('#log')?.textContent,
+    })).catch((e) => ({ error: e.message }));
+    await companion.screenshot({ path: join(SCREENS, `${currentPhase}-companion-FAIL.png`), timeout: 5000 }).catch(() => {});
+  }
   await writeFile(join(SCREENS, 'failure.json'), JSON.stringify(state, null, 2));
 }
 
-async function cleanup() {
+async function stopServer() {
   if (server?.pid && server.exitCode === null && server.signalCode === null) {
     const exited = new Promise((resolveExit) => server.once('exit', resolveExit));
     server.kill('SIGTERM');
     const force = setTimeout(() => server.kill('SIGKILL'), 5000);
     try { await exited; } finally { clearTimeout(force); }
   }
+  server = undefined;
+}
+
+async function cleanup() {
+  await stopServer();
   try {
     await browser?.close();
   } finally {
