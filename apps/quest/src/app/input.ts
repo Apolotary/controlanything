@@ -74,7 +74,6 @@ interface PinchState {
 }
 
 interface HandTrack {
-  source?: XRInputSource;
   pinch: PinchDetector;
   state: PinchState;
   jointPinching: boolean;
@@ -85,6 +84,8 @@ interface HandTrack {
   palmUpSince: number | null;
   selectDown: boolean;
   selectLatched: boolean;
+  jointCount: number;
+  pinchDistanceCm: number | null;
   hand: ShellHand;
   jointPool: Record<XRHandJoint, JointSample>;
 }
@@ -116,7 +117,8 @@ function makeTrack(): HandTrack {
   return {
     pinch: new PinchDetector(), state: { pinching: false, justStarted: false, justEnded: false },
     jointPinching: false, pinching: false, lastJointTime: null, lastPinchPoint: new Vector3(), hasPinchPoint: false,
-    palmUpSince: null, selectDown: false, selectLatched: false, hand: makeHand(), jointPool,
+    palmUpSince: null, selectDown: false, selectLatched: false, jointCount: 0, pinchDistanceCm: null,
+    hand: makeHand(), jointPool,
   };
 }
 const newDiagnostics = (): HandDiagnostics => ({
@@ -134,10 +136,10 @@ export interface DesktopPointer {
 }
 
 export class InputSampler {
-  private readonly tracks: Record<Handedness, HandTrack> = {
-    left: makeTrack(),
-    right: makeTrack(),
-  };
+  // Quest can expose a hand and an idle controller for the same side at once.
+  // Keep gestures with their source so sampling or select events cannot reset the other one.
+  private readonly tracks = new Map<XRInputSource, HandTrack>();
+  private readonly activeSources: Partial<Record<Handedness, XRInputSource>> = {};
   readonly diagnostics: InputDiagnostics = { left: newDiagnostics(), right: newDiagnostics() };
   private readonly desktopPinch = new PinchDetector();
   private readonly desktopState: PinchState = { pinching: false, justStarted: false, justEnded: false };
@@ -168,8 +170,9 @@ export class InputSampler {
   private readonly onSourcesChange = (e: XRInputSourcesChangeEvent) => {
     if (e.session !== this.session) return;
     for (const src of e.removed) {
+      this.tracks.delete(src);
       if (src.handedness === 'left' || src.handedness === 'right') {
-        if (this.tracks[src.handedness].source === src) this.resetHand(src.handedness);
+        if (this.activeSources[src.handedness] === src) this.clearHand(src.handedness);
       }
     }
   };
@@ -190,26 +193,17 @@ export class InputSampler {
     this.session?.removeEventListener('end', this.onSessionEnd);
     this.session?.removeEventListener('inputsourceschange', this.onSourcesChange);
     this.session = undefined;
-    this.resetHand('left', true);
-    this.resetHand('right', true);
+    this.tracks.clear();
+    this.clearHand('left', true);
+    this.clearHand('right', true);
     this.desktopPinch.reset();
     this.pointer.down = false;
     this.pointer.latched = false;
     this.lastTime = 0;
   }
 
-  private resetHand(hand: Handedness, resetEvents = false): void {
-    const track = this.tracks[hand];
-    delete track.source;
-    track.pinch.reset();
-    track.jointPinching = false;
-    track.pinching = false;
-    track.lastJointTime = null;
-    track.hasPinchPoint = false;
-    track.palmUpSince = null;
-    track.selectDown = false;
-    track.selectLatched = false;
-    for (const name of JOINTS) delete track.hand.joints[name];
+  private clearHand(hand: Handedness, resetEvents = false): void {
+    delete this.activeSources[hand];
     const diagnostic = this.diagnostics[hand];
     diagnostic.tracked = false;
     diagnostic.jointCount = 0;
@@ -218,24 +212,30 @@ export class InputSampler {
     if (resetEvents) diagnostic.selectEvents = 0;
   }
 
-  private trackSource(src: XRInputSource, hand: Handedness): HandTrack {
-    if (this.tracks[hand].source !== src) {
-      this.resetHand(hand);
-      this.tracks[hand].source = src;
+  private trackSource(src: XRInputSource): HandTrack {
+    let track = this.tracks.get(src);
+    if (!track) {
+      track = makeTrack();
+      this.tracks.set(src, track);
     }
-    return this.tracks[hand];
+    return track;
+  }
+
+  private hasSource(src: XRInputSource): boolean {
+    for (const current of this.session?.inputSources ?? []) if (current === src) return true;
+    return false;
   }
 
   private setSelect(src: XRInputSource, down: boolean): void {
     if (src.handedness !== 'left' && src.handedness !== 'right') return;
-    if (!Array.from(this.session?.inputSources ?? []).includes(src)) return;
-    const track = this.trackSource(src, src.handedness);
+    if (!this.hasSource(src)) return;
+    const track = this.trackSource(src);
     track.selectDown = down;
     // A short system pinch can start and end between animation frames.
     if (down) track.selectLatched = true;
     const diagnostic = this.diagnostics[src.handedness];
     diagnostic.selectEvents++;
-    diagnostic.selectDown = down;
+    if (this.activeSources[src.handedness] === src) diagnostic.selectDown = down;
   }
 
   /** Sample this frame into reusable storage; consumers retaining poses must copy them. */
@@ -252,10 +252,7 @@ export class InputSampler {
     camera.getWorldPosition(head.position);
     camera.getWorldQuaternion(head.quaternion);
     for (const handedness of HANDEDNESSES) {
-      const diagnostic = this.diagnostics[handedness];
-      diagnostic.tracked = false;
-      diagnostic.jointCount = 0;
-      diagnostic.pinchDistanceCm = null;
+      this.clearHand(handedness);
     }
     if (frame && refSpace) {
       const vp = frame.getViewerPose(refSpace);
@@ -265,17 +262,26 @@ export class InputSampler {
         head.position.set(p.x, p.y, p.z);
         head.quaternion.set(o.x, o.y, o.z, o.w);
       }
-      let leftPresent = false;
-      let rightPresent = false;
+      for (const src of this.tracks.keys()) {
+        if (!this.hasSource(src)) this.tracks.delete(src);
+      }
       for (const src of frame.session.inputSources) {
         if (src.handedness !== 'left' && src.handedness !== 'right') continue;
-        if (src.handedness === 'left') leftPresent = true;
-        else rightPresent = true;
         const hs = this.sampleSource(src, frame, refSpace, time);
-        if (hs) hands[src.handedness] = hs;
+        const current = hands[src.handedness];
+        // A located hand wins in either inputSources order. An unlocated hand still advances
+        // its gesture state, so recovering a held select cannot invent a second press.
+        if (hs && (!current || (current.controller && !hs.controller))) {
+          hands[src.handedness] = hs;
+          this.activeSources[src.handedness] = src;
+          const track = this.tracks.get(src)!;
+          const diagnostic = this.diagnostics[src.handedness];
+          diagnostic.tracked = track.jointCount > 0;
+          diagnostic.jointCount = track.jointCount;
+          diagnostic.pinchDistanceCm = track.pinchDistanceCm;
+          diagnostic.selectDown = track.selectDown;
+        }
       }
-      if (!leftPresent && this.tracks.left.source) this.resetHand('left');
-      if (!rightPresent && this.tracks.right.source) this.resetHand('right');
     }
     head.ray.origin.copy(head.position);
     head.ray.dir.set(0, 0, -1).applyQuaternion(head.quaternion);
@@ -296,8 +302,7 @@ export class InputSampler {
   }
 
   private sampleSource(src: XRInputSource, frame: XRFrame, ref: XRReferenceSpace, time: number): ShellHand | null {
-    const handedness = src.handedness as Handedness;
-    const track = this.trackSource(src, handedness);
+    const track = this.trackSource(src);
     const hand = track.hand;
     const { ray, joints, pinchPoint } = hand;
     const rayPose = frame.getPose(src.targetRaySpace, ref);
@@ -383,11 +388,8 @@ export class InputSampler {
     const justReleased = !pinching && track.pinching;
     track.pinching = pinching;
     track.selectLatched = false;
-    const diagnostic = this.diagnostics[handedness];
-    diagnostic.tracked = jointCount > 0;
-    diagnostic.jointCount = jointCount;
-    diagnostic.pinchDistanceCm = distance === null ? null : distance * 100;
-    diagnostic.selectDown = track.selectDown;
+    track.jointCount = jointCount;
+    track.pinchDistanceCm = distance === null ? null : distance * 100;
     if (palmUp) {
       if (track.palmUpSince === null) track.palmUpSince = time;
     } else track.palmUpSince = null;
