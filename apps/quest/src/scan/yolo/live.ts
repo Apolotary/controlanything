@@ -203,6 +203,13 @@ export class LiveDetector {
     for (const a of this.anchors.values()) if (a.shown) out.push(a.aimable);
   }
 
+  /** Reuse the visible box's pose for hand hover feedback. */
+  hoverTarget(id: string): Pick<Anchor, 'position' | 'facing' | 'sizeM'> | undefined {
+    const n = trackIdOf(id);
+    const anchor = n === undefined ? undefined : this.anchors.get(n);
+    return anchor?.shown ? anchor : undefined;
+  }
+
   /** The SAM target that has taken over this live box, if any. */
   claimOf(id: string): string | undefined {
     const n = trackIdOf(id);

@@ -2,7 +2,7 @@ import { Quaternion, Vector3 } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { TargetStore } from '../scan/targets';
 import { QuestApp } from './app';
-import type { ShellFrame } from './hud-contract';
+import type { ShellFrame, ShellHand } from './hud-contract';
 
 function shell() {
   // Exercise the shell's real selection methods without constructing a browser, socket, or audio context.
@@ -14,23 +14,38 @@ function shell() {
     'sam-frame',
   );
   const liveBox = { id: 'yolo_1', position: new Vector3(0.5, 1.6, -1), size: 0.3 };
+  const liveHover = { position: liveBox.position, facing: new Vector3(0, 0, 1), sizeM: [0.3, 0.2, 0.1] };
   const live = {
     pick: vi.fn((id: string) => id === liveBox.id),
     unpick: vi.fn(),
     claimOf: vi.fn<() => string | undefined>(() => undefined),
     appendAimables: (out: typeof liveBox[]) => out.push(liveBox),
+    hoverTarget: (id: string) => id === liveBox.id ? liveHover : undefined,
   };
+  const handFeedback = { setHover: vi.fn() };
   const hud = { setCandidate: vi.fn(), setLocked: vi.fn(), upsertTarget: vi.fn() };
   const scanner = { active: true, stop: vi.fn() };
   const ws = { send: vi.fn(() => 'sent') };
   Object.assign(app, {
-    targets, live, hud, scanner, ws, lockedId: null,
+    targets, live, hud, scanner, ws, handFeedback, lockedId: null,
     recorder: { input: vi.fn() }, page: { log: vi.fn() },
     input: { mouseAsHand: true, pointer: { inside: true } },
     candidate: { id: null, shown: null, since: 0 }, consumed: { left: false, right: false },
     aimTargets: new Map(), aimBuffer: [],
+    gazeHit: { id: '', angleDeg: 0, distance: 0 },
+    handHit: { id: '', angleDeg: 0, distance: 0 },
+    touchHit: { id: '', angleDeg: 0, distance: 0 },
   });
-  return { app, target, live, liveBox, hud, scanner, ws };
+  return { app, target, live, liveBox, liveHover, handFeedback, hud, scanner, ws };
+}
+
+function handFrame(right: Partial<ShellHand>): ShellFrame {
+  const origin = new Vector3(0, 1.6, 0);
+  const ray = { origin, dir: new Vector3(0, 0, -1) };
+  return {
+    time: 100, dt: 1 / 90, head: { position: origin, quaternion: new Quaternion(), ray },
+    hands: { right: { joints: {}, ray, pinchPoint: new Vector3(), pinching: false, justPinched: false, justReleased: false, controller: false, palmUp: false, palmUpMs: 0, ...right } },
+  };
 }
 
 describe('live box selection in the Quest shell', () => {
@@ -93,6 +108,44 @@ describe('live box selection in the Quest shell', () => {
     };
     (Reflect.get(app, 'interact') as (frame: ShellFrame, time: number) => void).call(app, f, 100);
     expect(app.lockedId).toBeNull();
+    expect(ws.send).not.toHaveBeenCalled();
+  });
+
+  it('hovers and system-pinches a live box with no joints before SAM takes over', () => {
+    const { app, target, liveBox, liveHover, handFeedback, scanner, ws } = shell();
+    Reflect.set(app, 'input', { mouseAsHand: false, pointer: { inside: false } });
+    const origin = new Vector3(0, 1.6, 0);
+    const f = handFrame({ ray: { origin, dir: liveBox.position.clone().sub(origin).normalize() } });
+    const interact = Reflect.get(app, 'interact') as (frame: ShellFrame, time: number) => void;
+    interact.call(app, f, 100);
+    expect(handFeedback.setHover).toHaveBeenLastCalledWith('right', liveHover);
+    expect(app.lockedId).toBeNull();
+
+    f.hands.right!.pinching = f.hands.right!.justPinched = true;
+    interact.call(app, f, 120);
+    expect(app.lockedId).toBe(liveBox.id);
+    expect(scanner.stop).not.toHaveBeenCalled();
+    expect(ws.send).not.toHaveBeenCalled();
+
+    app.lock(target.id, 'live box');
+    expect(app.lockedId).toBe(target.id);
+    expect(scanner.stop).toHaveBeenCalledOnce();
+    expect(ws.send).toHaveBeenCalledExactlyOnceWith('target.select', { frameId: 'sam-frame', detId: 'sam-device' }, { to: 'server' });
+  });
+
+  it('touches a live box without refining it as a SAM target', () => {
+    const { app, liveBox, ws } = shell();
+    const refine = vi.spyOn(app.targets, 'refine');
+    const joint = (offset: number) => ({ position: liveBox.position.clone().add(new Vector3(offset, 0, 0)), quaternion: new Quaternion(), radius: 0.008 });
+    const f = handFrame({
+      joints: { 'thumb-tip': joint(-0.005), 'index-finger-tip': joint(0.005) },
+      pinchPoint: liveBox.position.clone(), pinching: true, justPinched: true,
+    });
+
+    (Reflect.get(app, 'interact') as (frame: ShellFrame, time: number) => void).call(app, f, 100);
+
+    expect(refine).not.toHaveBeenCalled();
+    expect(app.lockedId).toBe(liveBox.id);
     expect(ws.send).not.toHaveBeenCalled();
   });
 });

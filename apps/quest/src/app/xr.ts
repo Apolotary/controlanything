@@ -29,6 +29,12 @@ export async function xrSupport(): Promise<{ ar: boolean; vr: boolean; xr: boole
   return { ar, vr, xr: true };
 }
 
+/** Read inside setAnimationLoop: the frame and reference space must belong to the renderer's current session. */
+export function frameReferenceSpace(renderer: WebGLRenderer, frame?: XRFrame): XRReferenceSpace | undefined {
+  if (!frame || frame.session !== renderer.xr.getSession()) return undefined;
+  return renderer.xr.getReferenceSpace() ?? undefined;
+}
+
 export async function startXr(renderer: WebGLRenderer, opts: { allowVr?: boolean } = {}): Promise<XrStart> {
   const xr = navigator.xr;
   if (!xr) throw new Error('WebXR is not available in this browser');
@@ -43,18 +49,27 @@ export async function startXr(renderer: WebGLRenderer, opts: { allowVr?: boolean
       errors.push(`${step.label}: ${(e as Error).message}`);
       continue;
     }
-    const wantsFloor = (step.init.requiredFeatures ?? step.init.optionalFeatures ?? []).includes('local-floor');
-    renderer.xr.setReferenceSpaceType(wantsFloor ? 'local-floor' : 'local');
     try {
+      // Resolve support before setSession: three.js allocates layers and binds events before requesting its space.
+      // Retrying setSession on the same partly initialized session leaves those resources/listeners behind.
+      let referenceType: XRReferenceSpaceType = 'local-floor';
+      try {
+        await session.requestReferenceSpace(referenceType);
+      } catch {
+        referenceType = 'local';
+        await session.requestReferenceSpace(referenceType);
+      }
+      renderer.xr.setReferenceSpaceType(referenceType);
       await renderer.xr.setSession(session);
-    } catch {
-      renderer.xr.setReferenceSpaceType('local');
-      await renderer.xr.setSession(session);
+      const refSpace = renderer.xr.getReferenceSpace();
+      if (!refSpace) throw new Error('no reference space after setSession');
+      const features = Array.from((session as XRSession & { enabledFeatures?: string[] }).enabledFeatures ?? []);
+      return { session, refSpace, mode: step.mode, features, attempt: step.label };
+    } catch (e) {
+      errors.push(`${step.label}: ${(e as Error).message}`);
+      // End before advancing the ladder so a failed session cannot retain renderer or input listeners.
+      await session.end();
     }
-    const refSpace = renderer.xr.getReferenceSpace();
-    if (!refSpace) throw new Error('no reference space after setSession');
-    const features = Array.from((session as XRSession & { enabledFeatures?: string[] }).enabledFeatures ?? []);
-    return { session, refSpace, mode: step.mode, features, attempt: step.label };
   }
   throw new Error(`could not start an XR session: ${errors.join(' | ')}`);
 }

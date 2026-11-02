@@ -45,6 +45,11 @@ describe('live selection and SAM handover', () => {
     live.running = true;
     live.apply([detection], frame, 0);
     const id = live.aimables()[0]!.id;
+    const hover = live.hoverTarget(id)!;
+    expect(hover.position).toBe(live.aimables()[0]!.position);
+    expect(hover.sizeM).toEqual(views.get(id)?.sizeM);
+    expect(hover.facing.length()).toBeCloseTo(1);
+    expect(live.hoverTarget('unknown')).toBeUndefined();
     expect(live.pick(id)).toBe(true);
     const target = sam();
     live.apply([], frame, 1000);
@@ -56,6 +61,7 @@ describe('live selection and SAM handover', () => {
     expect(live.onSamTargets()).toBe(target.id);
     expect(onPickClaimed).toHaveBeenCalledExactlyOnceWith(target.id);
     expect(live.aimables()).toEqual([]);
+    expect(live.hoverTarget(id)).toBeUndefined();
     expect(live.pickedId).toBeUndefined();
     live.onSamTargets();
     expect(onPickClaimed).toHaveBeenCalledTimes(1);
@@ -97,6 +103,7 @@ describe('live selection and SAM handover', () => {
     live.stop();
     expect(live.pickedId).toBeUndefined();
     expect(views.size).toBe(0);
+    expect(live.hoverTarget(aim.id)).toBeUndefined();
   });
 
   it('drops people and non-device results again at the main-thread boundary', () => {
