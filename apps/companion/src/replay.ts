@@ -29,6 +29,11 @@ function steps(): Step[] {
     ...(note ? { note } : {}),
   });
   return [
+    { at: 0, type: 'presence', payload: { spaceId: 'replay-room', devices: [
+      { deviceId: 'replay-quest', name: 'Quest', kind: 'quest', role: 'hmd', capabilities: [], canApprove: false, connections: 1, pairedAt: now, online: true },
+      { deviceId: 'replay-mac', name: 'Mac', kind: 'mac', role: 'companion', capabilities: [], canApprove: false, connections: 1, pairedAt: now, online: true },
+      { deviceId: 'replay-cardputer', name: 'Cardputer', kind: 'cardputer', role: 'device', capabilities: [], canApprove: false, connections: 0, pairedAt: now, online: false },
+    ] } satisfies PayloadOf<'presence'> },
     { at: 0, type: 'agent.step', payload: s('st1', 'scan', 'running', 'SCAN · 6 prompts', { model: 'sam-3.1', startedAt: now }) },
     { at: 900, type: 'agent.step', payload: s('st1', 'scan', 'ok', 'SCAN · 3 devices outlined', { model: 'sam-3.1', startedAt: now, endedAt: now + 900, latencyMs: 900, kind: 'proof', evidence: 'synth · laptop · light' }) },
     { at: 1000, type: 'agent.step', payload: s('st2', 'identify', 'running', 'IDENTIFY the selected device', { model: 'muse-spark-1.3', effort: 'low', startedAt: now + 1000 }) },

@@ -1,7 +1,4 @@
-/**
- * JSON for the workbench code panel: strings cyan, everything else bone, punctuation dim (the design rule:
- * "strings cyan, comments dim, nothing else coloured"). Built from spans with textContent only.
- */
+/** Safe, readable JSON rendering for the Details drawer. */
 import { el } from './dom';
 
 function line(indent: number, ...parts: Node[]): HTMLElement {

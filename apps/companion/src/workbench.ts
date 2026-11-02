@@ -1,5 +1,5 @@
 /**
- * The Mac workbench (Chrome, http://localhost:8787/companion/):
+ * The Mac companion: a calm status surface with diagnostics in Details.
  * - pairs this browser (owner on localhost), approves other devices, shows the "add a device" QR;
  * - executes the agent's work: MIDI (Web MIDI), the Cardputer (Web Serial, paired on its behalf),
  *   the audio oracle (synth USB audio or mic);
@@ -38,7 +38,8 @@ import { CardputerLink } from './serial/cardputer';
 import { $, ago, appendLine, button, clock, el, scheduler, secs, untilText } from './ui/dom';
 import { jsonView } from './ui/json';
 import { pulseTrain, sparkline } from './ui/spark';
-import { evidenceSentence, isDevDevice, linkProof, opSummary } from './ui/words';
+import { evidenceSentence, linkProof, opSummary } from './ui/words';
+import { createStatusPresenter, type CalmStatus } from './ui/status';
 import { replayArmResult, runReplay } from './replay';
 
 const APP = 'companion@0.2.0';
@@ -54,6 +55,7 @@ let welcome: PayloadOf<'welcome'> | undefined;
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
 let selfExpiresAt = 0;
 const pending = new Map<string, PendingPairing>();
+const settledPairings = new Set<string>();
 let devices: DeviceInfo[] = [];
 const steps = new Map<string, AgentStepPayload & { seenAt: number }>();
 const cards = new Map<string, DeviceCardPayload>();
@@ -64,7 +66,7 @@ const linkResults = new Map<string, LinkResultPayload>();
 /** "wrong device · refused" verdicts stay in EVIDENCE even after the right cable goes in */
 const refusals: LinkResultPayload[] = [];
 const replaying = params.get('replay') === '1';
-/** ?stage=1: recording sizes, no dev devices or revoke buttons, no drawer */
+/** Larger status type for recordings; details remain available. */
 const stage = params.get('stage') === '1';
 let replayStarted = false;
 const linkRequests = new Map<string, LinkRequestPayload>();
@@ -79,6 +81,13 @@ let tabChosenByUser = false;
 let addTarget: 'phone' | 'quest' | 'devterm' = 'phone';
 let qrShown = '';
 let serverDown = false;
+const presenter = createStatusPresenter();
+let activity: CalmStatus = { text: 'Idle', working: false };
+let shownStatus = '';
+let pairingBusy = false;
+let shownPair = '';
+const bridgeBusy = new Set<string>();
+const dialogTimers = new Map<HTMLDialogElement, ReturnType<typeof setTimeout>>();
 
 const midi = new MidiBridge();
 const midiExec = new MidiExecutor(midi);
@@ -88,7 +97,7 @@ const oracle = new AudioOracle();
 const executor = new Executor(midiExec, bridge, oracle);
 
 /** /p/<id>#<code> redirects here as /companion/?approve=<id>#<code> */
-const intent = (() => {
+let intent = (() => {
   const pairingId = params.get('approve');
   const code = location.hash.slice(1);
   return pairingId && isValidCode(code) ? { pairingId, code } : undefined;
@@ -104,6 +113,7 @@ executor.log = log;
 bridge.log = log;
 
 const render = scheduler({
+  calm: renderCalm,
   top: renderTop,
   banners: renderBanners,
   device: renderDevice,
@@ -118,7 +128,7 @@ const render = scheduler({
   approve: renderApprove,
   daemons: renderDaemons,
 });
-const renderAll = () => ['top', 'banners', 'device', 'code', 'tape', 'spec', 'agent', 'calls', 'evidence', 'learn', 'links', 'approve', 'daemons'].forEach(render);
+const renderAll = () => ['calm', 'top', 'banners', 'device', 'code', 'tape', 'spec', 'agent', 'calls', 'evidence', 'learn', 'links', 'approve', 'daemons'].forEach(render);
 
 // --- helpers --------------------------------------------------------------------------------
 
@@ -150,11 +160,135 @@ const perfAt = (epoch: number) => epoch - Date.now() + performance.now();
 
 async function renderQr(target: HTMLElement, text: string): Promise<void> {
   // qrcode returns SVG markup it generated itself from `text`; nothing untrusted is interpreted as HTML
-  target.innerHTML = await qrSvg(text, { type: 'svg', margin: 1, errorCorrectionLevel: 'M', color: { dark: '#0a0e12', light: '#f4f1e6' } });
+  target.innerHTML = await qrSvg(text, { type: 'svg', margin: 1, errorCorrectionLevel: 'M', color: { dark: '#0B0F17', light: '#F8FAFC' } });
 }
 
 function chip(text: string, cls = ''): HTMLElement {
   return el('span', { className: `chip ${cls}`, text });
+}
+
+// --- calm surface ---------------------------------------------------------------------------
+
+function openDialog(id: string): void {
+  const dialog = $<HTMLDialogElement>(id);
+  clearTimeout(dialogTimers.get(dialog));
+  dialogTimers.delete(dialog);
+  dialog.classList.remove('closing');
+  if (!dialog.open) dialog.showModal();
+  if (id === 'drawer') $('details-open').setAttribute('aria-expanded', 'true');
+}
+
+function closeDialog(id: string): void {
+  const dialog = $<HTMLDialogElement>(id);
+  if (!dialog.open || dialogTimers.has(dialog)) return;
+  const finish = () => {
+    dialog.close();
+    dialog.classList.remove('closing');
+    dialogTimers.delete(dialog);
+    if (id === 'drawer') $('details-open').setAttribute('aria-expanded', 'false');
+  };
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { finish(); return; }
+  dialog.classList.add('closing');
+  dialogTimers.set(dialog, setTimeout(finish, 180));
+}
+
+function renderCalm(): void {
+  const learning = bridge.learning && bridge.learning.until > Date.now() ? bridge.learning : undefined;
+  const status: CalmStatus = !replaying && serverDown
+    ? { text: 'Waiting for the server to reconnect', working: false }
+    : !replaying && !conn?.open
+      ? { text: 'Connecting to your room', working: true }
+      : learning
+        ? { text: `Learning your remote: ${learning.prompt ?? 'press each button once'}`, working: true }
+        : activity;
+  $('status-dot').className = `dot on${status.working ? ' working' : ''}`;
+  if (status.text !== shownStatus) {
+    const host = $('status-text');
+    const previous = el('span', { className: 'status-previous', text: shownStatus });
+    previous.setAttribute('aria-hidden', 'true');
+    const current = el('span', { className: 'status-current', text: status.text });
+    host.replaceChildren(current);
+    if (shownStatus && !matchMedia('(prefers-reduced-motion: reduce)').matches && current.animate) {
+      host.append(previous);
+      previous.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, fill: 'forwards' }).onfinish = () => previous.remove();
+      current.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200 });
+    }
+    shownStatus = status.text;
+  }
+  $('device-dots').replaceChildren(...devices.map((d) => {
+    const row = el('li', { className: `device-dot-item${d.online ? ' online' : ''}`, title: `${d.name} · ${d.online ? 'online' : 'offline'}` }, el('span', { className: `dot${d.online ? ' on' : ''}` }), el('span', { text: d.name }));
+    row.setAttribute('aria-label', `${d.name}, ${d.online ? 'online' : 'offline'}`);
+    return row;
+  }));
+  const pill = (id: string, name: string, on: boolean, supported: boolean, detail?: string) => {
+    const b = $<HTMLButtonElement>(`bridge-${id}`);
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+    b.disabled = replaying || !executor.leader || !supported || bridgeBusy.has(id);
+    b.title = replaying ? 'Display-only demo' : !supported ? `${name} needs Chrome on localhost or HTTPS` : !executor.leader ? 'Another companion tab runs the bridges' : detail ?? `${name}: ${on ? 'on' : 'off — click to enable'}`;
+    b.setAttribute('aria-label', `${name}, ${on ? 'on' : 'off'}`);
+  };
+  pill('midi', 'MIDI', midi.enabled, MidiBridge.supported);
+  pill('serial', 'Cardputer', link.ready, CardputerLink.supported, link.lastError);
+  pill('mic', 'Microphone', oracle.state === 'on', AudioOracle.supported, oracle.error);
+  $('details-open').classList.toggle('attention', Boolean(arm));
+}
+
+function removePending(pairingId: string): void {
+  pending.delete(pairingId);
+  settledPairings.add(pairingId);
+  if (settledPairings.size > 100) settledPairings.delete(settledPairings.values().next().value!);
+  if (intent?.pairingId === pairingId) clearIntent();
+}
+
+function renderPairSheet(): void {
+  const request = [...pending.values()].find((p) => p.expiresAt > Date.now());
+  const pairing = request ?? (intent ? { ...intent, name: 'Your device', display: formatCode(intent.code), expiresAt: undefined } : undefined);
+  if (!pairing || !canApprove || replaying) {
+    shownPair = '';
+    closeDialog('pair-sheet');
+    return;
+  }
+  if (shownPair !== pairing.pairingId) {
+    shownPair = pairing.pairingId;
+    const title = el('h2', { id: 'pair-title', className: 'pair-name', text: `Pair ${pairing.name}?` });
+    const code = el('div', { className: 'passcode', text: pairing.display });
+    const expiry = el('p', { className: 'dim small', text: pairing.expiresAt ? untilText(pairing.expiresAt) : 'Check that this code matches your device.' });
+    if (pairing.expiresAt) expiry.dataset.expires = String(pairing.expiresAt);
+    const error = el('p', { id: 'pair-error', className: 'small' });
+    error.setAttribute('role', 'alert');
+    const actions = el('div', { className: 'pair-actions' }, button('Deny', () => void deny(pairing.pairingId)), button('Approve', () => void approve(pairing.code, pairing.pairingId), 'primary'));
+    $('pending').replaceChildren(title, code, expiry, error, actions);
+  }
+  for (const b of $('pending').querySelectorAll('button')) b.disabled = pairingBusy;
+  openDialog('pair-sheet');
+}
+
+function setupCalm(): void {
+  $('details-open').addEventListener('click', () => openDialog('drawer'));
+  $('details-close').addEventListener('click', () => closeDialog('drawer'));
+  $('drawer').addEventListener('cancel', (e) => { e.preventDefault(); closeDialog('drawer'); });
+  $('drawer').addEventListener('click', (e) => { if (e.target === $('drawer')) closeDialog('drawer'); });
+  $('pair-sheet').addEventListener('cancel', (e) => e.preventDefault());
+  const bind = (id: string, action: () => void | Promise<void>) => {
+    $(`bridge-${id}`).addEventListener('click', async () => {
+      if (replaying || !executor.leader || bridgeBusy.has(id)) return;
+      bridgeBusy.add(id);
+      $('bridge-msg').textContent = '';
+      render('calm');
+      try { await action(); }
+      catch (e) {
+        $('bridge-msg').textContent = (e as Error).message;
+        log('warn', (e as Error).message);
+      } finally {
+        bridgeBusy.delete(id);
+        renderAll();
+      }
+    });
+  };
+  bind('midi', () => midi.enabled ? openDialog('drawer') : enableMidi());
+  bind('serial', () => link.hasPort ? link.close() : connectCardputer());
+  bind('mic', () => oracle.state === 'on' ? oracle.stop() : startOracle());
 }
 
 // --- top bar and banners --------------------------------------------------------------------
@@ -162,7 +296,10 @@ function chip(text: string, cls = ''): HTMLElement {
 function renderTop(): void {
   const pill = $('pill');
   const live = health?.mode === 'live';
-  if (!executor.leader && !replaying && health && !serverDown) {
+  if (replaying) {
+    $('pill-text').textContent = 'Demo · display only';
+    pill.className = 'pill';
+  } else if (!executor.leader && health && !serverDown) {
     // one pill, one state: a second tab says so here instead of in a banner
     $('pill-text').textContent = 'STANDBY · another tab runs the devices';
     pill.className = 'pill standby';
@@ -178,31 +315,13 @@ function renderTop(): void {
   const role = $('exec-role');
   role.textContent = replaying ? 'replay' : executor.leader ? 'executor' : 'standby';
   role.className = `chip ${executor.leader ? '' : 'muted'}`;
-  role.title = executor.leader ? 'This tab runs MIDI, the Cardputer and the audio oracle.' : 'Another companion tab is the executor; this one only watches.';
+  role.title = replaying ? 'A local demonstration. No device commands or server connection.' : executor.leader ? 'This tab runs MIDI, the Cardputer and the audio oracle.' : 'Another companion tab is the executor; this one only watches.';
 }
 
 function renderBanners(): void {
   const box = $('banners');
   box.replaceChildren();
   if (serverDown) box.append(el('div', { className: 'banner' }, el('span', { className: 'title', text: 'Server unreachable' }), el('span', { className: 'small', text: 'Start it with npm run dev. MIDI tools still work: open ?spike=midi.' })));
-
-  if (intent && identity) {
-    const p = pending.get(intent.pairingId);
-    const who = p ? `${p.name} (${p.kind})` : 'the device you scanned';
-    const row = el('div', { className: 'banner' }, el('span', { className: 'title', text: 'Link request' }), el('span', { className: 'grow', text: canApprove ? `Approve ${who} with code ${formatCode(intent.code)}?` : 'This browser cannot approve devices.' }));
-    if (canApprove) {
-      row.append(
-        button('Approve', async () => {
-          if (await approve(intent.code, intent.pairingId)) clearIntent();
-        }, 'primary'),
-        button('Deny', async () => {
-          await deny(intent.pairingId);
-          clearIntent();
-        }),
-      );
-    }
-    box.append(row);
-  }
 
   if (arm && arm.expiresAt > Date.now()) {
     const a = arm;
@@ -232,11 +351,11 @@ function renderBanners(): void {
       { className: 'banner link' },
       el('span', { className: 'title', text: `Link · ${card?.name ?? 'device'}` }),
       el('span', { className: 'grow small', text: r.reason }),
-      el('span', { className: 'row' }, ...r.needs.map((n) => chip(`needs ${n}`, 'volt')), ...r.suggestedClients.map((k) => chip(k, 'muted'))),
+      el('span', { className: 'row' }, ...r.needs.map((n) => chip(`needs ${n}`, 'accent')), ...r.suggestedClients.map((k) => chip(k, 'muted'))),
     );
     if (r.needs.includes('ir') && !link.ready && CardputerLink.supported && executor.leader) row.append(button('Connect Cardputer', () => void connectCardputer(), 'primary'));
-    if (r.needs.includes('midi') && !midi.enabled && MidiBridge.supported) row.append(button('Enable MIDI', () => void enableMidi(), 'primary'));
-    if (r.needs.includes('mic') && oracle.state !== 'on') row.append(button('Listen', () => void startOracle(), 'primary'));
+    if (r.needs.includes('midi') && !midi.enabled && MidiBridge.supported && executor.leader) row.append(button('Enable MIDI', () => void enableMidi(), 'primary'));
+    if (r.needs.includes('mic') && oracle.state !== 'on' && executor.leader) row.append(button('Listen', () => void startOracle(), 'primary'));
     box.append(row);
   }
 }
@@ -250,14 +369,22 @@ function holdButton(label: string, onHeld: () => void): HTMLButtonElement {
     t = undefined;
     b.textContent = label;
   };
-  b.addEventListener('pointerdown', () => {
+  const begin = () => {
+    if (t) return;
     b.textContent = 'Holding…';
     t = setTimeout(() => {
       t = undefined;
       b.textContent = label;
       onHeld();
     }, 600);
+  };
+  b.addEventListener('pointerdown', begin);
+  b.addEventListener('keydown', (e) => {
+    if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); begin(); }
   });
+  b.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter') cancel(); });
+  b.addEventListener('blur', cancel);
+  b.addEventListener('pointercancel', cancel);
   b.addEventListener('pointerup', cancel);
   b.addEventListener('pointerleave', cancel);
   return b;
@@ -340,6 +467,7 @@ function setTab(t: typeof mainTab, byUser = false): void {
   if (byUser) tabChosenByUser = true;
   for (const id of ['code', 'tape', 'spec'] as const) {
     $(`tab-${id}`).setAttribute('aria-selected', String(id === t));
+    $(`tab-${id}`).tabIndex = id === t ? 0 : -1;
     $(id).hidden = id !== t;
   }
   render(t);
@@ -555,7 +683,7 @@ function renderLearn(): void {
   const actions = $('learn-actions');
   actions.replaceChildren();
   if (bridge.learning) {
-    actions.append(chip(`listening · ${Math.max(0, Math.round((bridge.learning.until - Date.now()) / 1000))} s`, 'magenta'), button('Stop', () => bridge.stopLearning()));
+    actions.append(chip(`listening · ${Math.max(0, Math.round((bridge.learning.until - Date.now()) / 1000))} s`, 'accent'), button('Stop', () => bridge.stopLearning()));
   } else if (link.ready && executor.leader) {
     actions.append(button('Learn 15 s', () => void bridge.startLearning(15_000)));
   }
@@ -679,9 +807,8 @@ function renderLinks(): void {
   // other paired devices
   for (const d of devices) {
     if (d.deviceId === identity?.deviceId) continue;
-    if (stage && isDevDevice(d)) continue;
     const acts: Node[] = [];
-    if (canApprove && !stage) {
+    if (canApprove && !replaying) {
       acts.push(
         button('Revoke', async () => {
           if (!confirm(`Revoke ${d.name}? It will have to pair again.`)) return;
@@ -702,23 +829,11 @@ function renderLinks(): void {
 // --- approvals and add-a-device ---------------------------------------------------------------
 
 function renderApprove(): void {
-  $('approve-panel').hidden = !canApprove;
-  if (!canApprove) return;
-  const box = $('pending');
-  box.replaceChildren();
-  for (const p of pending.values()) {
-    if (stage && isDevDevice(p)) continue;
-    box.append(
-      el(
-        'div',
-        { className: 'p' },
-        el('span', { className: 'grow' }, el('strong', { text: p.name }), el('span', { className: 'dim small', text: `  ${p.kind}${p.origin ? ` · ${p.origin}` : ''} · ` }), el('span', { className: 'dim small', text: untilText(p.expiresAt), data: { expires: String(p.expiresAt) } })),
-        el('span', { className: 'passcode', text: p.display }),
-        button('Approve', () => void approve(p.code, p.pairingId), 'primary'),
-        button('Deny', () => void deny(p.pairingId), 'ghost'),
-      ),
-    );
-  }
+  const input = $('code-input') as HTMLInputElement;
+  input.disabled = !canApprove || replaying;
+  ($('code-form').querySelector('button') as HTMLButtonElement).disabled = !canApprove || replaying || pairingBusy;
+  $('approve-panel').hidden = false;
+  renderPairSheet();
   const tabs = $('add-tabs');
   tabs.replaceChildren();
   for (const t of ['phone', 'quest', 'devterm'] as const) {
@@ -738,7 +853,7 @@ function renderApprove(): void {
     addTarget === 'phone'
       ? 'Scan with the phone camera (or the iPhone app). Accept the self-signed certificate once; the phone shows a code to approve here.'
       : addTarget === 'quest'
-        ? 'Quest Browser. Over USB: adb reverse tcp:8787 tcp:8787, then http://localhost:8787/quest/.'
+        ? 'Open this address in Quest Browser, then approve its pairing code here.'
         : 'Plain WebSocket for the DevTerm CLI and ESP32 clients on the LAN.';
   if (url && url !== qrShown) {
     qrShown = url;
@@ -747,30 +862,50 @@ function renderApprove(): void {
 }
 
 async function approve(code: string, pairingId?: string): Promise<boolean> {
-  const msg = $('code-msg');
+  if (replaying || !canApprove || pairingBusy) return false;
+  pairingBusy = true;
+  render('approve');
   try {
-    await api.approve(code, identity?.deviceToken, pairingId);
-    msg.textContent = `Approved ${formatCode(code)}.`;
-    msg.className = 'small ok-text';
+    const result = await api.approve(code, identity?.deviceToken, pairingId);
+    removePending(result.pairingId);
+    $('code-msg').textContent = 'Device paired.';
+    $('code-msg').className = 'small ok-text';
     return true;
   } catch (e) {
-    msg.textContent = e instanceof ApiError ? e.message : `Approve failed: ${(e as Error).message}`;
-    msg.className = 'small fail-text';
+    const message = e instanceof ApiError ? e.message : `Could not pair: ${(e as Error).message}`;
+    $('code-msg').textContent = message;
+    $('code-msg').className = 'small fail-text';
+    if ($('pair-error')) $('pair-error').textContent = message;
     return false;
+  } finally {
+    pairingBusy = false;
+    render('approve');
   }
 }
 
 async function deny(pairingId: string): Promise<void> {
+  if (replaying || !canApprove || pairingBusy) return;
+  pairingBusy = true;
+  render('approve');
   try {
     await api.deny(pairingId, identity?.deviceToken);
+    removePending(pairingId);
   } catch (e) {
-    log('error', `deny failed: ${(e as Error).message}`);
+    const message = `Could not deny: ${(e as Error).message}`;
+    log('error', message);
+    if ($('pair-error')) $('pair-error').textContent = message;
+  } finally {
+    pairingBusy = false;
+    render('approve');
   }
 }
 
 function clearIntent(): void {
-  history.replaceState(null, '', location.pathname);
-  render('banners');
+  intent = undefined;
+  const url = new URL(location.href);
+  url.searchParams.delete('approve');
+  url.hash = '';
+  history.replaceState(null, '', url.pathname + url.search);
 }
 
 // --- daemons ----------------------------------------------------------------------------------
@@ -785,8 +920,8 @@ function renderDaemons(): void {
       el(
         'div',
         { className: 'ev' },
-        el('span', { className: 'hack magenta-text', text: d.name }),
-        chip(d.status ?? 'proposed', d.status === 'running' ? 'magenta' : 'muted'),
+        el('span', { className: 'hack accent-text', text: d.name }),
+        chip(d.status ?? 'proposed', d.status === 'running' ? 'accent' : 'muted'),
         el('div', { className: 'sentence' }, el('span', { className: 'text', text: `${device} · ${d.trigger.source} → ${d.targets.map((t) => t.hack).join(', ')} · ≤ ${d.max_rate_hz} Hz${d.blurb ? ` · ${d.blurb}` : ''}` })),
       ),
     );
@@ -796,24 +931,31 @@ function renderDaemons(): void {
 // --- executors: MIDI, Cardputer, oracle ------------------------------------------------------
 
 async function enableMidi(): Promise<void> {
+  if (replaying || !executor.leader) return;
   try {
     await midi.enable();
     log('info', `Web MIDI on${midi.sysex ? ' with SysEx' : ' (no SysEx: identity checks off)'}`);
     conn?.resendHello();
   } catch (e) {
     log('warn', (e as Error).message);
+    $('bridge-msg').textContent = (e as Error).message;
   }
-  ['links', 'device', 'banners'].forEach(render);
+  ['calm', 'links', 'device', 'banners'].forEach(render);
 }
 
 async function connectCardputer(): Promise<void> {
-  if (!(await link.reconnect())) await link.choose();
+  if (replaying || !executor.leader) return;
+  await link.choose();
 }
 
 async function startOracle(deviceId?: string): Promise<void> {
+  if (replaying || !executor.leader) return;
   await oracle.start(deviceId);
   if (oracle.state === 'on') log('info', `audio oracle listening to ${oracle.input?.label} (${oracle.input?.synth ? 'synth USB audio' : 'microphone'}, ${oracle.sampleRate} Hz)`);
-  else if (oracle.error) log('warn', `audio oracle: ${oracle.error}`);
+  else if (oracle.error) {
+    log('warn', `audio oracle: ${oracle.error}`);
+    $('bridge-msg').textContent = oracle.error;
+  }
   conn?.resendHello();
 }
 
@@ -830,7 +972,7 @@ function setupExecutors(): void {
     out,
     ch,
     button('Test note', () => {
-      if (!out.value) return;
+      if (!out.value || replaying || !executor.leader) return;
       try {
         midi.testNote(out.value, Number(ch.value));
         appendLine($('midi-monitor'), `${clock()} → ${out.selectedOptions[0]?.text ?? ''} test note C4 ch${ch.value}`, 'out');
@@ -843,7 +985,7 @@ function setupExecutors(): void {
   ($('midi-test-row').lastElementChild as HTMLAnchorElement).href = '?spike=midi';
   midi.onChange = () => {
     fillOuts();
-    ['links', 'device'].forEach(render);
+    ['calm', 'links', 'device'].forEach(render);
     conn?.resendHello();
   };
   midi.onMessage = (m) => {
@@ -861,33 +1003,41 @@ function setupExecutors(): void {
   executor.onLeader = (leader) => {
     log('info', leader ? 'this tab is the executor' : 'standby');
     renderAll();
-    if (leader) void takeDevices();
+    if (leader && !replaying) {
+      link.listenForPlug();
+      void takeDevices();
+    }
   };
 
   link.onLine = (dir, text) => appendLine($('serial-monitor'), `${clock()} ${dir === 'out' ? '→' : '←'} ${text}`, dir);
   link.onState = (s) => {
     $('serial-state').textContent = s;
-    if (s === 'ready') {
+    if (s === 'ready' && executor.leader && !replaying) {
       log('info', `Cardputer ready: ${link.info?.fw ?? '?'} on ${link.info?.board ?? '?'} (chip ${link.info?.chip ?? '?'})`);
       void bridge.deviceReady();
     }
     if (s === 'disconnected' || s === 'idle') bridge.deviceGone();
     conn?.resendHello();
-    ['links', 'learn', 'banners', 'device'].forEach(render);
+    ['calm', 'links', 'learn', 'banners', 'device'].forEach(render);
   };
   link.onMessage = (m) => {
     if (m.t === 'log') log(m.lvl === 'error' ? 'error' : m.lvl === 'warn' ? 'warn' : 'debug', `[cardputer] ${m.msg}`);
-    bridge.onDeviceMessage(m);
+    if (executor.leader && !replaying) bridge.onDeviceMessage(m);
   };
-  bridge.onChange = () => ['links', 'learn', 'banners'].forEach(render);
-  oracle.onState = () => ['links', 'device', 'banners'].forEach(render);
-  link.listenForPlug();
+  bridge.onChange = () => ['calm', 'links', 'learn', 'banners'].forEach(render);
+  oracle.onState = () => {
+    ['calm', 'links', 'device', 'banners'].forEach(render);
+    conn?.resendHello();
+  };
+  // Only the executing tab may reopen a serial port on a plug event.
+
 }
 
 let armedOnce = false;
 
 /** Re-open what this Mac had granted before (no prompts): MIDI, the Cardputer port, the microphone. */
 async function takeDevices(): Promise<void> {
+  if (replaying || !executor.leader) return;
   if (MidiBridge.supported && !midi.enabled && (await MidiBridge.alreadyGranted())) await enableMidi();
   if (CardputerLink.supported && !link.hasPort) await link.reconnect();
   if (AudioOracle.supported && oracle.state === 'off') {
@@ -902,7 +1052,7 @@ async function takeDevices(): Promise<void> {
 
 function meterLoop(): void {
   const m = document.querySelector<HTMLElement>('[data-meter]');
-  if (m && oracle.state === 'on') {
+  if (m && $('drawer').hasAttribute('open') && oracle.state === 'on') {
     const db = oracle.levelDb();
     m.style.width = `${Math.max(0, Math.min(100, ((db + 70) / 70) * 100))}%`;
   }
@@ -927,7 +1077,7 @@ async function pairThisBrowser(): Promise<void> {
     const r = await api.pairStart({ name: me.name, kind: me.kind, capabilities: hello().capabilities ?? [], ...(requireApproval ? { requireApproval } : {}) });
     if (r.status === 'approved' && r.deviceId && r.deviceToken) {
       log('info', `paired instantly as the owner (${isLocalPage() ? 'localhost' : 'trusted'})`);
-      adopt({ deviceId: r.deviceId, deviceToken: r.deviceToken, kind: me.kind, name: me.name }, false);
+      adopt({ deviceId: r.deviceId, deviceToken: r.deviceToken, kind: me.kind, name: me.name });
       return;
     }
     $('self-code').textContent = r.display;
@@ -939,7 +1089,7 @@ async function pairThisBrowser(): Promise<void> {
       try {
         const s = await api.pairStatus(r.pairingId, r.pollSecret);
         if (s.status === 'approved' && s.deviceId && s.deviceToken) {
-          adopt({ deviceId: s.deviceId, deviceToken: s.deviceToken, kind: me.kind, name: me.name }, true);
+          adopt({ deviceId: s.deviceId, deviceToken: s.deviceToken, kind: me.kind, name: me.name });
           return;
         }
         if (s.status !== 'pending') {
@@ -968,30 +1118,14 @@ function pairingFailed(message: string): void {
   log('warn', message);
 }
 
-function adopt(id: Identity, flip: boolean): void {
+function adopt(id: Identity): void {
   identity = id;
   saveIdentity(id);
   selfExpiresAt = 0;
   if (params.get('pair') === '1') history.replaceState(null, '', location.pathname);
-  const done = () => {
-    $('pairscreen').hidden = true;
-    $('workbench').hidden = false;
-    connect();
-  };
-  if (!flip) {
-    done();
-    return;
-  }
-  // flip the plate to the device card for a moment (240 ms), then show the workbench
-  const plate = $('pairplate');
-  plate.classList.add('flipped');
-  setTimeout(() => {
-    const outs = midi.outputs().map((o) => `${o.name ?? o.id}${o.manufacturer ? ` · ${o.manufacturer}` : ''} · USB MIDI ✓`);
-    plate.replaceChildren(
-      el('div', { className: 'side' }, el('div', { className: 'look', text: 'Paired' }), el('div', { className: 'code36', text: id.name }), el('div', { className: 'mono small dim', text: outs.length ? outs.join('\n') : 'waiting for USB…' })),
-    );
-  }, 240);
-  setTimeout(done, 1800);
+  $('pairscreen').hidden = true;
+  $('workbench').hidden = false;
+  connect();
 }
 
 // --- connection -----------------------------------------------------------------------------
@@ -1019,7 +1153,8 @@ function connect(): void {
   const c = new Connection(Connection.sameOrigin(), hello);
   conn = c;
   c.onState = (s, info) => {
-    render('top');
+    serverDown = s === 'closed';
+    ['calm', 'top'].forEach(render);
     if (s === 'closed' && info?.code === CLOSE_UNAUTHORIZED) {
       log('warn', 'This browser is no longer paired (revoked or unknown token); pairing again.');
       clearIdentity();
@@ -1033,24 +1168,30 @@ function connect(): void {
     canApprove = m.payload.canApprove;
     pending.clear();
     log('info', `connected as ${m.payload.name} (${m.payload.kind}, ${m.payload.deviceId}) · ${m.payload.server} · ${m.payload.mode}`);
-    ['top', 'approve', 'banners', 'links'].forEach(render);
+    ['calm', 'top', 'approve', 'banners', 'links'].forEach(render);
+    if (!replaying && canApprove) void api.pending(identity?.deviceToken).then((r) => {
+      // A snapshot can finish after a live approval or denial. Do not restore a settled request.
+      for (const p of r.pending) if (!settledPairings.has(p.pairingId)) pending.set(p.pairingId, p);
+      render('approve');
+    }).catch(() => {});
   });
   c.on('presence', (m) => {
     devices = m.payload.devices;
-    render('links');
+    ['calm', 'links'].forEach(render);
   });
   c.on('pair.pending', (m) => {
+    if (settledPairings.has(m.payload.pairingId)) return;
     pending.set(m.payload.pairingId, m.payload);
     log('info', `${m.payload.name} (${m.payload.kind}) wants to join · ${m.payload.display}`);
     ['approve', 'banners'].forEach(render);
   });
   c.on('pair.approved', (m) => {
-    pending.delete(m.payload.pairingId);
+    removePending(m.payload.pairingId);
     log('info', `paired ${m.payload.name} (${m.payload.kind})${m.payload.approvedBy ? ` · approved by ${m.payload.approvedBy}` : ''}`);
     render('approve');
   });
   c.on('pair.denied', (m) => {
-    pending.delete(m.payload.pairingId);
+    removePending(m.payload.pairingId);
     log('info', `pairing request ${m.payload.reason}`);
     render('approve');
   });
@@ -1108,7 +1249,7 @@ function connect(): void {
       armedOnce = true;
       if (!tabChosenByUser) setTab('tape');
     }
-    render('banners');
+    ['banners', 'calm'].forEach(render);
   });
   c.on('ui.spec', (m) => {
     const key = m.payload.cardId ?? m.payload.specId;
@@ -1118,13 +1259,17 @@ function connect(): void {
     ['spec', 'daemons', 'evidence', 'device'].forEach(render);
   });
   if (!replaying) executor.attach(c);
-  c.start();
+  c.onAny((m) => {
+    const next = presenter.update(m);
+    if (next) { activity = next; render('calm'); }
+  });
+  if (!replaying) c.start();
   if (replaying && !replayStarted) {
     replayStarted = true;
     log('info', 'REPLAY: injecting a scripted OP-1 Field run (display only)');
     runReplay(
       (m) => c.inject(m),
-      () => log('info', 'replay finished: press Arm or Cancel in the banner'),
+      () => log('info', 'Replay finished. Open Details to arm or cancel the example controls.'),
     );
   }
 }
@@ -1137,6 +1282,7 @@ function setupForms(): void {
   $('code-form').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const input = $('code-input') as HTMLInputElement;
+    if (replaying || !canApprove) return;
     if (!isValidCode(input.value)) {
       $('code-msg').textContent = 'Codes are 6 characters, like K7Q-4M2.';
       $('code-msg').className = 'small fail-text';
@@ -1144,20 +1290,40 @@ function setupForms(): void {
     }
     if (await approve(input.value)) input.value = '';
   });
+  $<HTMLButtonElement>('panic').disabled = replaying;
   $('panic').addEventListener('click', () => {
+    if (replaying) return;
     void executor.panicLocal('button');
     conn?.send('panic', { reason: 'PANIC button on the Mac' }, { to: 'server' });
   });
-  for (const t of ['code', 'tape', 'spec'] as const) $(`tab-${t}`).addEventListener('click', () => setTab(t, true));
+  const tabs = ['code', 'tape', 'spec'] as const;
+  for (const [i, t] of tabs.entries()) {
+    $(`tab-${t}`).addEventListener('click', () => setTab(t, true));
+    $(`tab-${t}`).addEventListener('keydown', (e) => {
+      const next = e.key === 'ArrowRight' ? (i + 1) % 3 : e.key === 'ArrowLeft' ? (i + 2) % 3 : e.key === 'Home' ? 0 : e.key === 'End' ? 2 : undefined;
+      if (next === undefined) return;
+      e.preventDefault();
+      setTab(tabs[next], true);
+      $(`tab-${tabs[next]}`).focus();
+    });
+  }
+  setTab('code');
   setInterval(() => {
     if (selfExpiresAt) $('self-expiry').textContent = untilText(selfExpiresAt);
     for (const e of document.querySelectorAll<HTMLElement>('[data-expires]')) e.textContent = untilText(Number(e.dataset.expires));
     // honest running counters: seconds since a model call started
     for (const e of document.querySelectorAll<HTMLElement>('[data-since]')) e.textContent = `${e.dataset.prefix ?? ''}${secs(Date.now() - Number(e.dataset.since))}`;
-    if (bridge.learning) render('learn');
+    if (bridge.learning) { render('learn'); render('calm'); }
+    let expired = false;
+    for (const [id, p] of pending) if (p.expiresAt <= Date.now()) {
+      removePending(id);
+      expired = true;
+    }
+    if (expired) render('approve');
     if (arm && arm.expiresAt <= Date.now()) {
       arm = undefined;
-      render('banners');
+      activity = { text: 'Approval expired: open Details', working: false };
+      ['banners', 'calm'].forEach(render);
     }
   }, 1000);
 }
@@ -1166,17 +1332,18 @@ export async function bootWorkbench(): Promise<void> {
   $('workbench').hidden = false;
   document.body.classList.toggle('stage', stage);
   if (replaying) {
-    const tag = el('a', { className: 'cornertag', text: 'REPLAY · display only', title: 'A scripted run injected into this page; nothing is executed or sent. Click to leave.' });
+    const tag = el('a', { className: 'cornertag', text: 'Demo · display only', title: 'A scripted run injected into this page; nothing is executed or sent. Click to leave.' });
     tag.href = location.pathname;
     document.body.append(tag);
   }
-  $('drawer').toggleAttribute('open', !isLocalPage());
+  setupCalm();
   setupForms();
   setupExecutors();
   renderAll();
   requestAnimationFrame(meterLoop);
   // a replay tab never executes, so it must not take the executor role from the real workbench
   if (!replaying) executor.claim();
+  if (replaying) { connect(); return; }
   try {
     health = await api.health();
   } catch {
@@ -1189,6 +1356,6 @@ export async function bootWorkbench(): Promise<void> {
     clearIdentity();
     identity = undefined;
   }
-  if (identity || replaying) connect();
+  if (identity) connect();
   else if (!serverDown) await pairThisBrowser();
 }

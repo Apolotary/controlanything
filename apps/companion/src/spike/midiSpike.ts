@@ -318,7 +318,7 @@ function showIdentity(): void {
   $('id-hex').textContent = r.hex ? `← ${r.hex}` : '← (no reply)';
   const v = $('id-verdict');
   v.textContent = r.check.verdict === 'mismatch' ? 'wrong device · refused' : `identity ${r.check.verdict}`;
-  v.className = `big-verdict ${r.check.verdict === 'mismatch' ? 'fail-text' : r.check.verdict === 'confirmed' ? 'ok-text' : 'volt-text'}`;
+  v.className = `big-verdict ${r.check.verdict === 'mismatch' ? 'fail-text' : r.check.verdict === 'confirmed' ? 'ok-text' : 'accent-text'}`;
   $('id-detail').textContent = [r.describe, r.check.text].filter(Boolean).join(' · ');
 }
 
