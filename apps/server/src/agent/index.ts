@@ -139,7 +139,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   if (sharedForge) detachRouteBridge(sharedForge);
   const unsubscribeForge = sharedForge ? subscribeForge(sharedForge, hub, targets, (cardId) => {
     const t = targets.get(cardId);
-    return Boolean(t && mode === 'control' && tags.has(cardId) && (setups.has(cardId) || canControl(t)));
+    if (!t) return true; // HTTP / sample generations that no discovery run owns
+    return mode === 'control' && tags.has(cardId) && (setups.has(cardId) || canControl(t));
   }) : () => {};
   let room: UiSpecPayload | undefined;
   let roomRev = 0;
