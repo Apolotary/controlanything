@@ -1328,7 +1328,8 @@ async function pairThisBrowser(): Promise<void> {
   const me = resumed?.device ?? defaultDevice();
   // A new Mac joins the headset's existing room through an explicit owner approval.
   // An empty room retains the local bootstrap so the owner can pair their first headset.
-  const requireApproval = pairNow || (health?.space?.pairedDevices ?? 0) > 0;
+  // Unknown room state (health not loaded yet, e.g. right after a revoke) must not fall back to self-approval.
+  const requireApproval = pairNow || (health?.space?.pairedDevices ?? 1) > 0;
   try {
     const r = resumed?.request ?? await api.pairStart({ name: me.name, kind: me.kind, capabilities: hello().capabilities ?? [], ...(requireApproval ? { requireApproval } : {}) });
     if (generation !== selfPairGeneration) return;
