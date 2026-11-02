@@ -16,7 +16,8 @@
   --radius: 20px;
   --pill-radius: 999px;
   --motion: 180ms;
-  --crossfade: 200ms;
+  --status-exit: 120ms;
+  --status-enter: 160ms;
   --ease: cubic-bezier(.2, .8, .2, 1);
   color-scheme: dark;
 }

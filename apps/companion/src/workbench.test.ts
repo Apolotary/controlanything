@@ -166,6 +166,21 @@ const byId = (id: string) => {
 };
 const flush = () => vi.advanceTimersByTimeAsync(160);
 
+function controlStatusAnimations(reducedMotion = false) {
+  const tokens = new Map([...readFileSync(new URL('./tokens.css', import.meta.url), 'utf8')
+    .matchAll(/(--[\w-]+):\s*([^;]+);/g)].map((match) => [match[1], match[2]]));
+  vi.stubGlobal('getComputedStyle', () => ({ getPropertyValue: (name: string) => tokens.get(name) ?? '' }));
+  vi.stubGlobal('matchMedia', () => ({ matches: reducedMotion }));
+  const animations: { onfinish: (() => void) | null; cancel: ReturnType<typeof vi.fn> }[] = [];
+  const animate = vi.fn((_frames: Keyframe[], _options: KeyframeAnimationOptions) => {
+    const animation = { onfinish: null as (() => void) | null, cancel: vi.fn() };
+    animations.push(animation);
+    return animation;
+  });
+  Object.assign(byId('status-text'), { animate });
+  return { animate, animations, easing: tokens.get('--ease') };
+}
+
 beforeEach(() => {
   vi.resetModules();
   vi.resetAllMocks();
@@ -275,6 +290,88 @@ describe('Calm companion behavior', () => {
     await app.emit('target.status', { cardId: 'light', state: 'verified' });
     expect(byId('status-text').textContent).toBe('Testing complete');
     expect(byId('status-dot').classList.contains('working')).toBe(false);
+  });
+
+  it('finishes the status exit before replacing the sentence and entering', async () => {
+    const app = await live();
+    const host = byId('status-text');
+    const previous = host.textContent;
+    const { animate, animations, easing } = controlStatusAnimations();
+
+    await app.emit('target.status', { cardId: 'light', state: 'verified' });
+    expect(host.children).toEqual([previous]);
+    expect(animate).toHaveBeenCalledExactlyOnceWith([
+      { opacity: 1, transform: 'translateY(0)' },
+      { opacity: 0, transform: 'translateY(-4px)' },
+    ], { duration: 120, easing, fill: 'forwards' });
+
+    animations[0].onfinish?.();
+    expect(host.children).toEqual(['Testing complete']);
+    expect(animations[0].cancel).toHaveBeenCalledOnce();
+    expect(animate).toHaveBeenNthCalledWith(2, [
+      { opacity: 0, transform: 'translateY(4px)' },
+      { opacity: 1, transform: 'translateY(0)' },
+    ], { duration: 160, easing });
+
+    animations[1].onfinish?.();
+    await app.emit('target.status', { cardId: 'light', state: 'verifying' });
+    expect(animate).toHaveBeenCalledTimes(3);
+    expect(host.children).toEqual(['Testing complete']);
+  });
+
+  it.each(['exit', 'entry'])('shows the latest status immediately during %s and ignores stale finishes', async (phase) => {
+    const app = await live();
+    const host = byId('status-text');
+    const { animate, animations } = controlStatusAnimations();
+    await app.emit('target.status', { cardId: 'light', state: 'verifying' });
+    const staleExit = animations[0].onfinish;
+    if (phase === 'entry') staleExit?.();
+    const active = animations.at(-1)!;
+    const staleFinish = active.onfinish;
+    const started = animations.length;
+
+    await app.emit('target.status', { cardId: 'light', state: 'verified' });
+    expect(host.children).toEqual(['Testing complete']);
+    expect(active.cancel).toHaveBeenCalledOnce();
+    expect(active.onfinish).toBeNull();
+    expect(animate).toHaveBeenCalledTimes(started);
+    staleExit?.();
+    staleFinish?.();
+    expect(host.children).toEqual(['Testing complete']);
+    expect(animate).toHaveBeenCalledTimes(started);
+
+    await app.emit('target.status', { cardId: 'light', state: 'forging' });
+    const next = animations.at(-1)!;
+    staleExit?.();
+    staleFinish?.();
+    await app.emit('target.status', { cardId: 'light', state: 'forged' });
+    expect(next.cancel).toHaveBeenCalledOnce();
+    expect(host.children).toEqual(['Controls created: open Details']);
+    expect(animate).toHaveBeenCalledTimes(started + 1);
+  });
+
+  it.each(['exit', 'entry'])('keeps the %s running when the desired status repeats', async (phase) => {
+    const app = await live();
+    const host = byId('status-text');
+    const { animate, animations } = controlStatusAnimations();
+    await app.emit('target.status', { cardId: 'light', state: 'verifying' });
+    if (phase === 'entry') animations[0].onfinish?.();
+    const active = animations.at(-1)!;
+    const text = host.textContent;
+    const started = animations.length;
+
+    await app.emit('target.status', { cardId: 'light', state: 'verifying' });
+    expect(host.children).toEqual([text]);
+    expect(active.cancel).not.toHaveBeenCalled();
+    expect(animate).toHaveBeenCalledTimes(started);
+  });
+
+  it('swaps status instantly with reduced motion even when animations are available', async () => {
+    const app = await live();
+    const { animate } = controlStatusAnimations(true);
+    await app.emit('target.status', { cardId: 'light', state: 'verified' });
+    expect(byId('status-text').children).toEqual(['Testing complete']);
+    expect(animate).not.toHaveBeenCalled();
   });
 
   it('restores pending requests when an owner reconnects', async () => {
