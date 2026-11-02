@@ -20,6 +20,8 @@ export interface Roster {
   devices(): DeviceInfo[];
   /** the in-process Mac executor is available */
   macLocal: boolean;
+  /** First helper pairing URL, including the server's actual HTTP port. */
+  helperUrl?: () => string;
   /** a sensor whose last sense.request timed out recently (a headset tab that stopped answering) */
   unhealthy?: (deviceId: string) => boolean;
 }

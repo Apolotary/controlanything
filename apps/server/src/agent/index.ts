@@ -37,6 +37,7 @@ import { ScanService } from './scan';
 import { StepLog } from './steps';
 import { TargetStore } from './targets';
 import { TagStore, evaluateConnection, tagCapability, tagSnapshot } from './tags';
+import { helperPairUrls } from '../net';
 import type { Target } from './types';
 
 // Derive from the payload map so newly added protocol schemas participate in narrowing.
@@ -117,7 +118,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const silentSpeech = macLocal.silent ? loadRecordedSpeech(undefined, log) : undefined;
   if (macLocal.silent) log('[silent] CE_MAC_SILENT=1: say / Music are not run and the volume is kept in memory; acks and evidence say so');
   // a sensor whose last reply timed out (a dead headset tab) yields to a healthy one for ~30 s
-  const roster: Roster = { devices: () => hub.devices(), macLocal: macLocal.available, unhealthy: (id) => dispatcher.unhealthy(id) };
+  const roster: Roster = { devices: () => hub.devices(), macLocal: macLocal.available,
+    helperUrl: () => helperPairUrls(ctx.bound.http ?? ctx.config.http.port)[0], unhealthy: (id) => dispatcher.unhealthy(id) };
   const steps = new StepLog(hub, log);
   const targets = new TargetStore(hub, log);
   const tags = new TagStore(opts.tagsFile === null ? undefined : opts.tagsFile ?? join(ctx.config.dataDir, 'tags.json'));

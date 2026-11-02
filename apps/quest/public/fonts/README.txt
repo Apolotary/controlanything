@@ -16,3 +16,8 @@ Reproduce every font from the repository root:
 The script uses only Node built-ins. Runtime text uses the local Latin fonts;
 characters absent from that subset are displayed as ? instead of fetching a
 fallback font from an external server. The verified check is drawn geometry.
+
+JetBrainsMono-Regular.ttf is the unmodified regular font from
+https://github.com/JetBrains/JetBrainsMono/blob/master/fonts/ttf/JetBrainsMono-Regular.ttf
+under the SIL OFL 1.1 in OFL-JetBrainsMono.txt. Helper pairing URLs use this
+local file; opening the pairing card does not fetch a remote font.

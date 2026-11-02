@@ -9,6 +9,8 @@ export interface SdfTextOptions {
   weight?: 400 | 500 | 600;
   /** Semibold Inter with its native tabular digit glyphs selected in the local font. */
   tabular?: boolean;
+  /** Locally bundled JetBrains Mono for URLs and pairing codes. */
+  mono?: boolean;
   anchorX?: 'left' | 'center' | 'right';
   anchorY?: 'top' | 'middle' | 'bottom';
   maxWidth?: number;
@@ -52,7 +54,7 @@ export function makeText(o: SdfTextOptions): SdfText {
   t.text = localText(o.text);
   t.fontSize = o.size ?? THEME.font.body;
   t.color = o.color ?? THEME.color.text;
-  t.font = o.tabular ? THEME.font.tabular : o.weight === 600 ? THEME.font.semibold : o.weight === 500 ? THEME.font.medium : THEME.font.regular;
+  t.font = o.mono ? THEME.font.mono : o.tabular ? THEME.font.tabular : o.weight === 600 ? THEME.font.semibold : o.weight === 500 ? THEME.font.medium : THEME.font.regular;
   t.anchorX = o.anchorX ?? 'left';
   t.anchorY = o.anchorY ?? 'middle';
   t.textAlign = o.align ?? (o.anchorX === 'center' ? 'center' : 'left');
@@ -60,7 +62,7 @@ export function makeText(o: SdfTextOptions): SdfText {
   if (o.singleLine) { t.whiteSpace = 'nowrap'; t.userData.lineWidth = o.maxWidth; }
   if (o.maxHeight) { t.userData.fitWidth = o.maxWidth; t.userData.fitHeight = o.maxHeight; }
   t.lineHeight = THEME.font.lineHeight;
-  t.letterSpacing = o.tabular ? 0 : THEME.font.letterSpacing;
+  t.letterSpacing = o.tabular || o.mono ? 0 : THEME.font.letterSpacing;
   t.depthOffset = -1;
   if (!headless) t.material = textMaterial;
   t.renderOrder = THEME.render.text;
