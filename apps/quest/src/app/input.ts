@@ -44,7 +44,7 @@ export class PinchDetector {
   ) {}
   /** returns the stable pinch state; `force` (select button / emulator) overrides the distance */
   update(distance: number | null, force?: boolean): { pinching: boolean; justStarted: boolean; justEnded: boolean } {
-    const want = force ?? (distance === null ? false : this.on ? distance < this.offDist : distance < this.onDist);
+    const want = force ?? (distance === null ? false : this.on ? distance <= this.offDist : distance < this.onDist);
     const was = this.on;
     if (force !== undefined) {
       this.on = force;
@@ -65,10 +65,35 @@ export class PinchDetector {
 }
 
 interface HandTrack {
+  source?: XRInputSource;
   pinch: PinchDetector;
-  palmUpSince: number;
+  jointPinching: boolean;
+  pinching: boolean;
+  lastJointTime: number | null;
+  lastPinchPoint: Vector3 | null;
+  palmUpSince: number | null;
+  selectDown: boolean;
+  selectLatched: boolean;
+}
+
+export interface HandDiagnostics {
+  tracked: boolean;
+  jointCount: number;
+  pinchDistanceCm: number | null;
+  selectEvents: number;
   selectDown: boolean;
 }
+
+export type InputDiagnostics = Record<Handedness, HandDiagnostics>;
+
+const JOINT_LOSS_GRACE_MS = 150;
+const newTrack = (): HandTrack => ({
+  pinch: new PinchDetector(), jointPinching: false, pinching: false, lastJointTime: null, lastPinchPoint: null,
+  palmUpSince: null, selectDown: false, selectLatched: false,
+});
+const newDiagnostics = (): HandDiagnostics => ({
+  tracked: false, jointCount: 0, pinchDistanceCm: null, selectEvents: 0, selectDown: false,
+});
 
 export interface DesktopPointer {
   /** normalised device coordinates of the mouse */
@@ -82,9 +107,10 @@ export interface DesktopPointer {
 
 export class InputSampler {
   private readonly tracks: Record<Handedness, HandTrack> = {
-    left: { pinch: new PinchDetector(), palmUpSince: 0, selectDown: false },
-    right: { pinch: new PinchDetector(), palmUpSince: 0, selectDown: false },
+    left: newTrack(),
+    right: newTrack(),
   };
+  readonly diagnostics: InputDiagnostics = { left: newDiagnostics(), right: newDiagnostics() };
   private readonly desktopPinch = new PinchDetector();
   private readonly raycaster = new Raycaster();
   private lastTime = 0;
@@ -93,28 +119,71 @@ export class InputSampler {
   /** emulator: route the mouse as the right hand even inside an emulated XR session */
   mouseAsHand = false;
   private session?: XRSession;
-  private readonly onSelectStart = (e: XRInputSourceEvent) => this.setSelect(e.inputSource, true);
-  private readonly onSelectEnd = (e: XRInputSourceEvent) => this.setSelect(e.inputSource, false);
+  private readonly onSelectStart = (e: XRInputSourceEvent) => {
+    if (e.frame.session === this.session) this.setSelect(e.inputSource, true);
+  };
+  private readonly onSelectEnd = (e: XRInputSourceEvent) => {
+    if (e.frame.session === this.session) this.setSelect(e.inputSource, false);
+  };
+  private readonly onSessionEnd = (e: XRSessionEvent) => {
+    if (e.session === this.session) this.detach();
+  };
+  private readonly onSourcesChange = (e: XRInputSourcesChangeEvent) => {
+    if (e.session !== this.session) return;
+    for (const src of e.removed) {
+      if (src.handedness === 'left' || src.handedness === 'right') {
+        if (this.tracks[src.handedness].source === src) this.resetHand(src.handedness);
+      }
+    }
+  };
 
   attach(session: XRSession): void {
+    if (this.session === session) return;
     this.detach();
     this.session = session;
     session.addEventListener('selectstart', this.onSelectStart);
     session.addEventListener('selectend', this.onSelectEnd);
+    session.addEventListener('end', this.onSessionEnd);
+    session.addEventListener('inputsourceschange', this.onSourcesChange);
   }
 
   detach(): void {
     this.session?.removeEventListener('selectstart', this.onSelectStart);
     this.session?.removeEventListener('selectend', this.onSelectEnd);
+    this.session?.removeEventListener('end', this.onSessionEnd);
+    this.session?.removeEventListener('inputsourceschange', this.onSourcesChange);
     this.session = undefined;
-    for (const t of Object.values(this.tracks)) {
-      t.pinch.reset();
-      t.selectDown = false;
+    this.resetHand('left', true);
+    this.resetHand('right', true);
+    this.desktopPinch.reset();
+    this.pointer.down = false;
+    this.pointer.latched = false;
+  }
+
+  private resetHand(hand: Handedness, resetEvents = false): void {
+    this.tracks[hand] = newTrack();
+    const selectEvents = resetEvents ? 0 : this.diagnostics[hand].selectEvents;
+    Object.assign(this.diagnostics[hand], newDiagnostics(), { selectEvents });
+  }
+
+  private trackSource(src: XRInputSource, hand: Handedness): HandTrack {
+    if (this.tracks[hand].source !== src) {
+      this.resetHand(hand);
+      this.tracks[hand].source = src;
     }
+    return this.tracks[hand];
   }
 
   private setSelect(src: XRInputSource, down: boolean): void {
-    if (src.handedness === 'left' || src.handedness === 'right') this.tracks[src.handedness].selectDown = down;
+    if (src.handedness !== 'left' && src.handedness !== 'right') return;
+    if (!Array.from(this.session?.inputSources ?? []).includes(src)) return;
+    const track = this.trackSource(src, src.handedness);
+    track.selectDown = down;
+    // A short system pinch can start and end between animation frames.
+    if (down) track.selectLatched = true;
+    const diagnostic = this.diagnostics[src.handedness];
+    diagnostic.selectEvents++;
+    diagnostic.selectDown = down;
   }
 
   /** Sample everything for this frame. `camera` is the rendering camera (desktop) or the XR camera. */
@@ -123,6 +192,14 @@ export class InputSampler {
     this.lastTime = time;
     const head = { position: new Vector3(), quaternion: new Quaternion(), ray: { origin: new Vector3(), dir: new Vector3(0, 0, -1) } };
     const hands: ShellFrame['hands'] = {};
+    // The renderer supplies this live frame inside its XR animation callback. Re-entry creates a
+    // different session; binding here also covers a missed application-level session-start callback.
+    if (frame) this.attach(frame.session);
+    for (const diagnostic of Object.values(this.diagnostics)) {
+      diagnostic.tracked = false;
+      diagnostic.jointCount = 0;
+      diagnostic.pinchDistanceCm = null;
+    }
     if (frame && refSpace) {
       const vp = frame.getViewerPose(refSpace);
       if (vp) {
@@ -131,10 +208,15 @@ export class InputSampler {
         head.position.set(p.x, p.y, p.z);
         head.quaternion.set(o.x, o.y, o.z, o.w);
       }
+      const present = new Set<Handedness>();
       for (const src of frame.session.inputSources) {
         if (src.handedness !== 'left' && src.handedness !== 'right') continue;
+        present.add(src.handedness);
         const hs = this.sampleSource(src, frame, refSpace, time);
         if (hs) hands[src.handedness] = hs;
+      }
+      for (const hand of ['left', 'right'] as const) {
+        if (!present.has(hand) && this.tracks[hand].source) this.resetHand(hand);
       }
     } else {
       camera.getWorldPosition(head.position);
@@ -155,9 +237,11 @@ export class InputSampler {
   }
 
   private sampleSource(src: XRInputSource, frame: XRFrame, ref: XRReferenceSpace, time: number): ShellHand | null {
-    const track = this.tracks[src.handedness as Handedness];
+    const hand = src.handedness as Handedness;
+    const track = this.trackSource(src, hand);
     const rayPose = frame.getPose(src.targetRaySpace, ref);
-    const ray = { origin: new Vector3(), dir: new Vector3(0, 0, -1) };
+    // A missing target ray is not a ray from the world origin. Consumers can reject this zero vector.
+    const ray = { origin: new Vector3(), dir: new Vector3() };
     if (rayPose) {
       const p = rayPose.transform.position;
       const o = rayPose.transform.orientation;
@@ -168,47 +252,89 @@ export class InputSampler {
     let distance: number | null = null;
     const pinchPoint = ray.origin.clone();
     let palmUp = false;
+    let hasSpatialPose = !!rayPose;
+    let jointCount = 0;
     if (src.hand && frame.getJointPose) {
       for (const name of JOINTS) {
         const space = src.hand.get(name);
         const jp = space ? frame.getJointPose(space, ref) : undefined;
         if (!jp) continue;
+        jointCount++;
         const p = jp.transform.position;
         const o = jp.transform.orientation;
         joints[name] = { position: new Vector3(p.x, p.y, p.z), quaternion: new Quaternion(o.x, o.y, o.z, o.w), radius: jp.radius ?? 0.008 };
       }
       const thumb = joints['thumb-tip'];
       const index = joints['index-finger-tip'];
+      if (!rayPose) {
+        const position = (index ?? thumb ?? joints.wrist ?? Object.values(joints)[0])?.position;
+        if (position) pinchPoint.copy(position);
+      }
       if (thumb && index) {
         distance = thumb.position.distanceTo(index.position);
         pinchPoint.addVectors(thumb.position, index.position).multiplyScalar(0.5);
+        (track.lastPinchPoint ??= new Vector3()).copy(pinchPoint);
       }
       const wrist = joints.wrist;
       if (wrist) {
-        // the palm faces the wrist frame's -Y (WebXR: +Y out of the back of the hand)
+        // WebXR joint space: -Y points perpendicular out of the palm, -Z along the bone.
+        // https://www.w3.org/TR/webxr-hand-input-1/#xrjointspace (same axes for both hands).
         const palm = new Vector3(0, -1, 0).applyQuaternion(wrist.quaternion);
         palmUp = palm.y > 0.75;
       }
     } else {
       const grip = src.gripSpace ? frame.getPose(src.gripSpace, ref) : undefined;
-      if (grip) pinchPoint.set(grip.transform.position.x, grip.transform.position.y, grip.transform.position.z);
+      if (grip) {
+        pinchPoint.set(grip.transform.position.x, grip.transform.position.y, grip.transform.position.z);
+        hasSpatialPose = true;
+      }
     }
     const controller = !src.hand;
-    // hands: joint distance, OR the platform's own select (it is the pinch on Quest); controllers: select only
-    const force = controller ? track.selectDown : track.selectDown ? true : undefined;
-    const pinch = track.pinch.update(distance, force);
+    if (distance !== null) {
+      track.lastJointTime = time;
+      track.jointPinching = track.pinch.update(distance).pinching;
+    } else if (track.lastJointTime !== null && time - track.lastJointTime <= JOINT_LOSS_GRACE_MS) {
+      // Brief occlusion must not split an existing drag; missing samples never start a new pinch.
+      track.pinch.update(null, track.jointPinching);
+    } else {
+      track.pinch.reset();
+      track.jointPinching = false;
+    }
+    // Keep these independent: a system select must not seed the distance detector's hysteresis.
+    // Quest's system select is its pinch, including when joint poses are unavailable.
+    const pinching = track.jointPinching || track.selectDown || track.selectLatched;
+    if (distance === null) {
+      // Freeze an ongoing gesture through occlusion, including its release frame. A new system
+      // pinch must not acquire a control at an old midpoint left over from a previous gesture.
+      if (track.pinching && track.lastPinchPoint) pinchPoint.copy(track.lastPinchPoint);
+      else track.lastPinchPoint = null;
+    }
+    const justPinched = pinching && !track.pinching;
+    const justReleased = !pinching && track.pinching;
+    track.pinching = pinching;
+    track.selectLatched = false;
+    Object.assign(this.diagnostics[hand], {
+      tracked: jointCount > 0,
+      jointCount,
+      pinchDistanceCm: distance === null ? null : distance * 100,
+      selectDown: track.selectDown,
+    });
     if (palmUp) {
-      if (!track.palmUpSince) track.palmUpSince = time;
-    } else track.palmUpSince = 0;
+      if (track.palmUpSince === null) track.palmUpSince = time;
+    } else track.palmUpSince = null;
+    if (!hasSpatialPose && jointCount === 0) {
+      // Hide the cursor without inventing a new press when a still-held pinch becomes located again.
+      return null;
+    }
     return {
       joints,
-      pinching: pinch.pinching,
-      justPinched: pinch.justStarted,
-      justReleased: pinch.justEnded,
+      pinching,
+      justPinched,
+      justReleased,
       pinchPoint,
       ray,
       palmUp,
-      palmUpMs: palmUp ? time - track.palmUpSince : 0,
+      palmUpMs: track.palmUpSince === null ? 0 : time - track.palmUpSince,
       controller,
     };
   }

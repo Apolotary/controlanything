@@ -207,7 +207,10 @@ export interface HandInput {
 export function handCursor(hand: 'left' | 'right', h: HandInput | undefined, out: Cursor): Cursor {
   out.id = hand;
   out.hand = hand;
-  out.canPoke = true;
+  // A native select can remain available without joint poses. Its ray origin is not a fingertip.
+  out.canPoke = Boolean(h?.joints['index-finger-tip']);
+  out.ray = h?.ray;
+  if (!h?.joints.wrist) out.wristQuat = undefined;
   if (!h) {
     out.tracked = false;
     out.pinching = false;
@@ -224,7 +227,6 @@ export function handCursor(hand: 'left' | 'right', h: HandInput | undefined, out
   out.justReleased = h.justReleased;
   const wrist = h.joints['wrist'];
   if (wrist) out.wristQuat = (out.wristQuat ?? new Quaternion()).copy(wrist.quaternion);
-  if (h.ray) out.ray = h.ray;
   return out;
 }
 
