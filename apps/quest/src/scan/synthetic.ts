@@ -9,7 +9,6 @@ import {
   CanvasTexture,
   Color,
   DoubleSide,
-  GridHelper,
   Group,
   Mesh,
   MeshBasicMaterial,
@@ -117,10 +116,6 @@ export class VirtualRoom {
       m.updateMatrixWorld(true);
       this.planes.push(m);
     }
-    const grid = new GridHelper(8, 16, 0x2a3540, 0x1c252d);
-    grid.renderOrder = -99;
-    (grid.material as { depthWrite: boolean }).depthWrite = false;
-    this.backdropGroup.add(grid);
   }
 
   /** Upload the live sim canvas now (before a synthetic capture). */

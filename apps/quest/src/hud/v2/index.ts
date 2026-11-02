@@ -9,6 +9,7 @@ import { THEME } from './theme';
 import { GlassSurfaces } from './surface';
 import { PinchReticles } from './reticle';
 import { unfoldEase } from './motion';
+import { TargetTether } from './tether';
 export { whenSdfReady } from './text';
 export { THEME } from './theme';
 
@@ -63,12 +64,11 @@ export class LeanHud implements Hud {
   private readonly materials = {
     button: new MeshBasicMaterial({ color: THEME.color.muted, transparent: true, opacity: THEME.surface.buttonOpacity, depthWrite: false, toneMapped: false }),
     accent: new MeshBasicMaterial({ color: THEME.color.accent, transparent: true, depthWrite: false, toneMapped: false }),
-    tether: new MeshBasicMaterial({ color: THEME.color.accent, transparent: true, opacity: THEME.opacity.line, depthWrite: false, toneMapped: false }),
   };
   private readonly surfaces = new GlassSurfaces();
   private readonly trackGeometry = new PlaneGeometry(1, 1);
   private readonly reticles = new PinchReticles();
-  private readonly tether = new Mesh(this.trackGeometry, this.materials.tether);
+  private readonly tether = new TargetTether();
   private readonly verdict = new Group();
   private readonly progress = new Group();
   private readonly progressFill = new Mesh(this.trackGeometry, this.materials.accent);
@@ -109,6 +109,8 @@ export class LeanHud implements Hud {
   private readonly origin = new Vector3();
   private readonly inverse = new Matrix4();
   private readonly facing = new Quaternion();
+  private readonly tetherStart = new Vector3();
+  private readonly tetherEnd = new Vector3();
 
   constructor(scene: Scene, private readonly camera: Camera) {
     this.root.name = 'hud-v2';
@@ -119,9 +121,6 @@ export class LeanHud implements Hud {
     this.deck.name = 'deck';
     this.notice.name = 'notice';
     this.root.add(this.boxes, this.card, this.modal, this.deck, this.notice, this.reticles, this.tether);
-    this.tether.name = 'target-tether';
-    this.tether.visible = false;
-    this.tether.renderOrder = THEME.render.boxes;
     this.card.add(this.plate(THEME.card.width, THEME.card.height), this.heading, this.status, this.controls, this.details, this.verdict, this.progress);
     this.heading.position.set(-THEME.card.width / 2 + THEME.card.padding, THEME.card.titleY, THEME.panel.depth);
     this.status.position.set(this.heading.position.x, THEME.card.statusY, THEME.panel.depth);
@@ -261,7 +260,12 @@ export class LeanHud implements Hud {
       if (!main && c.kind !== 'trigger' && c.kind !== 'toggle') main = c;
       else if (c.kind === 'trigger' || c.kind === 'toggle') buttons.push(c);
     }
-    const presetOrder = (c: Control) => /full[ _-]?on/i.test(c.label) ? 0 : /^off$/i.test(c.label) ? 1 : /night/i.test(c.label) ? 2 : 3;
+    const presetOrder = (c: Control) => {
+      const action = c.binding?.action.split('.').at(-1) ?? '';
+      if (/^(full[ _-]?on|full|on)$/i.test(action) || /full[ _-]?on/i.test(c.label)) return 0;
+      if (/^off$/i.test(action) || /\boff\b/i.test(c.label)) return 1;
+      return /^night(?:[ _-]?light)?$/i.test(action) || /night/i.test(c.label) ? 2 : 3;
+    };
     buttons.sort((a, b) => presetOrder(a) - presetOrder(b));
     buttons.splice(3);
     if (m && main) {
@@ -545,6 +549,34 @@ export class LeanHud implements Hud {
     this.direction.set(0, 0, -1).applyQuaternion(this.headQuaternion);
     panel.position.copy(this.head).addScaledVector(this.direction, THEME.card.distance); panel.position.y += y;
   }
+  private dockCard(center: Vector3): void {
+    this.direction.subVectors(center, this.head);
+    const maxPitch = THEME.card.maxPitchDeg * Math.PI / 180;
+    const pitch = Math.max(-maxPitch, Math.min(maxPitch, Math.atan2(this.direction.y, Math.hypot(this.direction.x, this.direction.z))));
+    this.direction.y = 0;
+    if (this.direction.lengthSq() < 1e-6) {
+      this.direction.set(0, 0, -1).applyQuaternion(this.headQuaternion);
+      this.direction.y = 0;
+      if (this.direction.lengthSq() < 1e-6) this.direction.set(0, 0, -1);
+    }
+    this.direction.normalize().multiplyScalar(Math.cos(pitch));
+    this.direction.y = Math.sin(pitch);
+    this.card.position.copy(this.head).addScaledVector(this.direction, THEME.card.dockDistance);
+    this.face(this.card);
+  }
+  private placeTether(targetId: string): void {
+    if (!this.card.visible || !this.boxes.nearestBorder(targetId, this.card.position, this.head, this.tetherStart)) { this.tether.hide(); return; }
+    this.facing.copy(this.card.quaternion).invert();
+    this.local.subVectors(this.tetherStart, this.card.position).applyQuaternion(this.facing);
+    const hw = THEME.card.width / 2 * this.card.scale.x, hh = THEME.card.height / 2;
+    let x = Math.max(-hw, Math.min(hw, this.local.x)), y = Math.max(-hh, Math.min(hh, this.local.y));
+    if (Math.abs(x) < hw && Math.abs(y) < hh) {
+      if (hw - Math.abs(x) < hh - Math.abs(y)) x = x < 0 ? -hw : hw;
+      else y = y < 0 ? -hh : hh;
+    }
+    this.tetherEnd.set(x, y, 0).applyQuaternion(this.card.quaternion).add(this.card.position);
+    this.tether.update(this.tetherStart, this.tetherEnd, this.head);
+  }
   private place(): void {
     const target = this.selected(), m = this.mounted();
     const unfold = target ? unfoldEase((this.time - this.unfoldStarted) / THEME.motion.duration) : 1;
@@ -552,15 +584,16 @@ export class LeanHud implements Hud {
     const controls = unfoldEase((this.time - this.controlsStarted) / THEME.motion.duration);
     this.controls.scale.y = Math.max(0.001, controls);
     const box = target && this.boxes.boxes.get(target.id);
-    this.tether.visible = !!box && this.card.visible;
     if (box) {
-      this.boxes.facingQuaternion(this.head, box.center, this.card.quaternion, box.facing);
-      this.right.set(1, 0, 0).applyQuaternion(this.card.quaternion);
-      this.card.position.copy(box.center).addScaledVector(this.right, box.w / 2 + THEME.card.gap + THEME.card.width / 2 * this.card.scale.x);
-      this.tether.position.copy(box.center).addScaledVector(this.right, box.w / 2 + THEME.card.gap / 2);
-      this.tether.quaternion.copy(this.card.quaternion);
-      this.tether.scale.set(THEME.card.gap, THEME.box.stroke, 1);
+      if (box.center.distanceTo(this.head) > THEME.card.maxTargetDistance || box.center.y - this.head.y > THEME.card.maxTargetHeight) this.dockCard(box.center);
+      else {
+        this.boxes.facingQuaternion(this.head, box.center, this.card.quaternion, box.facing);
+        this.right.set(1, 0, 0).applyQuaternion(this.card.quaternion);
+        this.card.position.copy(box.center).addScaledVector(this.right, box.w / 2 + THEME.card.gap + THEME.card.width / 2 * this.card.scale.x);
+      }
+      this.placeTether(box.id);
     } else {
+      this.tether.hide();
       if (m?.position) this.card.position.fromArray(m.position);
       else this.placeHeadPanel(this.card, THEME.panel.headY);
       this.face(this.card);
@@ -644,6 +677,7 @@ export class LeanHud implements Hud {
     (this.verdict.getObjectByName('verified-check') as Mesh).geometry.dispose();
     this.surfaces.dispose();
     this.reticles.dispose();
+    this.tether.dispose();
     for (const material of Object.values(this.materials)) material.dispose();
     this.trackGeometry.dispose(); this.root.removeFromParent();
   }

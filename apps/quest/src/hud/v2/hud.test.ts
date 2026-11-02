@@ -156,9 +156,68 @@ describe('Calm Glass HUD scene budget', () => {
     expect(card.position.x - THEME.card.width / 2).toBeCloseTo(edge);
     hud.dispose();
   });
+  it.each([
+    [0.4, 2.2, -3],
+    [0.3, 1.9, -0.6],
+    [0, 2.4, 0],
+    [0, -1, -2],
+  ] as [number, number, number][])('docks a distant or elevated target at arm’s length (%s, %s, %s)', (x, y, z) => {
+    const { hud, frame, pinch } = setup();
+    hud.upsertTarget({ ...target, position: [x, y, z] }); hud.setLocked(target.id);
+    hud.renderSpec(spec(), { targetId: target.id }); hud.update(frame(undefined, 200));
+    const card = hud.root.getObjectByName('device-card')!;
+    const head = new Vector3(0, 1.4, 0), offset = card.position.clone().sub(head);
+    expect(offset.length()).toBeCloseTo(THEME.card.dockDistance);
+    expect(Math.abs(Math.asin(offset.y / offset.length()))).toBeLessThanOrEqual(THEME.card.maxPitchDeg * Math.PI / 180 + 1e-6);
+    const normal = new Vector3(0, 0, 1).applyQuaternion(card.quaternion);
+    expect(normal.dot(offset.clone().normalize())).toBeCloseTo(-1);
+    expect(card.scale.toArray()).toEqual([1, 1, 1]);
+    const heading = hud.root.getObjectByName('device-name') as Object3D & { fontSize: number };
+    expect(heading.fontSize).toBe(THEME.font.title);
+    const button = hud.root.getObjectByName('control:action0')!;
+    expect(button.getWorldPosition(new Vector3()).distanceTo(head)).toBeLessThan(0.8);
+    const events: string[] = [];
+    hud.on('control', (event) => events.push(`${event.controlId}:${event.phase}`));
+    pinch(button);
+    expect(events).toEqual(['action0:start', 'action0:end']);
+    const tether = hud.root.getObjectByName('target-tether') as Mesh;
+    expect(tether.visible).toBe(true);
+    expect(tether.geometry.drawRange.count).toBe(6);
+    hud.removeTarget(target.id); hud.update(frame());
+    expect(tether.visible).toBe(false);
+    expect(tether.geometry.drawRange.count).toBe(0);
+    hud.dispose();
+  });
 });
 
 describe('Calm Glass HUD controls and details', () => {
+  it('retains armed lamp presets when a room spec arrives and emits the selected hack id', () => {
+    const { hud, frame, pinch } = setup();
+    hud.upsertTarget({ ...target, label: 'Ceiling light', position: [0.4, 2.2, -3] }); hud.setLocked(target.id);
+    const light: Gen3dSpec = { ...spec(false), controls: [
+      spec().controls[0]!,
+      { id: 'h_dim', kind: 'trigger', label: 'Dim room', binding: { action: 'dimmer' } },
+      { id: 'h_full', kind: 'trigger', label: 'Turn full on', binding: { action: 'full-on' } },
+      { id: 'h_off', kind: 'trigger', label: 'Lights out', binding: { action: 'off' } },
+      { id: 'h_night', kind: 'trigger', label: 'Low glow', binding: { action: 'night-light' } },
+    ] };
+    hud.renderSpec(light, { targetId: target.id });
+    expect(hud.root.getObjectByName('control:h_off')).toBeUndefined();
+    hud.setArmed(light.specId, true);
+    hud.renderSpec({ ...spec(false), specId: 'room_controls' }, {});
+    hud.showHackMenu('room', { title: 'Room', items: [{ id: 'blackout', label: 'Blackout', kind: 'action', status: 'ready' }] });
+    hud.update(frame(undefined, 200));
+    const buttons = ['h_full', 'h_off', 'h_night'].map((id) => hud.root.getObjectByName(`control:${id}`)!);
+    expect(buttons.every(Boolean)).toBe(true);
+    expect(buttons[0]!.position.x).toBeLessThan(buttons[1]!.position.x);
+    expect(buttons[1]!.position.x).toBeLessThan(buttons[2]!.position.x);
+    expect(hud.root.getObjectByName('control:h_dim')).toBeUndefined();
+    expect(hud.root.getObjectByName('action:blackout')).toBeUndefined();
+    const events: unknown[] = []; hud.on('control', (event) => events.push(event));
+    pinch(buttons[1]!);
+    expect(events).toContainEqual(expect.objectContaining({ specId: light.specId, controlId: 'h_off', value: true, phase: 'start' }));
+    hud.dispose();
+  });
   it('shows Verified only after physical verification and withdraws it for a failed or pending check', () => {
     const { hud, frame } = setup();
     hud.upsertTarget(target); hud.setLocked(target.id); hud.renderSpec(spec(), { targetId: target.id }); hud.update(frame(undefined, 200));
@@ -286,10 +345,9 @@ describe('Calm Glass HUD controls and details', () => {
     hud.setDeck({ open: true });
     expect(phases).toEqual(['press', 'release']); hud.dispose();
   });
-  it('keeps an overhead device card beside its box and ignores evidence for another device', () => {
+  it('ignores evidence for another device while an overhead card is docked', () => {
     const { hud, frame } = setup();
     hud.upsertTarget({ ...target, position: [0, 2.4, 0] }); hud.setLocked(target.id); hud.update(frame(undefined, 200));
-    expect(Math.abs(hud.root.getObjectByName('device-card')!.position.x)).toBeGreaterThan(THEME.card.width / 2);
     hud.showEvidence({ targetId: 'other', sent: 'on', expect: 'brighter', seen: 'no change', verdict: 'fail' });
     const card = hud.root.getObjectByName('device-card')!;
     expect(card.children.some((o) => 'text' in o && o.text === 'Learning this device…')).toBe(true); hud.dispose();

@@ -9,6 +9,42 @@ const head = new Vector3(0, 1.4, 0);
 const center = new Vector3(0, 1.4, -1);
 
 describe('Calm Glass target outlines', () => {
+  it('draws no idle slots and clears vacated outline vertices after tracks disappear', () => {
+    const capacity = 3, field = new BoxField(capacity);
+    const positions = field.geometry.getAttribute('position');
+    const colors = field.geometry.getAttribute('color');
+    expect(field.geometry.drawRange.count).toBe(0);
+    expect([...positions.array].every((value) => value === 0)).toBe(true);
+    field.update(0, head);
+    expect(field.geometry.drawRange.count).toBe(0);
+
+    field.set('first', center, 0.4, 0.2, THEME.color.line, true);
+    field.update(0, head);
+    const indicesPerBox = field.geometry.drawRange.count;
+    const floatsPerBox = positions.array.length / capacity;
+    field.set('second', new Vector3(1, 1.4, -1), 0.4, 0.2, THEME.color.line, true);
+    field.update(0, head);
+    expect(field.geometry.drawRange.count).toBe(indicesPerBox * 2);
+
+    field.remove('first'); field.update(0, head);
+    expect(field.geometry.drawRange.count).toBe(indicesPerBox);
+    expect([...positions.array.slice(floatsPerBox)].every((value) => value === 0)).toBe(true);
+    expect([...colors.array.slice(floatsPerBox)].every((value) => value === 0)).toBe(true);
+    for (let i = 0; i < indicesPerBox; i++) {
+      const vertex = field.geometry.index!.getX(i);
+      expect(positions.getX(vertex)).toBeGreaterThan(0.79);
+      expect(positions.getX(vertex)).toBeLessThan(1.21);
+    }
+
+    field.remove('second');
+    expect(field.geometry.drawRange.count).toBe(0);
+    expect([...positions.array].every((value) => value === 0)).toBe(true);
+    expect([...colors.array].every((value) => value === 0)).toBe(true);
+    field.update(0, head);
+    expect(field.geometry.drawRange.count).toBe(0);
+    field.dispose();
+  });
+
   it('renders a real 1.5 px stroke and promotes the active outline to 2 px accent', () => {
     const field = new BoxField();
     field.set('lamp', center, 0.4, 0.2, THEME.color.line, true);

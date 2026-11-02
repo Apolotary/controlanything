@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { TargetStore } from '../scan/targets';
 import { QuestApp } from './app';
 import type { ShellFrame, ShellHand } from './hud-contract';
+import type { UiSpecPayload } from '../io/v1';
+import { EXAMPLES } from '@ce/gen3d';
 
 function shell() {
   // Exercise the shell's real selection methods without constructing a browser, socket, or audio context.
@@ -147,5 +149,44 @@ describe('live box selection in the Quest shell', () => {
     expect(refine).not.toHaveBeenCalled();
     expect(app.lockedId).toBe(liveBox.id);
     expect(ws.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('device card association', () => {
+  it('binds a pending target once and preserves later same-card updates', () => {
+    const { app, target } = shell();
+    Reflect.set(app, 'pendingSelect', { targetId: target.id, at: Date.now() });
+    const resolve = Reflect.get(app, 'targetForCard') as (cardId: string) => typeof target | undefined;
+    expect(resolve.call(app, 'light')).toBe(target);
+    expect(target.cardId).toBe('light');
+    expect(resolve.call(app, 'room')).toBeUndefined();
+    expect(resolve.call(app, 'light')).toBe(target);
+    expect(target.cardId).toBe('light');
+  });
+
+  it('rejects a detection hint already associated with another card', () => {
+    const { app, target } = shell();
+    target.cardId = 'light';
+    const resolve = Reflect.get(app, 'targetForCard') as (cardId: string, hint: { frameId: string; detId: string }) => typeof target | undefined;
+    expect(resolve.call(app, 'room', { frameId: target.frameId, detId: target.detId })).toBeUndefined();
+    expect(target.cardId).toBe('light');
+  });
+
+  it('keeps a later room spec separate from the selected device controls', () => {
+    const { app, target, hud } = shell();
+    const renderSpec = vi.fn();
+    Object.assign(hud, { renderSpec, showHackMenu: vi.fn() });
+    Object.assign(app, {
+      pendingSelect: { targetId: target.id, at: Date.now() },
+      specByCard: new Map(), cardOfSpec: new Map(), uiSpecOfGen3d: new Map(), menuSpec: new Map(),
+    });
+    target.cardId = 'light';
+    const light = { ...EXAMPLES['ceiling-dimmer']!, specId: 'spec_light' };
+    const room = { ...light, specId: 'spec_room', state: { armed: false } };
+    const receive = Reflect.get(app, 'onUiSpec') as (payload: UiSpecPayload) => void;
+    receive.call(app, { cardId: 'light', specId: light.specId, gen3d: light });
+    receive.call(app, { cardId: 'room', specId: room.specId, gen3d: room });
+    expect(renderSpec.mock.calls).toEqual([[light, { targetId: target.id }], [room, {}]]);
+    expect(target.cardId).toBe('light');
   });
 });

@@ -36,6 +36,7 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
   private readonly colorScratch = new Color();
   private readonly activeColor = new Color(THEME.color.accent);
   private active: string | null = null;
+  private renderedBoxes = 0;
 
   constructor(private readonly max = THEME.box.max as number) {
     const geo = new BufferGeometry();
@@ -82,6 +83,7 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
     if (typeof objects[0] === 'string') {
       this.boxes.delete(objects[0]);
       if (this.active === objects[0]) this.active = null;
+      if (!this.boxes.size) this.setDrawCount(0);
     } else super.remove(...objects as import('three').Object3D[]);
     return this;
   }
@@ -98,9 +100,19 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
       b.color.lerp(b.tColor, mix);
       this.writeBox(index++, b, head);
     }
-    this.geometry.setDrawRange(0, index * INDICES);
+    this.setDrawCount(index);
     (this.geometry.getAttribute('position') as BufferAttribute).needsUpdate = true;
     (this.geometry.getAttribute('color') as BufferAttribute).needsUpdate = true;
+  }
+  private setDrawCount(count: number): void {
+    if (count < this.renderedBoxes) {
+      this.pos.fill(0, count * VERTICES * 3, this.renderedBoxes * VERTICES * 3);
+      this.col.fill(0, count * VERTICES * 3, this.renderedBoxes * VERTICES * 3);
+      (this.geometry.getAttribute('position') as BufferAttribute).needsUpdate = true;
+      (this.geometry.getAttribute('color') as BufferAttribute).needsUpdate = true;
+    }
+    this.renderedBoxes = count;
+    this.geometry.setDrawRange(0, count * INDICES);
   }
   setFacing(id: string, normal: [number, number, number] | undefined): void {
     const box = this.boxes.get(id);
