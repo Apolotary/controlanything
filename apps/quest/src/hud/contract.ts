@@ -24,7 +24,7 @@ export interface HandState {
   justReleased: boolean;
   pinchPoint: Vector3;
   ray: { origin: Vector3; dir: Vector3 };
-  /** non-dominant palm facing the user (spawns the deck) */
+  /** Palm facing the head; the HUD uses its dwell to reveal the hand menu. */
   palmUp?: boolean;
   palmUpMs?: number;
   /** true when this "hand" is really a controller */
@@ -38,6 +38,8 @@ export interface HudFrame {
   refSpace?: XRReferenceSpace;
   head: { position: Vector3; quaternion: Quaternion; ray?: { origin: Vector3; dir: Vector3 } };
   hands: { left?: HandState; right?: HandState };
+  /** 'mouse' while the desktop emulator's mouse drives input: hand-anchored UI uses its fallback. */
+  pointer?: 'mouse';
 }
 
 /** A detection the shell has placed in the world (capture pose + hit-test, pinch-to-refine). */

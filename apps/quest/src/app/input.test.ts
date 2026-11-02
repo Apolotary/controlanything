@@ -593,7 +593,7 @@ describe('InputSampler session lifetime', () => {
 });
 
 describe('InputSampler palm orientation', () => {
-  it.each(['left', 'right'] as const)('uses the wrist -Y axis for %s palm-up and starts dwell at timestamp zero', (hand) => {
+  it.each(['left', 'right'] as const)('uses the wrist -Y axis facing the head for the %s palm and starts dwell at zero', (hand) => {
     const f = fixture(hand);
     f.state.wrist.setFromAxisAngle(new Vector3(1, 0, 0), Math.PI);
     expect(f.sample(0)).toMatchObject({ palmUp: true, palmUpMs: 0 });
@@ -612,5 +612,18 @@ describe('InputSampler palm orientation', () => {
     const f = fixture();
     f.state.wrist.setFromAxisAngle(new Vector3(1, 0, 0), Math.PI / 2);
     expect(f.sample(0)).toMatchObject({ palmUp: false, palmUpMs: 0 });
+  });
+
+  it('opens with a palm facing the head at eye level, and rejects world-up at that height', () => {
+    const f = fixture();
+    f.getJointPose.mockImplementation((joint) => joint.jointName === 'wrist'
+      ? pose(0, 1.6, -0.4, f.state.wrist) : pose(0, 1.6, -0.45));
+    f.state.wrist.setFromAxisAngle(new Vector3(1, 0, 0), Math.PI);
+    expect(f.sample(0)?.palmUp).toBe(false);
+    f.state.wrist.setFromAxisAngle(new Vector3(1, 0, 0), -Math.PI / 2);
+    expect(f.sample(100)).toMatchObject({ palmUp: true, palmUpMs: 0 });
+    expect(f.sample(400)).toMatchObject({ palmUp: true, palmUpMs: 300 });
+    f.state.wrist.setFromAxisAngle(new Vector3(1, 0, 0), Math.PI / 2);
+    expect(f.sample(500)?.palmUp).toBe(false);
   });
 });

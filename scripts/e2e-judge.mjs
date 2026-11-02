@@ -210,6 +210,29 @@ async function target() {
   return result;
 }
 
+async function assertDockIcons(mode, canStop = false) {
+  const state = await quest.evaluate(() => {
+    const { hud } = window.__ce;
+    const dock = hud.root.getObjectByName('hand-dock');
+    if (!dock) throw new Error('Hand dock is missing');
+    const icons = [];
+    dock.traverse((node) => {
+      if (!/^(mode-(annotate|control)|filter:(everything|lights|electronics)|deck:panic)$/.test(node.name)) return;
+      for (let current = node; current; current = current.parent) if (!current.visible) return;
+      icons.push(node.name);
+    });
+    return { icons: icons.sort(), anchor: dock.userData.anchor,
+      oldBar: !!hud.root.getObjectByName('home-bar'), oldHint: !!hud.root.getObjectByName('home-hint'),
+      close: !!hud.root.getObjectByName('deck-close') };
+  });
+  const expected = ['mode-annotate', 'mode-control'];
+  if (mode === 'annotate') expected.push('filter:everything', 'filter:lights', 'filter:electronics');
+  if (canStop) expected.push('deck:panic');
+  assert.deepEqual(state.icons, expected.sort(), `${mode} dock must expose only its available actions`);
+  assert.equal(state.anchor, 'fallback', 'Controller and mouse input must use the fallback dock');
+  assert.equal(state.oldBar || state.oldHint || state.close, false, 'The old bar, permanent hint, and Close button must be removed');
+}
+
 async function run() {
   await mkdir(SCREENS, { recursive: true });
   await phase('00-server', startServer, false);
@@ -267,6 +290,7 @@ async function run() {
       && window.__ce.targets.list().some((t) => /ceiling (light|lamp)/i.test(t.label)));
     assert(await quest.evaluate(() => window.__judgeRequests.some((e) => e.type === 'mode.set' && e.payload.mode === 'annotate')),
       'Entering AR explicitly starts in Annotate');
+    await assertDockIcons('annotate');
     targetId = await quest.evaluate(() => window.__ce.targets.list().find((t) => /ceiling (light|lamp)/i.test(t.label)).id);
     // Where the head looks while tagging: the FIXTURE verify outline is the tag frame's box, so verify must see the same view.
     tagGaze = await quest.evaluate(() => {
@@ -297,6 +321,7 @@ async function run() {
     await pinch({ nodeName: 'mode-control', turn: true });
     await waitQuest(() => window.__ce.modes.mode === 'control' && !window.__ce.scanner.active);
     await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'setup', cardId);
+    await assertDockIcons('control');
     assert.equal(await quest.evaluate(() => window.__judgeRequests.some((e) => e.type === 'control.setup')), false,
       'Switching mode alone must not start setup');
   });
@@ -337,6 +362,7 @@ async function run() {
     await waitQuest((id) => window.__judgeEvents.some((e) => e.type === 'arm.result' && e.payload.cardId === id && e.payload.armed)
       && [...window.__ce.hud.specs.values()].some((m) => m.targetId === window.__ce.lockedId && m.armed), cardId);
     assert.equal((await target()).armed, true);
+    await assertDockIcons('control', true);
   });
   await phase('11-control-changes-light', async () => {
     await sim.waitForFunction(() => window.ceSim.lamp().power === 'on' && window.ceSimDebug.device.animator.settled);
