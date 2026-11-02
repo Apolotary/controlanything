@@ -59,6 +59,7 @@ export interface HudTarget {
   identifying?: boolean;
   busy?: boolean;
   connection?: DeviceConnection;
+  locating?: boolean;
   subtitle?: string;
   status: HudStatus;
   channel?: Channel;
@@ -121,7 +122,9 @@ export interface EvidenceState {
 
 export interface ConfirmRequest {
   id: string;
-  kind?: 'arm';
+  kind?: 'arm' | 'forget' | 'place';
+  primaryLabel?: string;
+  cancelLabel?: string;
   title: string;
   summary?: string;
   hold?: boolean;
@@ -137,6 +140,7 @@ export interface HudEvents {
   mode: { mode: AppMode };
   filter: { filter: ObjectFilter };
   tagRemove: { targetId: string };
+  forget: { targetId: string };
   setup: { targetId: string };
   cancel: { targetId: string };
   pair: { targetId: string };

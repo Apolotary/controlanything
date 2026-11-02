@@ -28,6 +28,8 @@ export interface Target {
   channel?: Channel;
   deviceId?: string;
   cardId?: string;
+  /** Persistent anchor tracking can temporarily lose its pose without losing the saved device. */
+  locating?: boolean;
   /** The latest detection that produced or updated it (included in tag.add). */
   frameId: string;
   detId: string;
@@ -59,6 +61,7 @@ const EMA = 0.35;
 export class TargetStore {
   readonly targets = new Map<string, Target>();
   private nextId = 1;
+  private readonly sessionId = globalThis.crypto.randomUUID();
 
   get(id: string): Target | undefined {
     return this.targets.get(id);
@@ -107,7 +110,7 @@ export class TargetStore {
       return { target: t, created: false };
     }
     const t: Target = {
-      id: `tgt${this.nextId++}`,
+      id: `tgt:${this.sessionId}:${this.nextId++}`,
       label: det.label,
       prompt: det.prompt ?? det.label,
       score: det.score,
@@ -148,6 +151,17 @@ export class TargetStore {
     return this.targets.delete(id);
   }
 
+  /** Adopt a fresh observation under the saved chip's stable id; no previous-session pose participates. */
+  reattach(targetId: string, fresh: Target, cardId: string): Target {
+    this.targets.delete(fresh.id);
+    fresh.id = targetId;
+    fresh.cardId = cardId;
+    fresh.method = 'reassociated';
+    fresh.locating = false;
+    this.targets.set(targetId, fresh);
+    return fresh;
+  }
+
   /** A new scan starts: drop everything the user has not locked, linked or controlled. Returns removed ids. */
   clearTransient(keep: (t: Target) => boolean): string[] {
     const removed: string[] = [];
@@ -163,6 +177,8 @@ export class TargetStore {
     let best: Target | undefined;
     let bestD = Infinity;
     for (const t of this.targets.values()) {
+      if (det.cardId && t.cardId === det.cardId) return t;
+      if (det.cardId && t.cardId && t.cardId !== det.cardId) continue;
       if (det.deviceId && t.deviceId === det.deviceId) return t;
       const d = t.position.distanceTo(pl.position);
       const size = Math.max(...t.sizeM, ...pl.sizeM, 0.1);
@@ -191,6 +207,7 @@ export function toHudTarget(t: Target): HudTarget {
     sizeM: t.sizeM,
     facing: v(t.facing),
     score: Math.round(t.score * 100) / 100,
+    locating: t.locating,
   };
   if (t.subtitle) out.subtitle = t.subtitle;
   if (t.channel) out.channel = t.channel;

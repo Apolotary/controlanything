@@ -12,6 +12,7 @@
  * This script needs sockets and Chrome and cannot run in the coding sandbox.
  */
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
@@ -34,8 +35,8 @@ let currentPhase = '00-server';
 const browserLog = [];
 const abort = new AbortController();
 
-async function json(path) {
-  const response = await fetch(`${BASE}${path}`, { signal: AbortSignal.timeout(3000) });
+async function json(path, token) {
+  const response = await fetch(`${BASE}${path}`, { ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}), signal: AbortSignal.timeout(3000) });
   assert(response.ok, `${path}: HTTP ${response.status}`);
   return response.json();
 }
@@ -1069,18 +1070,58 @@ async function run() {
 
   // Recovery is last: reload intentionally ends XR, and restarting discards transient setup work.
   const storedIdentity = (page) => page.evaluate(() => localStorage.getItem('ce.device'));
-  let macIdentity, questIdentity, spaceId, pairedDevices;
+  let macIdentity, questIdentity, spaceId, pairedDevices, savedSpecHash, savedSkinHash, savedSpecId, savedVersionId;
+  let recoverySetups = 0;
+  const canonical = (value) => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
+    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)])) : value;
+  const digest = (value) => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(canonical(value))).digest('hex');
+  const skinHash = async (spec) => {
+    if (!spec.gen3d?.skin?.url) return undefined;
+    const response = await fetch(new URL(spec.gen3d.skin.url, BASE));
+    assert(response.ok, 'A saved skin URL must still serve its image');
+    return digest(Buffer.from(await response.arrayBuffer()));
+  };
+  const savedLibraryDevice = async () => {
+    const token = JSON.parse(questIdentity).deviceToken;
+    return (await json('/api/library', token)).devices.find((device) => device.cardId === cardId);
+  };
+  const assertSavedSetup = async () => {
+    const device = await savedLibraryDevice();
+    assert.equal(device?.connection, 'ready', 'Saved light must be Ready as soon as its paired bridge reconnects');
+    assert.equal(device.activeVersionId, savedVersionId, 'Restoration must not create a new setup version');
+    const spec = await json(`/api/gen3d/specs/${encodeURIComponent(savedSpecId)}`);
+    assert.equal(digest(spec), savedSpecHash, 'Restoration must return the identical interface spec');
+    assert.equal(await skinHash(spec), savedSkinHash, 'Restoration must return identical skin bytes');
+    assert.equal(recoverySetups, 0, 'Reload and restart must never request setup automatically');
+  };
   let newPairRequests = 0;
   const watchPairing = (request) => {
     if (new URL(request.url()).pathname === '/api/pair/start') newPairRequests++;
   };
   await phase('18-companion-reload', async () => {
+    // Phase 16 deliberately stopped controls. Explicitly enable the saved setup before testing recovery.
+    if (await quest.evaluate(() => window.__ce.modes.mode !== 'control')) await pinch({ nodeName: 'mode-control', turn: true });
+    await pinch({ targetId, turn: true });
+    await pinch({ nodeName: 'control-setup' });
+    await waitQuest(() => window.__ce.pendingArm && window.__ce.hud.confirm);
+    await pinch({ nodeName: 'confirm-yes' });
+    await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'ready' && window.__ce.armedCards.has(id), cardId);
+    savedSpecId = (await target()).specId;
+    const savedSpec = await json(`/api/gen3d/specs/${encodeURIComponent(savedSpecId)}`);
+    savedSpecHash = digest(savedSpec);
+    savedSkinHash = await skinHash(savedSpec);
+    // Observe every socket across page reloads, including messages sent before app hydration completes.
+    quest.on('websocket', (socket) => socket.on('framesent', ({ payload }) => {
+      const message = JSON.parse(String(payload));
+      if (['control.setup', 'target.retry', 'gen3d.generate'].includes(message.type)) recoverySetups++;
+    }));
     companion.on('request', watchPairing);
     quest.on('request', watchPairing);
     macIdentity = await storedIdentity(companion);
     questIdentity = await storedIdentity(quest);
     assert(macIdentity && questIdentity && macIdentity !== questIdentity, 'Mac and Quest must have separate saved identities');
     ({ space: { spaceId, pairedDevices } } = await json('/api/health'));
+    savedVersionId = (await savedLibraryDevice()).activeVersionId;
     await companion.evaluate(() => window.__flowsMidi.connect(true));
     await companion.reload({ waitUntil: 'domcontentloaded' });
     await companion.waitForFunction(() => document.querySelector('#conn-dot')?.classList.contains('on')
@@ -1096,6 +1137,7 @@ async function run() {
     assert.equal(await companion.locator('#self-qr').isVisible(), false, 'A paired helper must not show a new QR');
     assert.equal(await companion.locator('#paired-summary').isVisible(), true);
     await companionScreenshot('18-companion-pair-revisited');
+    await assertSavedSetup();
   }, false);
   await phase('19-quest-reload', async () => {
     await quest.reload({ waitUntil: 'domcontentloaded' });
@@ -1104,8 +1146,15 @@ async function run() {
     assert.equal(newPairRequests, 0, 'Quest reload must not begin another pairing');
     await companion.waitForFunction(() => document.querySelector('#headset-status')?.textContent.includes('Connected to Quest'));
     await companionScreenshot('19-companion-quest-reloaded');
+    await assertSavedSetup();
   }, false);
   await phase('20-server-restart', async () => {
+    // Keep the camera quiet across reconnect to isolate restoration from optional annotation scanning.
+    await quest.evaluate(() => {
+      const scanner = window.__ce.scanner;
+      window.__flowsScannerTick = scanner.tick;
+      scanner.stop(); scanner.tick = () => {};
+    });
     await stopServer();
     await startServer();
     await waitQuest(() => window.__ce?.ws.open && window.__ce.welcome);
@@ -1118,6 +1167,40 @@ async function run() {
     assert(await storedIdentity(companion) === macIdentity && await storedIdentity(quest) === questIdentity,
       'Server restart must retain the saved Mac and Quest identities');
     assert.equal(newPairRequests, 0, 'Recovering after a server restart must not begin another pairing');
+    await sim.waitForFunction(() => window.ceSimDebug?.device.conn?.open
+      && document.querySelector('#b-conn')?.textContent.includes('ONLINE'));
+    await until('saved light bridge is online after restart', async () => (await savedLibraryDevice())?.connection === 'ready');
+    await assertSavedSetup();
+    assert.equal((await json('/api/muse/calls')).totals.calls, 0, 'Restart restoration must make zero model calls');
+    assert.equal((await json('/api/agent/exec')).sent.length, 0, 'Restart restoration must send zero physical commands');
+    await quest.evaluate(() => { window.__ce.scanner.tick = window.__flowsScannerTick; delete window.__flowsScannerTick; });
+    await quest.locator('#btn-enter').click();
+    await waitQuest(() => window.__ce.renderer.xr.isPresenting && window.__ce.cameraState === 'on');
+    await yaw(0);
+    // The emulator has no persistent anchors. A fresh fixture detection must place the saved card.
+    await waitQuest((id) => {
+      const app = window.__ce, target = app.targets.byCard(id);
+      return app.roomAnchors.states.get(id) === 'located' && target?.method === 'reassociated'
+        && app.visibleTargets.has(target.id);
+    }, cardId);
+    const chip = await quest.evaluate((id) => {
+      const app = window.__ce, target = app.targets.byCard(id);
+      return { cardId: target.cardId, frameId: target.frameId, position: target.position.toArray(),
+        shown: app.observed.get(target.id)?.target.position };
+    }, cardId);
+    assert.equal(chip.cardId, cardId, 'Fresh placement must reuse the saved card identity');
+    assert(chip.frameId, 'Fallback placement must come from a new detection');
+    assert(chip.shown && chip.shown.every((coordinate, axis) => Math.abs(coordinate - chip.position[axis]) <= 0.001),
+      'The saved chip must be drawn at its freshly observed place (millimetre display precision)');
+    await pinch({ nodeName: 'mode-control', turn: true });
+    await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'ready', cardId);
+    await assertSavedSetup();
+    assert((await json('/api/muse/calls')).calls.every((call) => call.format === 'segmentation'),
+      'Only the explicit fallback scan may run; restoring controls must not identify, research or generate again');
+    assert.equal((await json('/api/agent/exec')).sent.length, 0, 'Rendering restored controls must not send physical commands');
+    await screenshot('20-saved-light-ready');
+    await quest.evaluate(() => window.__ce.renderer.xr.getSession().end());
+    await waitQuest(() => !window.__ce.renderer.xr.isPresenting);
     await companionScreenshot('20-companion-server-restarted');
   }, false);
   await phase('21-exit-ar-hold', async () => {

@@ -10,6 +10,7 @@ import type { Hud, ShellFrame } from './hud-contract';
 import { InputSampler } from './input';
 import { ModeState } from './modes';
 import { PinchTargetHistory } from './precision';
+import { RoomAnchors } from '../anchors/room';
 
 async function setup() {
   // Use the real HUD wiring and render-frame ordering, without opening media, WebGL, or a socket.
@@ -56,6 +57,7 @@ async function setup() {
   const recorder = { input: vi.fn(), pose: vi.fn() };
   const lock = vi.fn(), send = vi.fn<(type: string, payload: unknown, routing?: unknown) => void>();
   Object.assign(app, {
+    roomAnchors: new RoomAnchors({ save: vi.fn(), locate: vi.fn() }),
     modes: new ModeState(), filter: 'electronics', observed: new Map(), visibleTargets: new Set(), armedCards: new Set(),
     lastAnnotationsAt: 0, controls: { clear: vi.fn() }, ws: { send },
     params: new URLSearchParams('hud=v2'), scene: new Scene(), desktopCam: camera,

@@ -5,6 +5,7 @@ import type { ShellFrame, ShellHand } from './hud-contract';
 import { InputSampler } from './input';
 import { ModeState } from './modes';
 import { PinchTargetHistory } from './precision';
+import { RoomAnchors } from '../anchors/room';
 
 function hand(overrides: Partial<ShellHand> = {}): ShellHand {
   return {
@@ -42,6 +43,7 @@ function appHarness(targets: ReturnType<typeof target>[] = []) {
   const hud = { setCandidate: vi.fn(), upsertTarget: vi.fn(), update: vi.fn(), setDeck: vi.fn() };
   const visibleTargets = new Set(targetMap.keys());
   Object.assign(app, {
+    roomAnchors: new RoomAnchors({ save: vi.fn(), locate: vi.fn() }),
     input, handFeedback: { setHover, update: vi.fn() },
     targets: { targets: targetMap, get: (id: string) => targetMap.get(id), refine },
     candidate: { id: null, since: 0, shown: null }, consumed: { left: false, right: false },
