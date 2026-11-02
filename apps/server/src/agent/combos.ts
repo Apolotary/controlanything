@@ -242,7 +242,7 @@ export class ComboRunner {
       this.d.targets.setState(room, 'controlling', hack.name);
       const camera = pickSensor(this.d.roster, 'camera');
       const mic = pickSensor(this.d.roster, 'mic');
-      const vdeps: VerifyDeps = { dispatcher: this.d.dispatcher, sam: this.d.sam, heard: this.d.heard, silentSpeech: this.d.silentSpeech, log: this.d.log, settleMs: () => 1200 };
+      const vdeps: VerifyDeps = { dispatcher: this.d.dispatcher, sam: this.d.sam, heard: this.d.heard, silentSpeech: this.d.silentSpeech, log: this.d.log, settleMs: (_t, a) => (a.encode.kind === 'ir' ? 1800 : 350) }; // the lamp's fade is 1.2 s: let it finish before the 'after' frame
       for (const cmd of hack.commands) {
         const t = cmd.cardId ? this.d.targets.get(cmd.cardId) : undefined;
         const name = t?.card?.name ?? cmd.cardId ?? '?';

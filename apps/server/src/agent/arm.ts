@@ -85,7 +85,7 @@ export class ArmService {
       return false;
     }
     const { target } = pend;
-    const driverId = target.driver?.driverId ?? '';
+    const driverId = target.driver?.driverId ?? 'room'; // a room combo has no driver; the protocol wants a non-empty id
     let r: ArmResultPayload;
     if (!p.approve) r = { armId: p.armId, cardId: target.cardId, driverId, armed: false, by: by.name ?? by.deviceId, reason: 'declined' };
     else if (pend.irreversible && !p.hold) r = { armId: p.armId, cardId: target.cardId, driverId, armed: false, by: by.name ?? by.deviceId, reason: 'this driver has an irreversible action: pinch and hold to arm' };
