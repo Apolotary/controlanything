@@ -107,7 +107,9 @@ describe('HandFeedback', () => {
     feedback.update(frame(250), diagnostics, 21);
     expect(fillText).toHaveBeenCalledTimes(10);
     expect(fillText.mock.calls[5]?.[0]).toBe('Hands   FPS 8.0   calls 21');
-    expect(plate.position.toArray()).toEqual([0, 1.26, -0.9]);
+    expect(plate.position.x).toBe(0);
+    expect(plate.position.y).toBeCloseTo(1.18);
+    expect(plate.position.z).toBe(-0.9);
     feedback.dispose();
     expect(geometryDispose).toHaveBeenCalledOnce();
     expect(materialDispose).toHaveBeenCalledOnce();

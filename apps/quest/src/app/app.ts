@@ -12,10 +12,13 @@
  *   replay=<url>       a take (session.jsonl or .zip); replayMode=playback|pipeline
  *   record=1           start recording at load
  *   mic=0              never open the microphone (no AudioContext at all)
- *   hud=debug          force the shell's debug HUD
- *   debug=1            show hand tracking and rendering diagnostics in the headset
+ *   hud=v2|v1|debug    compact HUD (default), original HUD, or shell debug HUD
  *   dominant=left      left-handed: the deck opens over the RIGHT palm
  *   ws=<url>           WebSocket override
+ *   yolo=0|1           live boxes from the on-device YOLOX-nano detector while scanning (default 1)
+ *   yoloep=webgpu|wasm force the detector's execution provider (default: WebGPU when available)
+ *   track=<category>   initial live-box category: everything|electronics|instruments|lights|remotes
+ *   debug=1            in-headset hand tracking, rendering and detector diagnostics
  */
 import type { Channel, ControlEvent, HackItem, HudStatus, ModelChip } from '@ce/gen3d';
 import type { AgentStepPayload, PayloadOf, TargetState } from '@ce/protocol';
@@ -41,7 +44,7 @@ import { PairingFlow } from '../pair/self';
 import { type ReplayMode, ReplayCamera, TakePlayer } from '../replay/player';
 import { Recorder } from '../replay/recorder';
 import { loadTake, type Take } from '../replay/take';
-import { type AimTarget, aimAt, touching } from '../scan/aim';
+import { type AimHit, type AimTarget, aimAt, touching } from '../scan/aim';
 import { type CameraSource, CameraError, LiveCamera } from '../scan/camera';
 import { FrameCapture } from '../scan/capture';
 import { JpegEncoder } from '../scan/encode';
@@ -54,18 +57,25 @@ import { cameraPoseFromHead, questIntrinsics, worldToPixel } from '../scan/proje
 import { Scanner } from '../scan/scanner';
 import { SyntheticCamera, VirtualRoom } from '../scan/synthetic';
 import { type Target, TargetStore, toHudTarget } from '../scan/targets';
+import { CATEGORIES, type Category, isCategory } from '../scan/yolo/classes';
+import { categoryFromControl, CHIPS_SPEC_ID, chipsSpec } from '../scan/yolo/chips';
+import { isLiveId, LiveDetector } from '../scan/yolo/live';
+import { LiveReadout } from '../scan/yolo/readout';
 import { Mic } from '../voice/mic';
 import { PushToTalk } from '../voice/ptt';
 import { ControlSender } from './controls';
 import { type Emulator, installEmulator } from './emulator';
 import { HandFeedback } from './hand-feedback';
 import type { Handedness, Hud, ShellFrame } from './hud-contract';
-import { loadHud } from './hud-loader';
+import { type HudKind, loadHud } from './hud-loader';
 import { handJointPositions, InputSampler } from './input';
 import { Page } from './page';
 import { frameReferenceSpace, startXr, xrSupport } from './xr';
 
 export const APP_VERSION = 'quest@0.1.0';
+const GAZE_AIM = { marginDeg: 3 };
+const HAND_AIM = { marginDeg: 2, minDist: 0.3 };
+const HANDS = ['left', 'right'] as const;
 
 const TARGET_STATES: Record<TargetState, { status: HudStatus; sub: string }> = {
   scanned: { status: 'scanned', sub: 'unverified' },
@@ -129,7 +139,7 @@ export class QuestApp {
   readonly mic = new Mic();
   renderer!: WebGLRenderer;
   hud!: Hud;
-  hudKind: 'gen3d' | 'debug' = 'debug';
+  hudKind: HudKind = 'debug';
   camera!: CameraSource;
   capture!: FrameCapture;
   scanner!: Scanner;
@@ -139,6 +149,10 @@ export class QuestApp {
   ptt!: PushToTalk;
   controls!: ControlSender;
   emulator?: Emulator;
+  /** live boxes (on-device YOLOX-nano): responsiveness only; SAM 3.1 stays the source of truth */
+  live?: LiveDetector;
+  private readout?: LiveReadout;
+  private chipsShown = false;
   room?: VirtualRoom;
   fixture?: SamFixture;
   player?: TakePlayer;
@@ -188,6 +202,10 @@ export class QuestApp {
     }
     await this.setupCamera();
     await this.setupHud();
+    if (this.live && this.params.get('debug') === '1') {
+      this.readout = new LiveReadout();
+      this.scene.add(this.readout);
+    }
     this.setupIo();
     this.setupUi();
     this.renderer.setAnimationLoop((t, f) => this.frame(t, f));
@@ -264,6 +282,11 @@ export class QuestApp {
     const headPose = () => (this.lastFrame ? { position: this.lastFrame.head.position, quaternion: this.lastFrame.head.quaternion } : null);
     if (want === 'photo' || want === 'sim') {
       const src = want === 'sim' ? { kind: 'sim' as const, url: this.params.get('sim') ?? '/sim/?embed=room' } : { kind: 'photo' as const, url: this.params.get('photo') ?? `${import.meta.env.BASE_URL}test/scan-scene.jpg` };
+      if (src.kind === 'sim' && this.params.get('mute') === '1') {
+        const url = new URL(src.url, location.href);
+        url.searchParams.set('mute', '1');
+        src.url = url.href;
+      }
       this.room = new VirtualRoom(src);
       this.room.ready
         .then(() => this.page.log(`virtual room: ${this.room!.label} (${this.room!.widthM.toFixed(2)} × ${this.room!.heightM.toFixed(2)} m)`, 'ok'))
@@ -323,6 +346,84 @@ export class QuestApp {
       this.hud.setDeck({ scanning: on });
       this.recorder.input('scan', { on });
     });
+    this.setupLive();
+  }
+
+  private setupLive(): void {
+    if (this.params.get('yolo') === '0') {
+      this.page.log('live boxes off (?yolo=0): SAM 3.1 scan only');
+      return;
+    }
+    const ep = this.params.get('yoloep');
+    const live = new LiveDetector({
+      camera: () => this.camera,
+      poses: this.poses,
+      hud: () => this.hud,
+      samTargets: () => this.targets.list(),
+      depth: () => this.depthProviders(),
+      handJoints: () => handJointPositions(this.lastFrame),
+      log: (m, l) => this.page.log(m, l),
+      modelUrl: `${import.meta.env.BASE_URL}models/yolox_nano.onnx`,
+      ep: ep === 'wasm' || ep === 'webgpu' ? ep : 'auto',
+      onPickClaimed: (id) => {
+        if (isLiveId(this.lockedId)) this.lock(id, 'live box');
+      },
+    });
+    const track = this.params.get('track');
+    if (isCategory(track)) live.category = track;
+    this.live = live;
+    this.scanner.on('state', ({ on }) => {
+      if (on) {
+        live.start();
+        this.showChips();
+      } else {
+        if (isLiveId(this.lockedId)) this.release();
+        live.stop();
+        this.hideChips();
+      }
+    });
+    // The SAM target takes over the selected live box as soon as it covers the same object.
+    this.scanner.on('result', () => live.onSamTargets());
+    // load the model while the user is still on the 2D page, so the first scan has boxes at once
+    setTimeout(() => void live.load().catch(() => undefined), 1500);
+  }
+
+  private showChips(): void {
+    if (!this.live || this.hudKind === 'v2') return;
+    const note = this.live.category === 'lights' ? 'lights: SAM scan only' : undefined;
+    this.hud.renderSpec(chipsSpec(this.live.category, note), {});
+    this.chipsShown = true;
+  }
+
+  private hideChips(): void {
+    if (!this.chipsShown) return;
+    this.hud.removeSpec(CHIPS_SPEC_ID);
+    this.chipsShown = false;
+  }
+
+  setLiveCategory(c: Category): void {
+    if (!this.live) return;
+    if (isLiveId(this.lockedId) && this.live.category !== c) this.release();
+    this.live.setCategory(c);
+    if (this.chipsShown) this.showChips();
+    this.hud.toast(`Tracking ${CATEGORIES.find((x) => x.id === c)?.label.toLowerCase() ?? c}`);
+    this.recorder.input('track', { category: c });
+  }
+
+  /** `y` key: live boxes on/off for this scan session. */
+  toggleLive(): void {
+    const l = this.live;
+    if (!l) return;
+    if (l.running) {
+      if (isLiveId(this.lockedId)) this.release();
+      l.stop();
+      this.hideChips();
+      this.page.log('live boxes paused');
+    } else if (this.scanner.active) {
+      l.start();
+      this.showChips();
+      this.page.log('live boxes on');
+    } else this.page.log('live boxes start with the next scan (s)');
   }
 
   private depthProviders(): DepthProvider[] {
@@ -338,7 +439,7 @@ export class QuestApp {
     this.hudKind = kind;
     this.scene.add(hud.root);
     if (error) this.page.log(error, 'warn');
-    this.page.log(`HUD: ${kind === 'gen3d' ? 'gen3d renderer' : 'shell debug HUD'}`);
+    this.page.log(`HUD: ${kind === 'v2' ? 'compact v2' : kind === 'gen3d' ? 'original renderer (v1)' : 'shell debug HUD'}`);
     hud.on('consumed', (e) => {
       // the desktop mouse is the right hand (gen3d reports its dev cursor as 'mouse')
       const hand = e.hand === 'mouse' ? 'right' : e.hand;
@@ -479,7 +580,7 @@ export class QuestApp {
     ws.on('panic', (m) => {
       const p = m.payload as PayloadOf<'panic'>;
       this.hud.toast(`STOP ALL${p.reason ? ` · ${p.reason}` : ''}`, 'warn');
-      for (const specId of this.specByCard.values()) this.hud.setArmed(specId, false, 'stopped');
+      for (const specId of this.specByCard.values()) this.hud.setArmed(this.gen3dIdFor(specId), false, 'stopped');
     });
     ws.on('control.event', (m) => {
       // another client moved a control: mirror it without re-emitting
@@ -771,6 +872,12 @@ export class QuestApp {
   }
 
   private onControl(e: ControlEvent): void {
+    // the live-box category chips are a local spec: they filter boxes and never reach the server
+    if (e.specId === CHIPS_SPEC_ID) {
+      const c = categoryFromControl(e.controlId);
+      if (c && e.phase === 'start') this.setLiveCategory(c);
+      return;
+    }
     // only controls of specs the server sent drive devices; HUD-internal objects (hack menus, deck) never do
     const ui = this.uiSpecOfGen3d.get(e.specId);
     if (!ui) return;
@@ -799,18 +906,41 @@ export class QuestApp {
 
   // --- targeting -----------------------------------------------------------------------------------
 
+  private readonly aimTargets = new Map<string, AimTarget>();
+  private readonly aimBuffer: AimTarget[] = [];
+  private readonly gazeHit: AimHit = { id: '', angleDeg: 0, distance: 0 };
+  private readonly handHit: AimHit = { id: '', angleDeg: 0, distance: 0 };
+  private readonly touchHit: AimHit = { id: '', angleDeg: 0, distance: 0 };
+
   private aimList(): AimTarget[] {
-    return this.targets.list().map((t) => ({ id: t.id, position: t.position, size: Math.max(0.06, ...t.sizeM.slice(0, 2)) }));
+    const list = this.aimBuffer;
+    list.length = 0;
+    for (const t of this.targets.targets.values()) {
+      let aim = this.aimTargets.get(t.id);
+      if (!aim) {
+        aim = { id: t.id, position: t.position, size: 0 };
+        this.aimTargets.set(t.id, aim);
+      }
+      aim.size = Math.max(0.06, t.sizeM[0], t.sizeM[1]);
+      list.push(aim);
+    }
+    for (const id of this.aimTargets.keys()) if (!this.targets.get(id)) this.aimTargets.delete(id);
+    this.live?.appendAimables(list);
+    return list;
   }
 
   private interact(f: ShellFrame, time: number): void {
     const list = this.aimList();
     this.handFeedback.setHover('left');
     this.handFeedback.setHover('right');
-    if (!list.length) return;
+    if (!list.length) {
+      this.candidate.id = this.candidate.shown = null;
+      this.hud.setCandidate(null);
+      return;
+    }
     const mouse = this.input.mouseAsHand && this.input.pointer.inside ? f.hands.right : undefined;
     const gaze = mouse?.ray ?? f.head.ray;
-    const aim = aimAt(gaze.origin, gaze.dir, list, { marginDeg: 3 });
+    const aim = aimAt(gaze.origin, gaze.dir, list, GAZE_AIM, this.gazeHit);
     const id = aim?.id ?? null;
     if (id !== this.candidate.id) {
       this.candidate.id = id;
@@ -821,17 +951,17 @@ export class QuestApp {
       this.candidate.shown = show;
       this.hud.setCandidate(show);
     }
-    for (const hand of ['left', 'right'] as const) {
+    for (const hand of HANDS) {
       const h = f.hands[hand];
       if (!h || this.consumed[hand]) continue;
-      const handAim = h.ray.dir.lengthSq() > 0.5 ? aimAt(h.ray.origin, h.ray.dir, list, { marginDeg: 2, minDist: 0.3 }) : null;
-      if (handAim) this.handFeedback.setHover(hand, this.targets.get(handAim.id));
+      const handAim = h.ray.dir.lengthSq() > 0.5 ? aimAt(h.ray.origin, h.ray.dir, list, HAND_AIM, this.handHit) : null;
+      if (handAim) this.handFeedback.setHover(hand, this.targets.get(handAim.id) ?? this.live?.hoverTarget(handAim.id));
       if (!h.justPinched) continue;
       // A system pinch can arrive without joints; only a measured midpoint can refine a target.
       if (!h.controller && h.joints['thumb-tip'] && h.joints['index-finger-tip']) {
-        const touch = touching(h.pinchPoint, list, 0.06);
+        const touch = touching(h.pinchPoint, list, 0.06, this.touchHit);
         if (touch) {
-          const t = this.targets.refine(touch.id, h.pinchPoint);
+          const t = isLiveId(touch.id) ? undefined : this.targets.refine(touch.id, h.pinchPoint);
           if (t) this.hud.upsertTarget(toHudTarget(t));
           if (touch.id !== this.lockedId) this.lock(touch.id, 'touch');
           continue;
@@ -846,6 +976,23 @@ export class QuestApp {
 
   /** Lock a target; `send: false` only shows it (replay playback must not drive the live server). */
   lock(id: string, how = 'api', opts: { send?: boolean } = {}): void {
+    if (isLiveId(id)) {
+      const claimed = this.live?.claimOf(id);
+      if (claimed) return this.lock(claimed, how, opts);
+      // A fast local box has no server detection id yet. Keep scanning until SAM supplies one.
+      if (!this.live?.pick(id)) return;
+      if (this.lockedId && this.lockedId !== id) {
+        this.release();
+        this.live.pick(id);
+      }
+      this.lockedId = id;
+      this.pendingSelect = undefined;
+      this.candidate.shown = null;
+      this.hud.setCandidate(null);
+      this.hud.setLocked(id);
+      this.page.log('box selected: waiting for the device scan');
+      return;
+    }
     const t = this.targets.get(id);
     if (!t) return;
     if (this.lockedId && this.lockedId !== id) this.release();
@@ -872,6 +1019,7 @@ export class QuestApp {
 
   release(): void {
     const t = this.lockedId ? this.targets.get(this.lockedId) : undefined;
+    this.live?.unpick();
     this.lockedId = null;
     this.hud.setLocked(null);
     if (t && t.status === 'locked' && !t.cardId) {
@@ -933,7 +1081,7 @@ export class QuestApp {
     if (inXr && this.camera instanceof LiveCamera) this.camera.pollFromXr(time);
     this.room?.update(time);
     this.deckGesture(f, time);
-    for (const m of this.handheld.update(this.wrists(f), time)) {
+    for (const m of this.handheld.update(this.wrists(f), time, this.heldMoves)) {
       const t = this.targets.get(m.id);
       if (!t) continue;
       t.position.copy(m.position);
@@ -950,6 +1098,10 @@ export class QuestApp {
     this.interact(f, time);
     this.handFeedback.update(f, this.input.diagnostics, this.renderer.info.render.calls);
     this.scanner.tick(time);
+    if (this.live) {
+      this.live.tick(time, f.dt * 1000);
+      if (this.readout) this.readout.update(cam as PerspectiveCamera, time, this.liveReadoutLines());
+    }
     this.renderer.render(this.scene, this.desktopCam);
     if (time - this.lastStatusAt > 300) {
       this.lastStatusAt = time;
@@ -957,11 +1109,15 @@ export class QuestApp {
     }
   }
 
+  private readonly heldMoves: { id: string; position: Vector3 }[] = [];
+  private readonly wristPoses: { left?: WristPose; right?: WristPose } = {};
+
   private wrists(f: ShellFrame | undefined = this.lastFrame): { left?: WristPose; right?: WristPose } {
-    const out: { left?: WristPose; right?: WristPose } = {};
-    for (const h of ['left', 'right'] as const) {
+    const out = this.wristPoses;
+    for (const h of HANDS) {
       const w = f?.hands[h]?.joints.wrist;
-      if (w) out[h] = { position: w.position, quaternion: w.quaternion };
+      if (w) out[h] = w;
+      else delete out[h];
     }
     return out;
   }
@@ -1186,6 +1342,13 @@ export class QuestApp {
           // keyboard stand-in for pinch-and-hold (irreversible hacks: printing)
           if (this.pendingArm) this.answerConfirm(this.pendingArm, true, true);
           break;
+        case 'y':
+          this.toggleLive();
+          break;
+        case 'c':
+          // cycle the live-box category chips
+          if (this.live) this.setLiveCategory(CATEGORIES[(CATEGORIES.findIndex((x) => x.id === this.live!.category) + 1) % CATEGORIES.length]!.id);
+          break;
       }
     });
     window.addEventListener('keyup', (e) => {
@@ -1200,6 +1363,17 @@ export class QuestApp {
 
   private lastPreviewFrame = '';
 
+  private liveReadoutLines(): string[] {
+    const l = this.live;
+    if (!l) return [];
+    const s = l.stats;
+    if (s.state !== 'ready') return [`LIVE ${s.state.toUpperCase()}`, (s.lastError ?? '').slice(0, 60)];
+    return [
+      `LIVE yolox-nano · ${s.ep}${s.ep === 'wasm' ? `x${s.threads}` : ''} · ${l.running ? `${s.fps} fps` : 'idle'} · ${s.shown} box · ${l.category}`,
+      `infer ${Math.round(s.inferMs)} ms · lat ${Math.round(s.latencyMs)} ms · every ${s.intervalMs} ms · frame ${s.frameMs.toFixed(1)}/${s.baselineMs.toFixed(1)} ms`,
+    ];
+  }
+
   private updateStatus(): void {
     const s = this.scanner.stats;
     const head = this.lastFrame?.head.position;
@@ -1209,10 +1383,12 @@ export class QuestApp {
       xr: this.session ? `in session${this.emulator ? ' (IWER)' : ''}` : this.emulator ? 'emulator ready' : 'not in XR',
       camera: `${this.camera.kind} · ${this.cameraState}${this.cameraNote ? ` · ${this.cameraNote}` : ''}`,
       'camera fps': this.camera.kind === 'passthrough' ? `${this.camera.stats.fps}${this.camera.stats.captureTime ? ' · captureTime ✓' : ''}` : undefined,
+      'live boxes': this.live ? this.live.summary() : 'off (?yolo=0)',
       scan: `${this.scanner.active ? 'ON' : 'off'} · sent ${s.sent} · results ${s.results} · in flight ${s.inFlight}${s.lastModelId ? ` · ${s.lastModelId} ${s.lastLatencyMs} ms` : ''}${this.fixture ? ' · FIXTURE' : ''}`,
       targets: this.targets.list().map((t) => `${t.label}${t.id === this.lockedId ? '🔒' : ''}`).join(', ') || 'none',
       head: head ? `${head.x.toFixed(2)} ${head.y.toFixed(2)} ${head.z.toFixed(2)}` : '',
       hud: this.hudKind,
+      render: `${this.renderer.info.render.calls} draws · ${this.renderer.info.render.triangles} triangles`,
       mic: this.mic.ready ? `${this.ptt.listening ? 'LISTENING' : 'ready'}` : 'not prepared',
       record: this.recorder.recording ? `REC ${Math.round(this.recorder.elapsedMs / 1000)} s · ${this.recorder.count.frames} frames` : undefined,
       replay: this.player ? `${this.player.mode} ${Math.round(this.player.clock() / 1000)} / ${Math.round(this.player.duration / 1000)} s` : undefined,

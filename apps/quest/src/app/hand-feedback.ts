@@ -97,7 +97,7 @@ export class HandFeedback {
       dot.scale.setScalar(hand?.pinching ? 1.25 : 1);
     }
     if (!this.plate) return;
-    this.plate.position.set(0, -0.34, -0.9).applyQuaternion(f.head.quaternion).add(f.head.position);
+    this.plate.position.set(0, -0.42, -0.9).applyQuaternion(f.head.quaternion).add(f.head.position);
     this.plate.quaternion.copy(f.head.quaternion);
     // f.dt is capped by the input sampler; timestamps measure the actual frame rate.
     if (this.previousTime !== null && f.time > this.previousTime) {

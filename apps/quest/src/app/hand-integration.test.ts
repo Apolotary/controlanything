@@ -36,17 +36,24 @@ function appHarness(targets: ReturnType<typeof target>[] = []) {
   const refine = vi.fn();
   const lock = vi.fn();
   const xrHit = { attach: vi.fn(), detach: vi.fn(), onFrame: vi.fn() };
+  const targetMap = new Map(targets.map((t) => [t.id, t]));
+  const hud = { setCandidate: vi.fn(), upsertTarget: vi.fn(), update: vi.fn() };
   Object.assign(app, {
     input, handFeedback: { setHover, update: vi.fn() },
-    targets: { list: () => targets, get: (id: string) => targets.find((t) => t.id === id), refine },
+    targets: { targets: targetMap, get: (id: string) => targetMap.get(id), refine },
     candidate: { id: null, since: 0, shown: null }, consumed: { left: false, right: false },
-    hud: { setCandidate: vi.fn(), upsertTarget: vi.fn(), update: vi.fn() },
+    aimTargets: new Map(), aimBuffer: [],
+    gazeHit: { id: '', angleDeg: 0, distance: 0 },
+    handHit: { id: '', angleDeg: 0, distance: 0 },
+    touchHit: { id: '', angleDeg: 0, distance: 0 },
+    hud,
     lock, release: vi.fn(), lockedId: null,
     desktopCam: new PerspectiveCamera(), camera: {}, xrHit,
     poses: { push: vi.fn() }, recorder: { pose: vi.fn() },
     handheld: { update: () => [] }, scanner: { tick: vi.fn() }, lastStatusAt: 0,
+    wristPoses: {}, heldMoves: [],
   });
-  return { app, input, setHover, refine, lock, xrHit };
+  return { app, input, setHover, refine, lock, xrHit, targetMap, hud };
 }
 
 function xrSession(sources: XRInputSource[] = []): XRSession {
@@ -105,6 +112,22 @@ describe('shell hand input integration', () => {
 
     expect(refine).toHaveBeenCalledExactlyOnceWith('near', right.pinchPoint);
     expect(lock).toHaveBeenCalledExactlyOnceWith('near', 'touch');
+  });
+
+  it('clears hand hover and the dwell candidate when the last target disappears', () => {
+    const pointed = target('pointed', new Vector3(0, 0, -2));
+    const { app, setHover, targetMap, hud } = appHarness([pointed]);
+    const f = frame(hand());
+    app.interact(f, 0);
+    app.interact(f, 300);
+    expect(setHover).toHaveBeenLastCalledWith('right', pointed);
+    expect(hud.setCandidate).toHaveBeenLastCalledWith(pointed.id);
+
+    targetMap.clear();
+    app.interact(f, 320);
+
+    expect(setHover.mock.calls.slice(-2)).toEqual([['left'], ['right']]);
+    expect(hud.setCandidate).toHaveBeenLastCalledWith(null);
   });
 
   it('samples the live frame synchronously using the renderer current space instead of the startup space', () => {
