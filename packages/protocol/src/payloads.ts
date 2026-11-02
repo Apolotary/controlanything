@@ -44,6 +44,8 @@ import {
 
 /** C->S. First message on a socket. The server takes name, kind and approval rights from its registry. */
 export const HelloPayload = z.object({
+  /** Whether this browser tab owns the companion executor lock. */
+  executor: z.boolean().optional(),
   deviceToken: z.string().min(1).max(256),
   /** how this device acts now; defaults by kind (quest=hmd, mac=companion, ...) */
   role: Role.optional(),
@@ -173,31 +175,6 @@ export const CameraInfo = z.object({
 });
 export type CameraInfo = z.infer<typeof CameraInfo>;
 
-/**
- * C->S, send with `to: "server"`. One frame for SCAN (<= 1 Hz while scanning), VERIFY (before/after an action,
- * usually inside sense.result) or PAIR (the server decodes pairing QR codes in every frame anyway).
- */
-export const ScanFramePayload = z.object({
-  frameId: Id,
-  /** base64 JPEG bytes, no "data:" prefix; <= 1280 px wide */
-  jpeg: z.string().min(1).max(12_000_000),
-  width: z.number().int().positive(),
-  height: z.number().int().positive(),
-  /** epoch ms when the camera frame was captured */
-  capturedAt: z.number(),
-  /** reference space of the poses, e.g. WebXR "local-floor" */
-  space: z.string().max(64).optional(),
-  /** viewer (head) pose at capture */
-  pose: Pose.optional(),
-  camera: CameraInfo.optional(),
-  purpose: FramePurpose,
-  /** verify frames: the target this frame is about */
-  cardId: Id.optional(),
-  /** when this frame answers a sense.request */
-  senseId: Id.optional(),
-});
-export type ScanFramePayload = z.infer<typeof ScanFramePayload>;
-
 /** One SAM 3.1 detection in a scan frame. Boxes and polygons are in pixels of the JPEG that was sent. */
 export const ScanDetection = z.object({
   detId: Id,
@@ -216,6 +193,33 @@ export const ScanDetection = z.object({
   trackId: Id.optional(),
 });
 export type ScanDetection = z.infer<typeof ScanDetection>;
+
+/**
+ * C->S, send with `to: "server"`. One frame for SCAN (<= 1 Hz while scanning), VERIFY (before/after an action,
+ * usually inside sense.result) or PAIR (the server decodes pairing QR codes in every frame anyway).
+ */
+export const ScanFramePayload = z.object({
+  frameId: Id,
+  /** base64 JPEG bytes, no "data:" prefix; <= 1280 px wide */
+  jpeg: z.string().min(1).max(12_000_000),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  /** epoch ms when the camera frame was captured */
+  capturedAt: z.number(),
+  /** reference space of the poses, e.g. WebXR "local-floor" */
+  space: z.string().max(64).optional(),
+  /** viewer (head) pose at capture */
+  pose: Pose.optional(),
+  camera: CameraInfo.optional(),
+  purpose: FramePurpose,
+  /** Synthetic demo boxes; accepted only by a fixture server from an owner. */
+  fixtureDetections: z.array(ScanDetection.omit({ cardId: true, deviceId: true, trackId: true })).max(64).optional(),
+  /** verify frames: the target this frame is about */
+  cardId: Id.optional(),
+  /** when this frame answers a sense.request */
+  senseId: Id.optional(),
+});
+export type ScanFramePayload = z.infer<typeof ScanFramePayload>;
 
 /** A pairing QR code seen in a frame (the server approves it when the sender may approve). */
 export const SeenQr = z.object({

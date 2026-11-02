@@ -111,9 +111,9 @@ export class Executor {
     let ack: ExecAckPayload;
     if (cmd.op.kind === 'midi') ack = await this.midi.execute(cmd);
     else if (cmd.op.kind === 'ir') {
-      ack = this.bridge.link.ready
+      ack = this.bridge.online
         ? await this.bridge.exec(cmd)
-        : { execId: cmd.execId, ok: false, sentAt: Date.now(), error: 'no_ir', detail: 'no Cardputer attached to this companion (CONNECT CARDPUTER)' };
+        : { execId: cmd.execId, ok: false, sentAt: Date.now(), error: 'no_ir', detail: 'connect and approve the Cardputer before sending IR' };
     } else ack = { execId: cmd.execId, ok: false, sentAt: Date.now(), error: 'unsupported', detail: `the companion page does not run local ${cmd.op.op} (the server's Mac executor does)` };
     row.ack = ack;
     this.onTape();

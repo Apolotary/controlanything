@@ -46,6 +46,11 @@ describe('learned → IrCapture', () => {
 });
 
 describe('CardputerBridge.exec', () => {
+  function approvedBridge(link: CardputerLink): CardputerBridge {
+    const bridge = new CardputerBridge(link, 'test');
+    Object.assign(bridge, { chip: link.info?.chip, state: 'online', stored: { deviceId: 'cp-1', deviceToken: 'approved', name: 'Cardputer' } });
+    return bridge;
+  }
   function fakeLink(reply: Partial<SerialAck> = { ok: true, ms: 68 }) {
     const sent: unknown[] = [];
     const link = {
@@ -64,7 +69,7 @@ describe('CardputerBridge.exec', () => {
 
   it('plays the server-filled rawUs and acks with the device line in detail', async () => {
     const { link, sent } = fakeLink();
-    const b = new CardputerBridge(link, 'test');
+    const b = approvedBridge(link);
     const ack = await b.exec(cmd({ kind: 'ir', protocol: 'NEC', bytes: [0x82, 0x6d, 0xbe, 0x41], rawUs: encodeFrame({ proto: 'NEC', bytes: [0x82, 0x6d, 0xbe, 0x41] }), ref: 'lib:hotalux/re0201/off' }));
     expect(ack).toMatchObject({ execId: 'x1', ok: true, sentAt: 1234 });
     expect(ack.detail).toContain('hotalux/re0201/off (built-in LED) → Cardputer (68 ms on device)');
@@ -75,11 +80,40 @@ describe('CardputerBridge.exec', () => {
 
   it('maps device errors to protocol error codes', async () => {
     const { link } = fakeLink({ ok: false, err: 'busy', msg: 'ir pending' });
-    const ack = await new CardputerBridge(link, 'test').exec(cmd({ kind: 'ir', protocol: 'RAW', rawUs: [9000, 4500, 560, 560] }));
+    const ack = await approvedBridge(link).exec(cmd({ kind: 'ir', protocol: 'RAW', rawUs: [9000, 4500, 560, 560] }));
     expect(ack).toMatchObject({ ok: false, error: 'rate_limited' });
     const { link: l2 } = fakeLink();
-    expect((await new CardputerBridge(l2, 'test').exec(cmd({ kind: 'midi', msg: 'cc', channel: 1, number: 1, value: 1 }))).error).toBe('unsupported');
-    const dry = await new CardputerBridge(l2, 'test').exec(cmd({ kind: 'ir', protocol: 'RAW', rawUs: [9000, 4500, 560, 560] }, { dryRun: true }));
+    expect((await approvedBridge(l2).exec(cmd({ kind: 'midi', msg: 'cc', channel: 1, number: 1, value: 1 }))).error).toBe('unsupported');
+    const dry = await approvedBridge(l2).exec(cmd({ kind: 'ir', protocol: 'RAW', rawUs: [9000, 4500, 560, 560] }, { dryRun: true }));
     expect(dry.detail).toContain('dry run');
+  });
+
+  it.each(['pairing', 'denied', 'connecting', 'offline'] as const)('refuses execution while %s even with USB ready', async (state) => {
+    const { link, sent } = fakeLink();
+    const bridge = approvedBridge(link);
+    bridge.state = state;
+    expect(await bridge.exec(cmd({ kind: 'ir', protocol: 'RAW', rawUs: [9000, 4500] }))).toMatchObject({ ok: false, error: 'refused' });
+    expect(sent).toEqual([]);
+  });
+
+  it('refuses a replacement chip with the previous chip approval', async () => {
+    const { link, sent } = fakeLink();
+    const bridge = approvedBridge(link);
+    link.info!.chip = 'replacement';
+    expect(bridge.online).toBe(false);
+    expect(await bridge.exec(cmd({ kind: 'ir', protocol: 'RAW', rawUs: [9000, 4500] }))).toMatchObject({ ok: false, error: 'refused' });
+    expect(sent).toEqual([]);
+  });
+
+  it('does not reopen a learning window when its acknowledgment arrives after Stop', async () => {
+    const { link } = fakeLink();
+    let resolve!: (ack: SerialAck) => void;
+    Object.assign(link, { learn: () => new Promise<SerialAck>((done) => { resolve = done; }) });
+    const bridge = approvedBridge(link);
+    const learning = bridge.startLearning(1000, 'Press full on');
+    await bridge.panic();
+    resolve({ id: 'learn', ok: true });
+    expect(await learning).toBe(false);
+    expect(bridge.learning).toBeUndefined();
   });
 });

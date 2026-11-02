@@ -105,6 +105,8 @@ export class CardputerBridge {
   private menuSpecId?: string;
   private pollTimer?: ReturnType<typeof setTimeout>;
   private chip = 'unknown';
+  private generation = 0;
+  private learningGeneration = 0;
 
   onChange: () => void = () => {};
   log: (level: 'debug' | 'info' | 'warn' | 'error', text: string) => void = () => {};
@@ -115,7 +117,11 @@ export class CardputerBridge {
   ) {}
 
   get online(): boolean {
-    return this.state === 'online';
+    return this.state === 'online' && this.link.ready && Boolean(this.stored) && this.link.info?.chip === this.chip;
+  }
+
+  private current(generation: number, chip: string): boolean {
+    return this.generation === generation && this.chip === chip && this.link.ready && this.link.info?.chip === chip;
   }
 
   setTx(tx: 'led' | 'grove'): void {
@@ -139,6 +145,7 @@ export class CardputerBridge {
 
   /** Call when the serial link reports a hello (device ready). */
   async deviceReady(): Promise<void> {
+    this.deviceGone();
     const info = this.link.info;
     this.chip = info?.chip ?? 'unknown';
     const stored = load(this.chip);
@@ -152,11 +159,14 @@ export class CardputerBridge {
 
   /** Serial link closed or unplugged. */
   deviceGone(): void {
+    this.generation++;
     clearTimeout(this.pollTimer);
     this.stopLearning();
-    this.conn?.stop();
+    const previous = this.conn;
     this.conn = undefined;
+    previous?.stop();
     this.pairing = undefined;
+    this.stored = undefined;
     this.set('no-device');
   }
 
@@ -170,24 +180,34 @@ export class CardputerBridge {
   }
 
   async startPairing(): Promise<void> {
+    const generation = ++this.generation;
+    const chip = this.chip;
     clearTimeout(this.pollTimer);
+    this.pairing = undefined;
+    this.stored = undefined;
+    const previous = this.conn;
+    this.conn = undefined;
+    previous?.stop();
     if (!this.link.ready) return;
     const name = this.link.info?.board === 'cardputer-adv' ? 'Cardputer-Adv' : (this.link.info?.name ?? 'Cardputer');
     this.set('pairing');
     try {
       const r = await api.pairStart({ name, kind: 'cardputer', capabilities: ['ir', 'display', 'speaker'], requireApproval: true });
+      if (!this.current(generation, chip)) return;
       if (r.status === 'approved' && r.deviceId && r.deviceToken) {
         // an older server ignores requireApproval: accept it, but say so
         this.log('warn', 'the server approved the Cardputer instantly (requireApproval not honoured)');
-        await this.adopt({ deviceId: r.deviceId, deviceToken: r.deviceToken, name });
+        this.adopt({ deviceId: r.deviceId, deviceToken: r.deviceToken, name });
         return;
       }
       this.pairing = { pairingId: r.pairingId, pollSecret: r.pollSecret, display: r.display, qr: r.qr, expiresAt: r.expiresAt };
       const ack = await this.link.request(pairScreenCommand(r));
+      if (!this.current(generation, chip)) return;
       this.log(ack.ok ? 'info' : 'warn', ack.ok ? `Cardputer shows pairing code ${r.display}; approve it from the Quest (look at its QR) or type the code here` : `Cardputer did not take the pairing screen: ${ack.msg ?? ack.err}`);
       this.onChange();
       this.poll();
     } catch (e) {
+      if (!this.current(generation, chip)) return;
       this.log('error', `could not start pairing for the Cardputer: ${(e as Error).message}`);
       this.set('offline');
     }
@@ -195,26 +215,33 @@ export class CardputerBridge {
 
   private poll(): void {
     const p = this.pairing;
+    const generation = this.generation;
+    const chip = this.chip;
+    const current = () => this.current(generation, chip) && this.pairing === p;
     if (!p) return;
     this.pollTimer = setTimeout(async () => {
-      if (this.pairing !== p) return;
+      if (!current()) return;
       try {
         const s = await api.pairStatus(p.pairingId, p.pollSecret);
+        if (!current()) return;
         if (s.status === 'approved' && s.deviceId && s.deviceToken) {
-          this.pairing = undefined;
           const name = this.link.info?.board === 'cardputer-adv' ? 'Cardputer-Adv' : (this.link.info?.name ?? 'Cardputer');
           await this.link.request({ t: 'pair', state: 'approved', name, deviceId: s.deviceId });
-          await this.adopt({ deviceId: s.deviceId, deviceToken: s.deviceToken, name });
+          if (!current()) return;
+          this.pairing = undefined;
+          this.adopt({ deviceId: s.deviceId, deviceToken: s.deviceToken, name });
           return;
         }
         if (s.status === 'denied' || s.status === 'expired') {
-          this.pairing = undefined;
           await this.link.request({ t: 'pair', state: s.status });
+          if (!current()) return;
+          this.pairing = undefined;
           this.log('warn', `Cardputer pairing ${s.status}`);
           this.set('denied');
           return;
         }
       } catch (e) {
+        if (!current()) return;
         if (e instanceof ApiError && e.status === 404) {
           this.pairing = undefined;
           this.log('warn', 'the server forgot the Cardputer pairing request; start again');
@@ -226,7 +253,7 @@ export class CardputerBridge {
     }, 1500);
   }
 
-  private async adopt(s: StoredCardputer): Promise<void> {
+  private adopt(s: StoredCardputer): void {
     this.stored = s;
     save(this.chip, s);
     this.log('info', `Cardputer paired as ${s.name} (${s.deviceId})`);
@@ -234,6 +261,8 @@ export class CardputerBridge {
   }
 
   private connectAs(s: StoredCardputer): void {
+    const generation = this.generation;
+    const chip = this.chip;
     this.conn?.stop();
     this.set('connecting');
     const info = this.link.info;
@@ -246,8 +275,9 @@ export class CardputerBridge {
     }));
     this.conn = c;
     c.onState = (st, closeInfo) => {
-      if (st === 'open') this.set('online');
+      if (this.conn !== c || !this.current(generation, chip)) return;
       if (st === 'closed') {
+        void this.panic();
         if (closeInfo?.code === CLOSE_UNAUTHORIZED) {
           this.log('warn', 'the server no longer knows this Cardputer (revoked); pairing again');
           save(this.chip, undefined);
@@ -259,21 +289,28 @@ export class CardputerBridge {
       }
     };
     c.on('welcome', () => {
+      if (this.conn !== c || !this.current(generation, chip)) return;
+      this.set('online');
       void this.link.request({ t: 'pair', state: 'linked', name: s.name, deviceId: s.deviceId });
     });
     c.on('exec.command', (m) => {
+      if (this.conn !== c || !this.current(generation, chip)) return;
       if (m.to && m.to !== s.deviceId) return;
       void this.exec(m.payload).then((ack) => c.send('exec.ack', ack, { to: 'server' }));
     });
     c.on('sense.request', (m) => {
+      if (this.conn !== c || !this.current(generation, chip)) return;
       if (m.to && m.to !== s.deviceId) return;
       void this.sense(m.payload);
     });
     c.on('panic', (m) => {
+      if (this.conn !== c || !this.current(generation, chip)) return;
       if (m.to && m.to !== s.deviceId) return;
       void this.panic();
     });
-    c.on('ui.spec', (m) => this.mirrorSpec(m.payload));
+    c.on('ui.spec', (m) => {
+      if (this.conn === c && this.current(generation, chip)) this.mirrorSpec(m.payload);
+    });
     c.start();
   }
 
@@ -289,6 +326,7 @@ export class CardputerBridge {
       ...(extra.detail ? { detail: extra.detail.slice(0, 1000) } : {}),
     });
     if (!this.link.ready) return ack(false, { error: 'serial_offline', detail: 'the Cardputer is not connected over USB' });
+    if (!this.online) return ack(false, { error: 'refused', detail: 'the connected Cardputer must be paired and approved first' });
     const op = cmd.op;
     if (op.kind === 'ir') {
       const raw = irOpToRaw(op);
@@ -326,8 +364,8 @@ export class CardputerBridge {
       reply({ ok: false, error: `the Cardputer cannot sense ${req.kind}` });
       return;
     }
-    if (!this.link.ready) {
-      reply({ ok: false, error: 'the Cardputer is not connected over USB' });
+    if (!this.online) {
+      reply({ ok: false, error: 'the connected Cardputer must be paired and approved first' });
       return;
     }
     await this.startLearning(req.durationMs ?? 10_000, req.prompt, req.senseId);
@@ -336,8 +374,10 @@ export class CardputerBridge {
   /** Listen for remote presses; each frame becomes a LEARN row (and a sense.result when the server asked). */
   async startLearning(durationMs = 15_000, prompt?: string, senseId?: string): Promise<boolean> {
     this.stopLearning(false);
+    const generation = this.learningGeneration;
     const ms = Math.min(60_000, Math.max(1000, durationMs));
     const r = await this.link.learn(true, { timeoutMs: ms, ...(prompt ? { label: prompt.slice(0, 40) } : {}) });
+    if (generation !== this.learningGeneration) return false;
     if (!r.ok) {
       this.log('warn', `Cardputer could not start learning: ${r.msg ?? r.err}`);
       if (senseId) this.conn?.send('sense.result', { senseId, kind: 'ir-capture', at: Date.now(), ok: false, error: r.msg ?? r.err ?? 'learn failed' }, { to: 'server' });
@@ -351,6 +391,7 @@ export class CardputerBridge {
   }
 
   stopLearning(tellDevice = true): void {
+    this.learningGeneration++;
     const l = this.learning;
     if (!l) return;
     clearTimeout(l.timer);
@@ -395,7 +436,7 @@ export class CardputerBridge {
   /** Mirror a hack set for an IR device onto the Cardputer's screen (the physical-keys fallback). */
   mirrorSpec(spec: UiSpecPayload): void {
     const hs = spec.hackset;
-    if (!hs || !this.link.ready) return;
+    if (!hs || !this.online) return;
     const viaMe = hs.device.channel.via && hs.device.channel.via === this.stored?.deviceId;
     if (hs.device.channel.type !== 'ir' && !viaMe) return;
     const items: MenuItem[] = hs.hacks

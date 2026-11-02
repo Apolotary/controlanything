@@ -6,6 +6,8 @@ import {
   encodeMessage,
   makeMessage,
   MESSAGE_TYPES,
+  Message,
+  MessageSchemas,
   newId,
   parseMessage,
   PayloadSchemas,
@@ -15,6 +17,19 @@ import {
 } from './index';
 
 describe('envelope', () => {
+  it('exports every registered message in the discriminated union', () => {
+    expect(Message.options.map((schema) => schema.shape.type.value).sort()).toEqual(Object.keys(MessageSchemas).sort());
+    for (const message of [
+      makeMessage('mode.set', { mode: 'control' }), makeMessage('mode.state', { mode: 'annotate' }),
+      makeMessage('tag.add', { label: 'Lamp' }), makeMessage('tag.remove', { cardId: 'lamp' }),
+      makeMessage('tags.state', { tags: [] }), makeMessage('control.setup', { cardId: 'lamp' }),
+      makeMessage('control.cancel', { cardId: 'lamp' }),
+    ]) {
+      expect(Message.safeParse(message).success).toBe(true);
+      expect(parseMessage(message).ok).toBe(true);
+      expect(message.type).toBeTruthy();
+    }
+  });
   it('makeMessage fills v, id, ts and from', () => {
     const m = makeMessage('control.event', { widgetId: 'cutoff', value: 0.5, ts: 1 });
     expect(m.v).toBe(PROTOCOL_VERSION);

@@ -54,6 +54,7 @@ let canApprove = false;
 let welcome: PayloadOf<'welcome'> | undefined;
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
 let selfExpiresAt = 0;
+let selfPairing = false;
 const pending = new Map<string, PendingPairing>();
 const settledPairings = new Set<string>();
 let devices: DeviceInfo[] = [];
@@ -1026,6 +1027,7 @@ function setupExecutors(): void {
     if (!tabChosenByUser && mainTab === 'code' && executor.tape.length && armedOnce) setTab('tape');
   };
   executor.onLeader = (leader) => {
+    conn?.resendHello();
     log('info', leader ? 'this tab is the executor' : 'standby');
     renderAll();
     if (leader && !replaying) {
@@ -1049,7 +1051,10 @@ function setupExecutors(): void {
     if (m.t === 'log') log(m.lvl === 'error' ? 'error' : m.lvl === 'warn' ? 'warn' : 'debug', `[cardputer] ${m.msg}`);
     if (executor.leader && !replaying) bridge.onDeviceMessage(m);
   };
-  bridge.onChange = () => ['calm', 'links', 'learn', 'banners'].forEach(render);
+  bridge.onChange = () => {
+    conn?.resendHello();
+    ['calm', 'links', 'learn', 'banners'].forEach(render);
+  };
   oracle.onState = () => {
     ['calm', 'links', 'device', 'banners'].forEach(render);
     conn?.resendHello();
@@ -1087,6 +1092,8 @@ function meterLoop(): void {
 // --- pairing this browser ---------------------------------------------------------------------
 
 async function pairThisBrowser(): Promise<void> {
+  if (selfPairing) return;
+  selfPairing = true;
   clearTimeout(pollTimer);
   conn?.stop();
   conn = undefined;
@@ -1136,6 +1143,7 @@ async function pairThisBrowser(): Promise<void> {
 }
 
 function pairingFailed(message: string): void {
+  selfPairing = false;
   selfExpiresAt = 0;
   $('self-msg').textContent = message;
   $('self-msg').className = 'small fail-text';
@@ -1144,6 +1152,7 @@ function pairingFailed(message: string): void {
 }
 
 function adopt(id: Identity): void {
+  selfPairing = false;
   identity = id;
   saveIdentity(id);
   selfExpiresAt = 0;
@@ -1156,18 +1165,18 @@ function adopt(id: Identity): void {
 // --- connection -----------------------------------------------------------------------------
 
 function hello(): PayloadOf<'hello'> {
-  const p: PayloadOf<'hello'> = { deviceToken: identity?.deviceToken ?? '-', app: APP };
+  const p: PayloadOf<'hello'> = { deviceToken: identity?.deviceToken ?? '-', app: APP, executor: executor.leader };
   // another app on this origin (e.g. the Quest page) may own the identity: then don't claim its role
   if (!identity || identity.kind === 'mac' || identity.kind === 'web') {
     p.role = 'companion';
     const caps: NonNullable<PayloadOf<'hello'>['capabilities']> = [];
     if (MidiBridge.supported) caps.push('midi');
     if (CardputerLink.supported) caps.push('serial');
-    if (link.ready) caps.push('ir');
+    if (bridge.online) caps.push('ir');
     if (AudioOracle.supported) caps.push('mic');
     p.capabilities = caps;
     const ports: Port[] = midi.enabled ? midi.ports() : [];
-    if (link.ready) ports.push({ id: `serial:${link.info?.chip ?? 'cardputer'}`, kind: 'serial', name: `Cardputer USB serial (${link.info?.board ?? 'cardputer'})`, state: 'connected' });
+    if (bridge.online) ports.push({ id: `serial:${link.info?.chip ?? 'cardputer'}`, kind: 'serial', name: `Cardputer USB serial (${link.info?.board ?? 'cardputer'})`, state: 'connected' });
     p.ports = ports;
   }
   return p;
@@ -1353,6 +1362,21 @@ function setupForms(): void {
   }, 1000);
 }
 
+async function reachServer(retryMs = 1000): Promise<void> {
+  try {
+    health = await api.health();
+    serverDown = false;
+  } catch {
+    serverDown = true;
+    log('warn', 'Cannot reach the server; retrying shortly.');
+    renderAll();
+    setTimeout(() => void reachServer(Math.min(30_000, retryMs * 2)), retryMs);
+    return;
+  }
+  renderAll();
+  if (!identity) await pairThisBrowser();
+}
+
 export async function bootWorkbench(): Promise<void> {
   $('workbench').hidden = false;
   document.body.classList.toggle('stage', stage);
@@ -1369,18 +1393,11 @@ export async function bootWorkbench(): Promise<void> {
   // a replay tab never executes, so it must not take the executor role from the real workbench
   if (!replaying) executor.claim();
   if (replaying) { connect(); return; }
-  try {
-    health = await api.health();
-  } catch {
-    serverDown = true;
-    log('error', 'Cannot reach /api/health. Is the server running? (npm run dev)');
-  }
-  renderAll();
   void pollCalls();
   if (params.get('pair') === '1') {
     clearIdentity();
     identity = undefined;
   }
   if (identity) connect();
-  else if (!serverDown) await pairThisBrowser();
+  await reachServer();
 }

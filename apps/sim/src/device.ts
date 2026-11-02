@@ -60,10 +60,12 @@ export class SimDevice {
   lastIr?: { at: number; result: MatchResult; source: 'remote' | 'exec' };
   private lastAccepted?: { key: string; at: number };
   private irQueue: Promise<unknown> = Promise.resolve();
+  private irGeneration = 0;
   private lastIrTx = 0;
   private scanTimer?: ReturnType<typeof setTimeout>;
   private pendingFrames = new Map<string, ViewId>();
   private learnTimer?: ReturnType<typeof setTimeout>;
+  private autoPressTimer?: ReturnType<typeof setTimeout>;
   private readonly listeners = new Set<() => void>();
   private readonly logListeners = new Set<(l: LogLine) => void>();
   readonly logLines: LogLine[] = [];
@@ -101,6 +103,17 @@ export class SimDevice {
     this.logLines.push(l);
     if (this.logLines.length > 400) this.logLines.shift();
     for (const fn of this.logListeners) fn(l);
+  }
+
+  /** Stop all device work already scheduled by the server or the automatic remote. */
+  panic(): void {
+    this.irGeneration++;
+    this.irQueue = Promise.resolve();
+    clearTimeout(this.learnTimer);
+    clearTimeout(this.autoPressTimer);
+    this.learn = undefined;
+    this.synth.panic();
+    this.changed();
   }
 
   // --- lamp ----------------------------------------------------------------------------------------
@@ -202,7 +215,7 @@ export class SimDevice {
           this.log('midi', 'identity request F0 7E 7F 06 01 F7 → reply (non-commercial ID 7D)');
           return ack(true, { reply: SIM_IDENTITY_REPLY, detail: hex(SIM_IDENTITY_REPLY) });
         case 'panic':
-          this.synth.panic();
+          this.panic();
           this.log('midi', 'panic: all notes off');
           return ack(true, { detail: 'all notes off' });
       }
@@ -217,11 +230,14 @@ export class SimDevice {
     if (!us?.length) return ack(false, { error: 'bad_args', detail: 'IR op needs rawUs (or NEC/AEHA bytes)' });
     if (p.dryRun) return ack(true, { detail: 'dry run' });
     const timings = us;
+    const generation = this.irGeneration;
     // one burst at a time, never closer than IR_MIN_GAP_MS (like the Cardputer firmware)
     const run = this.irQueue.then(async () => {
+      if (generation !== this.irGeneration) return ack(false, { error: 'refused', detail: 'IR cancelled by Stop' });
       const wait = this.lastIrTx + IR_MIN_GAP_MS - Date.now();
       // hidden tabs may throttle timers to once a minute: never delay the control loop there
       if (wait > 0 && !(typeof document !== 'undefined' && document.hidden)) await new Promise((r) => setTimeout(r, wait));
+      if (generation !== this.irGeneration) return ack(false, { error: 'refused', detail: 'IR cancelled by Stop' });
       this.lastIrTx = Date.now();
       this.log('ir', `IR LED: ${op.protocol}${op.bytes ? ' ' + hex(op.bytes) : ''} ${timings.length} edges${op.repeats ? ` +${op.repeats} repeat(s)` : ''}${op.ref ? ` [${op.ref}]` : ''}`);
       this.receiveIr(timings, 'exec');
@@ -272,12 +288,15 @@ export class SimDevice {
     // ir-capture: open a learn window on the virtual remote
     const ms = p.durationMs ?? 15_000;
     if (this.learnTimer) clearTimeout(this.learnTimer);
+    clearTimeout(this.autoPressTimer);
     this.learn = { senseId: p.senseId, prompt: p.prompt, until: Date.now() + ms, count: 0 };
     this.log('learn', `learn window ${Math.round(ms / 1000)} s${p.prompt ? `: "${p.prompt}"` : ''}`);
     this.changed();
     if (this.autoPress) {
       const cmd = promptedButton(p.prompt);
-      if (cmd) setTimeout(() => this.remotePress(cmd), 1200);
+      if (cmd) this.autoPressTimer = setTimeout(() => {
+        if (this.learn?.senseId === p.senseId) this.remotePress(cmd);
+      }, 1200);
     }
     this.learnTimer = setTimeout(() => {
       const w = this.learn;
