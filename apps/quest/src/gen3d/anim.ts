@@ -51,6 +51,7 @@ export class Tweens {
 export class OneEuro3 {
   private prev = new Vector3();
   private dprev = new Vector3();
+  private readonly delta = new Vector3();
   private has = false;
   constructor(private minCutoff = 1.0, private beta = 0.02, private dCutoff = 1.0) {}
   reset(): void {
@@ -64,7 +65,7 @@ export class OneEuro3 {
       return out.copy(x);
     }
     const alphaD = alpha(dt, this.dCutoff);
-    const dx = x.clone().sub(this.prev).divideScalar(dt);
+    const dx = this.delta.copy(x).sub(this.prev).divideScalar(dt);
     this.dprev.lerp(dx, alphaD);
     const cutoff = this.minCutoff + this.beta * this.dprev.length();
     const a = alpha(dt, cutoff);

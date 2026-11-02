@@ -5,7 +5,7 @@
  * A cursor has a pinch point (thumb-index midpoint, or the ray hit), an index tip (for pokes), pinch state
  * with hysteresis already applied by the input layer, and an optional wrist orientation.
  */
-import { Camera, Matrix4, Object3D, Plane, Quaternion, Raycaster, Vector2, Vector3 } from 'three';
+import { Camera, Matrix4, Object3D, Plane, Quaternion, Raycaster, Vector2, Vector3, type Intersection } from 'three';
 import type { Axis } from '@ce/gen3d';
 
 export type CursorHand = 'left' | 'right' | 'mouse' | 'controller';
@@ -70,11 +70,14 @@ export class MouseCursor {
   private plane = new Plane();
   private dragging = false;
   private readonly tmp = new Vector3();
+  private readonly planeNormal = new Vector3();
+  private readonly hits: Intersection[] = [];
   wheelDelta = 0;
   private targets: Object3D[] = [];
 
   constructor(private el: HTMLElement, private camera: Camera) {
-    this.cursor = { id: 'mouse', hand: 'mouse', position: new Vector3(), tip: new Vector3(), pinching: false, justPinched: false, justReleased: false, tracked: false, canPoke: false };
+    this.cursor = { id: 'mouse', hand: 'mouse', position: new Vector3(), tip: new Vector3(), pinching: false, justPinched: false, justReleased: false, tracked: false, canPoke: false,
+      ray: { origin: this.raycaster.ray.origin, dir: this.raycaster.ray.direction } };
     // three's defaults treat any Line/Points within ONE METRE of the ray as a hit (edge keylines, particles)
     this.raycaster.params.Line.threshold = 0.004;
     this.raycaster.params.Points.threshold = 0.004;
@@ -154,20 +157,20 @@ export class MouseCursor {
     c.tracked = rayNdc.x > -5;
     if (!c.tracked) return c;
     this.raycaster.setFromCamera(rayNdc, this.camera);
-    c.ray = { origin: this.raycaster.ray.origin.clone(), dir: this.raycaster.ray.direction.clone() };
     if (this.dragging && c.pinching) {
       // keep moving on the drag plane
       const hit = this.raycaster.ray.intersectPlane(this.plane, this.tmp);
       if (hit) c.position.copy(hit);
     } else {
       // hidden parts (hints, a dim plane) are still raycast by three: only what the user can see may take the cursor
-      const shown = (o: Object3D | null): boolean => (o ? o.visible && shown(o.parent) : true);
-      const hits = this.raycaster.intersectObjects(this.targets, true).filter((h) => shown(h.object));
-      if (hits.length) {
-        c.position.copy(hits[0]!.point);
+      this.hits.length = 0;
+      this.raycaster.intersectObjects(this.targets, true, this.hits);
+      const hit = this.hits.find((h) => isShown(h.object));
+      if (hit) {
+        c.position.copy(hit.point);
         if (c.justPinched) {
           this.dragging = true;
-          const n = this.camera.getWorldDirection(new Vector3()).negate();
+          const n = this.camera.getWorldDirection(this.planeNormal).negate();
           this.plane.setFromNormalAndCoplanarPoint(n, c.position);
         }
       } else if (!this.dragging) {
@@ -186,6 +189,14 @@ export class MouseCursor {
     this.wheelDelta = 0;
     return d;
   }
+}
+
+function isShown(node: Object3D | null): boolean {
+  while (node) {
+    if (!node.visible) return false;
+    node = node.parent;
+  }
+  return true;
 }
 
 /** Minimal joint pose shape (matches quest-io's HandState.joints entries). */

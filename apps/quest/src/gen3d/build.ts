@@ -7,7 +7,7 @@
  * - renders the armed / disarmed states and the streaming build-up
  * - emits ControlEvents to a sink; never talks to a socket itself
  */
-import { Box3, Camera, CircleGeometry, Color, DoubleSide, EdgesGeometry, Euler, Group, LineSegments, Mesh, MeshBasicMaterial, MeshStandardMaterial, Object3D, PlaneGeometry, Quaternion, RingGeometry, SRGBColorSpace, Texture, TextureLoader, Vector3, type Material as ThreeMaterial } from 'three';
+import { Box3, Camera, CircleGeometry, Color, DoubleSide, EdgesGeometry, Euler, Group, LineSegments, Mesh, MeshBasicMaterial, MeshStandardMaterial, Object3D, PlaneGeometry, Quaternion, RingGeometry, SRGBColorSpace, Texture, TextureLoader, Vector3, type BufferGeometry, type Material as ThreeMaterial } from 'three';
 import type { Behavior, Control, ControlEvent, ControlValue, Feedback, Gen3dSpec, Part, PartialSpec, Skin } from '@ce/gen3d';
 import { NEON, expandSpec, repairSpec, validateSpec, type ExpandedSpec } from '@ce/gen3d';
 import { OneEuro3, Tweens, damp, ease } from './anim';
@@ -97,6 +97,7 @@ interface FRun {
   baseGlow: number;
   baseEmissive: number;
   baseColor?: Color;
+  feedbackColor?: Color;
   part?: Part;
 }
 
@@ -104,6 +105,7 @@ const DEG = Math.PI / 180;
 const _box = new Box3();
 const _v = new Vector3();
 const _v2 = new Vector3();
+const _local = new Vector3();
 const _q = new Quaternion();
 const _e = new Euler();
 
@@ -126,7 +128,7 @@ export class SpecObject extends Group {
   private clock: MaterialClock;
   private audio?: UiAudio;
   private sink: EventSink;
-  private armedAll = true;
+  private armedAll = false;
   private reasonLabel?: Label;
   private ghosted = new Map<Mesh, { material: ThreeMaterial | ThreeMaterial[]; edges?: LineSegments }>();
   private hoverArchetype = new Map<string, number>();
@@ -136,6 +138,7 @@ export class SpecObject extends Group {
   private skinLayers: Mesh<PlaneGeometry | CircleGeometry, MeshBasicMaterial>[] = [];
   private skinTexture?: Texture;
   private skinUrl?: string;
+  private contentVersion = 0;
   /** fired once the skin layer has finished fading in */
   onSkinReady?: (skin: Skin) => void;
   /** while a hand holds a control, the shell should not re-anchor or re-face the object */
@@ -163,7 +166,7 @@ export class SpecObject extends Group {
     this.clearContent();
     this.spec = spec;
     this.expanded = expandSpec(spec);
-    this.armedAll = spec.state?.armed ?? true;
+    this.armedAll = spec.state?.armed ?? false;
     for (const p of this.expanded.parts) this.parts.set(p.id, p);
 
     // controls
@@ -201,6 +204,7 @@ export class SpecObject extends Group {
       const mesh = node instanceof Mesh ? node : (node?.children.find((c) => c instanceof Mesh) as Mesh | undefined);
       const mat = mesh?.material as ThreeMaterial | undefined;
       const fr: FRun = { f, node, mat, baseGlow: 0, baseEmissive: 1, part: f.partId ? this.parts.get(f.partId) : undefined };
+      if (f.color) fr.feedbackColor = new Color(f.color);
       if (mat instanceof HoloMaterial) fr.baseGlow = mat.u.uGlow.value;
       if (mat instanceof MeshStandardMaterial) {
         fr.baseEmissive = mat.emissiveIntensity;
@@ -230,6 +234,7 @@ export class SpecObject extends Group {
 
   /** Paint the skin onto eligible plates / knob faces as a textured layer under the text plates. */
   private applySkin(skin: Skin, delayS: number): void {
+    const version = this.contentVersion;
     const targets: { node: Mesh; part: Part; kind: 'panel' | 'knob-face' }[] = [];
     for (const mesh of this.meshes) {
       const part = this.parts.get(mesh.userData.partId as string);
@@ -286,6 +291,10 @@ export class SpecObject extends Group {
       new TextureLoader().setCrossOrigin('anonymous').load(
         skin.url,
         (tex) => {
+          if (version !== this.contentVersion) {
+            tex.dispose();
+            return;
+          }
           this.skinTexture = tex;
           place(tex);
         },
@@ -304,16 +313,32 @@ export class SpecObject extends Group {
   }
 
   private clearContent(): void {
+    this.contentVersion++;
+    const geometries = new Set<BufferGeometry>();
+    const materials = new Set<ThreeMaterial>();
+    const collectMaterial = (material: ThreeMaterial | ThreeMaterial[]) => {
+      if (Array.isArray(material)) for (const m of material) materials.add(m);
+      else materials.add(material);
+    };
+    const collect = (node: Object3D): void => {
+      // Labels, paths and skins own their resources and are disposed below.
+      if (node instanceof Label || node instanceof PathObject || node.name === '_skin') return;
+      if (node instanceof Mesh || node instanceof LineSegments) {
+        geometries.add(node.geometry);
+        collectMaterial(node.material);
+      }
+      for (const child of node.children) collect(child);
+    };
+    for (const mesh of this.meshes) collect(mesh);
+    for (const ghost of this.ghosted.values()) collectMaterial(ghost.material);
     for (const n of [...this.children]) this.remove(n);
     for (const l of this.labels.values()) l.dispose();
     for (const p of this.paths.values()) p.dispose();
-    for (const m of this.meshes) {
-      m.geometry.dispose();
-      const mats = Array.isArray(m.material) ? m.material : [m.material];
-      for (const mat of mats) {
-        if (mat instanceof HoloMaterial) this.clock.unregister(mat);
-        mat.dispose();
-      }
+    this.reasonLabel?.dispose();
+    for (const geometry of geometries) geometry.dispose();
+    for (const material of materials) {
+      if (material instanceof HoloMaterial) this.clock.unregister(material);
+      material.dispose();
     }
     this.nodes.clear();
     this.labels.clear();
@@ -336,6 +361,9 @@ export class SpecObject extends Group {
       l.material.dispose();
     }
     this.skinLayers.length = 0;
+    this.skinTexture?.dispose();
+    this.skinTexture = undefined;
+    this.skinUrl = undefined;
   }
 
   private makeNode(p: Part): Object3D {
@@ -420,6 +448,7 @@ export class SpecObject extends Group {
     else this.hiddenParts.delete(partId);
     const node = this.nodes.get(partId);
     if (node) node.visible = !hidden;
+    if (hidden) for (const run of this.runs) if (this.isHidden(run.b.partId)) this.cancelRun(run);
   }
 
   private isHidden(partId: string): boolean {
@@ -431,6 +460,7 @@ export class SpecObject extends Group {
   setValue(controlId: string, value: ControlValue, opts: { emit?: boolean; phase?: ControlEvent['phase']; index?: number; immediate?: boolean } = {}): void {
     const c = this.controls.get(controlId);
     if (!c) return;
+    if (opts.emit !== false && opts.phase && (!c.armed || !this.armedAll)) return;
     const q = quantize(c.control, value);
     const changed = !sameValue(q, c.value);
     c.value = q;
@@ -491,6 +521,7 @@ export class SpecObject extends Group {
       this.armedAll = armed;
       for (const c of this.controls.values()) c.armed = armed;
     }
+    if (!armed) for (const run of this.runs) if (!run.ctrl?.armed || !this.armedAll) this.cancelRun(run);
     this.spec.state = { armed: this.armedAll, ...(reason ? { reason } : {}) };
     this.applyArmed();
     const isNow = this.armedAll && [...this.controls.values()].every((c) => c.armed);
@@ -530,8 +561,14 @@ export class SpecObject extends Group {
         mesh.material = ghostMaterial();
         for (const child of mesh.children) if (child.name !== '_ghostEdges' && child.name !== '_skin') child.visible = false;
       } else if (!shouldGhost && g) {
+        const material = mesh.material as ThreeMaterial;
         mesh.material = g.material;
-        if (g.edges) mesh.remove(g.edges);
+        material.dispose();
+        if (g.edges) {
+          mesh.remove(g.edges);
+          g.edges.geometry.dispose();
+          (g.edges.material as ThreeMaterial).dispose();
+        }
         for (const child of mesh.children) child.visible = true;
         this.ghosted.delete(mesh);
       }
@@ -579,6 +616,9 @@ export class SpecObject extends Group {
     this.updateMatrixWorld(true);
 
     // interaction
+    for (const grab of this.grabs.values()) {
+      if (!cursors.some((c) => c.id === grab.cursorId && c.tracked) || !this.canInteract(grab.run)) this.cancelRun(grab.run);
+    }
     for (const c of cursors) {
       const grab = this.grabs.get(c.id);
       if (grab) {
@@ -593,7 +633,7 @@ export class SpecObject extends Group {
       let best: BRun | null = null;
       let bestD = Infinity;
       for (const r of this.runs) {
-        if (r.owner || this.isHidden(r.b.partId)) continue;
+        if (r.owner || !this.canInteract(r)) continue;
         const gestures = r.b.gestures ?? ['pinch-drag'];
         const pokeOnly = gestures.every((g) => g === 'poke');
         if (pokeOnly && c.canPoke) continue;
@@ -610,16 +650,18 @@ export class SpecObject extends Group {
       }
       if (best && c.justPinched) this.acquire(best, c);
       // pokes
-      if (c.canPoke) for (const r of this.runs) if (!this.isHidden(r.b.partId)) this.updatePoke(r, c);
+      if (c.canPoke) for (const r of this.runs) if (this.canInteract(r)) this.updatePoke(r, c);
       if (c.hand === 'mouse' && best && wheel !== 0 && best.ctrl && best.b.type === 'rotate') {
         this.setT(best.ctrl, best.ctrl.t - wheel / 2400, undefined, 'move');
       }
     }
     // release presses held by pinch when the pinch ends
     for (const r of this.runs) {
+      if (r.pressedBy?.startsWith('poke:') && !cursors.some((c) => `poke:${c.id}` === r.pressedBy && c.tracked && c.canPoke)) this.cancelRun(r);
       if (r.pressedBy && !r.pressedBy.startsWith('poke:')) {
         const c = cursors.find((x) => x.id === r.pressedBy);
-        if (!c || !c.pinching) this.releasePress(r, c);
+        if (!c?.tracked) this.cancelRun(r);
+        else if (!c.pinching) this.releasePress(r, c);
       }
     }
 
@@ -662,7 +704,7 @@ export class SpecObject extends Group {
   nearestCandidate(c: Cursor): number {
     let best = Infinity;
     for (const r of this.runs) {
-      if (r.owner || this.isHidden(r.b.partId)) continue;
+      if (r.owner || !this.canInteract(r)) continue;
       const gestures = r.b.gestures ?? ['pinch-drag'];
       if (gestures.every((g) => g === 'poke') && c.canPoke) continue;
       best = Math.min(best, this.candidateDistance(r, c.position));
@@ -679,6 +721,22 @@ export class SpecObject extends Group {
     if (_box.isEmpty()) return Infinity;
     const db = _box.distanceToPoint(p);
     return db <= 0.02 ? r.radius + db : Infinity;
+  }
+
+  private canInteract(r: BRun): boolean {
+    return !this.isHidden(r.b.partId) && (r.b.type === 'grab' || (this.armedAll && !!r.ctrl?.armed));
+  }
+
+  /** Tracking loss, hiding and disarming cancel a gesture without a final device command. */
+  private cancelRun(r: BRun): void {
+    if (r.owner) this.grabs.delete(r.owner);
+    r.owner = null;
+    r.pressedBy = null;
+    r.momentum = 0;
+    r.pull = 0;
+    r.pokeArmed.clear();
+    r.hoverBy.clear();
+    if (r.ctrl?.control.kind === 'trigger' && r.ctrl.value === true) this.setValue(r.ctrl.control.id, false, { emit: false });
   }
 
   private acquire(r: BRun, c: Cursor): void {
@@ -740,11 +798,12 @@ export class SpecObject extends Group {
     const r = g.run;
     const filtered = g.filter.filter(c.position, dt, _v2);
     if (r.b.type === 'grab') {
-      const parentLocal = this.parent ? this.parent.worldToLocal(filtered.clone()) : filtered.clone();
+      const parentLocal = _local.copy(filtered);
+      if (this.parent) this.parent.worldToLocal(parentLocal);
       this.position.copy(parentLocal).add(g.objectOffset);
       return;
     }
-    const local = toLocal(r.parent, filtered, new Vector3()).sub(r.restPos);
+    const local = toLocal(r.parent, filtered, _local).sub(r.restPos);
     const ctrl = r.ctrl!;
     const axis = r.b.axis ?? (r.b.type === 'slide' ? 'y' : 'z');
     switch (r.b.type) {
@@ -964,7 +1023,7 @@ export class SpecObject extends Group {
           if (r.b.travel) {
             const on = r.ctrl ? (r.ctrl.value as boolean) : false;
             const target = on ? r.b.travel[1]! : r.b.travel[0]!;
-            const cur = r.node.position.clone().sub(r.restPos).dot(axis);
+            const cur = _v.copy(r.node.position).sub(r.restPos).dot(axis);
             const next = damp(cur, target, 0.06, _dt);
             r.node.position.copy(r.restPos).addScaledVector(axis, next);
           } else r.node.position.copy(r.restPos).addScaledVector(axis, -(r.b.depth ?? 0.007) * r.pressAmt);
@@ -1009,17 +1068,17 @@ export class SpecObject extends Group {
             if (mesh.userData.arcKey === key) break;
             mesh.userData.arcKey = key;
             const d = fr.part.dims ?? {};
-            mesh.geometry.dispose();
-            mesh.geometry = new RingGeometry(d.rInner ?? 0.03, d.rOuter ?? d.r ?? 0.04, 64, 1, (90 - cur) * DEG, Math.max(0.5, cur - a) * DEG);
+            if (mesh.geometry instanceof RingGeometry) {
+              updateArc(mesh.geometry, d.rInner ?? 0.03, d.rOuter ?? d.r ?? 0.04, (90 - cur) * DEG, Math.max(0.5, cur - a) * DEG);
+            }
           } else if (fr.part.shape === 'box') {
             const travel = run?.b.travel ?? [-0.08, 0.08];
             const len = travel[1]! - travel[0]!;
             const axis = run?.b.axis ?? 'y';
-            const base = this.baseScale.get(fr.part.id) ?? new Vector3(1, 1, 1);
+            const base = this.baseScale.get(fr.part.id)!;
             const fill = Math.max(0.01, t);
-            const s = base.clone();
-            s[axis] = base[axis] * fill;
-            mesh.scale.copy(s);
+            mesh.scale.copy(base);
+            mesh.scale[axis] = base[axis] * fill;
             const rest = fr.part.transform?.position ?? [0, 0, 0];
             const dimAlong = axis === 'y' ? (fr.part.dims?.h ?? 0.002) : axis === 'x' ? (fr.part.dims?.w ?? 0.002) : (fr.part.dims?.d ?? 0.002);
             mesh.position.set(rest[0]!, rest[1]!, rest[2]!);
@@ -1038,7 +1097,7 @@ export class SpecObject extends Group {
             if (fr.f.color && h > 0.01) (fr.mat.u.uRim.value as Color).set(fr.f.color);
           } else if (fr.mat instanceof MeshStandardMaterial) {
             fr.mat.emissiveIntensity = fr.baseEmissive * (1 + 1.2 * h);
-            if (fr.f.color && fr.baseColor) fr.mat.emissive.copy(fr.baseColor).lerp(new Color(fr.f.color), h);
+            if (fr.feedbackColor && fr.baseColor) fr.mat.emissive.copy(fr.baseColor).lerp(fr.feedbackColor, h);
           } else if (fr.mat instanceof MeshBasicMaterial && !(fr.mat.name === 'ghost')) {
             fr.mat.opacity = Math.min(1, 0.12 + 0.5 * h);
           }
@@ -1072,7 +1131,7 @@ export class SpecObject extends Group {
       const age = time - birth;
       const f = age < 0 ? 0 : Math.min(1, age / 0.3);
       const e = ease.outCubic(f);
-      const base = this.baseScale.get(id) ?? new Vector3(1, 1, 1);
+      const base = this.baseScale.get(id)!;
       node.visible = age >= 0 && !this.isHidden(id);
       node.scale.copy(base).multiplyScalar(0.9 + 0.1 * e);
       // position-only glitch while curing (no luminance flashing)
@@ -1245,8 +1304,29 @@ function isChrome(p: Part | undefined): boolean {
 function yawToward(obj: Object3D, worldTarget: Vector3): void {
   const parent = obj.parent;
   if (!parent) return;
-  const local = parent.worldToLocal(worldTarget.clone());
+  const local = parent.worldToLocal(_local.copy(worldTarget));
   const dx = local.x - obj.position.x;
   const dz = local.z - obj.position.z;
   obj.rotation.set(0, Math.atan2(dx, dz), 0);
+}
+
+/** Keep the arc's buffers stable while a control moves. */
+function updateArc(geometry: RingGeometry, inner: number, outer: number, start: number, sweep: number): void {
+  const { thetaSegments, phiSegments } = geometry.parameters;
+  const positions = geometry.getAttribute('position');
+  const uv = geometry.getAttribute('uv');
+  let vertex = 0;
+  for (let ring = 0; ring <= phiSegments; ring++) {
+    const radius = inner + (outer - inner) * ring / phiSegments;
+    for (let point = 0; point <= thetaSegments; point++) {
+      const angle = start + sweep * point / thetaSegments;
+      const x = radius * Math.cos(angle), y = radius * Math.sin(angle);
+      positions.setXYZ(vertex, x, y, 0);
+      uv.setXY(vertex++, (x / outer + 1) / 2, (y / outer + 1) / 2);
+    }
+  }
+  positions.needsUpdate = true;
+  uv.needsUpdate = true;
+  geometry.computeBoundingSphere();
+  if (geometry.boundingBox) geometry.computeBoundingBox();
 }

@@ -163,7 +163,7 @@ class HudImpl implements Hud {
   }
 
   private hudSpec(id: string, title: string, parts: Part[], extra: Partial<Gen3dSpec> = {}): Gen3dSpec {
-    return { spec: 'ce.gen3d/1', specId: id, rev: 1, title, anchor: { mode: 'world', position: [0, 0, 0], grabbable: false }, controls: [], parts, ...extra };
+    return { spec: 'ce.gen3d/1', specId: id, rev: 1, title, state: { armed: true }, anchor: { mode: 'world', position: [0, 0, 0], grabbable: false }, controls: [], parts, ...extra };
   }
 
   /** A target beyond comfortable reach (a ceiling light at 2.3 m): its HUD comes to arm's length. */
