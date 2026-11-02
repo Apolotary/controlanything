@@ -29,7 +29,8 @@ describe('companion first-run state', () => {
 
   it('retains saved pairing through server and headset reconnection', () => {
     expect(companionView({ ...initial, connected: false })).toMatchObject({ stage: 'connecting', enableMidi: false });
-    expect(companionView({ ...initial, devices: [{ ...quest, online: false }] })).toMatchObject({ stage: 'headset', headset: 'Waiting for your headset' });
+    expect(companionView({ ...initial, devices: [{ ...quest, online: false }] })).toMatchObject({ stage: 'headset', title: 'Waiting for Quest 3', headset: 'Waiting for your headset' });
+    expect(companionView({ ...initial, devices: [], headsetPaired: true })).toMatchObject({ stage: 'headset', title: 'Waiting for Quest 3' });
     expect(companionView({ ...initial, midiEnabled: true, ports: [usb] }).stage).toBe('setup');
   });
 

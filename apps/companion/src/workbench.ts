@@ -47,6 +47,7 @@ import { replayArmResult, runReplay } from './replay';
 
 const APP = 'companion@0.2.0';
 const params = new URLSearchParams(location.search);
+const pairNow = params.get('pair') === '1';
 
 // --- state ----------------------------------------------------------------------------------
 
@@ -60,6 +61,7 @@ let selfExpiresAt = 0;
 let selfPairing = false;
 let selfPairingError = false;
 let selfPairGeneration = 0;
+let pairedWithQuest = false;
 const pending = new Map<string, PendingPairing>();
 const settledPairings = new Set<string>();
 let devices: DeviceInfo[] = [];
@@ -285,8 +287,14 @@ function renderOnboarding(): void {
   }
   const view = companionView({
     connected: replaying || Boolean(conn?.open), authenticated: Boolean(identity), pairing: selfPairing || selfPairingError,
-    devices, ports, midiSupported: MidiBridge.supported, midiEnabled: midi.enabled, leader: executor.leader, activity: currentSetup,
+    devices, ports, midiSupported: MidiBridge.supported, midiEnabled: midi.enabled, leader: executor.leader, headsetPaired: pairedWithQuest, activity: currentSetup,
   });
+  const pairOnly = pairNow && !identity;
+  const paired = Boolean(identity && !selfPairing && (pairedWithQuest || devices.some((d) => d.kind === 'quest')));
+  $('app-header').hidden = pairOnly;
+  $('workbench').classList.toggle('pair-only', pairOnly);
+  $('onboarding').classList.toggle('has-paired', paired);
+  $('paired-summary').hidden = !paired;
   $('onboarding').dataset.state = view.stage;
   $('onboarding-title').textContent = view.title;
   $('onboarding-next').textContent = view.next;
@@ -1184,7 +1192,7 @@ async function pairThisBrowser(): Promise<void> {
   const me = resumed?.device ?? defaultDevice();
   // A new Mac joins the headset's existing room through an explicit owner approval.
   // An empty room retains the local bootstrap so the owner can pair their first headset.
-  const requireApproval = params.get('pair') === '1' || (health?.space?.pairedDevices ?? 0) > 0;
+  const requireApproval = pairNow || (health?.space?.pairedDevices ?? 0) > 0;
   try {
     const r = resumed?.request ?? await api.pairStart({ name: me.name, kind: me.kind, capabilities: hello().capabilities ?? [], ...(requireApproval ? { requireApproval } : {}) });
     if (generation !== selfPairGeneration) return;
@@ -1205,6 +1213,7 @@ async function pairThisBrowser(): Promise<void> {
         const s = await api.pairStatus(r.pairingId, r.pollSecret);
         if (generation !== selfPairGeneration) return;
         if (s.status === 'approved' && s.deviceId && s.deviceToken) {
+          pairedWithQuest = pairNow;
           adopt({ deviceId: s.deviceId, deviceToken: s.deviceToken, kind: me.kind, name: me.name });
           return;
         }
@@ -1263,7 +1272,7 @@ function adopt(id: Identity): void {
   identity = id;
   saveIdentity(id);
   selfExpiresAt = 0;
-  if (params.get('pair') === '1') history.replaceState(null, '', location.pathname);
+  if (pairNow) history.replaceState(null, '', location.pathname);
   $('pairscreen').hidden = true;
   $('workbench').hidden = false;
   connect();
@@ -1300,6 +1309,7 @@ function connect(): void {
       log('warn', 'This browser is no longer paired (revoked or unknown token); pairing again.');
       clearIdentity();
       identity = undefined;
+      pairedWithQuest = false;
       void pairThisBrowser();
     }
   };
@@ -1511,10 +1521,7 @@ export async function bootWorkbench(): Promise<void> {
   if (!replaying) executor.claim();
   if (replaying) { connect(); return; }
   void pollCalls();
-  if (params.get('pair') === '1') {
-    clearIdentity();
-    identity = undefined;
-  }
   if (identity) connect();
-  await reachServer();
+  if (pairNow && !identity) await Promise.all([pairThisBrowser(), reachServer()]);
+  else await reachServer();
 }

@@ -20,6 +20,7 @@ export interface CompanionInput {
   midiSupported: boolean;
   midiEnabled: boolean;
   leader: boolean;
+  headsetPaired?: boolean;
   activity?: SetupActivity;
 }
 
@@ -44,9 +45,12 @@ export function companionView(input: CompanionInput): CompanionView {
   const headset = quest ? 'Connected to Quest 3' : 'Waiting for your headset';
   const synth = input.ports.length ? `${input.ports.map((p) => p.name).join(', ')} on USB` : 'Plug in a synth (USB)';
   const base = { headset, synth, enableMidi: false };
-  if (input.pairing) return { ...base, stage: 'pairing', title: 'Pair with your headset', next: 'In Control, choose Connect Mac and look at this QR code.' };
+  if (input.pairing) return { ...base, stage: 'pairing', title: 'Pair with your headset', next: 'Look at this QR code with your Quest 3.' };
   if (!input.connected) return { ...base, stage: 'connecting', title: 'Connecting to your room', next: 'Your saved connection will return when the server is ready.' };
-  if (!input.authenticated || !quest) return { ...base, stage: 'headset', title: 'Pair with your headset', next: 'Open ControlEverything in Quest Browser, then approve its code on this Mac.' };
+  if (!input.authenticated) return { ...base, stage: 'headset', title: 'Pair with your headset', next: 'Open ControlEverything in Quest Browser, then approve its code on this Mac.' };
+  if (!quest) return input.headsetPaired || input.devices.some((d) => d.kind === 'quest')
+    ? { ...base, stage: 'headset', title: 'Waiting for Quest 3', next: 'Keep this page open and open ControlEverything in your headset.' }
+    : { ...base, stage: 'headset', title: 'Pair with your headset', next: 'Open ControlEverything in Quest Browser, then approve its code on this Mac.' };
   if (!input.midiSupported && !input.ports.length) return { ...base, stage: 'midi-permission', title: 'Open this page in Chrome', next: 'Chrome or Edge can connect your synth over USB.' };
   if (!input.midiEnabled && !input.ports.length && input.leader) return { ...base, stage: 'midi-permission', title: 'Connect your synth', next: 'Allow USB MIDI access so your headset can find the synth.', enableMidi: true };
   if (!input.ports.length) return { ...base, stage: 'usb', title: 'Plug in a synth (USB)', next: input.leader ? 'Connect the synth to this Mac with a USB cable.' : 'Keep the first companion tab open; it connects your USB devices.' };

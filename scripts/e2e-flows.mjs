@@ -6,7 +6,7 @@
  * Scan prompts are limited to ceiling light + synthesizer to avoid generic duplicate boxes.
  * The sim advertises connected sim-midi and sim-ir ports even with audio muted. We only
  * assert synth setup eligibility, never run its audio pipeline. Companion coverage uses a
- * separate browser context, its real rendered QR, and silent Web MIDI metadata to exercise
+ * separate browser context, typed code plus its real rendered QR, and silent Web MIDI metadata to exercise
  * hot-plug and second-tab presence. Recovery reuses the same fixture data across a restart.
  * Helpers are copied from e2e-judge.mjs so its passing path remains unchanged.
  * This script needs sockets and Chrome and cannot run in the coding sandbox.
@@ -200,8 +200,26 @@ async function openCompanion() {
   companion = await companionContext.newPage();
   watchPage(companion, 'companion');
   // requireApproval overrides trusted-loopback convenience, so the owner must still approve.
-  await companion.goto(`${BASE}/companion/?pair=1`, { waitUntil: 'domcontentloaded' });
+  await companion.goto(`${BASE}/pair`, { waitUntil: 'domcontentloaded' });
+  assert.equal(new URL(companion.url()).pathname, '/companion/');
+  assert.equal(new URL(companion.url()).searchParams.get('pair'), '1');
   await companion.locator('#self-qr svg').waitFor({ state: 'visible' });
+}
+
+async function helperPaired() {
+  // Assert the visible success before its 1.5 s dismissal; companion polling can arrive later.
+  await waitQuest(() => {
+    const app = window.__ce;
+    return app.onboarding.state === 'paired' && app.onboarding.visible && !app.onboarding.scanning
+      && app.hud.root.getObjectByName('helper-pairing-title')?.text === `Paired with ${app.onboarding.pairedName}`;
+  });
+  const pairedName = await quest.evaluate(() => window.__ce.onboarding.pairedName);
+  assert(pairedName, 'The success card must identify the paired laptop');
+  await waitQuest(() => !window.__ce.onboarding.visible && !window.__ce.onboarding.scanning, undefined, 5000);
+  await companion.waitForFunction(() => document.querySelector('#paired-summary')?.textContent.includes('Paired with Quest 3')
+    && document.querySelector('#paired-summary')?.textContent.includes('You can leave this page open; the headset uses it to reach your devices.'));
+  await companion.locator('#paired-summary').waitFor({ state: 'visible' });
+  return pairedName;
 }
 
 async function scanCompanionQr() {
@@ -457,6 +475,8 @@ async function run() {
     });
     await quest.locator('#btn-enter').click();
     await waitQuest(() => window.__ce.renderer.xr.isPresenting && window.__ce.cameraState === 'on');
+    assert.equal(await quest.evaluate(() => window.__ce.onboarding.visible), false,
+      'The simulated room already provides a helper for the judge path');
   });
 
   let targetId, synthId, synthCardId, tagGaze, staleControl;
@@ -554,8 +574,31 @@ async function run() {
     assert.equal(await quest.evaluate(() => window.__flowsRequests.some((e) => e.type === 'control.setup')), false,
       'Switching mode alone must not start setup');
   });
-  await phase('06-offline-bridge', async () => {
+  await phase('06-helper-onboarding', async () => {
     await assertSynthConnection(synthCardId, 'offline', () => sim.evaluate(() => window.ceSimDebug.device.conn.stop()));
+    const helper = await json('/api/helper');
+    assert.equal(helper.helpers.some((device) => device.online), false, 'This phase needs no online helper');
+    assert.equal(helper.urls[0], 'http://localhost:8797/pair');
+    await waitQuest((urls) => {
+      const app = window.__ce;
+      return app.onboarding.visible && app.onboarding.scanning
+        && app.hud.root.getObjectByName('helper-pairing-title')?.text === 'Pair a helper device'
+        && app.hud.root.getObjectByName('helper-pairing-url')?.text === urls[0].replace(/^https?:\/\//, '')
+        && app.hud.root.getObjectByName('helper-pairing-status')?.text === 'Looking for the QR code…';
+    }, helper.urls);
+    assert.deepEqual(await quest.evaluate(() => window.__ce.onboarding.urls), helper.urls,
+      'The card must display addresses supplied by the server');
+    const sent = await quest.evaluate(() => window.__flowsRequests.length);
+    await waitQuest((sent) => window.__flowsRequests.slice(sent).filter((e) => e.type === 'scan.frame' && e.payload.purpose === 'pair').length >= 2, sent);
+  });
+  await phase('06a-helper-skip-and-offline-card', async () => {
+    await pinch({ nodeName: 'helper-skip', turn: true });
+    await waitQuest(() => window.__ce.onboarding.state === 'skipped' && !window.__ce.onboarding.visible && !window.__ce.onboarding.scanning);
+    const sent = await quest.evaluate(() => window.__flowsRequests.length);
+    await elapsedFrames(2400); // Includes the helper presence refresh interval.
+    assert.equal(await quest.evaluate(() => window.__ce.onboarding.visible), false, 'Skip hides the card for this AR session');
+    assert.equal(await quest.evaluate((sent) => window.__flowsRequests.slice(sent).some((e) => e.type === 'scan.frame' && e.payload.purpose === 'pair'), sent), false,
+      'Skip must stop the pairing camera loop');
     const hint = await quest.evaluate((id) => window.__ce.modes.byCard(id).hint, synthCardId);
     assert.equal(hint, 'Open ControlEverything on your Mac and plug in the synth');
     await pinch({ targetId: synthId, turn: true });
@@ -568,39 +611,42 @@ async function run() {
     assert.equal(await quest.evaluate(() => window.__flowsRequests.some((e) => e.type === 'control.setup')), false);
     assert.equal(await quest.evaluate(() => window.__flowsEvents.some((e) => e.type === 'agent.step')), false);
   });
-  await phase('06a-connect-mac', async () => {
+  await phase('06b-helper-pair-by-code', async () => {
     await pinch({ nodeName: 'control-pair' });
-    await waitQuest(() => window.__ce.pairingUntil > performance.now()
-      && !!window.__ce.hud.root.getObjectByName('control-pair-cancel')
-      && !!window.__ce.hud.root.getObjectByName('control-pair-code'));
-    const remaining = await quest.evaluate(() => window.__ce.pairingUntil - performance.now());
-    assert(remaining > 0 && remaining <= 30_000, 'QR scan must have a bounded countdown');
-    await screenshot('06a-pairing-countdown');
-    await pinch({ nodeName: 'control-pair-cancel' });
-    await waitQuest(() => window.__ce.pairingUntil === 0 && !!window.__ce.hud.root.getObjectByName('control-pair'));
-    await pinch({ nodeName: 'control-pair-code' });
-    for (const key of 'K7Q4M2') await pinch({ nodeName: `pair-key:${key}` });
-    await waitQuest(() => window.__ce.hud.root.getObjectByName('pair-code-value')?.text === 'K7Q-4M2'
-      && !!window.__ce.hud.root.getObjectByName('pair-code-submit'));
-    await screenshot('06a-pairing-type-code');
-    await pinch({ nodeName: 'pair-code-close' });
-    await waitQuest(() => !window.__ce.hud.modal.visible && window.__ce.hud.card.visible);
-    await pinch({ nodeName: 'control-pair' });
+    await waitQuest(() => window.__ce.onboarding.visible && window.__ce.onboarding.scanning);
+    await openCompanion();
+    const code = await companion.locator('#self-code').innerText();
+    assert.match(code, /^[A-Z0-9]{3}-[A-Z0-9]{3}$/);
+    assert.equal(await companion.locator('#app-header').isVisible(), false, '/pair should begin with the QR and code only');
+    await companionScreenshot('06b-companion-pair-page');
+    await pinch({ nodeName: 'helper-type-code', turn: true });
+    for (const key of code.replace('-', '')) await pinch({ nodeName: `pair-key:${key}` });
+    await waitQuest((code) => window.__ce.hud.root.getObjectByName('pair-code-value')?.text === code
+      && !!window.__ce.hud.root.getObjectByName('pair-code-submit'), code);
+    await screenshot('06b-pairing-type-code');
+    assert.equal(await quest.evaluate(() => window.__ce.onboarding.scanning), true, 'Type code keeps QR scanning active');
+    await pinch({ nodeName: 'pair-code-submit' });
+    await helperPaired();
+    await companionScreenshot('06b-companion-paired-by-code');
+  }, false);
+  await phase('06c-helper-pair-by-qr', async () => {
+    // A fresh browser models a second laptop and keeps the real QR decoder covered.
+    await companionContext.close();
+    await waitQuest(() => window.__ce.onboarding.visible && window.__ce.onboarding.scanning);
     await openCompanion();
     assert.match(await companion.locator('#self-code').innerText(), /^[A-Z0-9]{3}-[A-Z0-9]{3}$/);
     const expires = await companion.locator('#self-expiry').innerText();
     assert(expires, 'The Mac must show when its pairing code expires');
     await companion.waitForFunction((previous) => document.querySelector('#self-expiry')?.textContent !== previous, expires);
-    await companionScreenshot('06b-companion-pair-code');
+    await companionScreenshot('06c-companion-pair-qr');
     await scanCompanionQr();
-    await companion.waitForFunction(() => document.querySelector('#headset-status')?.textContent.includes('Connected to Quest'));
-    await waitQuest(() => window.__ce.pairingUntil === 0);
+    await helperPaired();
     await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'offline'
       && window.__ce.modes.byCard(id)?.hint === 'Plug the synth into your Mac', synthCardId);
     assert.equal(await quest.evaluate(() => !!window.__ce.hud.root.getObjectByName('control-pair')), false,
       'A paired Mac without a synth must offer cable guidance, without another Connect Mac button');
     await companionScreenshot('06c-companion-connected-no-usb');
-  });
+  }, false);
   await phase('06d-companion-usb-hotplug', async () => {
     await companion.locator('#enable-midi').click();
     await assertSynthConnection(synthCardId, 'setup', () => companion.evaluate(() => window.__flowsMidi.connect(true)));
@@ -1042,6 +1088,14 @@ async function run() {
     assert(await storedIdentity(companion) === macIdentity, 'Companion reload must keep its saved identity');
     assert.equal(newPairRequests, 0, 'Companion reload must not begin another pairing');
     await companionScreenshot('18-companion-reloaded');
+    await companion.goto(`${BASE}/pair`, { waitUntil: 'domcontentloaded' });
+    await companion.waitForFunction(() => document.querySelector('#conn-dot')?.classList.contains('on')
+      && document.querySelector('#paired-summary')?.textContent.includes('Paired with Quest 3'));
+    assert(await storedIdentity(companion) === macIdentity, 'Revisiting /pair must reuse the saved companion identity');
+    assert.equal(newPairRequests, 0, 'Revisiting /pair must not begin another pairing');
+    assert.equal(await companion.locator('#self-qr').isVisible(), false, 'A paired helper must not show a new QR');
+    assert.equal(await companion.locator('#paired-summary').isVisible(), true);
+    await companionScreenshot('18-companion-pair-revisited');
   }, false);
   await phase('19-quest-reload', async () => {
     await quest.reload({ waitUntil: 'domcontentloaded' });
@@ -1093,6 +1147,8 @@ async function diagnostics() {
       camera: window.__ce?.cameraState, hud: window.__ce?.hudKind,
       mode: window.__ce?.modes.mode, tags: window.__ce?.modes.tags && [...window.__ce.modes.tags.values()],
       lockedId: window.__ce?.lockedId, pendingArm: window.__ce?.pendingArm,
+      onboarding: window.__ce?.onboarding && { state: window.__ce.onboarding.state, scanning: window.__ce.onboarding.scanning,
+        urls: window.__ce.onboarding.urls, pairedName: window.__ce.onboarding.pairedName },
       hands: window.__flowsHandEvents, input: window.__ce?.input.diagnostics,
       targets: window.__ce?.targets.list(), events: window.__flowsEvents, requests: window.__flowsRequests, controls: window.__flowsControls,
       specs: window.__ce?.hud.specs && [...window.__ce.hud.specs.values()].map((m) => ({

@@ -69,6 +69,7 @@ import { PushToTalk } from '../voice/ptt';
 import { PinchTargetHistory } from './precision';
 import { ControlSender } from './controls';
 import { ModeState } from './modes';
+import { HelperOnboarding, type HelperInfo } from './onboarding';
 import type { AppMode, HudTarget, ObjectFilter } from '../hud/contract';
 import { annotationFadeMs, annotationRange, matchesAnnotationFilter, inAnnotationRange } from '../scan/policy';
 import { type Emulator, installEmulator } from './emulator';
@@ -157,7 +158,12 @@ export class QuestApp {
   private activeSetup?: string;
   private armRequest?: ArmRequestPayload;
   private acceptedArm?: string;
+  readonly onboarding: HelperOnboarding;
   private pairingUntil = 0;
+  private helperLoading = false;
+  private helperPresenceRevision = 0;
+  private lastHelperPoll = -Infinity;
+  private helperViewKey = '';
   private pairCodeRequest: string | null = null;
   private lastPairFrame = 0;
   private pairCapturing = false;
@@ -214,6 +220,7 @@ export class QuestApp {
 
   constructor(params: URLSearchParams) {
     this.params = params;
+    this.onboarding = new HelperOnboarding(params.get('camera') === 'sim');
     this.nonDominant = params.get('dominant') === 'left' ? 'right' : 'left';
   }
 
@@ -520,6 +527,7 @@ export class QuestApp {
     hud.on('cancel', (e) => this.cancelControl(e.targetId));
     hud.on('pair', (e) => this.pairDevice(e.targetId));
     hud.on('pairCancel', () => { this.pairingUntil = 0; this.pairCodeRequest = null; this.refreshHome(); });
+    hud.on('helperSkip', () => this.skipHelper());
     hud.on('pairCode', (e) => this.submitPairCode(e.targetId, e.code));
     hud.on('handControl', (e) => this.setHandControl(e.targetId, e.enabled));
     hud.on('deck', (e) => this.onDeck(e.key, e.phase));
@@ -590,9 +598,9 @@ export class QuestApp {
     this.approvals.on('change', (list) => {
       const tag = this.lockedId ? this.modes.tags.get(this.lockedId) : undefined;
       const connectingMac = this.modes.mode === 'control' && tag?.connection === 'offline' && tag.action === 'open-companion';
-      this.hud.showApprovals(this.pairingUntil || connectingMac ? [] : list);
+      this.hud.showApprovals(this.onboarding.visible || this.pairingUntil || connectingMac ? [] : list);
       this.page.showApprovals(list, (id, ok) => (ok ? this.approvals.approve(id) : this.approvals.deny(id)));
-      if (list.length && !this.pairingUntil && !connectingMac) this.hud.toast(`${list[0].name} wants to join · ${list[0].display}`, 'info');
+      if (list.length && !this.onboarding.visible && !this.pairingUntil && !connectingMac) this.hud.toast(`${list[0].name} wants to join · ${list[0].display}`, 'info');
     });
     this.approvals.on('resolved', (r) => this.page.log(`pairing ${r.approved ? 'approved' : 'denied'}${r.name ? `: ${r.name}` : ''}`, r.approved ? 'ok' : 'warn'));
     this.ptt.on('listening', ({ listening }) => {
@@ -817,32 +825,89 @@ export class QuestApp {
   private pairDevice(targetId: string): void {
     const tag = this.modes.tags.get(targetId);
     if (this.modes.mode !== 'control' || tag?.connection !== 'offline' || !['open-companion', 'pair-device'].includes(tag.action ?? '')) return;
-    this.pairingUntil = performance.now() + 30_000;
+    if (tag.action === 'pair-device') {
+      this.pairingUntil = performance.now() + 30_000;
+      this.pairCodeRequest = null;
+      this.lastPairFrame = -Infinity;
+      this.hud.showApprovals([]);
+      void this.startCamera();
+      this.refreshHome();
+      return;
+    }
+    this.onboarding.show();
     this.pairCodeRequest = null;
-    this.lastPairFrame = 0;
-    this.hud.showApprovals([]);
-    void this.startCamera();
-    this.refreshHome();
+    this.lastPairFrame = -Infinity;
+    this.refreshHelper();
+    void this.loadHelper();
+  }
+
+  private skipHelper(): void {
+    this.onboarding.skip();
+    this.pairCodeRequest = null;
+    this.refreshHelper();
+  }
+
+  private async loadHelper(): Promise<void> {
+    if (this.helperLoading) return;
+    this.helperLoading = true;
+    this.lastHelperPoll = performance.now();
+    const revision = this.helperPresenceRevision;
+    try {
+      const url = new URL('/api/helper', this.ws.url);
+      url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+      const response = await fetch(url, { signal: AbortSignal.timeout(4000) });
+      if (!response.ok) return;
+      const info = await response.json() as HelperInfo;
+      if (!Array.isArray(info.urls) || !Array.isArray(info.helpers)) return;
+      // A newer socket snapshot takes priority over an HTTP request already in flight.
+      if (revision === this.helperPresenceRevision) this.onboarding.update(info, performance.now());
+      else this.onboarding.updateUrls(info.urls, performance.now());
+      this.refreshHelper();
+    } catch {
+      // Retry while in AR; presence messages still keep the helper status current.
+    } finally { this.helperLoading = false; }
+  }
+
+  private refreshHelper(): void {
+    const flow = this.onboarding;
+    if (flow.state === 'shown') {
+      flow.scan();
+      this.lastPairFrame = -Infinity;
+      this.hud.showApprovals([]);
+      void this.startCamera();
+    }
+    const view = flow.visible ? { urls: flow.urls, pairedName: flow.state === 'paired' ? flow.pairedName : undefined } : null;
+    const key = JSON.stringify(view);
+    if (key !== this.helperViewKey) {
+      this.helperViewKey = key;
+      this.hud.showHelperPairing?.(view);
+    }
+    if (flow.state === 'paired') this.pairCodeRequest = null;
   }
 
   private async capturePairing(time: number): Promise<void> {
-    if (time >= this.pairingUntil || this.modes.mode !== 'control') {
+    if (this.pairingUntil && (time >= this.pairingUntil || this.modes.mode !== 'control')) {
       this.pairingUntil = 0; this.pairCodeRequest = null;
-      this.hud.toast('Pairing timed out. Try again or type the code.', 'info');
-      this.refreshHome(); return;
+      this.refreshHome();
     }
-    if (this.pairCapturing || time - this.lastPairFrame < 1000) return;
-    this.refreshHome();
+    if ((!this.onboarding.scanning && !this.pairingUntil) || this.pairCapturing || time - this.lastPairFrame < 500) return;
+    if (this.pairingUntil) this.refreshHome();
+    const generation = this.onboarding.generation;
     this.pairCapturing = true; this.lastPairFrame = time;
     try {
       const frame = await this.capture.capture('pair');
-      if (frame && this.pairingUntil && this.modes.mode === 'control') this.ws.send('scan.frame', frame.payload, { to: 'server', droppable: true });
+      if (frame && (this.onboarding.scanning && generation === this.onboarding.generation || this.pairingUntil && this.modes.mode === 'control')) {
+        this.ws.send('scan.frame', frame.payload, { to: 'server', droppable: true });
+      }
+    } catch (error) {
+      this.page.log(`Pairing camera: ${(error as Error).message}`, 'warn');
     } finally { this.pairCapturing = false; }
   }
 
   private submitPairCode(targetId: string, value: string): void {
     const code = pairingCode(value), tag = this.modes.tags.get(targetId);
-    if (!code || this.modes.mode !== 'control' || tag?.connection !== 'offline' || !tag.action) return;
+    const helper = targetId === '__helper__' && this.onboarding.scanning;
+    if (!code || !helper && (this.modes.mode !== 'control' || tag?.connection !== 'offline' || !tag.action)) return;
     // Approval goes through the authenticated socket, never a URL from the QR or an input field.
     this.pairCodeRequest = this.ws.send('pair.approve', { code }, { to: 'server' });
     this.hud.toast(this.pairCodeRequest ? 'Checking the code…' : 'Waiting for the server connection.', 'info');
@@ -902,6 +967,7 @@ export class QuestApp {
     const ws = this.ws;
     ws.on('welcome', (m) => {
       this.welcome = m.payload as PayloadOf<'welcome'>;
+      void this.loadHelper();
       this.serverMode = this.welcome.mode;
       this.pendingMode = this.modes.mode;
       this.ws.send('mode.set', { mode: this.modes.mode }, { to: 'server' });
@@ -909,6 +975,12 @@ export class QuestApp {
       for (const cardId of this.modes.removals) this.ws.send('tag.remove', { cardId }, { to: 'server' });
       this.page.badge('b-mode', this.welcome.mode === 'live' ? 'LIVE' : 'FIXTURE', this.welcome.mode === 'live' ? 'ok' : 'warn');
       this.page.log(`connected: ${this.welcome.name} (${this.welcome.kind}) · ${this.welcome.server} · ${this.welcome.mode}${this.welcome.canApprove ? ' · approver' : ''}`, 'ok');
+    });
+    ws.on('presence', (m) => {
+      this.helperPresenceRevision++;
+      const helpers = (m.payload as PayloadOf<'presence'>).devices.filter((device) => device.kind === 'sim' || device.kind === 'mac' && device.role === 'companion');
+      this.onboarding.updateHelpers(helpers, performance.now());
+      this.refreshHelper();
     });
     ws.on('mode.state', (m) => {
       const { mode } = m.payload as PayloadOf<'mode.state'>;
@@ -931,16 +1003,12 @@ export class QuestApp {
     ws.on('scan.result', (m) => {
       const p = m.payload as ScanResultPayload;
       if (this.modes.mode === 'annotate') void this.scanner.onResult(p);
-      if (p.qr?.some((q) => q.approved)) { this.pairingUntil = 0; this.refreshHome(); }
+      if (p.qr?.some((q) => q.approved)) { this.pairingUntil = 0; this.refreshHome(); void this.loadHelper(); }
       if (p.qr?.length) for (const q of p.qr) this.page.log(`QR seen${q.approved ? ' → approved' : ''}: ${q.text.slice(0, 60)}`, q.approved ? 'ok' : 'info');
     });
     ws.on('pair.approved', (m) => {
       const p = m.payload as PayloadOf<'pair.approved'>;
-      if ((this.pairingUntil || this.pairCodeRequest) && p.kind === 'mac') {
-        this.pairingUntil = 0; this.pairCodeRequest = null;
-        this.hud.toast('Mac connected. Plug in the synth.', 'info');
-        this.refreshHome();
-      }
+      if (p.kind === 'mac') void this.loadHelper();
     });
     ws.on('target.status', (m) => this.onTargetStatus(m.payload as TargetStatusPayload));
     ws.on('device.card', (m) => this.onDeviceCard(m.payload as PayloadOf<'device.card'>));
@@ -1513,7 +1581,12 @@ export class QuestApp {
     this.room?.update(time);
     this.refreshAnnotations();
     this.updateHandControl(f, time);
-    if (this.pairingUntil) void this.capturePairing(time);
+    if (this.session) {
+      this.onboarding.tick(time);
+      this.refreshHelper();
+      if (time - this.lastHelperPoll >= 2000) void this.loadHelper();
+      if (this.onboarding.scanning || this.pairingUntil) void this.capturePairing(time);
+    }
     for (const m of this.handheld.update(this.wrists(f), time, this.heldMoves)) {
       const t = this.targets.get(m.id);
       if (!t) continue;
@@ -1528,9 +1601,9 @@ export class QuestApp {
       if (hands.right?.controller && this.input.mouseAsHand) delete hands.right;
       this.hud.update({ ...f, hands, ...(this.input.mouseAsHand ? { pointer: 'mouse' as const } : {}) });
     } else this.hud.update(this.input.mouseAsHand ? { ...f, pointer: 'mouse' } : f);
-    this.interact(f, time);
+    if (!this.onboarding?.visible) this.interact(f, time);
     this.handFeedback.update(f, this.input.diagnostics, this.renderer.info.render.calls);
-    this.scanner.tick(time);
+    if (!this.onboarding?.visible) this.scanner.tick(time);
     if (this.live) {
       this.live.tick(time, f.dt * 1000);
       if (this.readout) this.readout.update(cam as PerspectiveCamera, time, this.liveReadoutLines());
@@ -1602,6 +1675,9 @@ export class QuestApp {
       const s = await startXr(this.renderer, { allowVr: Boolean(this.emulator) });
       this.session = s.session;
       this.setMode('annotate');
+      this.onboarding.enter(performance.now());
+      this.refreshHelper();
+      void this.loadHelper();
       this.refSpace = s.refSpace;
       this.xrHit.attach(s.session, s.refSpace);
       this.input.attach(s.session);
@@ -1611,6 +1687,10 @@ export class QuestApp {
       s.session.addEventListener('end', () => {
         if (this.session !== s.session) return;
         this.scanner.stop();
+        this.onboarding.leave();
+        this.pairingUntil = 0;
+        this.pairCodeRequest = null;
+        this.refreshHelper();
         this.session = undefined;
         this.refSpace = undefined;
         this.xrHit.detach();

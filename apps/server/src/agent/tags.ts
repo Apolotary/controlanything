@@ -7,6 +7,7 @@ import { neededCapability, type LinkCapability } from './link';
 import { MAC_LOCAL_ID } from './maclocal';
 import { synthConnectionGuidance } from './guidance';
 import type { Target } from './types';
+import { isHelperDevice } from '../helpers';
 
 const StoredTagSchema = z.object({
   cardId: Id,
@@ -95,7 +96,12 @@ export class TagStore {
   }
 }
 
+export function isLaptopTarget(t: Target, label = ''): boolean {
+  return t.card?.category === 'computer' || /\b(laptop|computer|macbook|this mac)\b/i.test(`${t.card?.name ?? ''} ${t.detection?.label ?? ''} ${label}`);
+}
+
 export function tagCapability(t: Target): LinkCapability | undefined {
+  if (isLaptopTarget(t)) return 'local';
   const card = t.card;
   if (!card) return undefined;
   switch (card.category) {
@@ -112,12 +118,15 @@ export function tagCapability(t: Target): LinkCapability | undefined {
   const label = `${card.name} ${t.detection?.label ?? ''}`;
   if (/\b(synth(?:esizer)?|keyboard)\b/i.test(label)) return 'midi';
   if (/\b(light|lamp|tv|television|ac|air conditioner)\b/i.test(label)) return 'ir';
-  if (/\b(laptop|macbook|this mac)\b/i.test(label)) return 'local';
   return neededCapability(card);
 }
 
 /** Recompute from current presence on every snapshot; an old link is never proof of a live bridge. */
-export function evaluateConnection(t: Target, roster: Roster): Pick<TaggedDevice, 'connection' | 'hint' | 'action'> {
+export function evaluateConnection(t: Target, roster: Roster, label?: string): Pick<TaggedDevice, 'connection' | 'hint' | 'action'> {
+  if (isLaptopTarget(t, label) && !roster.devices().some((device) => device.online && isHelperDevice(device))) {
+    const url = (roster.helperUrl?.() ?? 'http://localhost:8787/pair').replace(/^https?:\/\//, '');
+    return { connection: 'offline', hint: `Open ${url} on this laptop`, action: 'open-companion' };
+  }
   if (!t.card) return { connection: 'offline', hint: 'Identify this tagged device before setting up control' };
   const cap = tagCapability(t);
   const hint = cap === 'ir'
@@ -164,6 +173,6 @@ export function tagSnapshot(tag: StoredTag, target: Target, roster: Roster): Tag
   return {
     cardId: tag.cardId, label: tag.label, position: tag.position,
     name: target.card?.name, category: target.card?.category, specId: target.specId,
-    ...evaluateConnection(target, roster),
+    ...evaluateConnection(target, roster, tag.label),
   };
 }

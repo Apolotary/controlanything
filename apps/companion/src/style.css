@@ -66,6 +66,16 @@ code, kbd, pre, .mono { font-family: var(--font); font-variant-numeric: tabular-
 .pairing-content, .pairing-code { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
 .pairing-code .qr { width: min(300px, 58vw); height: min(300px, 58vw); padding: 14px; }
 .pairing-code .passcode { font-family: 'SFMono-Regular', Consolas, monospace; }
+.pair-only { grid-template-rows: 1fr; }
+.pair-only .calm-center { padding: 32px 20px; }
+.pair-only .eyebrow { display: none; }
+.pair-only .pairing-code .qr { width: min(360px, 64vw); height: min(360px, 64vw); padding: 16px; }
+.pair-only .passcode { font-size: clamp(30px, 6vw, 42px); }
+.paired-summary { display: flex; flex-direction: column; align-items: center; gap: 14px; padding-bottom: 26px; border-bottom: 1px solid var(--border); }
+.paired-check { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; color: var(--accent); background: var(--accent-soft); font-size: 28px; }
+.paired-title { font-size: clamp(24px, 3.5vw, 32px); font-weight: 500; line-height: 1.2; }
+.has-paired .eyebrow { display: none; }
+.has-paired h1 { font-size: 22px; }
 #headset-url { overflow-wrap: anywhere; max-width: 100%; }
 .connection-steps { display: flex; flex-direction: column; gap: 12px; width: 100%; padding: 20px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--muted); }
 .connection-steps p::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 10px; border-radius: 50%; background: var(--faint); }
