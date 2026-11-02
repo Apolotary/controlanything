@@ -69,7 +69,7 @@ export class ModeState {
     }
     // The local tracker owns the live pose; snapshots retain the persisted capture pose.
     const position = tag.position ?? remote.position;
-    Object.assign(tag, remote, { position, pending: undefined });
+    Object.assign(tag, remote, { position, hint: remote.hint, pending: undefined });
     return tag;
   }
 

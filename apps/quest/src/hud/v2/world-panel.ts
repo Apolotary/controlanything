@@ -1,4 +1,4 @@
-import { Object3D, Quaternion, Vector3 } from 'three';
+import { Matrix4, Object3D, Quaternion, Vector3 } from 'three';
 
 interface HeadPose { position: Vector3; quaternion: Quaternion }
 interface PanelOffset { distance?: number; height?: number }
@@ -16,6 +16,7 @@ export class WorldPanel {
   private movingSince: number | null = null;
   private previousTime: number | null = null;
   private readonly anchorHead = new Vector3();
+  private readonly lookPoint = new Vector3();
   private readonly fromPosition = new Vector3();
   private readonly toPosition = new Vector3();
   private readonly fromRotation = new Quaternion();
@@ -36,6 +37,15 @@ export class WorldPanel {
     this.outsideSince = this.movingSince = this.previousTime = null;
   }
 
+  /** Adopt an existing world placement, such as a card opened beside a nearby object. */
+  anchor(panel: Object3D, head: HeadPose, timeMs: number): void {
+    this.reset();
+    this.placed = true;
+    this.previousTime = timeMs;
+    this.anchorHead.copy(head.position);
+    this.lookPoint.copy(panel.position).setY(head.position.y);
+  }
+
   update(panel: Object3D, head: HeadPose, timeMs: number): void {
     if (this.previousTime !== null && timeMs < this.previousTime) this.reset();
     this.previousTime = timeMs;
@@ -49,7 +59,8 @@ export class WorldPanel {
 
     if (this.movingSince === null) {
       this.gaze.set(0, 0, -1).applyQuaternion(head.quaternion);
-      this.direction.subVectors(panel.position, head.position).normalize();
+      // Judge the look-away angle around the anchor, not its deliberate below-eye offset.
+      this.direction.subVectors(this.lookPoint, head.position).normalize();
       if (this.direction.dot(this.gaze) < CONE_COS) this.outsideSince ??= timeMs;
       else this.outsideSince = null;
       const lookedAway = this.outsideSince !== null && timeMs - this.outsideSince > FOLLOW_DELAY_MS;
@@ -83,6 +94,7 @@ export class WorldPanel {
     }
     this.direction.normalize();
     this.toPosition.copy(head.position).addScaledVector(this.direction, this.distance);
+    this.lookPoint.copy(this.toPosition);
     this.toPosition.y += this.height;
     this.toRotation.setFromAxisAngle(UP, Math.atan2(-this.direction.x, -this.direction.z));
   }
@@ -90,6 +102,8 @@ export class WorldPanel {
 
 /** Keep the home bar below the card in the user's view, moving it only when their rectangles collide. */
 export class PanelSeparation {
+  private readonly cardMatrix = new Matrix4();
+  private readonly barMatrix = new Matrix4();
   private readonly inverse = new Quaternion();
   private readonly point = new Vector3();
   private readonly down = new Vector3();
@@ -97,14 +111,20 @@ export class PanelSeparation {
   private readonly lower = { left: 0, right: 0, top: 0, bottom: 0, depth: 0 };
 
   update(card: Object3D, bar: Object3D, head: HeadPose, cardWidth: number, cardHeight: number, barWidth: number, barHeight: number): void {
+    card.updateMatrix(); bar.updateMatrix();
+    // Looking around must not reposition a settled layout. Check again only when a panel moves or unfolds.
+    if (this.cardMatrix.equals(card.matrix) && this.barMatrix.equals(bar.matrix)) return;
+    this.cardMatrix.copy(card.matrix); this.barMatrix.copy(bar.matrix);
     this.inverse.copy(head.quaternion).invert();
     this.bounds(card, head, cardWidth, cardHeight, this.upper);
     this.bounds(bar, head, barWidth, barHeight, this.lower);
-    const a = this.upper, b = this.lower, gap = 0.035;
+    // Leave enough projected space for a 20 degree look around without another correction.
+    const a = this.upper, b = this.lower, gap = 0.18;
     if (a.depth <= 0 || b.depth <= 0 || a.right < b.left || b.right < a.left || b.top + gap <= a.bottom || b.bottom > a.top) return;
     // Translation along view-down leaves every corner's view depth unchanged.
     this.down.set(0, -1, 0).applyQuaternion(head.quaternion);
     bar.position.addScaledVector(this.down, (b.top - a.bottom + gap) * b.depth);
+    bar.updateMatrix(); this.barMatrix.copy(bar.matrix);
   }
 
   private bounds(panel: Object3D, head: HeadPose, width: number, height: number, out: typeof this.upper): void {

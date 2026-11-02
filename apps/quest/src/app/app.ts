@@ -689,9 +689,15 @@ export class QuestApp {
   }
 
   private onTagsState(payload: PayloadOf<'tags.state'>): void {
+    if (this.activeSetup && !payload.tags.some((tag) => tag.cardId === this.activeSetup)) {
+      const active = this.modes.byCard(this.activeSetup);
+      if (active) this.cancelControl(active.targetId);
+    }
     const removed = this.modes.snapshot(payload.tags);
     for (const tag of removed) {
       if (tag.cardId) { this.armedCards.delete(tag.cardId); this.controls.clear(); }
+      const target = this.targets.get(tag.targetId);
+      if (target) target.label = tag.label;
       if (this.lockedId === tag.targetId) this.release();
       this.hud.removeTarget(tag.targetId);
     }
@@ -733,6 +739,8 @@ export class QuestApp {
     if (this.modes.mode !== 'annotate') return;
     const tag = this.modes.remove(targetId);
     if (!tag) return;
+    const target = this.targets.get(targetId);
+    if (target) target.label = tag.label;
     if (tag.cardId) {
       this.armedCards.delete(tag.cardId);
       this.ws.send('tag.remove', { cardId: tag.cardId }, { to: 'server' });
@@ -1170,7 +1178,7 @@ export class QuestApp {
     this.activeSetup = undefined; this.pendingArm = undefined; this.armRequest = undefined; this.acceptedArm = undefined;
     this.armedCards.clear(); this.controls.clear(); this.handMapping = undefined;
     for (const specId of this.specByCard.values()) this.hud.setArmed(this.gen3dIdFor(specId), false);
-    this.hud.showConfirm(null); this.refreshTags(); this.refreshHome();
+    this.hud.showConfirm(null); this.release(); this.refreshTags();
   }
 
   /** Desktop helper: scanning is automatic whenever Annotate is active. */

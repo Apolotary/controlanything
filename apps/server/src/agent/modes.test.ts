@@ -191,6 +191,43 @@ describe('annotation and control mode boundary', () => {
     expect(setup({ dataDir }).agent.tagsState()).toEqual({ tags: [] });
   });
 
+  it('persists a quietly identified tag before any setup or state transition', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'ce-identified-tag-'));
+    cleanups.push(() => rmSync(dataDir, { recursive: true, force: true }));
+    const first = setup({ dataDir, devices: [remo] });
+    const jpeg = Buffer.from(encodeJpeg({ width: 8, height: 8, data: new Uint8Array(8 * 8 * 4).fill(120) }, 85)).toString('base64');
+    const target = first.agent.targets.create({ detection: {
+      frameId: 'frame', detId: 'det', sensorDeviceId: owner.deviceId, label: 'ceiling light', prompt: 'ceiling light', score: 0.9,
+      box: [1, 1, 4, 4], width: 8, height: 8, jpeg, capturedAt: Date.now(),
+    } });
+    first.emit('tag.add', { targetId: target.cardId, label: 'Ceiling light', position: { x: 0, y: 1, z: -2 } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(target.card?.name).toBe('FIXTURE ceiling light');
+    expect(first.of('target.status')).toEqual([]);
+    first.close();
+
+    const restored = setup({ dataDir, devices: [remo] });
+    expect(restored.agent.tagsState().tags).toEqual([expect.objectContaining({
+      cardId: target.cardId, name: 'FIXTURE ceiling light', category: 'lighting',
+      position: { x: 0, y: 1, z: -2 }, connection: 'setup',
+    })]);
+    expect(tryLink).not.toHaveBeenCalled();
+    expect(restored.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('untags in Annotate without publishing a failed setup or leaving controls armed', () => {
+    const s = setup({ devices: [remo] });
+    const target = s.addKnown();
+    Object.assign(target, { driver: lightDriver, specId: 'light-spec', verification: { off: 'pass' }, armed: true });
+    s.emit('tag.remove', { cardId: target.cardId });
+    expect(target.armed).toBe(false);
+    expect(s.agent.targets.get(target.cardId)).toBeUndefined();
+    expect(s.of('tags.state').at(-1)).toEqual({ tags: [] });
+    expect(s.of('target.status')).toEqual([]);
+    expect(s.of('agent.step')).toEqual([]);
+    expect(s.dispatch).not.toHaveBeenCalled();
+  });
+
   it('refuses setup outside control, for an untagged target, and without a connected bridge', () => {
     const s = setup({ devices: [remo] });
     const tagged = s.addKnown();

@@ -323,6 +323,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         t.card = r.card;
         const { card: _card, ...identity } = r;
         tagIdentity.set(t.cardId, identity);
+        tags.sync(t);
         hub.broadcast('device.card', r.card);
         log(`[tag] ${t.cardId} is ${r.card.name} (${r.card.maker} ${r.card.model}) · ${r.model} ${r.latencyMs} ms`);
         publishTags();
@@ -355,10 +356,11 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (!tags.has(cardId)) return false;
     identifying.get(cardId)?.abort();
     identifying.delete(cardId);
+    tagIdentity.delete(cardId);
     const t = targets.get(cardId);
     if (t) {
-      stop(t, 'device untagged');
-      t.armed = false;
+      if (t.abort || t.armId || setups.has(cardId)) stop(t, 'device untagged');
+      else control.cancel(t);
     }
     tags.remove(cardId);
     targets.remove(cardId);
