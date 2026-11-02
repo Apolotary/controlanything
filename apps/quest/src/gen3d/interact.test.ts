@@ -1,9 +1,38 @@
 import { describe, expect, it } from 'vitest';
-import { PerspectiveCamera, Vector3 } from 'three';
+import { PerspectiveCamera, Quaternion, Vector3 } from 'three';
 import { EXAMPLES, type ControlEvent } from '@ce/gen3d';
 import { SpecObject } from './build';
 import { MaterialClock } from './materials';
-import { MouseCursor, newCursor, type Cursor } from './interact';
+import { handCursor, MouseCursor, newCursor, type Cursor, type HandInput } from './interact';
+
+describe('hand cursor tracking loss', () => {
+  it('keeps system pinch input without inventing a fingertip or retaining wrist rotation', () => {
+    const cursor = newCursor('right', 'right');
+    const pose = { position: new Vector3(0.1, 1, -0.5), quaternion: new Quaternion() };
+    const hand: HandInput = {
+      joints: { wrist: pose, 'index-finger-tip': pose },
+      pinchPoint: pose.position.clone(), pinching: false, justPinched: false, justReleased: false,
+    };
+    handCursor('right', hand, cursor);
+    expect(cursor.canPoke).toBe(true);
+    expect(cursor.wristQuat).toBeDefined();
+    handCursor('right', { ...hand, joints: {}, pinching: true, justPinched: true }, cursor);
+    expect(cursor).toMatchObject({ tracked: true, pinching: true, justPinched: true, canPoke: false });
+    expect(cursor.wristQuat).toBeUndefined();
+  });
+
+  it('clears the ray and pinch when the source disappears', () => {
+    const cursor = newCursor('left', 'left');
+    const hand: HandInput = {
+      joints: {}, pinchPoint: new Vector3(), pinching: true, justPinched: true, justReleased: false,
+      ray: { origin: new Vector3(), dir: new Vector3(0, 0, -1) },
+    };
+    handCursor('left', hand, cursor);
+    handCursor('left', undefined, cursor);
+    expect(cursor).toMatchObject({ tracked: false, pinching: false, canPoke: false });
+    expect(cursor.ray).toBeUndefined();
+  });
+});
 
 /** Headless harness: a SpecObject at the origin, a camera 0.6 m in front, one hand cursor. */
 function harness(name: string) {

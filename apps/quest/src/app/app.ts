@@ -13,6 +13,7 @@
  *   record=1           start recording at load
  *   mic=0              never open the microphone (no AudioContext at all)
  *   hud=debug          force the shell's debug HUD
+ *   debug=1            show hand tracking and rendering diagnostics in the headset
  *   dominant=left      left-handed: the deck opens over the RIGHT palm
  *   ws=<url>           WebSocket override
  */
@@ -57,11 +58,12 @@ import { Mic } from '../voice/mic';
 import { PushToTalk } from '../voice/ptt';
 import { ControlSender } from './controls';
 import { type Emulator, installEmulator } from './emulator';
+import { HandFeedback } from './hand-feedback';
 import type { Handedness, Hud, ShellFrame } from './hud-contract';
 import { loadHud } from './hud-loader';
 import { handJointPositions, InputSampler } from './input';
 import { Page } from './page';
-import { startXr, xrSupport } from './xr';
+import { frameReferenceSpace, startXr, xrSupport } from './xr';
 
 export const APP_VERSION = 'quest@0.1.0';
 
@@ -165,6 +167,8 @@ export class QuestApp {
   private lastStatusAt = 0;
   private lastFrameShownAt = 0;
   private serverMode = '';
+  private enteringXr = false;
+  private handFeedback!: HandFeedback;
 
   constructor(params: URLSearchParams) {
     this.params = params;
@@ -203,12 +207,19 @@ export class QuestApp {
     r.outputColorSpace = SRGBColorSpace;
     r.localClippingEnabled = true;
     r.xr.enabled = true;
+    // three.js emits this synchronously before its first XR animation callback.
+    r.xr.addEventListener('sessionstart', () => {
+      const session = r.xr.getSession();
+      if (session) this.input.attach(session);
+    });
     try {
       r.xr.setFoveation(1);
     } catch {
       // not available before a session on some runtimes
     }
     this.renderer = r;
+    this.handFeedback = new HandFeedback(this.params.get('debug') === '1');
+    this.scene.add(this.handFeedback.root);
     this.page.stage.appendChild(r.domElement);
     const resize = () => {
       const w = this.page.stage.clientWidth || window.innerWidth;
@@ -794,6 +805,8 @@ export class QuestApp {
 
   private interact(f: ShellFrame, time: number): void {
     const list = this.aimList();
+    this.handFeedback.setHover('left');
+    this.handFeedback.setHover('right');
     if (!list.length) return;
     const mouse = this.input.mouseAsHand && this.input.pointer.inside ? f.hands.right : undefined;
     const gaze = mouse?.ray ?? f.head.ray;
@@ -810,8 +823,12 @@ export class QuestApp {
     }
     for (const hand of ['left', 'right'] as const) {
       const h = f.hands[hand];
-      if (!h?.justPinched || this.consumed[hand]) continue;
-      if (!h.controller) {
+      if (!h || this.consumed[hand]) continue;
+      const handAim = h.ray.dir.lengthSq() > 0.5 ? aimAt(h.ray.origin, h.ray.dir, list, { marginDeg: 2, minDist: 0.3 }) : null;
+      if (handAim) this.handFeedback.setHover(hand, this.targets.get(handAim.id));
+      if (!h.justPinched) continue;
+      // A system pinch can arrive without joints; only a measured midpoint can refine a target.
+      if (!h.controller && h.joints['thumb-tip'] && h.joints['index-finger-tip']) {
         const touch = touching(h.pinchPoint, list, 0.06);
         if (touch) {
           const t = this.targets.refine(touch.id, h.pinchPoint);
@@ -820,7 +837,6 @@ export class QuestApp {
           continue;
         }
       }
-      const handAim = aimAt(h.ray.origin, h.ray.dir, list, { marginDeg: 2, minDist: 0.3 });
       const pick = handAim?.id ?? this.candidate.shown ?? null;
       if (!pick) continue;
       if (pick === this.lockedId) this.release();
@@ -885,7 +901,15 @@ export class QuestApp {
   }
 
   private frameInner(time: number, xrFrame?: XRFrame): void {
-    const inXr = Boolean(xrFrame && this.refSpace);
+    // Read the manager's current space inside its active frame; a cached space may belong to an old session.
+    const refSpace = frameReferenceSpace(this.renderer, xrFrame);
+    if (xrFrame && !refSpace) return;
+    const inXr = Boolean(xrFrame && refSpace);
+    if (xrFrame && refSpace && refSpace !== this.refSpace) {
+      this.refSpace = refSpace;
+      this.xrHit.detach();
+      this.xrHit.attach(xrFrame.session, refSpace);
+    }
     if (this.emulator) {
       const h = this.emulator.head();
       this.desktopCam.position.copy(h.position);
@@ -901,7 +925,7 @@ export class QuestApp {
     }
     this.desktopCam.updateMatrixWorld();
     const cam = inXr ? this.renderer.xr.getCamera() : this.desktopCam;
-    const f = this.input.sample(time, cam, inXr ? xrFrame : undefined, inXr ? this.refSpace : undefined);
+    const f = this.input.sample(time, cam, xrFrame, refSpace);
     this.lastFrame = f;
     this.poses.push(time, f.head.position, f.head.quaternion);
     this.recorder.pose(f.head);
@@ -924,6 +948,7 @@ export class QuestApp {
       this.hud.update({ ...f, hands });
     } else this.hud.update(f);
     this.interact(f, time);
+    this.handFeedback.update(f, this.input.diagnostics, this.renderer.info.render.calls);
     this.scanner.tick(time);
     this.renderer.render(this.scene, this.desktopCam);
     if (time - this.lastStatusAt > 300) {
@@ -985,13 +1010,15 @@ export class QuestApp {
   }
 
   async enterXr(): Promise<void> {
+    if (this.enteringXr) return;
     if (this.session) {
       await this.session.end();
       return;
     }
-    // permissions before the session, so no prompt interrupts it (research/04 §2)
-    await this.prepareMedia();
+    this.enteringXr = true;
     try {
+      // permissions before the session, so no prompt interrupts it (research/04 §2)
+      await this.prepareMedia();
       const s = await startXr(this.renderer, { allowVr: Boolean(this.emulator) });
       this.session = s.session;
       this.refSpace = s.refSpace;
@@ -1001,6 +1028,7 @@ export class QuestApp {
       this.page.setButton(this.page.enter, 'Exit AR');
       this.recorder.input('xr', { on: true, mode: s.mode });
       s.session.addEventListener('end', () => {
+        if (this.session !== s.session) return;
         this.session = undefined;
         this.refSpace = undefined;
         this.xrHit.detach();
@@ -1008,9 +1036,11 @@ export class QuestApp {
         this.page.setButton(this.page.enter, this.emulator ? 'Enter AR (emulated)' : 'Enter AR');
         this.page.log('XR session ended');
         this.recorder.input('xr', { on: false });
-      });
+      }, { once: true });
     } catch (e) {
       this.page.log(`XR failed: ${(e as Error).message}`, 'error');
+    } finally {
+      this.enteringXr = false;
     }
   }
 
