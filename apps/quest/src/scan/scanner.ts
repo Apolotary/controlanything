@@ -6,6 +6,7 @@
  */
 import { Emitter } from '../app/emitter';
 import type { Hud } from '../app/hud-contract';
+import type { BoxField } from '../hud/v2/boxes';
 import { type Det, normalizeDetections, type ScanResultPayload } from '../io/v1';
 import type { WsClient } from '../io/ws';
 import type { FrameCapture, FrameRecord } from './capture';
@@ -64,6 +65,7 @@ export class Scanner extends Emitter<ScannerEvents> {
 
   constructor(private readonly d: ScannerDeps) {
     super();
+    (d.hud().root?.getObjectByName('boxField') as BoxField | undefined)?.setLimit(8);
   }
 
   start(purpose: 'scan' | 'pair' = 'scan'): void {

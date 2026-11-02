@@ -1,5 +1,6 @@
 /** Every tracked outline shares one triangle geometry and one material. */
-import { BufferAttribute, BufferGeometry, Color, DoubleSide, Matrix4, Mesh, MeshBasicMaterial, Quaternion, Vector3 } from 'three';
+import { BufferAttribute, BufferGeometry, Color, DoubleSide, Matrix4, Mesh, MeshBasicMaterial, Quaternion, ShaderMaterial, Vector3 } from 'three';
+import type { Object3D } from 'three';
 import { THEME } from './theme';
 
 export interface BoxState {
@@ -16,8 +17,12 @@ export interface BoxState {
   tScale: number;
   pulse: number;
   removing: boolean;
+  opacity: number;
   facing?: Vector3;
 }
+export type BoxRay = { origin: Vector3 } & ({ direction: Vector3 } | { dir: Vector3 });
+export interface BoxHit { box: BoxState; point: Vector3; distance: number }
+interface LabelLayout { anchor: Vector3; left: number; right: number; bottom: number; top: number; depth: number }
 const SEGMENTS = 4 * (THEME.box.cornerSteps + 1);
 const VERTICES = SEGMENTS * 2;
 const INDICES = SEGMENTS * 6;
@@ -28,6 +33,7 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
   readonly boxes = new Map<string, BoxState>();
   private readonly pos: Float32Array;
   private readonly col: Float32Array;
+  private readonly alpha: Float32Array;
   private readonly right = new Vector3(1, 0, 0);
   private readonly direction = new Vector3();
   private readonly faceUp = new Vector3();
@@ -36,12 +42,25 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
   private readonly colorScratch = new Color();
   private readonly activeColor = new Color(THEME.color.accent);
   private active: string | null = null;
+  private hovered: string | null = null;
+  private selected: string | null = null;
+  private readonly lastHead = new Vector3();
+  private readonly labelHead = new Vector3();
+  private readonly viewDirection = new Vector3();
+  private readonly viewRight = new Vector3();
+  private readonly viewUp = new Vector3();
+  private readonly labelLayouts = new Map<string, LabelLayout>();
+  private readonly labelGroups = new Map<string, Object3D>();
+  private readonly fadedSurfaces = new WeakSet<Object3D>();
+  private labelsDirty = true;
   private renderedBoxes = 0;
+  private limit: number;
 
   constructor(private readonly max = THEME.box.max as number) {
     const geo = new BufferGeometry();
     const pos = new Float32Array(max * VERTICES * 3);
     const col = new Float32Array(max * VERTICES * 3);
+    const alpha = new Float32Array(max * VERTICES);
     const indices = new Uint16Array(max * INDICES);
     for (let box = 0; box < max; box++) for (let segment = 0; segment < SEGMENTS; segment++) {
       const a = box * VERTICES + segment * 2, b = box * VERTICES + (segment + 1) % SEGMENTS * 2;
@@ -49,11 +68,19 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
     }
     geo.setAttribute('position', new BufferAttribute(pos, 3));
     geo.setAttribute('color', new BufferAttribute(col, 3));
+    geo.setAttribute('boxOpacity', new BufferAttribute(alpha, 1));
     geo.setIndex(new BufferAttribute(indices, 1));
     geo.setDrawRange(0, 0);
     super(geo, new MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: THEME.opacity.line, side: DoubleSide, forceSinglePass: true, depthWrite: false, toneMapped: false }));
     this.pos = pos;
     this.col = col;
+    this.alpha = alpha;
+    this.limit = max;
+    this.material.onBeforeCompile = (shader) => {
+      shader.vertexShader = 'attribute float boxOpacity; varying float vBoxOpacity;\n' + shader.vertexShader.replace('#include <color_vertex>', '#include <color_vertex>\nvBoxOpacity = boxOpacity;');
+      shader.fragmentShader = 'varying float vBoxOpacity;\n' + shader.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.a *= vBoxOpacity;');
+    };
+    this.material.customProgramCacheKey = () => 'ce-box-opacity';
     this.frustumCulled = false;
     this.renderOrder = THEME.render.boxes;
     this.name = 'boxField';
@@ -62,11 +89,11 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
     let b = this.boxes.get(id);
     const c = this.colorScratch.set(color);
     if (!b) {
-      if (this.boxes.size >= this.max) {
-        for (const old of this.boxes.values()) if (old.removing) { this.boxes.delete(old.id); break; }
-        if (this.boxes.size >= this.max) return;
+      if (this.boxes.size >= this.limit) {
+        for (const old of this.boxes.values()) if (old.removing) { this.remove(old.id); break; }
+        if (this.boxes.size >= this.limit) return;
       }
-      b = { id, center: center.clone(), w, h, color: c.clone(), scale: 1, tCenter: center.clone(), tw: w, th: h, tColor: c.clone(), tScale: 1, pulse: 0, removing: false };
+      b = { id, center: center.clone(), w, h, color: c.clone(), scale: 1, tCenter: center.clone(), tw: w, th: h, tColor: c.clone(), tScale: 1, pulse: 0, removing: false, opacity: 1 };
       this.boxes.set(id, b);
     }
     b.tCenter.copy(center);
@@ -74,6 +101,7 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
     b.th = Math.max(THEME.box.minSize, h);
     b.tColor.copy(c);
     b.removing = false;
+    this.labelsDirty = true;
     if (immediate) { b.center.copy(center); b.w = b.tw; b.h = b.th; b.color.copy(c); }
     return b;
   }
@@ -81,16 +109,40 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
   override remove(id: string): this;
   override remove(...objects: (import('three').Object3D | string)[]): this {
     if (typeof objects[0] === 'string') {
+      const label = this.labelGroup(objects[0]); if (label) label.visible = false;
       this.boxes.delete(objects[0]);
+      this.labelLayouts.delete(objects[0]);
+      this.labelGroups.delete(objects[0]);
+      this.labelsDirty = true;
       if (this.active === objects[0]) this.active = null;
+      if (this.hovered === objects[0]) this.hovered = null;
+      if (this.selected === objects[0]) this.selected = null;
       if (!this.boxes.size) this.setDrawCount(0);
     } else super.remove(...objects as import('three').Object3D[]);
     return this;
   }
   has(id: string): boolean { return this.boxes.has(id); }
+  /** Scanning uses eight slots; other HUD scenes can retain the allocated capacity. */
+  setLimit(limit: number): void {
+    this.limit = Math.max(1, Math.min(this.max, Math.floor(Number.isFinite(limit) ? limit : this.max)));
+    const overflow = this.boxes.size - this.limit;
+    if (overflow <= 0) return;
+    const priority = (box: BoxState) => Number(box.id === this.selected) * 4 + Number(box.id === this.active) * 2 + Number(box.id === this.hovered);
+    const removable = [...this.boxes.values()].sort((a, b) => priority(a) - priority(b));
+    for (let i = 0; i < overflow; i++) this.remove(removable[i].id);
+    this.update(0, this.lastHead);
+  }
   pulse(id: string, color: string): void { this.boxes.get(id)?.tColor.set(color); }
   setActive(id: string | null): void { this.active = id; }
+  setHovered(id: string | null): void { this.hovered = id; }
+  setSelected(id: string | null): void { this.selected = id; }
+  setOpacity(id: string, opacity: number): void {
+    const box = this.boxes.get(id);
+    if (box) box.opacity = Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 0;
+  }
   update(dt: number, head: Vector3): void {
+    this.lastHead.copy(head);
+    this.labelsDirty = true;
     const mix = 1 - Math.exp(-Math.max(0, dt) / 0.06);
     let index = 0;
     for (const b of this.boxes.values()) {
@@ -103,13 +155,16 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
     this.setDrawCount(index);
     (this.geometry.getAttribute('position') as BufferAttribute).needsUpdate = true;
     (this.geometry.getAttribute('color') as BufferAttribute).needsUpdate = true;
+    (this.geometry.getAttribute('boxOpacity') as BufferAttribute).needsUpdate = true;
   }
   private setDrawCount(count: number): void {
     if (count < this.renderedBoxes) {
       this.pos.fill(0, count * VERTICES * 3, this.renderedBoxes * VERTICES * 3);
       this.col.fill(0, count * VERTICES * 3, this.renderedBoxes * VERTICES * 3);
+      this.alpha.fill(0, count * VERTICES, this.renderedBoxes * VERTICES);
       (this.geometry.getAttribute('position') as BufferAttribute).needsUpdate = true;
       (this.geometry.getAttribute('color') as BufferAttribute).needsUpdate = true;
+      (this.geometry.getAttribute('boxOpacity') as BufferAttribute).needsUpdate = true;
     }
     this.renderedBoxes = count;
     this.geometry.setDrawRange(0, count * INDICES);
@@ -117,6 +172,7 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
   setFacing(id: string, normal: [number, number, number] | undefined): void {
     const box = this.boxes.get(id);
     if (box && normal) (box.facing ??= new Vector3()).fromArray(normal).normalize();
+    this.labelsDirty = true;
   }
   private basis(center: Vector3, head: Vector3, normal?: Vector3): void {
     if (normal) this.direction.copy(normal); else this.direction.subVectors(head, center);
@@ -134,12 +190,14 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
     this.col[offset] = color.r;
     this.col[offset + 1] = color.g;
     this.col[offset + 2] = color.b;
+    this.alpha[offset / 3] = b.opacity;
   }
   private writeBox(index: number, b: BoxState, head: Vector3): void {
     this.basis(b.center, head, b.facing);
     const hw = b.w / 2, hh = b.h / 2;
     const radius = Math.min(THEME.box.corner, hw / 2, hh / 2);
-    const active = b.id === this.active, halfStroke = (active ? THEME.box.activeStroke : THEME.box.stroke) / 2;
+    const active = b.id === this.active || b.id === this.hovered || b.id === this.selected;
+    const halfStroke = (active ? THEME.box.activeStroke : THEME.box.stroke) * this.labelScale(b, head) / 2;
     const color = active ? this.activeColor : b.color;
     // Two offset contours give the stroke a real width on WebGL, including its rounded corners.
     for (let sample = 0; sample < SEGMENTS; sample++) {
@@ -155,28 +213,125 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
     }
   }
   labelAnchor(b: BoxState, head: Vector3, out: Vector3): Vector3 {
-    this.basis(b.center, head, b.facing);
-    return out.copy(b.center).addScaledVector(this.right, -b.w / 2).addScaledVector(this.faceUp, b.h / 2 + THEME.box.labelGap);
+    if (this.labelsDirty || !head.equals(this.labelHead)) this.layoutLabels(head);
+    this.syncLabel(b, head);
+    return out.copy(this.labelLayouts.get(b.id)?.anchor ?? b.center);
+  }
+  /** Keep the same angular text size from one to three metres. */
+  labelScale(b: BoxState, head: Vector3 = this.lastHead): number { return Math.max(1, Math.min(3, b.center.distanceTo(head))); }
+  private labelGroup(id: string): Object3D | undefined {
+    const existing = this.labelGroups.get(id);
+    if (existing && existing.parent === this.parent) return existing;
+    const label = this.parent?.getObjectByName(`target-label:${id}`);
+    if (label) this.labelGroups.set(id, label);
+    return label;
+  }
+  private layoutLabels(head: Vector3): void {
+    this.labelHead.copy(head); this.labelsDirty = false;
+    this.viewDirection.set(0, 0, 0);
+    for (const b of this.boxes.values()) this.viewDirection.add(this.relative.subVectors(b.center, head).normalize());
+    if (this.viewDirection.lengthSq() < 1e-6) this.viewDirection.set(0, 0, -1);
+    this.viewDirection.normalize();
+    this.viewRight.crossVectors(this.viewDirection, worldUp).normalize();
+    if (this.viewRight.lengthSq() < 1e-6) this.viewRight.set(1, 0, 0);
+    this.viewUp.crossVectors(this.viewRight, this.viewDirection).normalize();
+    const placed: LabelLayout[] = [];
+    for (const b of this.boxes.values()) {
+      let layout = this.labelLayouts.get(b.id);
+      if (!layout) { layout = { anchor: new Vector3(), left: 0, right: 0, bottom: 0, top: 0, depth: 0 }; this.labelLayouts.set(b.id, layout); }
+      const scale = this.labelScale(b, head);
+      const pill = this.labelGroup(b.id)?.children.find((child) => child instanceof Mesh && child.material instanceof ShaderMaterial);
+      const width = (pill?.scale.x ?? (22 * THEME.font.label * 0.56 + THEME.box.labelPadding * 3)) * scale;
+      const height = (THEME.box.labelHeight + 0.006) * scale;
+      this.basis(b.center, head, b.facing);
+      layout.anchor.copy(b.center).addScaledVector(this.right, -b.w / 2).addScaledVector(this.faceUp, b.h / 2 + THEME.box.labelGap * scale);
+      this.labelBounds(layout, width, height, head);
+      // Stable insertion order keeps the same label in its row as detections move slightly.
+      for (let pass = 0; pass < placed.length; pass++) {
+        let shift = 0;
+        for (const other of placed) if (layout.left < other.right && layout.right > other.left && layout.bottom < other.top && layout.top > other.bottom) shift = Math.max(shift, other.top - layout.bottom + 0.004);
+        if (!shift) break;
+        layout.anchor.addScaledVector(this.viewUp, shift * layout.depth);
+        this.labelBounds(layout, width, height, head);
+      }
+      placed.push(layout);
+    }
+  }
+  private labelBounds(layout: LabelLayout, width: number, height: number, head: Vector3): void {
+    layout.left = layout.bottom = Infinity; layout.right = layout.top = -Infinity; layout.depth = 0;
+    for (const x of [0, width]) for (const y of [-height / 2, height / 2]) {
+      this.relative.copy(layout.anchor).addScaledVector(this.right, x).addScaledVector(this.faceUp, y).sub(head);
+      const depth = Math.max(0.05, this.relative.dot(this.viewDirection));
+      const px = this.relative.dot(this.viewRight) / depth, py = this.relative.dot(this.viewUp) / depth;
+      layout.left = Math.min(layout.left, px); layout.right = Math.max(layout.right, px);
+      layout.bottom = Math.min(layout.bottom, py); layout.top = Math.max(layout.top, py);
+      layout.depth = Math.max(layout.depth, depth);
+    }
+  }
+  private syncLabel(b: BoxState, head: Vector3): void {
+    const label = this.labelGroup(b.id); if (!label) return;
+    label.scale.setScalar(this.labelScale(b, head));
+    label.visible = b.opacity > 0.001;
+    for (const child of label.children) {
+      if ('fillOpacity' in child) child.fillOpacity = b.opacity;
+      if (!(child instanceof Mesh) || !(child.material instanceof ShaderMaterial) || this.fadedSurfaces.has(child)) continue;
+      const material = child.material, fill = material.uniforms.fillAlpha, edge = material.uniforms.edgeAlpha;
+      if (!fill || !edge) continue;
+      this.fadedSurfaces.add(child);
+      const before = child.onBeforeRender, after = child.onAfterRender;
+      let fillAlpha = 0, edgeAlpha = 0;
+      child.onBeforeRender = (...args) => {
+        before.apply(child, args); fillAlpha = fill.value; edgeAlpha = edge.value;
+        fill.value *= b.opacity; edge.value *= b.opacity; material.uniformsNeedUpdate = true;
+      };
+      child.onAfterRender = (...args) => {
+        fill.value = fillAlpha; edge.value = edgeAlpha; material.uniformsNeedUpdate = true;
+        after.apply(child, args);
+      };
+    }
   }
   facingQuaternion(head: Vector3, center: Vector3, out: Quaternion, normal?: Vector3): Quaternion {
     this.basis(center, head, normal);
     return out.setFromRotationMatrix(this.frame.makeBasis(this.right, this.faceUp, this.direction));
   }
-  intersectRay(ray: { origin: Vector3; dir: Vector3 }, head: Vector3): { box: BoxState; point: Vector3 } | null {
+  hitTest(ray: BoxRay, head: Vector3 = this.lastHead): BoxHit | null {
+    const direction = 'direction' in ray ? ray.direction : ray.dir;
+    const rayLength = direction.length();
+    if (!Number.isFinite(rayLength) || rayLength < 1e-6) return null;
     let nearest: BoxState | null = null, distance = THEME.control.rayDistance as number;
     for (const b of this.boxes.values()) {
+      if (b.opacity <= 0.001) continue;
       this.basis(b.center, head, b.facing);
-      const denominator = ray.dir.dot(this.direction);
+      const denominator = direction.dot(this.direction);
       if (Math.abs(denominator) < 1e-6) continue;
       const t = this.relative.subVectors(b.center, ray.origin).dot(this.direction) / denominator;
-      if (t < 0 || t > distance) continue;
-      this.relative.copy(ray.origin).addScaledVector(ray.dir, t).sub(b.center);
-      const x = Math.abs(this.relative.dot(this.right)), y = Math.abs(this.relative.dot(this.faceUp));
-      const hw = b.w / 2, hh = b.h / 2, radius = Math.min(THEME.box.corner, hw / 2, hh / 2);
-      const dx = Math.max(0, x - hw + radius), dy = Math.max(0, y - hh + radius);
-      if (x <= hw && y <= hh && dx * dx + dy * dy <= radius * radius) { nearest = b; distance = t; }
+      if (t < 0 || t * rayLength > distance) continue;
+      this.relative.copy(ray.origin).addScaledVector(direction, t).sub(b.center);
+      if (this.containsLocal(b)) { nearest = b; distance = t * rayLength; }
     }
-    return nearest ? { box: nearest, point: ray.origin.clone().addScaledVector(ray.dir, distance) } : null;
+    return nearest ? { box: nearest, point: ray.origin.clone().addScaledVector(direction, distance / rayLength), distance } : null;
+  }
+  intersectRay(ray: BoxRay, head: Vector3 = this.lastHead): BoxHit | null { return this.hitTest(ray, head); }
+  hitTestPoint(point: Vector3, head: Vector3 = this.lastHead, tolerance: number = THEME.control.near): BoxHit | null {
+    let nearest: BoxState | null = null, distance = Math.max(0, tolerance);
+    const projected = new Vector3();
+    for (const b of this.boxes.values()) {
+      if (b.opacity <= 0.001) continue;
+      this.basis(b.center, head, b.facing);
+      this.relative.subVectors(point, b.center);
+      const planeDistance = this.relative.dot(this.direction);
+      if (Math.abs(planeDistance) <= distance && this.containsLocal(b)) {
+        nearest = b; distance = Math.abs(planeDistance);
+        projected.copy(point).addScaledVector(this.direction, -planeDistance);
+      }
+    }
+    return nearest ? { box: nearest, point: projected, distance } : null;
+  }
+  private containsLocal(b: BoxState): boolean {
+    const x = Math.abs(this.relative.dot(this.right)), y = Math.abs(this.relative.dot(this.faceUp));
+    const hw = b.w / 2, hh = b.h / 2, radius = Math.min(THEME.box.corner, hw / 2, hh / 2);
+    const dx = Math.max(0, x - hw + radius), dy = Math.max(0, y - hh + radius);
+    return x <= hw && y <= hh && dx * dx + dy * dy <= radius * radius;
   }
   nearestBorder(id: string, point: Vector3, head: Vector3, out: Vector3): Vector3 | null {
     const b = this.boxes.get(id); if (!b) return null;

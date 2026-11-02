@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { allowedClasses, CATEGORIES, PERSON_CLASS } from './classes';
 import { anchorCount, decodeYolox, dropLaptopKeyboards, nms, postprocess, type Candidate } from './post';
 import { letterbox, PAD_VALUE, rgbaToBgrChw, toSource } from './prep';
-import { BoxTracker } from './tracker';
+import { BoxTracker, trackOpacity } from './tracker';
 
 function anchor(cls: number, other?: number): Float32Array {
   const out = new Float32Array(85);
@@ -74,9 +74,79 @@ describe('YOLOX NMS and tracking', () => {
     expect(first.box[0]).toBeGreaterThan(0);
     expect(first.box[0]).toBeLessThan(4);
     tracker.update([], 400);
-    expect(tracker.update([laptop], 600).tracks[0]?.id).toBe(first.id);
-    tracker.update([], 1400);
-    expect(tracker.update([], 1500).removed[0]?.id).toBe(first.id);
+    expect(tracker.update([laptop], 550).tracks[0]?.id).toBe(first.id);
+    expect(tracker.update([], 950).removed[0]?.id).toBe(first.id);
+  });
+
+  it('waits at least 150 ms before showing even a very confident detection', () => {
+    const tracker = new BoxTracker();
+    const detection = { ...laptop, score: 0.99 };
+    const first = tracker.update([detection], 0).tracks[0]!;
+    expect(first.live).toBe(false);
+    expect(first.opacity).toBe(0);
+    tracker.update([detection], 70);
+    tracker.update([detection], 140);
+    expect(first.live).toBe(false);
+    tracker.update([detection], 150);
+    expect(first.live).toBe(true);
+    expect(first.opacity).toBe(1);
+  });
+
+  it('coasts and fades independently of inference, then expires after 400 ms unseen', () => {
+    const tracker = new BoxTracker();
+    tracker.update([laptop], 0);
+    const track = tracker.update([laptop], 150).tracks[0]!;
+    expect(trackOpacity(track, 350)).toBe(1);
+    expect(trackOpacity(track, 450)).toBe(0.5);
+    expect(tracker.age(450)).toEqual([]);
+    expect(track.opacity).toBe(0.5);
+    expect(tracker.age(550)).toEqual([track]);
+    expect(tracker.list()).toEqual([]);
+    expect(trackOpacity(track, 600)).toBe(0);
+  });
+
+  it('keeps a selected track while SAM is pending, then lets it expire when released', () => {
+    const tracker = new BoxTracker();
+    tracker.update([laptop], 0);
+    const track = tracker.update([laptop], 150).tracks[0]!;
+    expect(tracker.age(1000, track.id)).toEqual([]);
+    expect(track.opacity).toBe(1);
+    expect(tracker.age(1001)).toEqual([track]);
+  });
+
+  it('confirms across a slow sampling gap while still fading unseen boxes at 400 ms', () => {
+    const tracker = new BoxTracker();
+    const retentionMs = 1500;
+    const track = tracker.update([laptop], 0, undefined, undefined, retentionMs).tracks[0]!;
+    expect(tracker.age(400, undefined, retentionMs)).toEqual([]);
+    expect(track.opacity).toBe(0);
+    expect(track.live).toBe(false);
+    const confirmed = tracker.update([laptop], 600, undefined, undefined, retentionMs).tracks[0]!;
+    expect(confirmed.id).toBe(track.id);
+    expect(confirmed.live).toBe(true);
+    expect(confirmed.opacity).toBe(1);
+    expect(tracker.age(1000, undefined, retentionMs)).toEqual([]);
+    expect(confirmed.opacity).toBe(0);
+    expect(tracker.update([laptop], 1200, undefined, undefined, retentionMs).tracks[0]?.id).toBe(track.id);
+    expect(confirmed.opacity).toBe(1);
+    expect(tracker.age(2700, undefined, retentionMs)).toEqual([track]);
+  });
+
+  it('never revives an expired id and suppresses duplicate classes for one object', () => {
+    const tracker = new BoxTracker();
+    const first = tracker.update([laptop, { ...laptop, cls: 66, score: 0.7, box: [2, 0, 100, 80] }], 0);
+    expect(first.tracks).toHaveLength(1);
+    const next = tracker.update([laptop], 500);
+    expect(next.removed[0]?.id).toBe(first.tracks[0]?.id);
+    expect(next.tracks[0]?.id).not.toBe(first.tracks[0]?.id);
+    expect(next.tracks[0]?.live).toBe(false);
+  });
+
+  it('drops people at the tracker boundary and defaults to eight tracks', () => {
+    const tracker = new BoxTracker();
+    expect(tracker.update([{ ...laptop, cls: PERSON_CLASS }], 0).tracks).toEqual([]);
+    const detections: Candidate[] = Array.from({ length: 10 }, (_, i) => ({ ...laptop, box: [i * 200, 0, 100, 80] }));
+    expect(tracker.update(detections, 100).tracks).toHaveLength(8);
   });
 
   it('uses capture-pose prediction to match a device after head movement', () => {

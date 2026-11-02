@@ -20,6 +20,8 @@ const scope = self as unknown as {
 };
 
 let session: ort.InferenceSession | undefined;
+/** Retained only on GPU, so device loss can recover without another model download. */
+let fallbackModel: Uint8Array | undefined;
 let ep: YoloEp = 'wasm';
 let size = 416;
 let canvas: OffscreenCanvas | undefined;
@@ -45,14 +47,18 @@ async function init(m: Extract<WorkerIn, { type: 'init' }>): Promise<void> {
   size = m.inputSize;
   const isolated = Boolean(scope.crossOriginIsolated);
   ort.env.wasm.numThreads = isolated ? Math.max(1, Math.min(4, (scope.navigator.hardwareConcurrency || 2) - 1)) : 1;
+  // Validate fixed-width SIMD before loading the bundled SIMD runtime.
+  ort.env.wasm.simd = 'fixed';
   ort.env.wasm.proxy = false;
   ort.env.logLevel = 'error';
   const res = await fetch(m.modelUrl, { signal: AbortSignal.timeout(30_000) });
   if (!res.ok) throw new Error(`model ${m.modelUrl}: HTTP ${res.status}`);
   const bytes = new Uint8Array(await res.arrayBuffer());
   const fetchMs = performance.now() - t0;
-  const order: YoloEp[] = m.ep === 'wasm' ? ['wasm'] : m.ep === 'webgpu' ? ['webgpu', 'wasm'] : (await hasWebGpu()) ? ['webgpu', 'wasm'] : ['wasm'];
+  const gpuAvailable = m.ep !== 'wasm' && await hasWebGpu();
+  const order: YoloEp[] = gpuAvailable ? ['webgpu', 'wasm'] : ['wasm'];
   const errors: string[] = [];
+  if (m.ep === 'webgpu' && !gpuAvailable) errors.push('webgpu: no adapter in the worker');
   canvas = new OffscreenCanvas(size, size);
   ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('no 2d context in the worker');
@@ -76,6 +82,7 @@ async function init(m: Extract<WorkerIn, { type: 'init' }>): Promise<void> {
     }
   }
   if (!session) throw new Error(`no execution provider worked (${errors.join('; ')})`);
+  fallbackModel = ep === 'webgpu' ? bytes : undefined;
   post({ type: 'ready', ep, threads: ort.env.wasm.numThreads as number, isolated, loadMs: Math.round(performance.now() - t0), fetchMs: Math.round(fetchMs), warmMs: Math.round(warmMs), fallback: errors.length ? errors.join('; ') : undefined });
 }
 
@@ -91,6 +98,31 @@ async function run(): Promise<Float32Array> {
   }
 }
 
+async function runWithFallback(): Promise<Float32Array> {
+  try {
+    return await run();
+  } catch (error) {
+    if (ep !== 'webgpu' || !fallbackModel) throw error;
+    const reason = `webgpu: ${(error as Error).message}`;
+    await session?.release().catch(() => undefined);
+    session = undefined;
+    try {
+      session = await ort.InferenceSession.create(fallbackModel, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
+      // Retry the current input: the frame still belongs to this worker until detect() finishes.
+      const out = await run();
+      ep = 'wasm';
+      fallbackModel = undefined;
+      post({ type: 'backend', ep, threads: ort.env.wasm.numThreads as number, fallback: reason });
+      return out;
+    } catch (fallbackError) {
+      await session?.release().catch(() => undefined);
+      session = undefined;
+      fallbackModel = undefined;
+      throw new Error(`${reason}; wasm: ${(fallbackError as Error).message}`);
+    }
+  }
+}
+
 async function detect(m: Extract<WorkerIn, { type: 'frame' }>): Promise<void> {
   const t0 = performance.now();
   const bmp = m.bitmap;
@@ -103,14 +135,14 @@ async function detect(m: Extract<WorkerIn, { type: 'frame' }>): Promise<void> {
     const px = ctx.getImageData(0, 0, size, size).data;
     rgbaToBgrChw(px, lb, tensorData);
     const t1 = performance.now();
-    const out = await run();
+    const out = await runWithFallback();
     const t2 = performance.now();
     const cands = postprocess(out, { inputSize: size, scoreThreshold: m.scoreThreshold, allowed: new Set(m.allowed), iouThreshold: 0.45, maxOut: 12 });
     const dets = cands.map((c) => ({ box: toSource(c.box, lb), score: c.score, cls: c.cls })).filter((d) => d.box[2] > 1 && d.box[3] > 1);
     const t3 = performance.now();
     post({ type: 'result', id: m.id, dets, width: bmp.width, height: bmp.height, prepMs: t1 - t0, inferMs: t2 - t1, postMs: t3 - t2 });
   } catch (e) {
-    post({ type: 'error', id: m.id, message: (e as Error).message });
+    post({ type: 'error', id: m.id, message: (e as Error).message, fatal: !session });
   } finally {
     bmp.close();
   }

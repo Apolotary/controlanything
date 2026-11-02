@@ -6,7 +6,8 @@
  * "keyboard" the next keeps one label), a short tentative phase and a short coast before a track is dropped.
  * Image-space only and pure: the 3D side lives in live.ts.
  */
-import { iou } from './post';
+import { PERSON_CLASS } from './classes';
+import { iou, nms } from './post';
 import type { Box } from './prep';
 
 export interface TrackerInput {
@@ -29,8 +30,10 @@ export interface Track {
   misses: number;
   firstAt: number;
   lastSeenAt: number;
-  /** shown to the user (enough hits, or one confident hit) */
+  /** shown after repeated detections have persisted for minAgeMs */
   live: boolean;
+  /** opacity of a confirmed track as it coasts between detections */
+  opacity: number;
   votes: Map<number, number>;
 }
 
@@ -40,30 +43,35 @@ export interface TrackerOptions {
   iouOther: number;
   /** box EMA weight of the new detection (1 = no smoothing) */
   alpha: number;
-  /** hits before a track is shown, unless one hit scores ≥ instantScore */
+  /** Both hit count and lifetime must pass before a track is shown. */
   minHits: number;
-  instantScore: number;
-  /** a track is dropped after this long unseen AND at least minMisses unmatched frames */
+  minAgeMs: number;
+  /** A confirmed track fades away and is dropped after this long unseen. */
   maxMissMs: number;
-  minMisses: number;
   maxTracks: number;
 }
 
 export const TRACKER_DEFAULTS: TrackerOptions = {
   iouSame: 0.3,
   iouOther: 0.5,
-  alpha: 0.55,
+  alpha: 0.35,
   minHits: 2,
-  instantScore: 0.6,
-  maxMissMs: 700,
-  minMisses: 2,
-  maxTracks: 12,
+  minAgeMs: 150,
+  maxMissMs: 400,
+  maxTracks: 8,
 };
 
 export interface TrackerUpdate {
   tracks: Track[];
   created: Track[];
   removed: Track[];
+}
+
+/** A brief coast followed by a smooth fade; usable each render frame without a new inference. */
+export function trackOpacity(track: Pick<Track, 'live' | 'lastSeenAt'>, now: number, maxMissMs = 400): number {
+  if (!track.live) return 0;
+  if (maxMissMs <= 0) return now <= track.lastSeenAt ? 1 : 0;
+  return Math.max(0, Math.min(1, (maxMissMs - (now - track.lastSeenAt)) / (maxMissMs * 0.5)));
 }
 
 export class BoxTracker {
@@ -89,12 +97,29 @@ export class BoxTracker {
     return all;
   }
 
+  /** Fade at maxMissMs; a slower sampling cadence may retain invisible identities longer. */
+  age(now: number, retainId?: number, retentionMs = this.opts.maxMissMs): Track[] {
+    const removed: Track[] = [];
+    for (const t of this.tracks.values()) {
+      t.opacity = t.id === retainId && t.live ? 1 : trackOpacity(t, now, this.opts.maxMissMs);
+      if (t.id !== retainId && now - t.lastSeenAt >= Math.max(this.opts.maxMissMs, retentionMs)) {
+        this.tracks.delete(t.id);
+        removed.push(t);
+      }
+    }
+    return removed;
+  }
+
   /**
    * One frame of detections. `predict` maps a track to its expected box in THIS frame (or null to use its
    * last box): pass it when the camera moved between frames.
    */
-  update(dets: TrackerInput[], now: number, predict?: (t: Track) => Box | null, retainId?: number): TrackerUpdate {
+  update(dets: TrackerInput[], now: number, predict?: (t: Track) => Box | null, retainId?: number, retentionMs = this.opts.maxMissMs): TrackerUpdate {
     const o = this.opts;
+    // Repeat the privacy guard at the tracking boundary, and collapse alternate class predictions.
+    dets = nms(dets.filter((d) => d.cls !== PERSON_CLASS && Number.isFinite(d.score)
+      && d.box.every(Number.isFinite) && d.box[2] > 0 && d.box[3] > 0), 0.7, { classAware: false });
+    const removed = this.age(now, retainId, retentionMs);
     const tracks = this.list();
     const prior = new Map<number, Box>();
     for (const t of tracks) prior.set(t.id, predict?.(t) ?? t.box);
@@ -116,17 +141,13 @@ export class BoxTracker {
       usedD.add(p.d);
       this.continueTrack(p.t, dets[p.d]!, prior.get(p.t.id)!, now);
     }
-    const removed: Track[] = [];
     for (const t of tracks) {
       if (usedT.has(t.id)) continue;
       t.misses++;
       // keep coasting where it is predicted to be, so a re-detection still matches
       t.box = prior.get(t.id)!;
       if (t.id === retainId) continue; // the selected device may await a slower SAM result
-      if (t.misses >= o.minMisses && now - t.lastSeenAt > o.maxMissMs) {
-        this.tracks.delete(t.id);
-        removed.push(t);
-      } else if (!t.live && t.misses >= 1) {
+      if (!t.live) {
         // a tentative track that misses its second frame was noise
         this.tracks.delete(t.id);
         removed.push(t);
@@ -145,7 +166,8 @@ export class BoxTracker {
         misses: 0,
         firstAt: now,
         lastSeenAt: now,
-        live: det.score >= o.instantScore || o.minHits <= 1,
+        live: o.minAgeMs <= 0 && o.minHits <= 1,
+        opacity: o.minAgeMs <= 0 && o.minHits <= 1 ? 1 : 0,
         votes: new Map([[det.cls, det.score]]),
       };
       this.tracks.set(t.id, t);
@@ -162,7 +184,8 @@ export class BoxTracker {
     t.hits++;
     t.misses = 0;
     t.lastSeenAt = now;
-    if (t.hits >= this.opts.minHits) t.live = true;
+    if (t.hits >= this.opts.minHits && now - t.firstAt >= this.opts.minAgeMs) t.live = true;
+    t.opacity = t.live ? 1 : 0;
     for (const [c, v] of t.votes) t.votes.set(c, v * 0.8);
     t.votes.set(det.cls, (t.votes.get(det.cls) ?? 0) + det.score);
     let best = t.cls;
