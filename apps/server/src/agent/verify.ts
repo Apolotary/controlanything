@@ -160,9 +160,9 @@ export async function verifyOnce(deps: VerifyDeps, t: Target, driver: Driver, a:
         ...base,
         execId: ack.execId,
         sent: { op, at: ack.sentAt },
-        observed: { sense: 'audio', metric: 'transcript', before: 0, after: heard.similarity, delta: heard.similarity, threshold: TRANSCRIPT_THRESHOLD, sensorDeviceId: exec.deviceId, note: `${canned.label}; ${heard.recordedFrom ?? heard.model}${heard.source === 'fixture' ? ' (FIXTURE replay)' : ''} heard "${heard.transcript.slice(0, 120)}"` },
+        observed: { sense: 'audio', metric: 'transcript', before: 0, after: heard.similarity, delta: heard.similarity, threshold: TRANSCRIPT_THRESHOLD, sensorDeviceId: exec.deviceId, note: `${heard.recordedFrom ?? heard.model}${heard.source === 'fixture' ? ' (FIXTURE replay)' : ''} heard "${heard.transcript.slice(0, 60)}" · recorded clip ${canned.file}, not this Mac (CE_MAC_SILENT)`.slice(0, 200) },
         pass: heard.pass,
-        note: heard.pass ? `recorded clip heard back by ${heard.recordedFrom ?? heard.model}: "${heard.transcript.slice(0, 80)}" (${canned.label})` : `expected "${canned.line.slice(0, 40)}", heard "${heard.transcript.slice(0, 40) || 'nothing'}" (${canned.label})`,
+        note: (heard.pass ? `recorded clip heard back by ${heard.recordedFrom ?? heard.model}: "${heard.transcript.slice(0, 60)}" · ${canned.label}` : `expected "${canned.line.slice(0, 40)}", heard "${heard.transcript.slice(0, 40) || 'nothing'}" · ${canned.label}`).slice(0, 200),
       };
       return { evidence };
     }

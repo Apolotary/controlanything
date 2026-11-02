@@ -1152,6 +1152,10 @@ export class QuestApp {
           if (this.pendingArm) this.answerConfirm(this.pendingArm, true);
           else this.approvals.approveFirst();
           break;
+        case 'h':
+          // keyboard stand-in for pinch-and-hold (irreversible hacks: printing)
+          if (this.pendingArm) this.answerConfirm(this.pendingArm, true, true);
+          break;
       }
     });
     window.addEventListener('keyup', (e) => {
