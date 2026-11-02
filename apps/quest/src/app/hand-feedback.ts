@@ -1,6 +1,7 @@
 import { BufferGeometry, CanvasTexture, Float32BufferAttribute, Group, LineBasicMaterial, LineLoop, Mesh, MeshBasicMaterial, PlaneGeometry, SphereGeometry, Vector3 } from 'three';
 import type { Handedness, ShellFrame } from './hud-contract';
 import type { HandDiagnostics } from './input';
+import { WorldPanel } from '../hud/v2/world-panel';
 
 const HANDS = ['left', 'right'] as const;
 const FORWARD = new Vector3(0, 0, 1);
@@ -26,6 +27,7 @@ export class HandFeedback {
   private readonly facing = new Vector3();
   private showHover = true;
   private plate?: Mesh<PlaneGeometry, MeshBasicMaterial>;
+  private readonly plateAnchor = new WorldPanel({ height: -0.4 });
   private canvas?: HTMLCanvasElement;
   private context?: CanvasRenderingContext2D;
   private texture?: CanvasTexture;
@@ -105,8 +107,7 @@ export class HandFeedback {
       dot.scale.setScalar(hand?.pinching ? 1.25 : 1);
     }
     if (!this.plate) return;
-    this.plate.position.set(0, -0.42, -0.9).applyQuaternion(f.head.quaternion).add(f.head.position);
-    this.plate.quaternion.copy(f.head.quaternion);
+    this.plateAnchor.update(this.plate, f.head, f.time);
     // f.dt is capped by the input sampler; timestamps measure the actual frame rate.
     if (this.previousTime !== null && f.time > this.previousTime) {
       this.elapsed += f.time - this.previousTime;

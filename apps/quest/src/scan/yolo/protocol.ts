@@ -16,5 +16,6 @@ export interface WorkerDet {
 
 export type WorkerOut =
   | { type: 'ready'; ep: YoloEp; threads: number; isolated: boolean; loadMs: number; fetchMs: number; warmMs: number; fallback?: string }
+  | { type: 'backend'; ep: YoloEp; threads: number; fallback: string }
   | { type: 'result'; id: number; dets: WorkerDet[]; width: number; height: number; prepMs: number; inferMs: number; postMs: number }
   | { type: 'error'; id?: number; message: string; fatal?: boolean };

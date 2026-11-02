@@ -5,7 +5,7 @@ import { aimAt, touching } from './aim';
 import type { FrameRecord } from './capture';
 import { type DepthProvider, placeDetection, rejectReason } from './placement';
 import { cameraPoseFromHead, QUEST3_1280x960, rayPlane, worldToPixel } from './projection';
-import { TargetStore, toHudTarget } from './targets';
+import { displayLabel, TargetStore, toHudTarget } from './targets';
 
 function record(extra: Partial<FrameRecord> = {}): FrameRecord {
   const head = { position: new Vector3(0, 1.6, 0), quaternion: new Quaternion() };
@@ -71,14 +71,14 @@ describe('rejectReason (devices only)', () => {
   it('drops walls (over 60 % of the frame)', () => {
     expect(rejectReason(det({ box: [0, 0, 1200, 900] }), record())).toMatch(/60/);
   });
-  it('drops a box that is really a tracked hand, but keeps a held remote', () => {
+  it('drops all boxes overlapping tracked joints, including held-device classes', () => {
     const rec = record();
     // 15 joints projected into the middle of the box
     const p = new Vector3(0, 0, -1).applyQuaternion(rec.cam.quaternion).multiplyScalar(0.5).add(rec.cam.position);
     const joints = Array.from({ length: 15 }, () => p.clone());
     const withHand = record({ handJoints: joints });
     expect(rejectReason(det({ label: 'electronic device', box: [540, 380, 200, 200] }), withHand)).toMatch(/hand/);
-    expect(rejectReason(det({ label: 'remote control', box: [540, 380, 200, 200] }), withHand)).toBeNull();
+    expect(rejectReason(det({ label: 'remote control', box: [540, 380, 200, 200] }), withHand)).toMatch(/hand/);
   });
   it('keeps an ordinary device', () => {
     expect(rejectReason(det(), record())).toBeNull();
@@ -86,6 +86,13 @@ describe('rejectReason (devices only)', () => {
 });
 
 describe('TargetStore', () => {
+  it('uses one short sentence-case label', () => {
+    expect(displayLabel('  CEILING   LIGHT  ')).toBe('Ceiling light');
+    expect(displayLabel('LAPTOP')).toBe('Laptop');
+    expect(displayLabel('')).toBe('Device');
+    expect(displayLabel('Very long electronic device description').length).toBeLessThanOrEqual(22);
+  });
+
   it('merges repeated detections of the same device and keeps different devices apart', async () => {
     const store = new TargetStore();
     const rec = record();

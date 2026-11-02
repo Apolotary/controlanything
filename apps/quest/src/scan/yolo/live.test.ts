@@ -1,5 +1,6 @@
-import { Quaternion, Vector3 } from 'three';
-import { describe, expect, it, vi } from 'vitest';
+import { Group, Quaternion, Vector3 } from 'three';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BoxField } from '../../hud/v2/boxes';
 import type { Hud, HudTarget } from '../../app/hud-contract';
 import type { CameraSource, GrabbedFrame } from '../camera';
 import { PoseRing } from '../poses';
@@ -19,8 +20,12 @@ class FakeWorker {
   ready(): void { this.emit({ type: 'ready', ep: 'wasm', threads: 1, isolated: false, loadMs: 1, fetchMs: 1, warmMs: 1 }); }
 }
 
-function setup() {
+afterEach(() => vi.unstubAllGlobals());
+
+function setup(field?: BoxField) {
   const targets: Target[] = [];
+  const root = new Group();
+  if (field) root.add(field);
   const views = new Map<string, HudTarget>();
   const workers: FakeWorker[] = [];
   const bitmap = { width: 416, height: 312, close: vi.fn() } as unknown as ImageBitmap;
@@ -28,22 +33,103 @@ function setup() {
   const onPickClaimed = vi.fn();
   const live = new LiveDetector({
     camera: () => ({ grab, eye: 'mono' } as unknown as CameraSource), poses: new PoseRing(),
-    hud: () => ({ upsertTarget: (t: HudTarget) => views.set(t.id, t), removeTarget: (id: string) => views.delete(id) } as unknown as Hud),
+    hud: () => ({ root, upsertTarget: (t: HudTarget) => {
+      views.set(t.id, t);
+      field?.set(t.id, new Vector3(...t.position), t.sizeM?.[0] ?? 0.3, t.sizeM?.[1] ?? 0.2, '#ffffff');
+    }, removeTarget: (id: string) => { views.delete(id); field?.remove(id); } } as unknown as Hud),
     samTargets: () => targets, depth: () => [], handJoints: () => [], log: vi.fn(), modelUrl: '/models/yolox_nano.onnx', onPickClaimed,
     createWorker: () => { const worker = new FakeWorker(); workers.push(worker); return worker as unknown as Worker; },
   });
   const sam = (id = 'sam_device', size = 1): Target => {
     const view = [...views.values()][0]!;
-    return { id, position: new Vector3(...view.position), sizeM: view.sizeM!.map((v) => v * size) } as Target;
+    return { id, label: 'Ceiling light', score: 0.9, status: 'scanned', facing: new Vector3(0, 0, 1), position: new Vector3(...view.position), sizeM: view.sizeM!.map((v) => v * size) } as Target;
   };
   return { live, targets, views, workers, bitmap, grab, onPickClaimed, sam };
 }
 
 describe('live selection and SAM handover', () => {
+  it('confirms after 150 ms, fades on render time, and expires with no further worker result', () => {
+    const field = new BoxField();
+    const { live, views } = setup(field);
+    live.running = true;
+    live.apply([detection], frame, 0);
+    live.apply([detection], frame, 100);
+    expect(views.size).toBe(0);
+    live.apply([detection], frame, 150);
+    const id = live.aimables()[0]!.id;
+    live.tick(450, 11);
+    expect(field.boxes.get(id)?.opacity).toBeCloseTo(0.5);
+    live.tick(550, 11);
+    expect(views.size).toBe(0);
+    expect(live.aimables()).toEqual([]);
+    field.dispose();
+  });
+
+  it('rejects an edge-overlapping hand immediately instead of coasting its old box', () => {
+    const { live, views } = setup();
+    live.apply([detection], frame, 0);
+    live.apply([detection], frame, 150);
+    expect(views.size).toBe(1);
+    const hand = new Vector3((108 - 208) / 416, -(106 - 156) / 416, -1);
+    live.apply([detection], { ...frame, handJoints: [hand] }, 200);
+    expect(views.size).toBe(0);
+    expect(live.aimables()).toEqual([]);
+  });
+
+  it('reclaims a full outline slot for the SAM label and shape without a duplicate', () => {
+    const field = new BoxField(1);
+    const { live, targets, views, sam } = setup(field);
+    live.apply([detection], frame, 0);
+    live.apply([detection], frame, 150);
+    const oldId = live.aimables()[0]!.id;
+    const target = sam();
+    targets.push(target);
+    expect(field.set(target.id, target.position, 0.3, 0.2, '#ffffff')).toBeUndefined();
+    live.onSamTargets();
+    expect(field.boxes.size).toBe(1);
+    expect(field.has(oldId)).toBe(false);
+    expect(views.get(target.id)?.label).toBe('Ceiling light');
+    live.apply([detection], frame, 250);
+    expect(field.boxes.size).toBe(1);
+    expect(live.aimables()).toEqual([]);
+    field.dispose();
+  });
+
+  it('makes room for SAM-only classes when the scan limit is full', () => {
+    const field = new BoxField(1);
+    const { live, targets, views, sam } = setup(field);
+    live.apply([detection], frame, 0);
+    live.apply([detection], frame, 150);
+    const target = sam();
+    target.position.x += 2;
+    targets.push(target);
+    live.onSamTargets();
+    expect(field.boxes.size).toBe(1);
+    expect(field.has(target.id)).toBe(true);
+    expect([...views.values()].map((v) => v.label)).toEqual(['Ceiling light']);
+    field.dispose();
+  });
+
+  it('retains a confirmed identity across deliberate slow cadence without leaving a stale outline', () => {
+    const { live, views } = setup();
+    live.stats.intervalMs = 600;
+    live.running = true;
+    live.apply([detection], frame, 0);
+    live.tick(500, 11);
+    live.apply([detection], frame, 600);
+    const id = live.aimables()[0]!.id;
+    live.tick(1000, 11);
+    expect(views.size).toBe(0);
+    live.apply([detection], frame, 1200);
+    expect(live.aimables()[0]?.id).toBe(id);
+    live.dispose();
+  });
+
   it('keeps a pinched box through tracker aging and hands it to a late SAM result once', () => {
     const { live, targets, views, sam, onPickClaimed } = setup();
     live.running = true;
     live.apply([detection], frame, 0);
+    live.apply([detection], frame, 150);
     const id = live.aimables()[0]!.id;
     const hover = live.hoverTarget(id)!;
     expect(hover.position).toBe(live.aimables()[0]!.position);
@@ -70,6 +156,7 @@ describe('live selection and SAM handover', () => {
   it('does not let a small subobject claim the selected larger device', () => {
     const { live, targets, sam, onPickClaimed } = setup();
     live.apply([detection], frame, 0);
+    live.apply([detection], frame, 150);
     live.pick(live.aimables()[0]!.id);
     targets.push(sam('small_remote', 0.1));
     expect(live.onSamTargets()).toBeUndefined();
@@ -79,6 +166,7 @@ describe('live selection and SAM handover', () => {
   it('keeps a selected device in world space when the user looks away', () => {
     const { live } = setup();
     live.apply([detection], frame, 0);
+    live.apply([detection], frame, 150);
     const aim = live.aimables()[0]!;
     const position = aim.position.clone();
     live.pick(aim.id);
@@ -89,6 +177,7 @@ describe('live selection and SAM handover', () => {
   it('clears selection on category change and scan stop, reusing aim objects across frames', () => {
     const { live, views } = setup();
     live.apply([detection], frame, 0);
+    live.apply([detection], frame, 150);
     const out: ReturnType<LiveDetector['aimables']> = [];
     live.appendAimables(out);
     const aim = out[0]!;
@@ -114,6 +203,28 @@ describe('live selection and SAM handover', () => {
 });
 
 describe('live worker scheduling and lifecycle', () => {
+  it('publishes live percentiles, backoff, skipped opportunities and backend recovery on __ce', async () => {
+    const app = { existing: true, yoloStats: undefined as unknown };
+    vi.stubGlobal('window', { __ce: app });
+    const { live, workers } = setup();
+    live.start(); workers[0]!.ready();
+    live.tick(100, 11);
+    await Promise.resolve();
+    live.tick(200, 11);
+    const sent = workers[0]!.postMessage.mock.calls.at(-1)![0];
+    if (sent.type !== 'frame') throw new Error('expected frame');
+    workers[0]!.emit({ type: 'result', id: sent.id, dets: [], width: 416, height: 312, prepMs: 0, inferMs: 100, postMs: 0 });
+    expect(live.stats.intervalMs).toBeGreaterThanOrEqual(135);
+    expect(app.yoloStats).toEqual({ backend: 'wasm', inferMs: { p50: 100, p95: 100 }, hz: 1, boxes: 0, dropped: 1 });
+    workers[0]!.emit({ type: 'backend', ep: 'wasm', threads: 1, fallback: 'GPU lost' });
+    expect(app.existing).toBe(true);
+    expect(live.stats.threads).toBe(1);
+    live.stop();
+    live.tick(performance.now() + 1001, 11);
+    expect(live.telemetry.value.hz).toBe(0);
+    live.dispose();
+  });
+
   it('allows one frame in flight and never sends above 15 Hz', async () => {
     const { live, workers, grab } = setup();
     live.start(); workers[0]!.ready();

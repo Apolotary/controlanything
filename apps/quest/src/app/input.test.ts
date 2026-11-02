@@ -393,6 +393,78 @@ describe('InputSampler system pinch', () => {
   });
 });
 
+describe('InputSampler concurrent hands and controllers', () => {
+  it.each([
+    ['left', false], ['left', true], ['right', false], ['right', true],
+  ] as const)('prefers the tracked %s hand with controller first=%s', (handedness, controllerFirst) => {
+    const f = fixture(handedness);
+    const controller = source(handedness, false);
+    if (controllerFirst) f.session.sources.unshift(controller);
+    else f.session.sources.push(controller);
+    f.state.distance = 0.01;
+    expect(f.sample(0)).toMatchObject({ controller: false, pinching: false });
+    expect(f.sample(10)).toMatchObject({ controller: false, pinching: true, justPinched: true });
+    expect(f.sample(20)).toMatchObject({ controller: false, pinching: true, justPinched: false });
+    // The runtime may reorder the sources between frames without changing the gesture.
+    f.session.sources.reverse();
+    expect(f.sample(30)).toMatchObject({ controller: false, pinching: true, justPinched: false });
+    expect(f.sampler.diagnostics[handedness]).toMatchObject({ tracked: true, jointCount: 3 });
+  });
+
+  it('keeps native select events attached to their source without interrupting the tracked hand', () => {
+    const f = fixture();
+    const controller = source('right', false);
+    f.session.sources.push(controller);
+    f.sample(0);
+    f.session.select('selectstart', f.src);
+    expect(f.sample(10)).toMatchObject({ controller: false, pinching: true, justPinched: true });
+    f.session.select('selectstart', controller);
+    f.session.select('selectend', controller);
+    expect(f.sampler.diagnostics.right.selectDown).toBe(true);
+    expect(f.sample(20)).toMatchObject({ controller: false, pinching: true, justPinched: false });
+    f.session.select('selectend', f.src);
+    expect(f.sample(30)).toMatchObject({ controller: false, pinching: false, justReleased: true });
+    f.session.removeSource(controller);
+    expect(f.sampler.diagnostics.right.tracked).toBe(true);
+    expect(f.sample(40)).toMatchObject({ controller: false, pinching: false });
+  });
+
+  it('uses the controller only after both hand ray and joint tracking are lost', () => {
+    const f = fixture();
+    const controller = source('right', false);
+    f.session.sources.push(controller);
+    f.getPose.mockImplementation((space) => space === controller.targetRaySpace || f.state.ray ? pose(0.1, 1.2, -0.2) : null);
+    f.state.joints = false;
+    expect(f.sample(0)?.controller).toBe(false);
+    f.session.select('selectstart', f.src);
+    expect(f.sample(10)).toMatchObject({ controller: false, justPinched: true });
+    f.state.ray = false;
+    expect(f.sample(20)).toMatchObject({ controller: true, pinching: false });
+    f.session.select('selectstart', controller);
+    expect(f.sample(30)).toMatchObject({ controller: true, pinching: true, justPinched: true });
+    f.session.select('selectend', controller);
+    expect(f.sample(40)).toMatchObject({ controller: true, justReleased: true });
+    f.state.joints = true;
+    // Located joints restore hand priority even before its ray returns. The held native pinch
+    // was already consumed before tracking loss and must not press the button again.
+    expect(f.sample(50)).toMatchObject({ controller: false, pinching: true, justPinched: false });
+    f.session.select('selectend', f.src);
+    expect(f.sample(60)).toMatchObject({ controller: false, justReleased: true });
+  });
+
+  it('does not replay an ignored controller press when the hand loses tracking', () => {
+    const f = fixture();
+    const controller = source('right', false);
+    f.session.sources.push(controller);
+    f.getPose.mockImplementation((space) => space === controller.targetRaySpace || f.state.ray ? pose(0.1, 1.2, -0.2) : null);
+    f.sample(0);
+    f.session.select('selectstart', controller);
+    expect(f.sample(10)).toMatchObject({ controller: false, pinching: false });
+    f.state.joints = f.state.ray = false;
+    expect(f.sample(20)).toMatchObject({ controller: true, pinching: true, justPinched: false });
+  });
+});
+
 describe('InputSampler session lifetime', () => {
   it('automatically binds the live frame session and does not rebind/reset the same session', () => {
     const f = fixture();

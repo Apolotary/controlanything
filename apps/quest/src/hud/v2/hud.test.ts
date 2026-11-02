@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DoubleSide, Mesh, PerspectiveCamera, Scene, Vector3, type Object3D, type WebGLRenderer } from 'three';
+import { DoubleSide, Mesh, PerspectiveCamera, Scene, Vector3, Quaternion, type ShaderMaterial, type Object3D, type WebGLRenderer } from 'three';
 import { EXAMPLES, type Gen3dSpec } from '@ce/gen3d';
 import type { HandState, HudFrame, HudTarget } from '../contract';
 import { HandFeedback } from '../../app/hand-feedback';
@@ -21,7 +21,7 @@ function setup() {
   let time = 0;
   function frame(hand?: Partial<HandState>, elapsedMs = 1000 / 72): HudFrame {
     time += elapsedMs;
-    return { time, dt: elapsedMs / 1000, head: { position: camera.position, quaternion: camera.quaternion }, hands: hand ? { right: { joints: {}, pinchPoint: new Vector3(10, 10, 10), ray: { origin: camera.position.clone(), dir: new Vector3(0, 0, -1) }, pinching: false, justPinched: false, justReleased: false, ...hand } } : {} };
+    return { time, dt: elapsedMs / 1000, head: { position: camera.position, quaternion: camera.quaternion }, hands: hand ? { right: { joints: hand.pinchPoint && !hand.controller ? { 'index-finger-tip': { position: hand.pinchPoint, quaternion: new Quaternion(), radius: 0.008 } } : {}, pinchPoint: new Vector3(10, 10, 10), ray: { origin: camera.position.clone(), dir: new Vector3(0, 0, -1) }, pinching: false, justPinched: false, justReleased: false, ...hand } } : {} };
   }
   function pinch(object: Object3D, heldMs = 20) {
     hud.update(frame(undefined, 200));
@@ -30,7 +30,7 @@ function setup() {
     hud.update(frame({ pinchPoint: point, pinching: true }, heldMs));
     hud.update(frame({ pinchPoint: point, justReleased: true }));
   }
-  return { hud, scene, frame, pinch };
+  return { hud, scene, camera, frame, pinch };
 }
 function budget(root: Object3D) {
   let calls = 0, triangles = 0, text = 0;
@@ -92,16 +92,16 @@ describe('Calm Glass HUD scene budget', () => {
     expect(hud.root.getObjectByName('control:action3')).toBeUndefined();
     feedback.dispose(); hud.dispose();
   });
-  it('keeps scanning as boxes only and reveals a card only after a box is picked', () => {
+  it('keeps Stop scan reachable while scanning and reveals picked device controls', () => {
     const { hud, frame } = setup();
     hud.upsertTarget(target); hud.setScanning(true); hud.update(frame());
     const card = hud.root.getObjectByName('device-card')!;
-    expect(card.visible).toBe(false);
+    expect(card.visible).toBe(true);
     expect(hud.root.getObjectByName('target-label:device')?.visible).toBe(true);
     hud.setLocked(target.id); hud.update(frame()); expect(card.visible).toBe(true);
     hud.renderSpec(spec(), { targetId: target.id });
     hud.showHackMenu(target.id, { title: 'Laptop', items: [] });
-    hud.setLocked(null); hud.update(frame()); expect(card.visible).toBe(false);
+    hud.setLocked(null); hud.update(frame()); expect(card.visible).toBe(true);
     hud.dispose();
   });
   it('reuses the same geometry and label on tracking updates, then removes the old outline immediately on handover', () => {
@@ -167,10 +167,11 @@ describe('Calm Glass HUD scene budget', () => {
     hud.renderSpec(spec(), { targetId: target.id }); hud.update(frame(undefined, 200));
     const card = hud.root.getObjectByName('device-card')!;
     const head = new Vector3(0, 1.4, 0), offset = card.position.clone().sub(head);
-    expect(offset.length()).toBeCloseTo(THEME.card.dockDistance);
-    expect(Math.abs(Math.asin(offset.y / offset.length()))).toBeLessThanOrEqual(THEME.card.maxPitchDeg * Math.PI / 180 + 1e-6);
+    expect(Math.hypot(offset.x, offset.z)).toBeCloseTo(THEME.card.dockDistance);
+    expect(offset.y).toBeCloseTo(THEME.panel.headY);
     const normal = new Vector3(0, 0, 1).applyQuaternion(card.quaternion);
-    expect(normal.dot(offset.clone().normalize())).toBeCloseTo(-1);
+    expect(normal.y).toBe(0);
+    expect(normal.dot(offset.clone().setY(0).normalize())).toBeCloseTo(-1);
     expect(card.scale.toArray()).toEqual([1, 1, 1]);
     const heading = hud.root.getObjectByName('device-name') as Object3D & { fontSize: number };
     expect(heading.fontSize).toBe(THEME.font.title);
@@ -363,5 +364,116 @@ describe('Calm Glass HUD controls and details', () => {
     expect(moves.length).toBeLessThanOrEqual(15);
     hud.toast('Connected'); hud.update(frame(undefined, 1000)); expect(hud.root.getObjectByName('notice')!.visible).toBe(true);
     hud.update(frame(undefined, 2100)); expect(hud.root.getObjectByName('notice')!.visible).toBe(false); hud.dispose();
+  });
+});
+
+describe('HUD button interaction feedback', () => {
+  it('keeps an open deck above Scan and preserves its explicit anchor through state updates', () => {
+    const { hud, camera, frame } = setup();
+    hud.update(frame(undefined, 200));
+    hud.setDeck({ open: true }); hud.update(frame(undefined, 200));
+    expect(hud.root.getObjectByName('device-card')!.visible).toBe(false);
+    const phases: string[] = [];
+    hud.on('deck', (e) => phases.push(`${e.key}:${e.phase}`));
+    const point = hud.root.getObjectByName('deck:mic')!.getWorldPosition(new Vector3());
+    const ray = { origin: camera.position.clone(), dir: point.sub(camera.position).normalize() };
+    hud.update(frame({ ray, pinching: true, justPinched: true }));
+    hud.update(frame({ ray, justReleased: true }));
+    expect(phases).toEqual(['mic:press', 'mic:release']);
+    hud.setDeck({ at: [0.4, 1, -0.4] }); hud.update(frame());
+    hud.setDeck({ scanning: true }); hud.update(frame());
+    expect(hud.root.getObjectByName('deck')!.position.toArray()).toEqual([0.4, 1, -0.4]);
+    hud.setDeck({ open: false }); hud.update(frame());
+    expect(hud.root.getObjectByName('device-card')!.visible).toBe(true);
+    hud.dispose();
+  });
+
+  it('accepts a fresh pinch after tracking loss without replaying a held pinch', () => {
+    const { hud, camera, frame } = setup();
+    hud.update(frame(undefined, 200));
+    const point = hud.root.getObjectByName('scan-toggle')!.getWorldPosition(new Vector3());
+    const ray = { origin: camera.position.clone(), dir: point.sub(camera.position).normalize() };
+    const phases: string[] = [];
+    hud.on('deck', (e) => phases.push(e.phase));
+    hud.update(frame({ ray, pinching: true, justPinched: true }));
+    hud.update(frame());
+    hud.update(frame({ ray, pinching: true }));
+    expect(phases).toEqual(['press', 'release']);
+    hud.update(frame());
+    hud.update(frame({ ray, pinching: true, justPinched: true }));
+    expect(phases).toEqual(['press', 'release', 'press']);
+    hud.dispose();
+  });
+
+  it('uses the index tip for hover and crossing, requires withdrawal before another poke, and never pokes with missing joints', () => {
+    const { hud, frame } = setup();
+    hud.update(frame(undefined, 200));
+    const button = hud.root.getObjectByName('scan-toggle')!;
+    const phases: string[] = [];
+    hud.on('deck', (e) => phases.push(e.phase));
+    const fingertip = (z: number, x = 0) => button.localToWorld(new Vector3(x, 0, z));
+    const update = (z: number, x = 0) => hud.update(frame({
+      joints: { 'index-finger-tip': { position: fingertip(z, x), quaternion: new Quaternion(), radius: 0.008 } },
+      pinchPoint: new Vector3(20, 20, 20), ray: { origin: new Vector3(20, 20, 20), dir: new Vector3(0, 0, -1) },
+    }));
+    const material = () => (button.getObjectByName('button-plate') as Mesh).material as ShaderMaterial;
+    update(-0.003); // Appearing behind the face is not a crossing.
+    expect(phases).toEqual([]);
+    update(0.02);
+    expect(button.userData.hovered).toBe(true);
+    expect(material().uniforms.edgeAlpha!.value).toBe(1);
+    update(-0.003);
+    expect(phases).toEqual(['press']);
+    expect(button.scale.x).toBe(0.96);
+    expect(material().uniforms.fillAlpha!.value).toBe(0.48);
+    for (const z of [0.004, -0.002, 0.006, -0.004]) update(z);
+    expect(phases).toEqual(['press']);
+    update(0.02);
+    expect(phases).toEqual(['press', 'release']);
+    update(-0.003);
+    expect(phases).toEqual(['press', 'release', 'press']);
+    hud.update(frame({ joints: {}, pinchPoint: fingertip(-0.003), ray: { origin: new Vector3(20, 20, 20), dir: new Vector3(0, 0, -1) } }, 200));
+    expect(phases).toEqual(['press', 'release', 'press', 'release']);
+    expect(button.userData.hovered).toBe(false);
+    expect(button.scale.x).toBe(1);
+    expect(material().uniforms.edgeAlpha!.value).toBe(THEME.opacity.stroke);
+    hud.dispose();
+  });
+
+  it.each(['scan', 'details', 'deck', 'confirm', 'approval', 'control', 'hack'] as const)('supports a 48 mm hit area, ray hover and open-finger poke on %s buttons', (kind) => {
+    const { hud, camera, frame } = setup();
+    let name = 'scan-toggle';
+    if (kind === 'details') name = 'details-toggle';
+    if (kind === 'deck') { hud.setDeck({ open: true }); name = 'deck:ping'; }
+    if (kind === 'confirm') { hud.showConfirm({ id: 'ok', title: 'Allow?' }); name = 'confirm-yes'; }
+    if (kind === 'approval') { hud.showApprovals([{ pairingId: 'mac', name: 'Mac', kind: 'companion', display: '123' }]); name = 'approval-yes'; }
+    if (kind === 'control' || kind === 'hack') {
+      hud.upsertTarget({ ...target, status: 'verified' }); hud.setLocked(target.id);
+      if (kind === 'control') { hud.renderSpec(spec(), { targetId: target.id }); name = 'control:action0'; }
+      else { hud.showHackMenu(target.id, { title: 'Actions', items: [{ id: 'on', label: 'On', controlId: 'on', kind: 'action', status: 'ready' }] }); name = 'action:on'; }
+    }
+    hud.update(frame(undefined, 200));
+    const button = hud.root.getObjectByName(name)!;
+    const plate = button.getObjectByName('button-plate')!;
+    expect(plate.scale.x).toBeGreaterThanOrEqual(0.048);
+    expect(plate.scale.y).toBeGreaterThanOrEqual(0.048);
+    const point = button.localToWorld(new Vector3(0, 0.023, 0));
+    const ray = { origin: camera.position.clone(), dir: point.clone().sub(camera.position).normalize() };
+    const consumed: string[] = [];
+    hud.on('consumed', (event) => consumed.push(event.widget));
+    hud.update(frame({ ray }));
+    expect(button.userData.hovered).toBe(true);
+    hud.update(frame({ ray, pinching: true, justPinched: true }));
+    expect(hud.root.getObjectByName(name)!.userData.pressed).toBe(true);
+    expect(consumed.length).toBeGreaterThan(0);
+    hud.update(frame({ ray, justReleased: true }));
+    hud.update(frame(undefined, 200));
+    const current = hud.root.getObjectByName(name)!;
+    const poke = (z: number) => hud.update(frame({ joints: { 'index-finger-tip': { position: current.localToWorld(new Vector3(0, 0.023, z)), quaternion: new Quaternion(), radius: 0.008 } } }));
+    consumed.length = 0;
+    poke(0.025); poke(-0.005);
+    expect(consumed.length).toBeGreaterThan(0);
+    expect(hud.root.getObjectByName(name)!.userData.pressed).toBe(true);
+    hud.dispose();
   });
 });
