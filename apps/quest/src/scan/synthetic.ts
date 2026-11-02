@@ -230,14 +230,14 @@ export class SyntheticCamera implements CameraSource {
     this.room.refresh();
     this.renderer.render(this.room.scene, this.cam);
     const tCapture = performance.now();
-    const resize = resizeFor(this.k.width, this.k.height, opts.maxWidth);
-    const bitmap = resize ? await createImageBitmap(this.element, resize) : await createImageBitmap(this.element);
-    this.stats.frames++;
-    this.stats.lastFrameAt = tCapture;
     const headPose: Pose = {
       position: { x: head.position.x, y: head.position.y, z: head.position.z },
       orientation: { x: head.quaternion.x, y: head.quaternion.y, z: head.quaternion.z, w: head.quaternion.w },
     };
+    const resize = resizeFor(this.k.width, this.k.height, opts.maxWidth);
+    const bitmap = resize ? await createImageBitmap(this.element, resize) : await createImageBitmap(this.element);
+    this.stats.frames++;
+    this.stats.lastFrameAt = tCapture;
     return { bitmap, width: bitmap.width, height: bitmap.height, tCapture, headPose, intrinsics: resize ? scaleIntrinsics(this.k, bitmap.width, bitmap.height) : { ...this.k } };
   }
 }

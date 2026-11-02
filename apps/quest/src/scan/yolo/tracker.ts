@@ -93,7 +93,7 @@ export class BoxTracker {
    * One frame of detections. `predict` maps a track to its expected box in THIS frame (or null to use its
    * last box): pass it when the camera moved between frames.
    */
-  update(dets: TrackerInput[], now: number, predict?: (t: Track) => Box | null): TrackerUpdate {
+  update(dets: TrackerInput[], now: number, predict?: (t: Track) => Box | null, retainId?: number): TrackerUpdate {
     const o = this.opts;
     const tracks = this.list();
     const prior = new Map<number, Box>();
@@ -122,6 +122,7 @@ export class BoxTracker {
       t.misses++;
       // keep coasting where it is predicted to be, so a re-detection still matches
       t.box = prior.get(t.id)!;
+      if (t.id === retainId) continue; // the selected device may await a slower SAM result
       if (t.misses >= o.minMisses && now - t.lastSeenAt > o.maxMissMs) {
         this.tracks.delete(t.id);
         removed.push(t);
@@ -172,6 +173,7 @@ export class BoxTracker {
         best = c;
       }
     }
-    t.cls = best;
+    // One ambiguous frame should not change the label above a stable device.
+    if (best === t.cls || bestV > (t.votes.get(t.cls) ?? 0) * 1.35) t.cls = best;
   }
 }

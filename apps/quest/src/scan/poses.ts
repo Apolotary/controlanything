@@ -49,8 +49,13 @@ export class PoseRing {
     this.prevT = t;
     const i = this.head;
     this.t[i] = t;
-    this.p.set([position.x, position.y, position.z], i * 3);
-    this.q.set([q.x, q.y, q.z, q.w], i * 4);
+    this.p[i * 3] = position.x;
+    this.p[i * 3 + 1] = position.y;
+    this.p[i * 3 + 2] = position.z;
+    this.q[i * 4] = q.x;
+    this.q[i * 4 + 1] = q.y;
+    this.q[i * 4 + 2] = q.z;
+    this.q[i * 4 + 3] = q.w;
     this.s[i] = speed;
     this.head = (this.head + 1) % this.capacity;
     this.count = Math.min(this.count + 1, this.capacity);

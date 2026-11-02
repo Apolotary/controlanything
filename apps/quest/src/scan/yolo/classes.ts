@@ -2,8 +2,8 @@
  * COCO-80 classes of the bundled YOLOX detector and what the annotation layer does with them.
  *
  * Only device-like classes ever leave the worker. "person" (class 0) is never boxed, labelled or tracked:
- * an anchor whose best class is "person" is dropped, and person boxes are used inside the worker only to
- * suppress a device box that is really a person (BRIEF §4.1 rule 7). Everything else (cups, chairs, plants…)
+ * an anchor whose best class is "person" is dropped before its coordinates are decoded.
+ * Everything else (cups, chairs, plants…)
  * is ignored: the live layer shows devices, nothing else.
  */
 

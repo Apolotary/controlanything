@@ -221,13 +221,13 @@ export class LiveCamera implements CameraSource {
     const v = this.element;
     if (!this.running || v.readyState < 2 || !v.videoWidth) return null;
     const resize = resizeFor(v.videoWidth, v.videoHeight, opts.maxWidth);
-    const bitmap = resize ? await createImageBitmap(v, resize) : await createImageBitmap(v);
     const m = this.meta;
     const now = performance.now();
     // Chromium exposes captureTime for camera tracks; otherwise presentation time minus the measured latency.
     // Metadata older than 200 ms means rVFC stalled (e.g. throttled in XR): estimate from now instead.
     const fresh = m && now - this.stats.lastFrameAt < 200;
     const tCapture = fresh ? (m.captureTime ?? m.presentationTime - this.latencyMs) : now - this.latencyMs;
+    const bitmap = resize ? await createImageBitmap(v, resize) : await createImageBitmap(v);
     const g: GrabbedFrame = { bitmap, width: bitmap.width, height: bitmap.height, tCapture };
     // a downscaled grab keeps the full-size camera model, scaled (not re-derived from the small size)
     if (resize) g.intrinsics = scaleIntrinsics(questIntrinsics(v.videoWidth, v.videoHeight), bitmap.width, bitmap.height);

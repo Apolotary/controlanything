@@ -1,16 +1,9 @@
-/**
- * Crisp SDF text for the headset (troika-three-text, MIT) in one family: Inter (OFL). One draw call per label,
- * sharp at any distance, with a dark outline so words read over a bright room without a plate when needed.
- * Headless (unit tests): a stub Object3D with the same surface.
- */
-import { Object3D } from 'three';
-import { NEON } from '@ce/gen3d';
-import inter500 from '@fontsource/inter/files/inter-latin-500-normal.woff';
-import inter600 from '@fontsource/inter/files/inter-latin-600-normal.woff';
+import { BufferGeometry, Float32BufferAttribute, Mesh, MeshBasicMaterial } from 'three';
+import { Text } from 'troika-three-text';
+import { THEME } from './theme';
 
 export interface SdfTextOptions {
   text: string;
-  /** cap-ish height in metres (troika fontSize) */
   size?: number;
   color?: string;
   weight?: 500 | 600;
@@ -18,88 +11,62 @@ export interface SdfTextOptions {
   anchorY?: 'top' | 'middle' | 'bottom';
   maxWidth?: number;
   outline?: boolean;
+  singleLine?: boolean;
   align?: 'left' | 'center' | 'right';
 }
-
-export interface SdfText extends Object3D {
-  text: string;
-  color: string | number;
-  fontSize: number;
-  sync(cb?: () => void): void;
-  dispose(): void;
-  /** troika's material; the stub carries a compatible object */
-  material: { opacity: number; transparent: boolean; depthWrite: boolean };
-}
-
-type TroikaCtor = new () => SdfText & Record<string, unknown>;
-let TroikaText: TroikaCtor | null = null;
+export type SdfText = Text;
 const headless = typeof document === 'undefined';
-if (!headless) {
-  // dynamic import keeps the headless test path free of troika's worker setup
-  void import('troika-three-text').then((m) => (TroikaText = m.Text as unknown as TroikaCtor));
-}
+const textMaterial = new MeshBasicMaterial({ color: THEME.color.text, transparent: true, depthWrite: false, toneMapped: false });
 
-class StubText extends Object3D implements SdfText {
+/** Tests retain a real renderable Mesh and two triangles per glyph, without launching font workers. */
+class HeadlessText extends Mesh<BufferGeometry, MeshBasicMaterial> {
   text = '';
-  color: string | number = '#ffffff';
-  fontSize = 0.01;
-  material = { opacity: 1, transparent: true, depthWrite: false };
-  sync(cb?: () => void): void {
-    cb?.();
+  color: string | number = THEME.color.text;
+  fontSize = THEME.font.body as number;
+  constructor() { super(new BufferGeometry(), textMaterial); }
+  sync(callback?: () => void): void {
+    const vertices = new Float32Array(Math.max(1, this.text.length) * 18);
+    this.geometry.setAttribute('position', new Float32BufferAttribute(vertices, 3));
+    callback?.();
   }
-  dispose(): void {}
+  override dispose(): void { this.geometry.dispose(); }
 }
 
-/** Create a label. Set `.text`/`.color` and call `.sync()` to change it later. */
+/** Browser imports are synchronous: every browser label is real SDF text from its first frame. */
 export function makeText(o: SdfTextOptions): SdfText {
-  const t: SdfText & Record<string, unknown> = TroikaText ? new TroikaText() : new StubText();
-  t.text = o.text;
-  t.fontSize = o.size ?? 0.012;
-  t.color = o.color ?? NEON.bone;
-  if (TroikaText) {
-    t.font = (o.weight ?? 500) === 600 ? inter600 : inter500;
-    t.anchorX = o.anchorX ?? 'left';
-    t.anchorY = o.anchorY ?? 'middle';
-    t.textAlign = o.align ?? (o.anchorX === 'center' ? 'center' : 'left');
-    if (o.maxWidth) t.maxWidth = o.maxWidth;
-    t.lineHeight = 1.25;
-    t.letterSpacing = 0;
-    if (o.outline ?? true) {
-      t.outlineWidth = '10%';
-      t.outlineColor = NEON.void;
-      t.outlineOpacity = 0.9;
-    }
-    t.depthOffset = -1;
-    (t.material as { toneMapped?: boolean }).toneMapped = false;
-    t.renderOrder = 60;
-    t.sync();
-  }
+  const t = headless ? new HeadlessText() as unknown as Text : new Text();
+  t.text = o.text.slice(0, THEME.limits.textChars);
+  t.fontSize = o.size ?? THEME.font.body;
+  t.color = o.color ?? THEME.color.text;
+  t.font = o.weight === 600 ? THEME.font.semibold : THEME.font.regular;
+  t.anchorX = o.anchorX ?? 'left';
+  t.anchorY = o.anchorY ?? 'middle';
+  t.textAlign = o.align ?? (o.anchorX === 'center' ? 'center' : 'left');
+  t.maxWidth = o.singleLine ? Infinity : o.maxWidth ?? Infinity;
+  if (o.singleLine) { t.whiteSpace = 'nowrap'; t.userData.lineWidth = o.maxWidth; }
+  t.lineHeight = THEME.font.lineHeight;
+  t.letterSpacing = 0;
+  t.depthOffset = -1;
+  if (!headless) t.material = textMaterial;
+  t.renderOrder = THEME.render.text;
   t.name = 'sdf';
+  t.frustumCulled = false;
+  syncText(t);
   return t;
 }
-
 export function setText(t: SdfText, text: string, color?: string): void {
-  let changed = false;
-  if (t.text !== text) {
-    t.text = text;
-    changed = true;
-  }
-  if (color && t.color !== color) {
-    t.color = color;
-    changed = true;
-  }
-  if (changed) t.sync();
+  const next = text.slice(0, THEME.limits.textChars);
+  if (t.text === next && (!color || t.color === color)) return;
+  t.text = next;
+  if (color) t.color = color;
+  syncText(t);
 }
-
-/** True once troika is loaded (labels created before that are stubs and should be recreated). */
-export function sdfReady(): boolean {
-  return headless || TroikaText !== null;
+function syncText(t: SdfText): void {
+  const width = t.userData.lineWidth as number | undefined;
+  t.sync(width ? () => {
+    const bounds = t.textRenderInfo?.blockBounds;
+    if (bounds) t.scale.setScalar(Math.min(1, width / Math.max(0.001, bounds[2] - bounds[0])));
+  } : undefined);
 }
-
-/** Resolve when the SDF engine is available (immediately when headless). */
-export function whenSdfReady(): Promise<void> {
-  if (sdfReady()) return Promise.resolve();
-  return import('troika-three-text').then((m) => {
-    TroikaText = m.Text as unknown as TroikaCtor;
-  });
-}
+export function sdfReady(): boolean { return true; }
+export function whenSdfReady(): Promise<void> { return Promise.resolve(); }

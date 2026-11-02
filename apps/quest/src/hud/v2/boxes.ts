@@ -1,186 +1,149 @@
-/**
- * BoxField: every scan box (YOLO or SAM) in ONE LineSegments draw call. Each box is a front-facing rectangle drawn
- * as four corner brackets (8 segments, 16 vertices) with a per-box vertex colour. Positions and sizes glide toward
- * their targets with a 60 ms damp so tracked boxes move smoothly; removed boxes shrink away over 250 ms.
- */
-import { BufferAttribute, BufferGeometry, Color, LineBasicMaterial, LineSegments, Quaternion, Vector3 } from 'three';
-import { damp } from '../../gen3d/anim';
+/** Every tracked rectangle shares one line geometry and one material. */
+import { BufferAttribute, BufferGeometry, Color, LineBasicMaterial, LineSegments, Matrix4, Quaternion, Vector3 } from 'three';
+import { THEME } from './theme';
 
 export interface BoxState {
   id: string;
   center: Vector3;
-  /** width, height of the face in metres */
   w: number;
   h: number;
   color: Color;
-  /** 0..1 draw scale (0 = gone) */
   scale: number;
-  // targets
   tCenter: Vector3;
   tw: number;
   th: number;
   tColor: Color;
   tScale: number;
-  /** pulse 0..1 (a verdict), decays */
   pulse: number;
   removing: boolean;
+  facing?: Vector3;
 }
-
-const SEG_PER_BOX = 8;
-const VERT_PER_BOX = SEG_PER_BOX * 2;
+const SEGMENTS = 4 * (THEME.box.cornerSteps + 1);
+const VERTICES = SEGMENTS * 2;
+const forward = new Vector3(0, 0, 1);
+const worldUp = new Vector3(0, 1, 0);
 
 export class BoxField extends LineSegments<BufferGeometry, LineBasicMaterial> {
   readonly boxes = new Map<string, BoxState>();
-  private readonly max: number;
   private readonly pos: Float32Array;
   private readonly col: Float32Array;
   private readonly right = new Vector3(1, 0, 0);
-  private readonly up = new Vector3(0, 1, 0);
-  private readonly tmp = new Vector3();
+  private readonly direction = new Vector3();
+  private readonly faceUp = new Vector3();
+  private readonly frame = new Matrix4();
+  private readonly colorScratch = new Color();
 
-  constructor(max = 24) {
+  constructor(private readonly max = THEME.box.max as number) {
     const geo = new BufferGeometry();
-    const pos = new Float32Array(max * VERT_PER_BOX * 3);
-    const col = new Float32Array(max * VERT_PER_BOX * 3);
+    const pos = new Float32Array(max * VERTICES * 3);
+    const col = new Float32Array(max * VERTICES * 3);
     geo.setAttribute('position', new BufferAttribute(pos, 3));
     geo.setAttribute('color', new BufferAttribute(col, 3));
     geo.setDrawRange(0, 0);
-    super(geo, new LineBasicMaterial({ vertexColors: true, toneMapped: false }));
-    this.max = max;
+    super(geo, new LineBasicMaterial({ vertexColors: true, transparent: true, opacity: THEME.opacity.line, depthWrite: false, toneMapped: false }));
     this.pos = pos;
     this.col = col;
     this.frustumCulled = false;
-    this.renderOrder = 10;
+    this.renderOrder = THEME.render.boxes;
     this.name = 'boxField';
   }
-
-  /** Create or retarget a box. `color` is the full brightness colour for the box's status. */
-  set(id: string, center: Vector3, w: number, h: number, color: string | Color, immediate = false): BoxState {
+  set(id: string, center: Vector3, w: number, h: number, color: string | Color, immediate = false): BoxState | undefined {
     let b = this.boxes.get(id);
-    const c = color instanceof Color ? color : new Color(color);
+    const c = this.colorScratch.set(color);
     if (!b) {
       if (this.boxes.size >= this.max) {
-        // drop the oldest removing box, else refuse silently
-        const victim = [...this.boxes.values()].find((x) => x.removing);
-        if (victim) this.boxes.delete(victim.id);
-        else return { id, center: center.clone(), w, h, color: c, scale: 0, tCenter: center.clone(), tw: w, th: h, tColor: c, tScale: 0, pulse: 0, removing: true };
+        for (const old of this.boxes.values()) if (old.removing) { this.boxes.delete(old.id); break; }
+        if (this.boxes.size >= this.max) return;
       }
-      b = { id, center: center.clone(), w: immediate ? w : w * 1.3, h: immediate ? h : h * 1.3, color: c.clone(), scale: immediate ? 1 : 0.2, tCenter: center.clone(), tw: w, th: h, tColor: c.clone(), tScale: 1, pulse: 0, removing: false };
+      b = { id, center: center.clone(), w, h, color: c.clone(), scale: 1, tCenter: center.clone(), tw: w, th: h, tColor: c.clone(), tScale: 1, pulse: 0, removing: false };
       this.boxes.set(id, b);
-      return b;
     }
     b.tCenter.copy(center);
-    b.tw = w;
-    b.th = h;
+    b.tw = Math.max(THEME.box.minSize, w);
+    b.th = Math.max(THEME.box.minSize, h);
     b.tColor.copy(c);
-    b.tScale = 1;
     b.removing = false;
+    if (immediate) { b.center.copy(center); b.w = b.tw; b.h = b.th; b.color.copy(c); }
     return b;
   }
-
-  /** Shrink the box away (250 ms), then forget it. */
-  remove(id: string): void {
-    const b = this.boxes.get(id);
-    if (!b) return;
-    b.removing = true;
-    b.tScale = 0;
+  override remove(...objects: import('three').Object3D[]): this;
+  override remove(id: string): this;
+  override remove(...objects: (import('three').Object3D | string)[]): this {
+    if (typeof objects[0] === 'string') this.boxes.delete(objects[0]);
+    else super.remove(...objects as import('three').Object3D[]);
+    return this;
   }
-
-  /** A verdict on the device: a 240 ms pulse in the given colour (green = seen, red = miss). */
-  pulse(id: string, color: string): void {
-    const b = this.boxes.get(id);
-    if (!b) return;
-    b.pulse = 1;
-    b.color.set(color);
-  }
-
-  has(id: string): boolean {
-    const b = this.boxes.get(id);
-    return !!b && !b.removing;
-  }
-
-  /** Smooth, rebuild, upload. `head` sets the facing frame (boxes always face the user, yaw only). */
+  has(id: string): boolean { return this.boxes.has(id); }
+  pulse(id: string, color: string): void { this.boxes.get(id)?.tColor.set(color); }
   update(dt: number, head: Vector3): void {
-    let i = 0;
-    for (const b of [...this.boxes.values()]) {
-      if (b.removing && b.scale < 0.03) {
-        this.boxes.delete(b.id);
-        continue;
-      }
-      b.center.x = damp(b.center.x, b.tCenter.x, 0.06, dt);
-      b.center.y = damp(b.center.y, b.tCenter.y, 0.06, dt);
-      b.center.z = damp(b.center.z, b.tCenter.z, 0.06, dt);
-      b.w = damp(b.w, b.tw, 0.08, dt);
-      b.h = damp(b.h, b.th, 0.08, dt);
-      b.scale = damp(b.scale, b.tScale, b.removing ? 0.08 : 0.1, dt);
-      b.color.lerp(b.tColor, 1 - Math.exp(-dt / 0.2));
-      b.pulse = Math.max(0, b.pulse - dt / 0.24);
-      if (i >= this.max) break;
-      this.writeBox(i++, b, head);
+    const mix = 1 - Math.exp(-Math.max(0, dt) / 0.06);
+    let index = 0;
+    for (const b of this.boxes.values()) {
+      b.center.lerp(b.tCenter, mix);
+      b.w += (b.tw - b.w) * mix;
+      b.h += (b.th - b.h) * mix;
+      b.color.lerp(b.tColor, mix);
+      this.writeBox(index++, b, head);
     }
-    this.geometry.setDrawRange(0, i * VERT_PER_BOX);
+    this.geometry.setDrawRange(0, index * VERTICES);
     (this.geometry.getAttribute('position') as BufferAttribute).needsUpdate = true;
     (this.geometry.getAttribute('color') as BufferAttribute).needsUpdate = true;
   }
-
-  private writeBox(i: number, b: BoxState, head: Vector3): void {
-    // frame: right = perpendicular to the head→box direction in the floor plane, up = world up
-    const dir = this.tmp.subVectors(head, b.center);
-    dir.y = 0;
-    if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
-    dir.normalize();
-    this.right.set(dir.z, 0, -dir.x);
-    const s = b.scale * (1 + 0.08 * Math.sin(b.pulse * Math.PI));
-    const hw = (b.w / 2) * s;
-    const hh = (b.h / 2) * s;
-    const arm = Math.min(0.03, Math.min(hw, hh) * 0.5);
-    const base = i * VERT_PER_BOX * 3;
-    let k = 0;
-    const put = (x: number, y: number) => {
-      const p = this.tmp.copy(b.center).addScaledVector(this.right, x).addScaledVector(this.up, y);
-      this.pos[base + k * 3] = p.x;
-      this.pos[base + k * 3 + 1] = p.y;
-      this.pos[base + k * 3 + 2] = p.z;
-      this.col[base + k * 3] = b.color.r;
-      this.col[base + k * 3 + 1] = b.color.g;
-      this.col[base + k * 3 + 2] = b.color.b;
-      k++;
-    };
-    for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
-      const cx = sx * hw, cy = sy * hh;
-      put(cx, cy); put(cx - sx * arm, cy); // horizontal arm
-      put(cx, cy); put(cx, cy - sy * arm); // vertical arm
-    }
+  setFacing(id: string, normal: [number, number, number] | undefined): void {
+    const box = this.boxes.get(id);
+    if (box && normal) (box.facing ??= new Vector3()).fromArray(normal).normalize();
   }
-
-  /** World position of a box's top-left corner (for its label). */
-  labelAnchor(b: BoxState, head: Vector3, out: Vector3): Vector3 {
-    const dir = this.tmp.subVectors(head, b.center);
-    dir.y = 0;
-    if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
-    dir.normalize();
-    const right = new Vector3(dir.z, 0, -dir.x);
-    return out.copy(b.center).addScaledVector(right, -(b.w / 2) * b.scale).addScaledVector(this.up, (b.h / 2) * b.scale + 0.012);
+  private basis(center: Vector3, head: Vector3, normal?: Vector3): void {
+    if (normal) this.direction.copy(normal); else this.direction.subVectors(head, center);
+    if (this.direction.lengthSq() < 1e-6) this.direction.copy(forward);
+    this.direction.normalize();
+    this.right.crossVectors(worldUp, this.direction);
+    if (this.right.lengthSq() < 1e-6) this.right.set(1, 0, 0);
+    else this.right.normalize();
+    this.faceUp.crossVectors(this.direction, this.right).normalize();
   }
-
-  /** Nearest box to a world point, within `radius` of its face. */
-  nearest(p: Vector3, radius: number): BoxState | null {
-    let best: BoxState | null = null;
-    let bestD = radius;
-    for (const b of this.boxes.values()) {
-      if (b.removing) continue;
-      const d = p.distanceTo(b.center) - Math.max(b.w, b.h) / 2;
-      if (d < bestD) {
-        bestD = d;
-        best = b;
+  private vertex(offset: number, x: number, y: number, b: BoxState): void {
+    this.pos[offset] = b.center.x + this.right.x * x + this.faceUp.x * y;
+    this.pos[offset + 1] = b.center.y + this.right.y * x + this.faceUp.y * y;
+    this.pos[offset + 2] = b.center.z + this.right.z * x + this.faceUp.z * y;
+    this.col[offset] = b.color.r;
+    this.col[offset + 1] = b.color.g;
+    this.col[offset + 2] = b.color.b;
+  }
+  private writeBox(index: number, b: BoxState, head: Vector3): void {
+    this.basis(b.center, head, b.facing);
+    const hw = b.w / 2, hh = b.h / 2;
+    const radius = Math.min(THEME.box.corner, hw / 2, hh / 2);
+    const count = SEGMENTS;
+    // Rounded corners are joined by full sides; never separate decorative corner marks.
+    for (let i = 0; i < count; i++) {
+      const next = (i + 1) % count;
+      for (let endpoint = 0; endpoint < 2; endpoint++) {
+        const sample = endpoint ? next : i;
+        const corner = Math.floor(sample / (THEME.box.cornerSteps + 1));
+        const part = sample % (THEME.box.cornerSteps + 1);
+        const angle = (corner + part / THEME.box.cornerSteps) * Math.PI / 2;
+        const cx = corner === 0 || corner === 3 ? hw - radius : -hw + radius;
+        const cy = corner < 2 ? hh - radius : -hh + radius;
+        this.vertex((index * VERTICES + i * 2 + endpoint) * 3, cx + radius * Math.cos(angle), cy + radius * Math.sin(angle), b);
       }
     }
-    return best;
   }
-
-  facingQuaternion(head: Vector3, center: Vector3, out: Quaternion): Quaternion {
-    const dir = new Vector3().subVectors(head, center);
-    dir.y = 0;
-    return out.setFromUnitVectors(new Vector3(0, 0, 1), dir.lengthSq() < 1e-6 ? new Vector3(0, 0, 1) : dir.normalize());
+  labelAnchor(b: BoxState, head: Vector3, out: Vector3): Vector3 {
+    this.basis(b.center, head, b.facing);
+    return out.copy(b.center).addScaledVector(this.right, -b.w / 2).addScaledVector(this.faceUp, b.h / 2 + THEME.box.labelGap);
   }
+  facingQuaternion(head: Vector3, center: Vector3, out: Quaternion, normal?: Vector3): Quaternion {
+    this.basis(center, head, normal);
+    return out.setFromRotationMatrix(this.frame.makeBasis(this.right, this.faceUp, this.direction));
+  }
+  nearest(p: Vector3, radius: number): BoxState | null {
+    let result: BoxState | null = null, distance = radius;
+    for (const b of this.boxes.values()) {
+      const d = p.distanceTo(b.center) - Math.max(b.w, b.h) / 2;
+      if (d < distance) { result = b; distance = d; }
+    }
+    return result;
+  }
+  override dispose(): void { this.geometry.dispose(); this.material.dispose(); }
 }

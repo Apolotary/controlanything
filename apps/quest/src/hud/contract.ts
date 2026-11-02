@@ -53,7 +53,7 @@ export interface HudTarget {
   contour?: [number, number][];
   score?: number;
   modelId?: string;
-  /** sam (default): full outline, tag, twin when locked · yolo: thin dashed brackets + a small class tag, never a focal object */
+  /** Detector source. Both sources are selectable; a live pick waits for a matching SAM target. */
   source?: 'sam' | 'yolo';
 }
 

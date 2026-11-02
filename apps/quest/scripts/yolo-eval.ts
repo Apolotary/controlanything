@@ -1,9 +1,8 @@
 /**
  * Runs the bundled on-device detector (YOLOX-nano, Apache-2.0) on a JPEG in Node, with the same pre/post
- * processing the headset worker uses, and prints what the live layer would box (and, with --all, every COCO
- * class before the device filter, person included, for checking only: nothing here is drawn).
+ * processing the headset worker uses, and prints device boxes (and, with --raw, device candidates before NMS).
  *
- *   npx tsx apps/quest/scripts/yolo-eval.ts [photo.jpg] [--model path.onnx] [--all] [--runs 10] [--rgbnorm]
+ *   npx tsx apps/quest/scripts/yolo-eval.ts [photo.jpg] [--model path.onnx] [--raw] [--runs 10] [--rgbnorm]
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -71,11 +70,10 @@ for (let i = 0; i < Math.max(1, runs); i++) {
 times.sort((a, b) => a - b);
 console.log(`${modelPath.split('/').pop()} on ${photo.split('/').pop()} (${img.width}×${img.height} → ${lb.width}×${lb.height} in ${SIZE}²) · wasm 1 thread · median ${times[times.length >> 1]!.toFixed(1)} ms over ${times.length} runs`);
 
-if (flag('--all')) {
-  const all = new Set(COCO_CLASSES.map((_, i) => i));
-  const { devices, persons } = decodeYolox(out!, { inputSize: SIZE, scoreThreshold: 0.25, allowed: all, keepPersons: true });
-  const top = [...devices, ...persons].sort((a, b) => b.score - a.score).slice(0, 25);
-  console.log('all classes (raw, pre-NMS top 25):');
+if (flag('--raw')) {
+  const { devices } = decodeYolox(out!, { inputSize: SIZE, scoreThreshold: 0.25, allowed: allowedClasses('everything') });
+  const top = devices.sort((a, b) => b.score - a.score).slice(0, 25);
+  console.log('device candidates (raw, pre-NMS top 25):');
   for (const c of top) console.log(`  ${COCO_CLASSES[c.cls]!.padEnd(14)} ${(c.score * 100).toFixed(0).padStart(3)} %  ${toSource(c.box, lb).map((v) => Math.round(v)).join(',')}`);
 }
 

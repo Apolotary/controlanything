@@ -4,7 +4,7 @@
  * `decode_in_inference=False` export, as in its ONNXRuntime demo). Anchors are the cells of the stride-8,
  * 16 and 32 grids in that order: 52² + 26² + 13² = 3549 for a 416 input.
  */
-import { PERSON_CLASS } from './classes';
+import { deviceClass, PERSON_CLASS } from './classes';
 import type { Box } from './prep';
 
 export interface Candidate {
@@ -21,13 +21,10 @@ export interface DecodeOptions {
   scoreThreshold: number;
   /** classes that may be returned; an anchor whose best class is outside the set is dropped */
   allowed: Set<number>;
-  /** also return person boxes (for suppression inside the worker only); they never leave it */
-  keepPersons?: boolean;
 }
 
 export interface Decoded {
   devices: Candidate[];
-  persons: Candidate[];
 }
 
 export function anchorCount(inputSize: number, strides = [8, 16, 32]): number {
@@ -39,16 +36,15 @@ export function decodeYolox(out: Float32Array, o: DecodeOptions): Decoded {
   const stride = 5 + nc;
   const strides = o.strides ?? [8, 16, 32];
   const devices: Candidate[] = [];
-  const persons: Candidate[] = [];
   let a = 0;
   for (const s of strides) {
     const g = Math.round(o.inputSize / s);
     for (let gy = 0; gy < g; gy++) {
       for (let gx = 0; gx < g; gx++, a++) {
         const base = a * stride;
-        if (base + stride > out.length) return { devices, persons };
+        if (base + stride > out.length) return { devices };
         const obj = out[base + 4]!;
-        if (obj < o.scoreThreshold) continue; // score = obj × cls ≤ obj
+        if (!Number.isFinite(obj) || obj < o.scoreThreshold) continue; // score = obj × cls ≤ obj
         // best class over all 80: a person-dominant anchor is never relabelled as a device
         let best = 0;
         let bestP = -1;
@@ -61,19 +57,18 @@ export function decodeYolox(out: Float32Array, o: DecodeOptions): Decoded {
         }
         const score = obj * bestP;
         if (score < o.scoreThreshold) continue;
-        const isPerson = best === PERSON_CLASS;
-        if (!isPerson && !o.allowed.has(best)) continue;
-        if (isPerson && !o.keepPersons) continue;
+        if (best === PERSON_CLASS || !deviceClass(best) || !o.allowed.has(best)) continue;
         const cx = (out[base]! + gx) * s;
         const cy = (out[base + 1]! + gy) * s;
         const w = Math.exp(out[base + 2]!) * s;
         const h = Math.exp(out[base + 3]!) * s;
+        if (![cx, cy, w, h].every(Number.isFinite) || w <= 0 || h <= 0) continue;
         const c: Candidate = { box: [cx - w / 2, cy - h / 2, w, h], score, cls: best };
-        (isPerson ? persons : devices).push(c);
+        devices.push(c);
       }
     }
   }
-  return { devices, persons };
+  return { devices };
 }
 
 export function iou(a: Box, b: Box): number {
@@ -106,12 +101,6 @@ export function nms<T extends Candidate>(cands: T[], iouThreshold: number, opts:
   return keep;
 }
 
-/** Drop a device box that is essentially a person box (the detector called a person something else). */
-export function suppressPersons<T extends Candidate>(devices: T[], persons: Candidate[], iouThreshold = 0.5): T[] {
-  if (!persons.length) return devices;
-  return devices.filter((d) => !persons.some((p) => iou(d.box, p.box) > iouThreshold));
-}
-
 /** Fraction of box `a` that lies inside box `b`. */
 export function containment(a: Box, b: Box): number {
   const x0 = Math.max(a[0], b[0]);
@@ -136,9 +125,9 @@ export function dropLaptopKeyboards<T extends Candidate>(boxes: T[]): T[] {
 export function postprocess(out: Float32Array, o: DecodeOptions & { iouThreshold?: number; maxOut?: number }): Candidate[] {
   // laptops are always decoded (to recognise a laptop's own keyboard), then filtered like everything else
   const decodeSet = o.allowed.has(KEYBOARD) ? new Set([...o.allowed, LAPTOP]) : o.allowed;
-  const { devices, persons } = decodeYolox(out, { ...o, allowed: decodeSet, keepPersons: true });
+  const { devices } = decodeYolox(out, { ...o, allowed: decodeSet });
   const kept = nms(devices, o.iouThreshold ?? 0.45, { classAware: true, maxOut: (o.maxOut ?? 12) * 2 });
   // a second, class-agnostic pass: one object, one box
   const single = dropLaptopKeyboards(nms(kept, 0.7, { classAware: false, maxOut: o.maxOut ?? 12 })).filter((c) => o.allowed.has(c.cls));
-  return suppressPersons(single, nms(persons, 0.45, { maxOut: 20 }));
+  return single;
 }

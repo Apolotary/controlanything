@@ -2,11 +2,11 @@
  * LIVE BOXES: the fast half of the annotation layer. While SCAN is on, camera frames (downscaled to 416 px at
  * grab time) go to an on-device YOLOX-nano worker; its device boxes are tracked (tracker.ts), lifted to 3D with
  * the pose the frame was captured at (like the SAM tags), and drawn through the HUD API as `source: 'yolo'`
- * targets: thin brackets and a small class tag. SAM 3.1 (server, ~1 Hz) stays the source of truth: the moment a
- * SAM outline covers the same object, the live box is removed (the HUD fades it) and stays suppressed.
+ * targets: one clean box and a short class tag. SAM 3.1 (server, ~1 Hz) stays the source of truth: the moment a
+ * SAM target covers the same object, it takes over from the live box.
  *
- * Responsiveness only: live boxes are never identified, never selectable, never sent to the server, and never
- * drawn on people (the worker drops "person"; boxes that are really a tracked hand are dropped here).
+ * A live box can be pinched immediately. Selection waits for SAM to identify the object before starting the
+ * agent loop. People are excluded; boxes that are really a tracked hand are dropped here.
  *
  * Cadence is adaptive: one frame in flight, at most ~15 Hz, and the interval backs off when the render loop's
  * frame time rises above its baseline (the XR frame rate always wins over detection).
@@ -74,6 +74,7 @@ export interface LiveStats {
 
 interface PendingFrame {
   id: number;
+  generation: number;
   t0: number;
   cam: PoseLike;
   k: Intrinsics;
@@ -91,11 +92,12 @@ interface Anchor {
   /** id of the SAM target that took over */
   claimedBy?: string;
   shown: boolean;
+  aimable: { id: string; position: Vector3; size: number };
   sent?: { position: Vector3; sizeM: [number, number, number]; label: string; score: number; picked: boolean };
 }
 
 const HELD = /remote|phone/i;
-const MIN_INTERVAL = 66;
+export const MIN_INTERVAL = 1000 / 15;
 const MAX_INTERVAL = 1000;
 const MAX_HEAD_SPEED = 120; // deg/s: faster than this, frames are blurred and boxes would only lag
 
@@ -107,10 +109,12 @@ export class LiveDetector {
   running = false;
   private worker?: Worker;
   private readyPromise?: Promise<void>;
+  private rejectReady?: (error: Error) => void;
   private readonly pending = new Map<number, PendingFrame>();
   private readonly anchors = new Map<number, Anchor>();
   private nextFrameId = 1;
   private inFlight = false;
+  private captureTicket = 0;
   private lastSentAt = 0;
   private lastAdaptAt = 0;
   private readonly results: number[] = [];
@@ -118,6 +122,7 @@ export class LiveDetector {
   private lastFrame?: Pick<PendingFrame, 'cam' | 'k'>;
   /** the track the user pinched, waiting for SAM 3.1 to cover it */
   private picked?: number;
+  private generation = 0;
 
   constructor(private readonly d: LiveDetectorDeps) {}
 
@@ -125,7 +130,8 @@ export class LiveDetector {
   load(): Promise<void> {
     if (this.readyPromise) return this.readyPromise;
     this.stats.state = 'loading';
-    this.readyPromise = new Promise<void>((resolve, reject) => {
+    const loading = new Promise<void>((resolve, reject) => {
+      this.rejectReady = reject;
       let w: Worker;
       try {
         w = this.d.createWorker ? this.d.createWorker() : new Worker(new URL('./yolo.worker.ts', import.meta.url), { type: 'module' });
@@ -136,11 +142,13 @@ export class LiveDetector {
       }
       this.worker = w;
       w.onmessage = (e: MessageEvent<WorkerOut>) => {
+        if (this.worker !== w) return;
         const m = e.data;
         if (m.type === 'ready') {
           Object.assign(this.stats, { state: 'ready', ep: m.ep, threads: m.threads, isolated: m.isolated, loadMs: m.loadMs, warmMs: m.warmMs });
           this.d.log(`live boxes: ${LIVE_MODEL_ID} on ${m.ep}${m.ep === 'wasm' ? ` (${m.threads} thread${m.threads > 1 ? 's' : ''}${m.isolated ? '' : ', page not cross-origin isolated'})` : ''} · loaded in ${m.loadMs} ms · warm run ${m.warmMs} ms${m.fallback ? ` · fell back: ${m.fallback}` : ''}`, 'ok');
           resolve();
+          this.rejectReady = undefined;
         } else if (m.type === 'result') this.onResult(m);
         else if (m.type === 'error') {
           if (m.id !== undefined) this.release(m.id);
@@ -153,14 +161,19 @@ export class LiveDetector {
         }
       };
       w.onerror = (e) => {
+        if (this.worker !== w) return;
         this.fail(`worker crashed: ${e.message || 'unknown error'}`);
         reject(new Error(e.message));
       };
       const init: WorkerIn = { type: 'init', modelUrl: this.d.modelUrl, inputSize: INPUT_SIZE, ep: this.d.ep ?? 'auto' };
-      w.postMessage(init);
+      try { w.postMessage(init); }
+      catch (e) { this.fail(`worker: ${(e as Error).message}`); }
     });
-    this.readyPromise.catch(() => undefined);
-    return this.readyPromise;
+    this.readyPromise = loading;
+    void loading.catch(() => {
+      if (this.readyPromise === loading) this.readyPromise = undefined;
+    });
+    return loading;
   }
 
   start(): void {
@@ -171,17 +184,23 @@ export class LiveDetector {
   }
 
   stop(): void {
-    if (!this.running) return;
     this.running = false;
+    this.generation++;
     this.picked = undefined;
+    this.lastFrame = undefined;
     this.clearShown();
   }
 
   /** Live boxes on screen, for aiming and pinching (ids are the HUD ids). */
   aimables(): { id: string; position: Vector3; size: number }[] {
     const out: { id: string; position: Vector3; size: number }[] = [];
-    for (const [id, a] of this.anchors) if (a.shown) out.push({ id: hudId(id), position: a.position, size: Math.max(0.06, a.sizeM[0], a.sizeM[1]) });
+    this.appendAimables(out);
     return out;
+  }
+
+  /** Appends cached aim objects into the shell's reusable frame list. */
+  appendAimables(out: { id: string; position: Vector3; size: number }[]): void {
+    for (const a of this.anchors.values()) if (a.shown) out.push(a.aimable);
   }
 
   /** The SAM target that has taken over this live box, if any. */
@@ -213,7 +232,7 @@ export class LiveDetector {
     if (t && a?.shown) {
       a.sent = undefined;
       this.show(t, a);
-    } else if (!t) this.anchors.delete(n);
+    } else if (!t) this.hide(n, true);
   }
 
   get pickedId(): string | undefined {
@@ -222,6 +241,7 @@ export class LiveDetector {
 
   setCategory(c: Category): void {
     if (c === this.category) return;
+    this.unpick();
     this.category = c;
     // boxes of classes the chip excludes go at once
     const allowed = allowedClasses(c);
@@ -245,7 +265,9 @@ export class LiveDetector {
     }
     this.lastSentAt = now;
     this.inFlight = true;
-    void this.shoot([...allowed]).catch((e) => {
+    const ticket = ++this.captureTicket;
+    void this.shoot([...allowed], ticket).catch((e) => {
+      if (ticket !== this.captureTicket) return;
       this.inFlight = false;
       this.stats.errors++;
       this.stats.lastError = (e as Error).message;
@@ -264,14 +286,16 @@ export class LiveDetector {
     const floor = Math.max(MIN_INTERVAL, s.inferMs * 1.1);
     if (s.frameMs > s.baselineMs * 1.2) s.intervalMs = Math.min(MAX_INTERVAL, s.intervalMs * 1.4);
     else if (s.frameMs < s.baselineMs * 1.08) s.intervalMs = Math.max(floor, s.intervalMs * 0.85);
-    s.intervalMs = Math.round(Math.max(MIN_INTERVAL, s.intervalMs));
+    s.intervalMs = Math.ceil(Math.max(MIN_INTERVAL, s.intervalMs));
   }
 
-  private async shoot(allowed: number[]): Promise<void> {
+  private async shoot(allowed: number[], ticket: number): Promise<void> {
+    const generation = this.generation;
+    const t0 = performance.now();
     const cam = this.d.camera();
     const g = await cam.grab({ maxWidth: INPUT_SIZE });
     if (!g) {
-      this.inFlight = false;
+      if (ticket === this.captureTicket) this.inFlight = false;
       return;
     }
     let head: PoseLike | null = null;
@@ -284,23 +308,28 @@ export class LiveDetector {
       const p = this.d.poses.lookup(g.tCapture);
       if (p) head = { position: p.position, quaternion: p.quaternion };
     }
-    if (!head || !this.worker || !this.running) {
+    if (!head || !this.worker || !this.running || generation !== this.generation) {
       g.bitmap.close();
-      this.inFlight = false;
+      if (ticket === this.captureTicket) this.inFlight = false;
       return;
     }
     const k = g.intrinsics ? scaleIntrinsics(g.intrinsics, g.width, g.height) : questIntrinsics(g.width, g.height);
     const id = this.nextFrameId++;
-    this.pending.set(id, { id, t0: performance.now(), cam: cameraPoseFromHead(head, cam.eye), k, handJoints: this.d.handJoints().map((v) => v.clone()) });
+    this.pending.set(id, { id, generation, t0, cam: cameraPoseFromHead(head, cam.eye), k, handJoints: this.d.handJoints().map((v) => v.clone()) });
     const msg: WorkerIn = { type: 'frame', id, bitmap: g.bitmap, allowed, scoreThreshold: this.scoreThreshold };
-    this.worker.postMessage(msg, [g.bitmap]);
+    try { this.worker.postMessage(msg, [g.bitmap]); }
+    catch (e) {
+      g.bitmap.close();
+      this.release(id);
+      throw e;
+    }
     this.stats.frames++;
   }
 
   private release(id: number): PendingFrame | undefined {
     const p = this.pending.get(id);
     this.pending.delete(id);
-    this.inFlight = false;
+    if (p) this.inFlight = false;
     return p;
   }
 
@@ -315,7 +344,7 @@ export class LiveDetector {
     this.results.push(now);
     while (this.results.length && now - this.results[0]! > 1000) this.results.shift();
     s.fps = this.results.length;
-    if (!this.running) return;
+    if (!this.running || fr.generation !== this.generation) return;
     this.apply(m.dets, fr, now);
   }
 
@@ -324,14 +353,16 @@ export class LiveDetector {
     const allowed = allowedClasses(this.category);
     const kept = dets.filter((d) => allowed.has(d.cls) && !this.isHand(d, fr));
     this.lastFrame = { cam: fr.cam, k: fr.k };
-    const upd = this.tracker.update(kept, now, (t) => this.predict(t, fr));
+    const upd = this.tracker.update(kept, now, (t) => this.predict(t, fr), this.picked);
     // a picked box that drops out of view keeps its anchor: SAM may still find it there
-    for (const t of upd.removed) this.hide(t.id, t.id !== this.picked);
+    for (const t of upd.removed) if (t.id !== this.picked) this.hide(t.id, true);
     const sam = this.d.samTargets();
     let shown = 0;
     for (const t of upd.tracks) {
       if (!t.live || !allowed.has(t.cls)) continue;
-      const a = this.place(t, fr, now);
+      // A coasted box keeps its world anchor, including when head motion takes it out of view.
+      const previous = this.anchors.get(t.id);
+      const a = t.misses && previous ? previous : this.place(t, fr, now);
       const claim = this.claimedBy(t.box, fr, sam);
       if (claim) {
         if (!a.claimedBy) this.stats.handedOver++;
@@ -364,7 +395,7 @@ export class LiveDetector {
     let pickedBy: string | undefined;
     for (const [id, a] of this.anchors) {
       if (!a.shown && id !== this.picked) continue;
-      const box = this.tracker.get(id)?.box ?? this.predict({ id } as Track, fr);
+      const box = this.tracker.get(id)?.box ?? this.predict({ id }, fr);
       if (!box) continue;
       const claim = this.claimedBy(box, fr, sam);
       if (!claim) continue;
@@ -420,7 +451,7 @@ export class LiveDetector {
     const zCam = Math.max(0.05, depth * Math.max(0.2, ray.dir.dot(camFwd)));
     const sizeM: [number, number, number] = [r3((w * zCam) / k.fx), r3((h * zCam) / k.fy), r3(Math.min(w / k.fx, h / k.fy) * zCam * 0.5)];
     if (!a) {
-      a = { position, sizeM, facing: ray.origin.clone().sub(position).normalize(), hitPending: false, lastHitAt: 0, shown: false };
+      a = { position, sizeM, facing: ray.origin.clone().sub(position).normalize(), hitPending: false, lastHitAt: 0, shown: false, aimable: { id: hudId(t.id), position, size: Math.max(0.06, sizeM[0], sizeM[1]) } };
       this.anchors.set(t.id, a);
     } else {
       // world-space smoothing on top of the image-space one; a big jump (new depth) snaps
@@ -429,6 +460,7 @@ export class LiveDetector {
       a.sizeM = sizeM;
       a.facing.copy(ray.origin).sub(a.position).normalize();
     }
+    a.aimable.size = Math.max(0.06, sizeM[0], sizeM[1]);
     // a hit test along the box centre at most once a second per box (async; used from the next frame on)
     const providers = this.d.depth();
     if (providers.length && !a.hitPending && now - a.lastHitAt > 1000) {
@@ -452,15 +484,23 @@ export class LiveDetector {
 
   /** The SAM target (if any) that covers this live box in this frame. */
   private claimedBy(box: Box, fr: Pick<PendingFrame, 'cam' | 'k'>, sam: Target[]): string | undefined {
+    let best: string | undefined;
+    let bestOverlap = 0;
     for (const s of sam) {
       const px = worldToPixel(s.position, fr.k, fr.cam);
       if (!px) continue;
       const sw = (Math.max(0.03, s.sizeM[0]) * fr.k.fx) / px.depth;
       const sh = (Math.max(0.03, s.sizeM[1]) * fr.k.fy) / px.depth;
       const sbox: Box = [px.u - sw / 2, px.v - sh / 2, sw, sh];
-      if (iou(sbox, box) >= 0.25 || containment(box, sbox) >= 0.6 || containment(sbox, box) >= 0.6) return s.id;
+      const overlap = iou(sbox, box);
+      // A smaller subobject inside a device must not claim that device's selection.
+      const covers = containment(box, sbox) >= 0.6 && containment(sbox, box) >= 0.2;
+      if ((overlap >= 0.25 || covers) && overlap > bestOverlap) {
+        best = s.id;
+        bestOverlap = overlap;
+      }
     }
-    return undefined;
+    return best;
   }
 
   private show(t: Track, a: Anchor): void {
@@ -507,6 +547,15 @@ export class LiveDetector {
   }
 
   private fail(message: string): void {
+    this.stop();
+    this.worker?.terminate();
+    this.worker = undefined;
+    this.pending.clear();
+    this.captureTicket++;
+    this.inFlight = false;
+    this.rejectReady?.(new Error(message));
+    this.rejectReady = undefined;
+    this.readyPromise = undefined;
     this.stats.state = 'error';
     this.stats.lastError = message;
     this.d.log(`live boxes unavailable: ${message}`, 'error');
@@ -523,6 +572,13 @@ export class LiveDetector {
     this.stop();
     this.worker?.terminate();
     this.worker = undefined;
+    this.pending.clear();
+    this.captureTicket++;
+    this.inFlight = false;
+    this.rejectReady?.(new Error('detector disposed'));
+    this.rejectReady = undefined;
+    this.readyPromise = undefined;
+    this.stats.state = 'off';
   }
 }
 

@@ -23,6 +23,7 @@ const HELD = /remote|phone|controller|cardputer|screen and keyboard|handheld/i;
 
 export class HandheldTracker {
   private readonly attached = new Map<string, Attachment>();
+  private readonly point = new Vector3();
   /** attach when the device is this close to a wrist, metres */
   reach = 0.18;
   /** detach after the hand has been lost this long, ms */
@@ -65,8 +66,8 @@ export class HandheldTracker {
    * Per frame: new positions for attached devices that moved enough to redraw (≥ 5 mm, ≤ 15 Hz).
    * Devices whose hand has been lost for `lostMs` are released where they were last seen.
    */
-  update(wrists: { left?: WristPose; right?: WristPose }, now: number): { id: string; position: Vector3 }[] {
-    const moved: { id: string; position: Vector3 }[] = [];
+  update(wrists: { left?: WristPose; right?: WristPose }, now: number, moved: { id: string; position: Vector3 }[] = []): { id: string; position: Vector3 }[] {
+    moved.length = 0;
     for (const [id, a] of this.attached) {
       const w = wrists[a.hand];
       if (!w) {
@@ -74,11 +75,11 @@ export class HandheldTracker {
         continue;
       }
       a.lastSeen = now;
-      const p = a.offset.clone().applyQuaternion(w.quaternion).add(w.position);
+      const p = this.point.copy(a.offset).applyQuaternion(w.quaternion).add(w.position);
       if (p.distanceTo(a.lastSent) >= 0.005 && now - a.lastSentAt >= 66) {
         a.lastSent.copy(p);
         a.lastSentAt = now;
-        moved.push({ id, position: p });
+        moved.push({ id, position: p.clone() });
       }
     }
     return moved;

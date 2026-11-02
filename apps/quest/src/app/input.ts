@@ -3,7 +3,7 @@
  * (on < 2.0 cm, off > 3.5 cm, two frames to change: research/04 §5), the palm-up deck gesture, controllers
  * (select button = pinch), and on the desktop a mouse/keyboard stand-in (click = pinch along the mouse ray).
  */
-import { type Camera, Quaternion, Raycaster, Vector2, Vector3 } from 'three';
+import { ArrayCamera, type Camera, Quaternion, Raycaster, Vector2, Vector3 } from 'three';
 import type { Handedness, JointSample, ShellFrame, ShellHand } from './hud-contract';
 
 const JOINTS: XRHandJoint[] = [
@@ -43,7 +43,7 @@ export class PinchDetector {
     private readonly framesToChange = 2,
   ) {}
   /** returns the stable pinch state; `force` (select button / emulator) overrides the distance */
-  update(distance: number | null, force?: boolean): { pinching: boolean; justStarted: boolean; justEnded: boolean } {
+  update(distance: number | null, force?: boolean, out: PinchState = { pinching: false, justStarted: false, justEnded: false }): PinchState {
     const want = force ?? (distance === null ? false : this.on ? distance < this.offDist : distance < this.onDist);
     const was = this.on;
     if (force !== undefined) {
@@ -56,7 +56,10 @@ export class PinchDetector {
         this.count = 0;
       }
     }
-    return { pinching: this.on, justStarted: this.on && !was, justEnded: !this.on && was };
+    out.pinching = this.on;
+    out.justStarted = this.on && !was;
+    out.justEnded = !this.on && was;
+    return out;
   }
   reset(): void {
     this.on = false;
@@ -64,10 +67,37 @@ export class PinchDetector {
   }
 }
 
+interface PinchState {
+  pinching: boolean;
+  justStarted: boolean;
+  justEnded: boolean;
+}
+
 interface HandTrack {
   pinch: PinchDetector;
+  state: PinchState;
   palmUpSince: number;
   selectDown: boolean;
+  selectLatched: boolean;
+  hand: ShellHand;
+  jointPool: Record<XRHandJoint, JointSample>;
+}
+
+function makeHand(): ShellHand {
+  return {
+    joints: {}, pinching: false, justPinched: false, justReleased: false,
+    pinchPoint: new Vector3(), ray: { origin: new Vector3(), dir: new Vector3(0, 0, -1) },
+    palmUp: false, palmUpMs: 0, controller: false,
+  };
+}
+
+function makeTrack(): HandTrack {
+  const jointPool = {} as Record<XRHandJoint, JointSample>;
+  for (const name of JOINTS) jointPool[name] = { position: new Vector3(), quaternion: new Quaternion(), radius: 0.008 };
+  return {
+    pinch: new PinchDetector(), state: { pinching: false, justStarted: false, justEnded: false },
+    palmUpSince: 0, selectDown: false, selectLatched: false, hand: makeHand(), jointPool,
+  };
 }
 
 export interface DesktopPointer {
@@ -82,11 +112,20 @@ export interface DesktopPointer {
 
 export class InputSampler {
   private readonly tracks: Record<Handedness, HandTrack> = {
-    left: { pinch: new PinchDetector(), palmUpSince: 0, selectDown: false },
-    right: { pinch: new PinchDetector(), palmUpSince: 0, selectDown: false },
+    left: makeTrack(),
+    right: makeTrack(),
   };
   private readonly desktopPinch = new PinchDetector();
+  private readonly desktopState: PinchState = { pinching: false, justStarted: false, justEnded: false };
+  private readonly desktopHand = makeHand();
   private readonly raycaster = new Raycaster();
+  private readonly rayQuaternion = new Quaternion();
+  private readonly palm = new Vector3();
+  private readonly output: ShellFrame = {
+    time: 0, dt: 1 / 72,
+    head: { position: new Vector3(), quaternion: new Quaternion(), ray: { origin: new Vector3(), dir: new Vector3(0, 0, -1) } },
+    hands: {},
+  };
   private lastTime = 0;
   /** desktop / emulator: mouse ray + click as the right hand */
   readonly pointer: DesktopPointer = { ndc: new Vector2(), down: false, latched: false, inside: false };
@@ -107,22 +146,36 @@ export class InputSampler {
     this.session?.removeEventListener('selectstart', this.onSelectStart);
     this.session?.removeEventListener('selectend', this.onSelectEnd);
     this.session = undefined;
-    for (const t of Object.values(this.tracks)) {
-      t.pinch.reset();
-      t.selectDown = false;
-    }
+    this.resetTrack(this.tracks.left);
+    this.resetTrack(this.tracks.right);
+    this.desktopPinch.reset();
+    this.lastTime = 0;
   }
 
   private setSelect(src: XRInputSource, down: boolean): void {
-    if (src.handedness === 'left' || src.handedness === 'right') this.tracks[src.handedness].selectDown = down;
+    if (src.handedness !== 'left' && src.handedness !== 'right') return;
+    const track = this.tracks[src.handedness];
+    track.selectDown = down;
+    if (down) track.selectLatched = true;
   }
 
-  /** Sample everything for this frame. `camera` is the rendering camera (desktop) or the XR camera. */
+  private resetTrack(track: HandTrack): void {
+    track.pinch.reset();
+    track.selectDown = false;
+    track.selectLatched = false;
+    track.palmUpSince = 0;
+  }
+
+  /** Sample this frame into reusable storage; consumers retaining poses must copy them. */
   sample(time: number, camera: Camera, frame?: XRFrame, refSpace?: XRReferenceSpace): ShellFrame {
     const dt = this.lastTime ? Math.min(0.1, (time - this.lastTime) / 1000) : 1 / 72;
     this.lastTime = time;
-    const head = { position: new Vector3(), quaternion: new Quaternion(), ray: { origin: new Vector3(), dir: new Vector3(0, 0, -1) } };
-    const hands: ShellFrame['hands'] = {};
+    const f = this.output;
+    const { head, hands } = f;
+    delete hands.left;
+    delete hands.right;
+    camera.getWorldPosition(head.position);
+    camera.getWorldQuaternion(head.quaternion);
     if (frame && refSpace) {
       const vp = frame.getViewerPose(refSpace);
       if (vp) {
@@ -136,20 +189,23 @@ export class InputSampler {
         const hs = this.sampleSource(src, frame, refSpace, time);
         if (hs) hands[src.handedness] = hs;
       }
-    } else {
-      camera.getWorldPosition(head.position);
-      camera.getWorldQuaternion(head.quaternion);
     }
+    if (!hands.left) this.resetTrack(this.tracks.left);
+    if (!hands.right) this.resetTrack(this.tracks.right);
     head.ray.origin.copy(head.position);
     head.ray.dir.set(0, 0, -1).applyQuaternion(head.quaternion);
     if (!frame || this.mouseAsHand) {
       const mouse = this.sampleMouse(camera, head);
       if (mouse) hands.right = mouse;
     }
-    const f: ShellFrame = { time, dt, head, hands };
+    f.time = time;
+    f.dt = dt;
     if (frame && refSpace) {
       f.frame = frame;
       f.refSpace = refSpace;
+    } else {
+      delete f.frame;
+      delete f.refSpace;
     }
     return f;
   }
@@ -157,25 +213,31 @@ export class InputSampler {
   private sampleSource(src: XRInputSource, frame: XRFrame, ref: XRReferenceSpace, time: number): ShellHand | null {
     const track = this.tracks[src.handedness as Handedness];
     const rayPose = frame.getPose(src.targetRaySpace, ref);
-    const ray = { origin: new Vector3(), dir: new Vector3(0, 0, -1) };
-    if (rayPose) {
-      const p = rayPose.transform.position;
-      const o = rayPose.transform.orientation;
-      ray.origin.set(p.x, p.y, p.z);
-      ray.dir.set(0, 0, -1).applyQuaternion(new Quaternion(o.x, o.y, o.z, o.w));
-    }
-    const joints: Partial<Record<XRHandJoint, JointSample>> = {};
+    if (!rayPose) return null;
+    const hand = track.hand;
+    const { ray, joints, pinchPoint } = hand;
+    const p = rayPose.transform.position;
+    const o = rayPose.transform.orientation;
+    ray.origin.set(p.x, p.y, p.z);
+    ray.dir.set(0, 0, -1).applyQuaternion(this.rayQuaternion.set(o.x, o.y, o.z, o.w));
     let distance: number | null = null;
-    const pinchPoint = ray.origin.clone();
+    pinchPoint.copy(ray.origin);
     let palmUp = false;
     if (src.hand && frame.getJointPose) {
       for (const name of JOINTS) {
         const space = src.hand.get(name);
         const jp = space ? frame.getJointPose(space, ref) : undefined;
-        if (!jp) continue;
+        if (!jp) {
+          delete joints[name];
+          continue;
+        }
         const p = jp.transform.position;
         const o = jp.transform.orientation;
-        joints[name] = { position: new Vector3(p.x, p.y, p.z), quaternion: new Quaternion(o.x, o.y, o.z, o.w), radius: jp.radius ?? 0.008 };
+        const joint = track.jointPool[name];
+        joint.position.set(p.x, p.y, p.z);
+        joint.quaternion.set(o.x, o.y, o.z, o.w);
+        joint.radius = jp.radius ?? 0.008;
+        joints[name] = joint;
       }
       const thumb = joints['thumb-tip'];
       const index = joints['index-finger-tip'];
@@ -186,54 +248,57 @@ export class InputSampler {
       const wrist = joints.wrist;
       if (wrist) {
         // the palm faces the wrist frame's -Y (WebXR: +Y out of the back of the hand)
-        const palm = new Vector3(0, -1, 0).applyQuaternion(wrist.quaternion);
-        palmUp = palm.y > 0.75;
+        this.palm.set(0, -1, 0).applyQuaternion(wrist.quaternion);
+        palmUp = this.palm.y > 0.75;
       }
     } else {
+      for (const name of JOINTS) delete joints[name];
       const grip = src.gripSpace ? frame.getPose(src.gripSpace, ref) : undefined;
       if (grip) pinchPoint.set(grip.transform.position.x, grip.transform.position.y, grip.transform.position.z);
     }
     const controller = !src.hand;
     // hands: joint distance, OR the platform's own select (it is the pinch on Quest); controllers: select only
-    const force = controller ? track.selectDown : track.selectDown ? true : undefined;
-    const pinch = track.pinch.update(distance, force);
+    const selected = track.selectDown || track.selectLatched;
+    const force = controller ? selected : selected ? true : undefined;
+    track.selectLatched = false;
+    const pinch = track.pinch.update(distance, force, track.state);
     if (palmUp) {
       if (!track.palmUpSince) track.palmUpSince = time;
     } else track.palmUpSince = 0;
-    return {
-      joints,
-      pinching: pinch.pinching,
-      justPinched: pinch.justStarted,
-      justReleased: pinch.justEnded,
-      pinchPoint,
-      ray,
-      palmUp,
-      palmUpMs: palmUp ? time - track.palmUpSince : 0,
-      controller,
-    };
+    hand.pinching = pinch.pinching;
+    hand.justPinched = pinch.justStarted;
+    hand.justReleased = pinch.justEnded;
+    hand.palmUp = palmUp;
+    hand.palmUpMs = palmUp ? time - track.palmUpSince : 0;
+    hand.controller = controller;
+    return hand;
   }
 
   private sampleMouse(camera: Camera, head: ShellFrame['head']): ShellHand | null {
-    if (!this.pointer.inside && !this.pointer.down && !this.pointer.latched) return null;
-    this.raycaster.setFromCamera(this.pointer.ndc, camera);
-    const ray = { origin: this.raycaster.ray.origin.clone(), dir: this.raycaster.ray.direction.clone() };
+    if (!this.pointer.inside && !this.pointer.down && !this.pointer.latched) {
+      this.desktopPinch.reset();
+      return null;
+    }
+    // A mono XR view carries the authoritative inverse projection for emulator clicks.
+    const rayCamera = camera instanceof ArrayCamera && camera.cameras.length === 1 ? camera.cameras[0] : camera;
+    rayCamera.updateWorldMatrix(true, false);
+    this.raycaster.setFromCamera(this.pointer.ndc, rayCamera);
+    const hand = this.desktopHand;
+    const { ray } = hand;
+    ray.origin.copy(this.raycaster.ray.origin);
+    ray.dir.copy(this.raycaster.ray.direction);
     if (!Number.isFinite(ray.dir.x)) {
       ray.origin.copy(head.position);
       ray.dir.copy(head.ray.dir);
     }
-    const pinch = this.desktopPinch.update(null, this.pointer.down || this.pointer.latched);
+    const pinch = this.desktopPinch.update(null, this.pointer.down || this.pointer.latched, this.desktopState);
     this.pointer.latched = false;
-    return {
-      joints: {},
-      pinching: pinch.pinching,
-      justPinched: pinch.justStarted,
-      justReleased: pinch.justEnded,
-      pinchPoint: ray.origin.clone().addScaledVector(ray.dir, 0.6),
-      ray,
-      palmUp: false,
-      palmUpMs: 0,
-      controller: true,
-    };
+    hand.pinching = pinch.pinching;
+    hand.justPinched = pinch.justStarted;
+    hand.justReleased = pinch.justEnded;
+    hand.pinchPoint.copy(ray.origin).addScaledVector(ray.dir, 0.6);
+    hand.controller = true;
+    return hand;
   }
 }
 
