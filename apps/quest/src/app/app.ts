@@ -1039,7 +1039,19 @@ export class QuestApp {
 
   saveTake(): void {
     const name = this.recorder.download();
-    if (name) this.page.log(`saved ${name} (on the headset: adb pull /sdcard/Download/${name})`, 'ok');
+    if (!name) return;
+    this.page.log(`saved ${name} (on the headset: adb pull /sdcard/Download/${name})`, 'ok');
+    // on the Mac the server keeps a copy in the repo (apps/quest/public/takes/<take>/), ready to replay and commit
+    if (!isLocalPage()) return;
+    const take = name.replace(/\.zip$/, '');
+    const body = new Blob([this.recorder.toZip() as unknown as BlobPart], { type: 'application/zip' });
+    void fetch(`/api/takes/${encodeURIComponent(take)}`, { method: 'POST', headers: { 'content-type': 'application/zip' }, body })
+      .then(async (r) => {
+        const j = (await r.json().catch(() => ({}))) as { dir?: string; files?: string[]; message?: string };
+        if (r.ok) this.page.log(`take kept by the server: ${j.dir} (${j.files?.length ?? 0} files) · replay: /sim/?take=${take}`, 'ok');
+        else this.page.log(`the server did not keep the take: ${j.message ?? `HTTP ${r.status}`}`, 'warn');
+      })
+      .catch((e) => this.page.log(`the server did not keep the take: ${(e as Error).message}`, 'warn'));
   }
 
   async startReplay(src: string | Uint8Array, mode: ReplayMode): Promise<void> {

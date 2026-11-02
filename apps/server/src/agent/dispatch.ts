@@ -24,7 +24,11 @@ interface Pending<T> {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/** a sensor whose last request timed out is avoided for this long when another one is online */
+export const SENSE_UNHEALTHY_MS = 30_000;
+
 interface SenseCollector {
+  sensorDeviceId: string;
   results: SenseResultPayload[];
   resolve: (v: SenseResultPayload[]) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -79,6 +83,8 @@ export interface DispatcherOptions {
 export class Dispatcher {
   private readonly acks = new Map<string, Pending<ExecAckPayload>>();
   private readonly senses = new Map<string, SenseCollector>();
+  /** sensor device id -> when its last sense.request timed out (cleared by the next good reply) */
+  private readonly senseTimeouts = new Map<string, number>();
   private readonly limiters = new Map<string, RateLimiter>();
   private readonly trailing = new Map<string, { op: ExecOp; opts: { port?: string; cardId?: string; driverId?: string; actionId?: string; lightCap?: boolean }; timer: ReturnType<typeof setTimeout> }>();
   private readonly log: (line: string) => void;
@@ -221,9 +227,12 @@ export class Dispatcher {
         const c = this.senses.get(senseId);
         this.senses.delete(senseId);
         if (collect) resolve(c?.results ?? []);
-        else reject(new ExecError(`no sense.result (${kind}) from ${sensorDeviceId} within ${timeoutMs} ms`, 'timeout'));
+        else {
+          this.senseTimeouts.set(sensorDeviceId, Date.now());
+          reject(new ExecError(`no sense.result (${kind}) from ${sensorDeviceId} within ${timeoutMs} ms`, 'timeout'));
+        }
       }, timeoutMs);
-      this.senses.set(senseId, { results: [], resolve, timer, collect });
+      this.senses.set(senseId, { sensorDeviceId, results: [], resolve, timer, collect });
       opts.signal?.addEventListener('abort', () => {
         clearTimeout(timer);
         this.senses.delete(senseId);
@@ -233,9 +242,16 @@ export class Dispatcher {
   }
 
   /** Feed a sense.result from the hub. */
+  /** Did this sensor's last sense.request time out within the last ~30 s (and no good reply since)? */
+  unhealthy(deviceId: string, withinMs = SENSE_UNHEALTHY_MS): boolean {
+    const at = this.senseTimeouts.get(deviceId);
+    return at !== undefined && Date.now() - at < withinMs;
+  }
+
   onSense(r: SenseResultPayload): boolean {
     const c = this.senses.get(r.senseId);
     if (!c) return false;
+    if (r.ok !== false) this.senseTimeouts.delete(c.sensorDeviceId);
     if (r.ok === false && !c.collect) {
       clearTimeout(c.timer);
       this.senses.delete(r.senseId);

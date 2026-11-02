@@ -319,3 +319,28 @@ describe('scan crop for the panel skin', () => {
     expect(corner.height).toBeLessThanOrEqual(60);
   });
 });
+
+describe('sensor health', () => {
+  const devices = [
+    { deviceId: 'quest-1', name: 'Quest', kind: 'quest' as const, role: 'hmd' as const, capabilities: ['camera' as const, 'mic' as const], canApprove: true, online: true, connections: 1, pairedAt: 1 },
+    { deviceId: 'sim-1', name: 'Sim room', kind: 'sim' as const, role: 'device' as const, capabilities: ['camera' as const, 'ir' as const], canApprove: false, online: true, connections: 1, pairedAt: 2 },
+  ];
+  it('a camera whose last sense.request timed out yields to a healthy one, and is still used when it is the only one', () => {
+    const roster: Roster = { devices: () => devices, macLocal: false, unhealthy: (id) => id === 'quest-1' };
+    expect(pickSensor(roster, 'camera')?.deviceId).toBe('sim-1');
+    expect(pickSensor(roster, 'camera', { preferDeviceId: 'quest-1' })?.deviceId).toBe('sim-1');
+    expect(pickSensor({ ...roster, devices: () => devices.slice(0, 1) }, 'camera')?.deviceId).toBe('quest-1');
+    expect(pickSensor({ ...roster, unhealthy: () => false }, 'camera')?.deviceId).toBe('quest-1');
+  });
+  it('the dispatcher marks a sensor unhealthy after a frame timeout and clears it on the next good reply', async () => {
+    const d = new Dispatcher({ hub: { sendToDevice: () => 1 } });
+    await expect(d.sense('quest-1', 'frame', { timeoutMs: 15 })).rejects.toThrow(/no sense.result/);
+    expect(d.unhealthy('quest-1')).toBe(true);
+    expect(d.unhealthy('sim-1')).toBe(false);
+    const p = d.sense('quest-1', 'frame', { timeoutMs: 1000 });
+    const senseId = d.pendingSenseIds()[0]!;
+    d.onSense({ senseId, kind: 'frame', at: Date.now(), ok: true });
+    await p;
+    expect(d.unhealthy('quest-1')).toBe(false);
+  });
+});

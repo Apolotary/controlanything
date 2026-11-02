@@ -33,6 +33,7 @@ import { gen3dRouter, skinsRouter } from './gen3d';
 import { MAX_AUDIO_BYTES, requestCancellation, RequestCancelledError, TranscribeInputError, TranscribeUpstreamError } from './muse';
 import { type Approver, PairingError } from './pairing/manager';
 import type { DeviceRecord } from './pairing/registry';
+import { saveTake, TAKES_DIR, takeExists, takeName } from './takes';
 
 function bearer(req: Request): string | undefined {
   const m = /^Bearer\s+(\S+)\s*$/i.exec(req.get('authorization') ?? '');
@@ -201,6 +202,31 @@ export function createApp(ctx: ServerContext): express.Express {
   // the discovery loop: targets, work log, exec monitor, curated profiles, select / arm / panic (see agent/routes.ts)
   api.use('/agent', agentRouter(ctx));
 
+  // recorded takes: the headset app on this Mac hands its zip to the server (localhost only), which unpacks it into
+  // apps/quest/public/takes/<take>/ so it replays at once (/sim/?take=<take>) and can be committed
+  api.post('/takes/:take', express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '64mb' }), (req, res) => {
+    if (!ctx.isLocal(req.socket.remoteAddress)) {
+      res.status(403).json({ error: 'forbidden', message: 'Takes are saved into the repo from this Mac only.' });
+      return;
+    }
+    const take = takeName(String(req.params.take));
+    if (!take || !Buffer.isBuffer(req.body) || !req.body.length) {
+      res.status(400).json({ error: 'bad_request', message: 'POST /api/takes/<take-name> with the take zip as the body.' });
+      return;
+    }
+    try {
+      const r = saveTake(TAKES_DIR, take, req.body);
+      ctx.log(`[takes] ${take}: ${r.files.length} files, ${Math.round(r.bytes / 1024)} KB -> ${r.dir}`);
+      res.json({ ok: true, take, ...r, replay: `/sim/?take=${encodeURIComponent(take)}` });
+    } catch (e) {
+      res.status(400).json({ error: 'bad_take', message: (e as Error).message });
+    }
+  });
+  api.get('/takes/:take', (req, res) => {
+    const take = takeName(String(req.params.take));
+    res.json({ take, exists: Boolean(take && takeExists(TAKES_DIR, take)) });
+  });
+
   api.use((req, res) => {
     res.status(404).json({ error: 'not_found', message: `No route ${req.method} ${req.originalUrl}` });
   });
@@ -210,6 +236,9 @@ export function createApp(ctx: ServerContext): express.Express {
   app.get('/p/:pairingId', (req, res) => {
     res.redirect(302, `/companion/?approve=${encodeURIComponent(String(req.params.pairingId))}`);
   });
+
+  // takes saved after the last build are served from the source folder, so no rebuild is needed to replay one
+  app.use('/quest/takes', express.static(TAKES_DIR));
 
   // static client apps
   app.use((req, res, next) => {

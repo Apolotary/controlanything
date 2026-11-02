@@ -95,7 +95,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const macLocal = new MacLocalExecutor(undefined, macEnabled, process.env.CE_MAC_SILENT === '1');
   const silentSpeech = macLocal.silent ? loadRecordedSpeech(undefined, log) : undefined;
   if (macLocal.silent) log('[silent] CE_MAC_SILENT=1: say / Music are not run and the volume is kept in memory; acks and evidence say so');
-  const roster: Roster = { devices: () => hub.devices(), macLocal: macLocal.available };
+  // a sensor whose last reply timed out (a dead headset tab) yields to a healthy one for ~30 s
+  const roster: Roster = { devices: () => hub.devices(), macLocal: macLocal.available, unhealthy: (id) => dispatcher.unhealthy(id) };
   const steps = new StepLog(hub, log);
   const targets = new TargetStore(hub, log);
   const dispatcher = new Dispatcher({ hub, macLocal, log });
@@ -136,7 +137,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   };
   const control = new ControlRouter({ targets, dispatcher, specs, steps, hub, log, onRoomHack });
   const daemons = new DaemonRunner({ hub, steps, log, drive: control });
-  const roster0: Roster = { devices: () => hub.devices(), macLocal: macLocal.available };
+  const roster0: Roster = { devices: () => hub.devices(), macLocal: macLocal.available, unhealthy: (id) => dispatcher.unhealthy(id) };
   const combos = new ComboRunner({ hub, targets, steps, dispatcher, sam, roster: roster0, arm, daemons, heard, readVolume: () => macLocal.currentVolume(), silentSpeech, log });
   const publishRoom = (): UiSpecPayload | undefined => {
     const built = buildRoomSpec(targets.list(), (id) => specs.get(id), roomRev + 1);
@@ -230,6 +231,12 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         void arm.request(existing, driver).then((r) => {
           if (r.armed) hub.broadcast('driver.status', { driverId: driver.driverId, cardId: existing.cardId, phase: 'armed', actions: driver.actions.map((a) => ({ actionId: a.actionId, verified: existing.verification[a.actionId] ?? 'untested' })), modelId: driver.modelId });
         });
+      } else if (existing.specId && existing.card) {
+        // a headset that (re)joined mid-session pinches a device it already owns: give it the card, the controls and the armed state again
+        const spec = specs.get(existing.specId);
+        hub.sendToDevice(from.deviceId, 'device.card', existing.card);
+        if (spec) hub.sendToDevice(from.deviceId, 'ui.spec', spec);
+        if (existing.driver) hub.sendToDevice(from.deviceId, 'driver.status', { driverId: existing.driver.driverId, cardId: existing.cardId, phase: existing.armed ? 'armed' : 'disarmed', actions: existing.driver.actions.map((a) => ({ actionId: a.actionId, verified: existing.verification[a.actionId] ?? 'untested' })), modelId: existing.driver.modelId });
       }
       return existing;
     }

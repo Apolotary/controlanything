@@ -20,6 +20,8 @@ export interface Roster {
   devices(): DeviceInfo[];
   /** the in-process Mac executor is available */
   macLocal: boolean;
+  /** a sensor whose last sense.request timed out recently (a headset tab that stopped answering) */
+  unhealthy?: (deviceId: string) => boolean;
 }
 
 export function macLocalInfo(): DeviceInfo {
@@ -88,7 +90,10 @@ export function pickExecutor(r: Roster, cap: 'midi' | 'ir' | 'local', opts: { po
 
 /** Sensors for a sense kind: the device that saw the target first when it still is online. */
 export function pickSensor(r: Roster, cap: 'camera' | 'mic' | 'ir', opts: { preferDeviceId?: string; excludeDeviceId?: string } = {}): DeviceInfo | undefined {
-  const cands = online(r, cap).filter((d) => d.deviceId !== opts.excludeDeviceId && d.deviceId !== MAC_LOCAL_ID);
+  const all = online(r, cap).filter((d) => d.deviceId !== opts.excludeDeviceId && d.deviceId !== MAC_LOCAL_ID);
+  // a sensor that stopped answering yields to a healthy one when there is one (else it is still tried)
+  const healthy = all.filter((d) => !r.unhealthy?.(d.deviceId));
+  const cands = healthy.length ? healthy : all;
   if (!cands.length) return undefined;
   if (opts.preferDeviceId) {
     const d = cands.find((x) => x.deviceId === opts.preferDeviceId);
