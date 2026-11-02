@@ -98,7 +98,7 @@ async function startServer() {
   for (const stream of [server.stdout, server.stderr]) stream.on('data', (chunk) => {
     serverLog = (serverLog + chunk.toString()).slice(-250_000);
     // HTTP starts before HTTPS: wait until the entry point has finished starting both.
-    serverReady ||= serverLog.includes('ControlEverything server ');
+    serverReady ||= serverLog.includes('ControlAnything server ');
   });
   await until('own HTTP/HTTPS fixture server startup', () => serverReady);
   const health = await json('/api/health');
@@ -250,7 +250,7 @@ async function run() {
   let initial;
   await phase('01-silent-instrument', async () => {
     browser = await chromium.launch({ channel: 'chrome', headless: true,
-      args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--mute-audio'] });
+      args: ['--mute-audio'] });
     abort.signal.throwIfAborted();
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
     context.setDefaultTimeout(UI_TIMEOUT);

@@ -55,7 +55,8 @@ visualDisplay.width = visualCanvas.width;
 visualDisplay.height = visualCanvas.height;
 const visualContext = visualDisplay.getContext('2d')!;
 let visualChange = 'Ready';
-const visualSynth = createVisualSynth(visualCanvas, { onChange: (label) => { visualChange = label; } });
+// A parameter change repaints the laptop screen right away (idle motion is sampled at ~4 fps by the room loop).
+const visualSynth = createVisualSynth(visualCanvas, { onChange: (label) => { visualChange = label; room?.screenChanged(); } });
 const visualRelay = createVisualSynthRelay(visualSynth, { authoritative: () => sync.leader });
 const device = new SimDevice(synth, meter, room, animator, visualRelay);
 room.visualScreenSource = visualDisplay;

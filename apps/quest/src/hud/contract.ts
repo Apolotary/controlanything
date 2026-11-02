@@ -55,6 +55,8 @@ export interface HudFrame {
 export interface HudTarget {
   id: string;
   label: string;
+  /** The detector/model label before display shortening; filters and matching use this. */
+  rawLabel?: string;
   tagged?: boolean;
   identifying?: boolean;
   busy?: boolean;

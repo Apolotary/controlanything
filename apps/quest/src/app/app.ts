@@ -671,7 +671,7 @@ export class QuestApp {
   }
 
   private observeTarget(target: HudTarget): void {
-    if (/\b(person|people|human)\b/i.test(target.label)) return;
+    if (/\b(person|people|human)\b/i.test(target.rawLabel ?? target.label)) return;
     const tag = this.modes.tags.get(target.id);
     if (tag) {
       tag.position = { x: target.position[0], y: target.position[1], z: target.position[2] };
@@ -702,7 +702,7 @@ export class QuestApp {
     }
     if (this.modes.mode === 'annotate') {
       const candidates = [...this.observed.values()].filter(({ target, at }) => !this.modes.tags.has(target.id)
-        && now - at <= annotationFadeMs(isLiveId(target.id)) && (target.score ?? 0) >= 0.5 && matchesAnnotationFilter(target.label, this.filter)
+        && now - at <= annotationFadeMs(isLiveId(target.id)) && (target.score ?? 0) >= 0.5 && matchesAnnotationFilter(target.rawLabel ?? target.label, this.filter)
         && inAnnotationRange(target.position, head, range));
       const rank = (target: HudTarget) => {
         const x = target.position[0] - head.x, y = target.position[1] - head.y, z = target.position[2] - head.z;

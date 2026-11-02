@@ -186,7 +186,10 @@ export class RoomView {
       const dt = t - last;
       last = t;
       const changed = this.lamp.step(dt);
-      if ((changed || this.screenDirty || this.visualScreenSource) && t - this.lastFrame > 33) {
+      // The live laptop screen only needs a full repaint when something changed; its idle shader motion is sampled at
+      // ~4 fps so the room (rendered twice: sim page + the emulator's embed) doesn't saturate the CPU/GPU.
+      const visualIdle = !!this.visualScreenSource && t - this.lastFrame > 250;
+      if ((changed || this.screenDirty || visualIdle) && t - this.lastFrame > 33) {
         this.lastFrame = t;
         this.screenDirty = false;
         if (changed) this.render();
