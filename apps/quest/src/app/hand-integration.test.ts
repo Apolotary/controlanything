@@ -3,6 +3,7 @@ import { PerspectiveCamera, Quaternion, Vector3 } from 'three';
 import { QuestApp } from './app';
 import type { ShellFrame, ShellHand } from './hud-contract';
 import { InputSampler } from './input';
+import { ModeState } from './modes';
 
 function hand(overrides: Partial<ShellHand> = {}): ShellHand {
   return {
@@ -37,7 +38,8 @@ function appHarness(targets: ReturnType<typeof target>[] = []) {
   const lock = vi.fn();
   const xrHit = { attach: vi.fn(), detach: vi.fn(), onFrame: vi.fn() };
   const targetMap = new Map(targets.map((t) => [t.id, t]));
-  const hud = { setCandidate: vi.fn(), upsertTarget: vi.fn(), update: vi.fn() };
+  const hud = { setCandidate: vi.fn(), upsertTarget: vi.fn(), update: vi.fn(), setDeck: vi.fn() };
+  const visibleTargets = new Set(targetMap.keys());
   Object.assign(app, {
     input, handFeedback: { setHover, update: vi.fn() },
     targets: { targets: targetMap, get: (id: string) => targetMap.get(id), refine },
@@ -46,6 +48,9 @@ function appHarness(targets: ReturnType<typeof target>[] = []) {
     gazeHit: { id: '', angleDeg: 0, distance: 0 },
     handHit: { id: '', angleDeg: 0, distance: 0 },
     touchHit: { id: '', angleDeg: 0, distance: 0 },
+    modes: new ModeState(), visibleTargets,
+    refreshAnnotations: vi.fn(), updateHandControl: vi.fn(),
+    nonDominant: 'left', palmOpened: false,
     hud,
     lock, release: vi.fn(), lockedId: null,
     desktopCam: new PerspectiveCamera(), camera: {}, xrHit,
@@ -53,7 +58,7 @@ function appHarness(targets: ReturnType<typeof target>[] = []) {
     handheld: { update: () => [] }, scanner: { tick: vi.fn() }, lastStatusAt: 0,
     wristPoses: {}, heldMoves: [],
   });
-  return { app, input, setHover, refine, lock, xrHit, targetMap, hud };
+  return { app, input, setHover, refine, lock, xrHit, targetMap, visibleTargets, hud };
 }
 
 function xrSession(sources: XRInputSource[] = []): XRSession {
@@ -99,19 +104,56 @@ describe('shell hand input integration', () => {
     expect(setHover).toHaveBeenLastCalledWith('right', pointedTarget);
   });
 
-  it('still refines a real thumb-index midpoint touching a nearby target', () => {
+  it('selects a nearby tracked anchor by touch without moving it to the fingers', () => {
     const near = target('near', new Vector3(0, 0, -0.2));
     const { app, refine, lock } = appHarness([near]);
+    const anchor = near.position.clone();
     const joint = (x: number) => ({ position: new Vector3(x, 0, -0.2), quaternion: new Quaternion(), radius: 0.008 });
     const right = hand({
       joints: { 'thumb-tip': joint(-0.005), 'index-finger-tip': joint(0.005) },
-      pinchPoint: near.position.clone(), pinching: true, justPinched: true,
+      pinchPoint: near.position.clone().add(new Vector3(0.015, 0, 0.01)), pinching: true, justPinched: true,
     });
 
     app.interact(frame(right), 16);
 
-    expect(refine).toHaveBeenCalledExactlyOnceWith('near', right.pinchPoint);
+    expect(refine).not.toHaveBeenCalled();
+    expect(near.position).toEqual(anchor);
     expect(lock).toHaveBeenCalledExactlyOnceWith('near', 'touch');
+  });
+
+  it('does not select an anchor hidden by the annotation range or object filter', () => {
+    const hidden = target('hidden', new Vector3(0, 0, -2));
+    const { app, lock, visibleTargets, hud } = appHarness([hidden]);
+    visibleTargets.clear();
+    app.interact(frame(hand({ pinching: true, justPinched: true })), 300);
+    expect(lock).not.toHaveBeenCalled();
+    expect(hud.setCandidate).toHaveBeenLastCalledWith(null);
+  });
+
+  it('hides a lost hand and does not repeat selection or move the anchor when its held pinch returns', () => {
+    const pointed = target('pointed', new Vector3(0, 0, -2));
+    const { app, input, lock, refine, setHover } = appHarness([pointed]);
+    const source = { handedness: 'right', targetRaySpace: {}, hand: new Map() } as unknown as XRInputSource;
+    const session = xrSession([source]);
+    const transform = { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } };
+    let tracked = true;
+    const xrFrame = {
+      session, getViewerPose: () => ({ transform }), getPose: () => tracked ? { transform } : null, getJointPose: () => null,
+    } as unknown as XRFrame;
+    const camera = new PerspectiveCamera(), reference = {} as XRReferenceSpace;
+    input.attach(session);
+    session.dispatchEvent(Object.assign(new Event('selectstart'), { inputSource: source, frame: xrFrame }));
+    app.interact(input.sample(16, camera, xrFrame, reference), 16);
+    expect(lock).toHaveBeenCalledExactlyOnceWith('pointed', 'ray');
+
+    tracked = false;
+    app.interact(input.sample(32, camera, xrFrame, reference), 32);
+    expect(setHover.mock.calls.slice(-2)).toEqual([['left'], ['right']]);
+    tracked = true;
+    app.interact(input.sample(48, camera, xrFrame, reference), 48);
+    expect(lock).toHaveBeenCalledOnce();
+    expect(refine).not.toHaveBeenCalled();
+    expect(pointed.position).toEqual(new Vector3(0, 0, -2));
   });
 
   it('clears hand hover and the dwell candidate when the last target disappears', () => {

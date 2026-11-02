@@ -1,6 +1,6 @@
 import { BufferAttribute, BufferGeometry, Color, DoubleSide, Group, Mesh, MeshBasicMaterial, Vector3 } from 'three';
 import type { Cursor } from '../../gen3d/interact';
-import { BoxField } from './boxes';
+import { BoxField, type BoxHit } from './boxes';
 import { THEME } from './theme';
 
 interface ReticleState {
@@ -50,9 +50,10 @@ function reticleGeometry(): BufferGeometry {
 /** One ring and centre dot per hand, sharing geometry and requiring two draw calls. */
 export class PinchReticles extends Group {
   private readonly geometry = reticleGeometry();
-  private readonly material = new MeshBasicMaterial({ vertexColors: true, side: DoubleSide, forceSinglePass: true, transparent: true, opacity: THEME.opacity.line, depthWrite: false, depthTest: false, toneMapped: false });
+  private readonly material = new MeshBasicMaterial({ vertexColors: true, side: DoubleSide, forceSinglePass: true, transparent: true, opacity: THEME.opacity.line, depthWrite: false, depthTest: true, toneMapped: false });
   private readonly states: ReticleState[] = [];
   private readonly destination = new Vector3();
+  private readonly hit: BoxHit = { box: undefined as unknown as BoxHit['box'], point: new Vector3(), distance: 0 };
 
   constructor() {
     super();
@@ -66,19 +67,22 @@ export class PinchReticles extends Group {
       this.states.push({ mesh, start: new Vector3(), end: new Vector3(), target: null, elapsed: 0, releaseElapsed: THEME.motion.duration, releasedScale: 1, contracting: false });
     }
   }
-  update(cursors: readonly Cursor[], head: Vector3, dt: number, boxes: BoxField): void {
+  update(cursors: readonly Cursor[], head: Vector3, dt: number, boxes: BoxField, widgetPoints?: readonly (Vector3 | null)[]): void {
     for (let i = 0; i < this.states.length; i++) {
       const state = this.states[i]!, cursor = cursors[i];
       const { mesh } = state;
-      mesh.visible = !!cursor?.tracked && !!cursor.ray;
+      mesh.visible = !!cursor?.tracked && !!cursor.ray && cursor.ray.dir.lengthSq() > 0.000001;
       if (!mesh.visible || !cursor?.ray) {
         state.contracting = false; state.target = null; state.releaseElapsed = THEME.motion.duration;
         mesh.scale.setScalar(1);
         continue;
       }
-      const hit = boxes.intersectRay(cursor.ray, head);
-      if (hit) this.destination.copy(hit.point);
-      else this.destination.copy(cursor.ray.origin).addScaledVector(cursor.ray.dir, THEME.reticle.distance);
+      let hit = boxes.intersectRay(cursor.ray, head, this.hit);
+      const widget = widgetPoints?.[i];
+      if (widget && (!hit || widget.distanceToSquared(cursor.ray.origin) < hit.distance ** 2)) { this.destination.copy(widget); hit = null; }
+      else if (hit) this.destination.copy(hit.point);
+      else if (cursor.canPoke) this.destination.copy(cursor.tip);
+      else { mesh.visible = false; continue; }
       boxes.facingQuaternion(head, this.destination, mesh.quaternion, hit?.box.facing);
       if (cursor.justPinched && hit) {
         state.start.copy(this.destination);

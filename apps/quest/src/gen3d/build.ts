@@ -515,11 +515,11 @@ export class SpecObject extends Group {
     const was = this.armedAll && [...this.controls.values()].every((c) => c.armed);
     if (controlIds) for (const id of controlIds) {
       const c = this.controls.get(id);
-      if (c) c.armed = armed;
+      if (c) { c.armed = armed; c.control.armed = armed; }
     }
     else {
       this.armedAll = armed;
-      for (const c of this.controls.values()) c.armed = armed;
+      for (const c of this.controls.values()) c.armed = armed && c.control.armed !== false;
     }
     if (!armed) for (const run of this.runs) if (!run.ctrl?.armed || !this.armedAll) this.cancelRun(run);
     this.spec.state = { armed: this.armedAll, ...(reason ? { reason } : {}) };

@@ -20,7 +20,7 @@
  *   track=<category>   initial live-box category: everything|electronics|instruments|lights|remotes
  *   debug=1            in-headset hand tracking, rendering and detector diagnostics
  */
-import type { Channel, ControlEvent, HackItem, HudStatus, ModelChip } from '@ce/gen3d';
+import type { Channel, ControlEvent, Gen3dSpec, HackItem, HudStatus, ModelChip } from '@ce/gen3d';
 import type { AgentStepPayload, PayloadOf, TargetState } from '@ce/protocol';
 import { AmbientLight, DirectionalLight, HemisphereLight, PerspectiveCamera, Quaternion, Scene, SRGBColorSpace, Vector3, WebGLRenderer } from 'three';
 import type { Identity } from '../io/identity';
@@ -33,7 +33,6 @@ import {
   normalizeDetections,
   type ScanResultPayload,
   type SenseRequestPayload,
-  type TargetSelectPayload,
   type TargetStatusPayload,
   type UiSpecPayload,
   type VerifyResultPayload,
@@ -57,13 +56,16 @@ import { cameraPoseFromHead, questIntrinsics, worldToPixel } from '../scan/proje
 import { Scanner } from '../scan/scanner';
 import { SyntheticCamera, VirtualRoom } from '../scan/synthetic';
 import { type Target, TargetStore, toHudTarget } from '../scan/targets';
-import { CATEGORIES, type Category, isCategory } from '../scan/yolo/classes';
+import { CATEGORIES, type Category } from '../scan/yolo/classes';
 import { categoryFromControl, CHIPS_SPEC_ID, chipsSpec } from '../scan/yolo/chips';
 import { isLiveId, LiveDetector } from '../scan/yolo/live';
 import { LiveReadout } from '../scan/yolo/readout';
 import { Mic } from '../voice/mic';
 import { PushToTalk } from '../voice/ptt';
 import { ControlSender } from './controls';
+import { ModeState } from './modes';
+import type { AppMode, HudTarget, ObjectFilter } from '../hud/contract';
+import { annotationRange, matchesAnnotationFilter, inAnnotationRange } from '../scan/policy';
 import { type Emulator, installEmulator } from './emulator';
 import { HandFeedback } from './hand-feedback';
 import { THEME as HUD_V2_THEME } from '../hud/v2/theme';
@@ -134,6 +136,27 @@ export class QuestApp {
   readonly poses = new PoseRing(256);
   readonly encoder = new JpegEncoder(1280, 0.8);
   readonly targets = new TargetStore();
+  readonly modes = new ModeState();
+  filter: ObjectFilter = 'electronics';
+  private readonly observed = new Map<string, { target: HudTarget; at: number }>();
+  private readonly visibleTargets = new Set<string>();
+  private readonly armedCards = new Set<string>();
+  private readonly cancelledCards = new Set<string>();
+  private lastAnnotationsAt = 0;
+  private readonly deferredSpecs = new Map<string, UiSpecPayload>();
+  private readonly controlValues = new Map<string, ControlEvent['value']>();
+  private readonly generated = new Map<string, Gen3dSpec>();
+  private drawTarget?: (target: HudTarget) => void;
+  private eraseTarget?: (id: string) => void;
+  private pendingMode?: AppMode;
+  private activeSetup?: string;
+  private armRequest?: ArmRequestPayload;
+  private acceptedArm?: string;
+  private pairingUntil = 0;
+  private lastPairFrame = 0;
+  private pairCapturing = false;
+  private palmOpened = false;
+  private handMapping?: { targetId: string; specId: string; controlId: string; originY?: number; value: number; current: number; lastAt: number };
   readonly xrHit = new XrHitTester();
   readonly handheld = new HandheldTracker();
   readonly recorder = new Recorder();
@@ -168,7 +191,6 @@ export class QuestApp {
   private readonly nonDominant: Handedness;
   private candidate = { id: null as string | null, since: 0, shown: null as string | null };
   lockedId: string | null = null;
-  private pendingSelect?: { targetId: string; frameId?: string; detId?: string; at: number };
   private readonly consumed = { left: false, right: false };
   private readonly specByCard = new Map<string, string>();
   private readonly cardOfSpec = new Map<string, string>();
@@ -178,7 +200,6 @@ export class QuestApp {
   private readonly chips = new Map<string, ModelChip & { at: number }>();
   private upload?: { hackId: string; label: string; cardId?: string; stepsDone: number; startedAt: number };
   private pingVisible = false;
-  private deckSpawnedAt = 0;
   private lastStatusAt = 0;
   private lastFrameShownAt = 0;
   private serverMode = '';
@@ -201,8 +222,9 @@ export class QuestApp {
       this.input.mouseAsHand = true;
       this.page.log(`desktop emulator: IWER ${this.emulator.device.version} (${this.emulator.device.name}${this.emulator.devui ? ', DevUI' : ''})`, 'ok');
     }
-    await this.setupCamera();
     await this.setupHud();
+    await this.setupCamera();
+    this.refreshHome();
     if (this.live && this.params.get('debug') === '1') {
       this.readout = new LiveReadout();
       this.scene.add(this.readout);
@@ -323,10 +345,13 @@ export class QuestApp {
       targets: this.targets,
       poses: this.poses,
       depth: () => this.depthProviders(),
+      headPosition: () => this.lastFrame?.head.position ?? this.desktopCam.position,
       log: (m, l) => this.page.log(m, l),
       fixture: () => (this.fixture && this.room ? { fix: this.fixture, room: this.room } : null),
       local: (dir, type, payload) => this.recorder.message(dir, { v: 1, type, id: `local-${type}-${Date.now()}`, ts: Date.now(), from: dir === 'in' ? 'fixture' : '', payload }),
     });
+    this.scanner.rangeM = annotationRange(this.params.get('range'));
+    this.scanner.setCategory(this.filter);
     this.scanner.on('frame', (fr) => this.rememberJpeg(fr.frameId, fr.jpeg));
     this.scanner.on('result', (r) => {
       const rec = this.capture.get(r.frameId);
@@ -362,6 +387,7 @@ export class QuestApp {
       hud: () => this.hud,
       samTargets: () => this.targets.list(),
       depth: () => this.depthProviders(),
+      headPosition: () => this.lastFrame?.head.position ?? this.desktopCam.position,
       handJoints: () => handJointPositions(this.lastFrame),
       log: (m, l) => this.page.log(m, l),
       modelUrl: `${import.meta.env.BASE_URL}models/yolox_nano.onnx`,
@@ -371,14 +397,16 @@ export class QuestApp {
       },
     });
     const track = this.params.get('track');
-    if (isCategory(track)) live.category = track;
+    if (track === 'electronics' || track === 'lights' || track === 'everything') this.filter = track;
+    live.category = this.filter;
+    live.rangeM = annotationRange(this.params.get('range'));
+    this.scanner.setCategory(this.filter);
     this.live = live;
     this.scanner.on('state', ({ on }) => {
-      if (on) {
+      if (on && this.modes.mode === 'annotate') {
         live.start();
         this.showChips();
       } else {
-        if (isLiveId(this.lockedId)) this.release();
         live.stop();
         this.hideChips();
       }
@@ -403,12 +431,13 @@ export class QuestApp {
   }
 
   setLiveCategory(c: Category): void {
-    if (!this.live) return;
-    if (isLiveId(this.lockedId) && this.live.category !== c) this.release();
-    this.live.setCategory(c);
-    if (this.chipsShown) this.showChips();
-    this.hud.toast(`Tracking ${CATEGORIES.find((x) => x.id === c)?.label.toLowerCase() ?? c}`);
-    this.recorder.input('track', { category: c });
+    if (this.modes.mode !== 'annotate') return;
+    this.filter = c === 'lights' || c === 'everything' ? c : 'electronics';
+    this.live?.setCategory(this.filter);
+    this.scanner.setCategory(this.filter);
+    this.refreshAnnotations();
+    this.refreshHome();
+    this.recorder.input('track', { category: this.filter });
   }
 
   /** `y` key: live boxes on/off for this scan session. */
@@ -438,6 +467,14 @@ export class QuestApp {
     const { hud, kind, error } = await loadHud({ scene: this.scene, camera: this.desktopCam, renderer: this.renderer }, this.params.get('hud'));
     this.hud = hud;
     this.hudKind = kind;
+    this.drawTarget = hud.upsertTarget.bind(hud);
+    this.eraseTarget = hud.removeTarget.bind(hud);
+    hud.upsertTarget = (target) => this.observeTarget(target);
+    hud.removeTarget = (id) => {
+      this.observed.delete(id);
+      if (!this.modes.tags.has(id)) { this.eraseTarget?.(id); this.visibleTargets.delete(id); }
+    };
+    this.refreshHome();
     if (kind === 'v2') this.handFeedback.setAppearance({ accent: HUD_V2_THEME.color.accent, showHover: false });
     this.scene.add(hud.root);
     if (error) this.page.log(error, 'warn');
@@ -466,6 +503,13 @@ export class QuestApp {
         this.page.log(`gen3d dev cursor unavailable: ${(e as Error).message}`, 'warn');
       }
     }
+    hud.on('mode', (e) => this.setMode(e.mode));
+    hud.on('filter', (e) => this.setLiveCategory(e.filter));
+    hud.on('tagRemove', (e) => this.untag(e.targetId));
+    hud.on('setup', (e) => this.setupControl(e.targetId));
+    hud.on('cancel', (e) => this.cancelControl(e.targetId));
+    hud.on('pair', (e) => this.pairDevice(e.targetId));
+    hud.on('handControl', (e) => this.setHandControl(e.targetId, e.enabled));
     hud.on('deck', (e) => this.onDeck(e.key, e.phase));
     hud.on('hack', (e) => this.onHack(e));
     hud.on('control', (e) => this.onControl(e));
@@ -477,13 +521,18 @@ export class QuestApp {
   private setupIo(): void {
     const name = this.emulator ? 'Quest (desktop emulator)' : /Quest 3S/i.test(navigator.userAgent) ? 'Quest 3S' : 'Quest 3';
     this.pairing = new PairingFlow({ name, capabilities: ['camera', 'mic', 'hands', 'display'] });
-    this.controls = new ControlSender((p) => this.ws.send('control.event', p), 30);
+    this.controls = new ControlSender((p) => { if (p.specId && this.canControl(this.cardOfSpec.get(p.specId))) this.ws.send('control.event', p); }, 30);
     this.approvals = new Approvals(this.ws);
     this.ptt = new PushToTalk(this.mic, this.ws, () => this.identity?.deviceToken);
     this.ws.tap('out', (m) => this.recorder.message('out', m));
     this.ws.tap('in', (m) => this.recorder.message('in', m));
     this.ws.onState = (s, info) => {
       this.page.badge('b-ws', s, s === 'open' ? 'ok' : s === 'connecting' ? 'warn' : 'bad');
+      if (s === 'closed') {
+        const active = this.activeSetup ? this.modes.byCard(this.activeSetup) : undefined;
+        if (active) this.cancelControl(active.targetId);
+        this.controls.clear(); this.modes.disconnected(); this.refreshHome(); this.refreshTags();
+      }
       if (s === 'closed' && info) this.page.log(`socket closed (${info.code}${info.reason ? ` ${info.reason}` : ''}); reconnecting`, 'warn');
     };
     this.ws.onUnauthorized = () => {
@@ -533,6 +582,234 @@ export class QuestApp {
     this.wireMessages();
   }
 
+  setMode(mode: AppMode, send = true): void {
+    if (mode !== 'annotate' && mode !== 'control') return;
+    if (mode !== this.modes.mode) {
+      if (this.activeSetup) {
+        const tag = this.modes.byCard(this.activeSetup);
+        if (tag) this.cancelControl(tag.targetId);
+      }
+      this.controls?.clear();
+      this.release();
+      this.hud.hideHackMenu();
+      this.hud.showConfirm(null);
+    }
+    this.modes.mode = mode;
+    if (send) {
+      this.pendingMode = mode;
+      this.ws.send('mode.set', { mode }, { to: 'server' });
+    }
+    if (mode === 'annotate') {
+      if (this.cameraState !== 'on') void this.startCamera();
+      this.scanner.start();
+    } else {
+      this.scanner.stop();
+      this.live?.stop();
+    }
+    this.refreshAnnotations(true);
+    this.refreshHome();
+  }
+
+  private refreshHome(): void {
+    this.hud.setHome?.({ mode: this.modes.mode, filter: this.filter, tagged: this.modes.tags.size,
+      status: this.modes.mode === 'annotate' ? 'Tag the devices you want to control' : this.pairingUntil ? 'Look at the companion’s QR code' : 'Choose a tagged device' });
+    const tag = this.lockedId ? this.modes.tags.get(this.lockedId) : undefined;
+    this.hud.setDeviceState?.(tag ? { targetId: tag.targetId, connection: tag.connection, hint: tag.hint,
+      busy: tag.busy, sentence: tag.sentence, handControl: this.handMapping?.targetId === tag.targetId } : null);
+  }
+
+  private observeTarget(target: HudTarget): void {
+    if (/\b(person|people|human)\b/i.test(target.label)) return;
+    const tag = this.modes.tags.get(target.id);
+    if (tag) {
+      tag.position = { x: target.position[0], y: target.position[1], z: target.position[2] };
+      target = { ...target, label: tag.name ?? tag.label, tagged: true, connection: tag.connection };
+    }
+    this.observed.set(target.id, { target, at: Date.now() });
+    this.refreshAnnotations(true);
+  }
+
+  /** One budget shared by both detectors. Tagged anchors survive detection expiry. */
+  private refreshAnnotations(force = false): void {
+    const now = Date.now();
+    if (!force && now - this.lastAnnotationsAt < 80) return;
+    this.lastAnnotationsAt = now;
+    const head = this.lastFrame?.head.position ?? this.desktopCam.position;
+    const range = annotationRange(this.params.get('range'));
+    const show = new Set<string>();
+    const draw: HudTarget[] = [];
+    for (const [id, tag] of this.modes.tags) {
+      const observed = this.observed.get(id);
+      if (!observed || !inAnnotationRange(observed.target.position, head, range)) continue;
+      show.add(id);
+      if (force || !this.visibleTargets.has(id)) draw.push({ ...observed.target, tagged: true, connection: tag.connection, label: tag.name ?? tag.label });
+    }
+    if (this.modes.mode === 'annotate') {
+      const candidates = [...this.observed.values()].filter(({ target, at }) => !this.modes.tags.has(target.id)
+        && now - at <= 400 && (target.score ?? 0) >= 0.5 && matchesAnnotationFilter(target.label, this.filter)
+        && inAnnotationRange(target.position, head, range));
+      candidates.sort((a, b) => (b.target.score ?? 0) - (a.target.score ?? 0));
+      for (const { target } of candidates.slice(0, Math.max(0, 6 - show.size))) {
+        show.add(target.id);
+        if (force || !this.visibleTargets.has(target.id)) draw.push(target);
+      }
+    }
+    for (const id of this.visibleTargets) if (!show.has(id)) this.eraseTarget?.(id);
+    for (const target of draw) this.drawTarget?.(target);
+    this.visibleTargets.clear();
+    for (const id of show) this.visibleTargets.add(id);
+    for (const [id, observed] of this.observed) if (now - observed.at > 15_000 && !this.modes.tags.has(id)) {
+      this.observed.delete(id); this.targets.remove(id);
+    }
+  }
+
+  private materializeTarget(snapshot: HudTarget): Target {
+    const target = this.targets.upsert({ detId: '', label: snapshot.label, score: snapshot.score ?? 1, box: [0, 0, 1, 1] },
+      { position: new Vector3().fromArray(snapshot.position), facing: new Vector3().fromArray(snapshot.facing ?? [0, 0, 1]),
+        sizeM: snapshot.sizeM ?? [0.25, 0.2, 0.1], confirmed: snapshot.confirmed, method: 'tracked', depth: 1 }, '', snapshot.modelId).target;
+    return target;
+  }
+
+  private onTagsState(payload: PayloadOf<'tags.state'>): void {
+    const removed = this.modes.snapshot(payload.tags);
+    for (const tag of removed) {
+      if (tag.cardId) { this.armedCards.delete(tag.cardId); this.controls.clear(); }
+      if (this.lockedId === tag.targetId) this.release();
+      this.hud.removeTarget(tag.targetId);
+    }
+    for (const tag of this.modes.tags.values()) {
+      let target = this.targets.get(tag.targetId);
+      if (!target && tag.position) {
+        const p = tag.position;
+        target = this.materializeTarget({ id: tag.targetId, label: tag.label, position: [p.x, p.y, p.z], confirmed: true, status: 'locked' });
+        // A stored tag keeps one stable local id, including after reconnect.
+        this.targets.targets.delete(target.id);
+        target.id = tag.targetId;
+        this.targets.targets.set(target.id, target);
+      }
+      if (target) { target.cardId = tag.cardId; target.label = tag.name ?? tag.label; }
+      if (tag.cardId) {
+        if (tag.connection === 'offline' && this.activeSetup === tag.cardId) this.cancelControl(tag.targetId);
+        if (tag.connection === 'ready' && this.cancelledCards.has(tag.cardId)) tag.connection = 'setup';
+        if (tag.connection === 'ready' && this.activeSetup !== tag.cardId && !this.cancelledCards.has(tag.cardId)) this.armedCards.add(tag.cardId);
+        else { this.armedCards.delete(tag.cardId); this.controls.clear(); }
+        const deferred = this.deferredSpecs.get(tag.cardId);
+        if (deferred && tag.connection === 'ready' && !this.cancelledCards.has(tag.cardId)) { this.deferredSpecs.delete(tag.cardId); this.onUiSpec(deferred); }
+        const specId = this.specByCard.get(tag.cardId);
+        if (specId) this.hud.setArmed(this.gen3dIdFor(specId), this.armedCards.has(tag.cardId));
+      }
+    }
+    for (const cardId of this.modes.removals) this.ws.send('tag.remove', { cardId }, { to: 'server' });
+    this.refreshTags(); this.refreshHome();
+  }
+
+  private refreshTags(): void {
+    for (const tag of this.modes.tags.values()) {
+      const target = this.targets.get(tag.targetId);
+      if (target) this.hud.upsertTarget(toHudTarget(target));
+    }
+    this.refreshAnnotations(true);
+  }
+
+  untag(targetId: string): void {
+    if (this.modes.mode !== 'annotate') return;
+    const tag = this.modes.remove(targetId);
+    if (!tag) return;
+    if (tag.cardId) {
+      this.armedCards.delete(tag.cardId);
+      this.ws.send('tag.remove', { cardId: tag.cardId }, { to: 'server' });
+    }
+    if (this.lockedId === targetId) this.release();
+    this.observed.delete(targetId); this.hud.removeTarget(targetId);
+    this.refreshHome();
+  }
+
+  setupControl(targetId: string): void {
+    if (!this.modes.canSetup(targetId)) return;
+    const tag = this.modes.tags.get(targetId)!;
+    if (this.activeSetup && this.activeSetup !== tag.cardId) return;
+    this.cancelledCards.delete(tag.cardId!);
+    this.deferredSpecs.delete(tag.cardId!);
+    this.activeSetup = tag.cardId;
+    tag.busy = true; tag.sentence = 'Connecting to this device.';
+    if (!this.ws.send('control.setup', { cardId: tag.cardId! }, { to: 'server' })) {
+      tag.busy = false; tag.connection = 'unknown'; this.activeSetup = undefined;
+      tag.sentence = 'Waiting for the server connection.';
+    }
+    this.refreshHome();
+  }
+
+  cancelControl(targetId: string): void {
+    const tag = this.modes.tags.get(targetId);
+    if (this.modes.mode !== 'control' || !tag?.cardId || this.activeSetup !== tag.cardId) return;
+    this.cancelledCards.add(tag.cardId);
+    this.ws.send('control.cancel', { cardId: tag.cardId }, { to: 'server' });
+    tag.busy = false; tag.sentence = 'Setup cancelled.';
+    this.activeSetup = undefined; this.pendingArm = undefined; this.armRequest = undefined; this.acceptedArm = undefined;
+    this.armedCards.delete(tag.cardId); this.controls.clear(); this.handMapping = undefined;
+    const specId = this.specByCard.get(tag.cardId);
+    if (specId) this.hud.setArmed(this.gen3dIdFor(specId), false);
+    this.hud.showConfirm(null); this.refreshHome();
+  }
+
+  private canControl(cardId: string | undefined): boolean {
+    const tag = cardId ? this.modes.byCard(cardId) : undefined;
+    return this.modes.mode === 'control' && !!cardId && !!tag && tag.connection === 'ready'
+      && this.visibleTargets.has(tag.targetId) && this.armedCards.has(cardId) && !this.cancelledCards.has(cardId) && this.lockedId === tag.targetId;
+  }
+
+  private pairDevice(targetId: string): void {
+    if (this.modes.mode !== 'control' || !this.modes.tags.has(targetId)) return;
+    this.pairingUntil = performance.now() + 30_000;
+    this.lastPairFrame = 0;
+    void this.startCamera();
+    this.refreshHome();
+  }
+
+  private async capturePairing(time: number): Promise<void> {
+    if (time >= this.pairingUntil || this.modes.mode !== 'control') { this.pairingUntil = 0; this.refreshHome(); return; }
+    if (this.pairCapturing || time - this.lastPairFrame < 1000) return;
+    this.pairCapturing = true; this.lastPairFrame = time;
+    try {
+      const frame = await this.capture.capture('pair');
+      if (frame && this.pairingUntil && this.modes.mode === 'control') this.ws.send('scan.frame', frame.payload, { to: 'server', droppable: true });
+    } finally { this.pairCapturing = false; }
+  }
+
+  private setHandControl(targetId: string, enabled: boolean): void {
+    this.handMapping = undefined;
+    const tag = this.modes.tags.get(targetId);
+    const spec = tag?.cardId ? this.generated.get(tag.cardId) : undefined;
+    if (enabled && this.canControl(tag?.cardId) && spec && /synth|keyboard|midi/i.test(`${tag?.category} ${spec.device?.category} ${tag?.label}`)) {
+      const control = spec.controls.find((c) => (c.kind === 'continuous' || c.kind === 'stepped') && c.armed !== false);
+      if (control) {
+        const value = Number(this.controlValues.get(`${spec.specId}:${control.id}`) ?? control.default ?? control.range?.min ?? 0);
+        this.handMapping = { targetId, specId: spec.specId, controlId: control.id, value, current: value, lastAt: 0 };
+      }
+    }
+    this.refreshHome();
+  }
+
+  private updateHandControl(frame: ShellFrame, time: number): void {
+    const mapping = this.handMapping;
+    if (!mapping) return;
+    const tag = this.modes.tags.get(mapping.targetId);
+    if (!this.canControl(tag?.cardId)) { this.handMapping = undefined; this.refreshHome(); return; }
+    const wrist = frame.hands.right?.joints.wrist?.position;
+    if (!wrist) { mapping.originY = undefined; mapping.value = mapping.current; return; }
+    if (mapping.originY === undefined) { mapping.originY = wrist.y; return; }
+    if (time - mapping.lastAt < 50) return;
+    const spec = this.generated.get(tag!.cardId!);
+    const control = spec?.controls.find((c) => c.id === mapping.controlId);
+    if (!control) return;
+    const range = control.range ?? { min: 0, max: 1 };
+    let value = Math.max(range.min, Math.min(range.max, mapping.value + (wrist.y - mapping.originY) / 0.4 * (range.max - range.min)));
+    if (range.step) value = range.min + Math.round((value - range.min) / range.step) * range.step;
+    mapping.lastAt = time; mapping.current = value;
+    this.onControl({ specId: mapping.specId, controlId: mapping.controlId, value, phase: 'move', ts: Date.now() });
+    this.hud.setControlValue(mapping.specId, mapping.controlId, value);
+  }
+
   private helloPayload(): PayloadOf<'hello'> {
     return { deviceToken: this.identity?.deviceToken ?? '', role: 'hmd', capabilities: ['camera', 'mic', 'hands', 'display'], app: APP_VERSION };
   }
@@ -554,9 +831,21 @@ export class QuestApp {
     ws.on('welcome', (m) => {
       this.welcome = m.payload as PayloadOf<'welcome'>;
       this.serverMode = this.welcome.mode;
+      this.pendingMode = this.modes.mode;
+      this.ws.send('mode.set', { mode: this.modes.mode }, { to: 'server' });
+      for (const tag of this.modes.tags.values()) if (tag.pending) this.ws.send('tag.add', tag.pending, { to: 'server' });
+      for (const cardId of this.modes.removals) this.ws.send('tag.remove', { cardId }, { to: 'server' });
       this.page.badge('b-mode', this.welcome.mode === 'live' ? 'LIVE' : 'FIXTURE', this.welcome.mode === 'live' ? 'ok' : 'warn');
       this.page.log(`connected: ${this.welcome.name} (${this.welcome.kind}) · ${this.welcome.server} · ${this.welcome.mode}${this.welcome.canApprove ? ' · approver' : ''}`, 'ok');
     });
+    ws.on('mode.state', (m) => {
+      const { mode } = m.payload as PayloadOf<'mode.state'>;
+      // An old acknowledgement must not undo a newer local toggle.
+      if (this.pendingMode && this.pendingMode !== mode) return;
+      this.pendingMode = undefined;
+      this.setMode(mode, false);
+    });
+    ws.on('tags.state', (m) => this.onTagsState(m.payload as PayloadOf<'tags.state'>));
     ws.on('log', (m) => {
       const p = m.payload as PayloadOf<'log'>;
       if (p.level === 'error' || p.level === 'warn') {
@@ -565,7 +854,8 @@ export class QuestApp {
     });
     ws.on('scan.result', (m) => {
       const p = m.payload as ScanResultPayload;
-      void this.scanner.onResult(p);
+      if (this.modes.mode === 'annotate') void this.scanner.onResult(p);
+      if (p.qr?.some((q) => q.approved)) { this.pairingUntil = 0; this.refreshHome(); }
       if (p.qr?.length) for (const q of p.qr) this.page.log(`QR seen${q.approved ? ' → approved' : ''}: ${q.text.slice(0, 60)}`, q.approved ? 'ok' : 'info');
     });
     ws.on('target.status', (m) => this.onTargetStatus(m.payload as TargetStatusPayload));
@@ -581,14 +871,15 @@ export class QuestApp {
     ws.on('sense.request', (m) => void this.onSenseRequest(m.payload as SenseRequestPayload));
     ws.on('panic', (m) => {
       const p = m.payload as PayloadOf<'panic'>;
-      this.hud.toast(`STOP ALL${p.reason ? ` · ${p.reason}` : ''}`, 'warn');
-      for (const specId of this.specByCard.values()) this.hud.setArmed(this.gen3dIdFor(specId), false, 'stopped');
+      this.stopControls();
+      this.hud.toast(`Stopped${p.reason ? ` · ${p.reason}` : ''}`, 'warn');
     });
     ws.on('control.event', (m) => {
       // another client moved a control: mirror it without re-emitting
       const p = m.payload as PayloadOf<'control.event'>;
       if (m.from === this.identity?.deviceId || !p.specId) return;
       const gen3dId = [...this.uiSpecOfGen3d.entries()].find(([, ui]) => ui === p.specId)?.[0] ?? p.specId;
+      this.controlValues.set(`${gen3dId}:${p.widgetId}`, p.value);
       this.hud.setControlValue(gen3dId, p.widgetId, p.value);
     });
   }
@@ -599,7 +890,7 @@ export class QuestApp {
     let t = this.targets.byCard(cardId);
     if (t) return t;
     if (hint.frameId && hint.detId) t = this.targets.list().find((x) => x.frameId === hint.frameId && x.detId === hint.detId);
-    if (!t && this.pendingSelect && Date.now() - this.pendingSelect.at < 180_000) t = this.targets.get(this.pendingSelect.targetId);
+    if (!t) { const tag = this.modes.byCard(cardId); if (tag) t = this.targets.get(tag.targetId); }
     // A room spec can arrive while a device selection is still pending.
     if (t?.cardId && t.cardId !== cardId) return undefined;
     if (t && !t.cardId) t.cardId = cardId;
@@ -609,13 +900,22 @@ export class QuestApp {
   private onDeviceCard(p: PayloadOf<'device.card'>): void {
     const t = this.targetForCard(p.cardId, { frameId: p.frameId, detId: p.detId });
     this.page.log(`device.card: ${p.maker} ${p.model || p.name} (${Math.round(p.confidence * 100)} %)${p.modelId ? ` · ${p.modelId}` : ''}`, 'ok');
-    if (!t) return;
+    if (!t || !this.modes.tags.has(t.id)) return;
+    const tag = this.modes.tags.get(t.id)!;
+    tag.cardId = p.cardId;
+    tag.name = p.name;
     t.label = p.name || `${p.maker} ${p.model}`.trim();
     if (!t.subtitle || t.subtitle.startsWith('locked')) t.subtitle = 'identified';
     this.hud.upsertTarget(toHudTarget(t));
+    this.refreshHome();
   }
 
   private onTargetStatus(p: TargetStatusPayload): void {
+    const tag = this.modes.byCard(p.cardId);
+    if (!tag || this.activeSetup !== p.cardId || this.modes.mode !== 'control') return;
+    tag.sentence = p.sentence ?? p.detail;
+    if (p.state === 'failed') { tag.busy = false; this.activeSetup = undefined; }
+    this.refreshHome();
     const t = this.targetForCard(p.cardId);
     const m = TARGET_STATES[p.state] ?? { status: 'locked' as HudStatus, sub: p.state };
     if (t) {
@@ -628,6 +928,11 @@ export class QuestApp {
   }
 
   private onAgentStep(s: AgentStepPayload): void {
+    if (!s.cardId || this.activeSetup !== s.cardId || this.modes.mode !== 'control') return;
+    const tag = this.modes.byCard(s.cardId);
+    if (!tag) return;
+    tag.sentence = s.sentence ?? s.title;
+    this.refreshHome();
     this.hud.logStep(s);
     if (s.model) this.chip(s.model, s.status === 'running' || s.status === 'pending' ? 'live' : s.status === 'fail' ? 'error' : 'done');
     if (this.upload && (!s.cardId || s.cardId === this.upload.cardId)) {
@@ -637,6 +942,7 @@ export class QuestApp {
   }
 
   private onLinkRequest(p: LinkRequestPayload): void {
+    if (this.modes.mode !== 'control' || this.activeSetup !== p.cardId) return;
     const t = this.targetForCard(p.cardId);
     const channel: Channel = p.needs.includes('ir') ? 'ir' : p.needs.includes('midi') ? 'usb' : p.needs.includes('ble') ? 'ble' : 'wifi';
     this.links.set(p.cardId, { channel, proven: false, label: p.reason });
@@ -648,10 +954,11 @@ export class QuestApp {
     }
     this.hud.toast(p.reason, 'info');
     this.page.log(`link.request: ${p.reason}`, 'warn');
-    this.refreshPing(true);
+    this.refreshHome();
   }
 
   private onLinkResult(p: LinkResultPayload): void {
+    if (this.modes.mode !== 'control' || this.activeSetup !== p.cardId) return;
     const t = this.targetForCard(p.cardId);
     const proven = p.verdict === 'confirmed' || p.verdict === 'consistent';
     const channel = p.channel ? channelOf(p.channel) : (this.links.get(p.cardId)?.channel ?? 'wifi');
@@ -669,17 +976,18 @@ export class QuestApp {
     }
     if (p.verdict === 'mismatch') this.hud.toast('wrong device · refused', 'error');
     this.page.log(`link.result ${p.verdict}${p.reason ? `: ${p.reason}` : ''}`, proven ? 'ok' : 'warn');
-    this.refreshPing(true);
+    this.refreshHome();
   }
 
   private onDriverStatus(p: PayloadOf<'driver.status'>): void {
     const verified = p.actions?.filter((a) => a.verified === 'pass').length ?? 0;
     this.page.log(`driver ${p.driverId.slice(-6)} ${p.phase ?? p.status ?? ''}${p.actions ? ` · ${verified}/${p.actions.length} verified` : ''}`);
     const specId = p.cardId ? this.specByCard.get(p.cardId) : undefined;
-    if (specId && (p.phase === 'armed' || p.phase === 'disarmed')) this.hud.setArmed(this.gen3dIdFor(specId), p.phase === 'armed', p.phase === 'armed' ? 'armed' : 'disarmed');
+    if (specId && p.phase === 'disarmed') { if (p.cardId) this.armedCards.delete(p.cardId); this.hud.setArmed(this.gen3dIdFor(specId), false); this.controls.clear(); }
   }
 
   private onVerify(e: VerifyResultPayload): void {
+    if (this.modes.mode !== 'control' || !e.cardId || this.activeSetup !== e.cardId) return;
     const s = evidenceSentence(e);
     const t = e.cardId ? this.targetForCard(e.cardId) : undefined;
     this.hud.showEvidence({ targetId: t?.id, ...s });
@@ -688,31 +996,43 @@ export class QuestApp {
   }
 
   private onArmRequest(p: ArmRequestPayload): void {
+    if (this.modes.mode !== 'control' || this.activeSetup !== p.cardId || !this.modes.byCard(p.cardId) || this.modes.byCard(p.cardId)?.connection === 'offline' || this.modes.byCard(p.cardId)?.connection === 'unknown') return;
     if (this.welcome && !this.welcome.canApprove) return;
-    const t = this.targetForCard(p.cardId);
-    this.hud.showConfirm({ id: p.armId, title: p.title, summary: p.summary, hold: p.irreversible, expiresAt: p.expiresAt, targetId: t?.id });
+    this.armRequest = p;
     this.pendingArm = p.armId;
-    this.page.log(`arm.request: ${p.title} — pinch ARM (or press A)`, 'warn');
+    this.acceptedArm = undefined;
+    this.hud.showConfirm({ id: p.armId, title: 'Arm controls', summary: p.summary, hold: p.irreversible, expiresAt: p.expiresAt, targetId: this.modes.byCard(p.cardId)?.targetId });
+    this.page.log('Controls verified. Confirm ARM to use them.', 'ok');
   }
 
   private pendingArm?: string;
   private mouseCursor?: { cursor: unknown; setTargets(o: unknown[]): void; update(): unknown };
 
   answerConfirm(armId: string, approve: boolean, hold?: boolean): void {
-    const payload: PayloadOf<'arm.confirm'> = { armId, approve };
-    if (hold) payload.hold = true;
-    this.ws.send('arm.confirm', payload, { to: 'server' });
+    const request = this.armRequest;
+    if (this.modes.mode !== 'control' || !request || this.pendingArm !== armId || request.armId !== armId || this.activeSetup !== request.cardId) return;
+    if (approve && (Date.now() >= request.expiresAt || request.irreversible && !hold)) return;
+    this.ws.send('arm.confirm', { armId, approve, ...(hold ? { hold } : {}) }, { to: 'server' });
     this.hud.showConfirm(null);
-    if (this.pendingArm === armId) this.pendingArm = undefined;
+    this.pendingArm = undefined;
+    this.acceptedArm = approve ? armId : undefined;
+    if (!approve) this.cancelControl(this.modes.byCard(request.cardId)!.targetId);
     this.recorder.input('arm', { armId, approve });
-    this.page.log(`arm.confirm ${approve ? 'ARM' : 'cancel'}`, approve ? 'ok' : 'warn');
   }
 
   private onArmResult(p: PayloadOf<'arm.result'>): void {
-    this.hud.showConfirm(null);
+    if (this.modes.mode !== 'control') return;
+    if (this.armRequest?.armId !== p.armId || this.armRequest.cardId !== p.cardId || this.activeSetup !== p.cardId) return;
+    if (p.armed && this.acceptedArm !== p.armId) return;
+    if (this.pendingArm === p.armId) { this.hud.showConfirm(null); this.pendingArm = undefined; }
+    if (p.armed) this.armedCards.add(p.cardId);
+    else this.armedCards.delete(p.cardId);
     const specId = this.specByCard.get(p.cardId);
-    if (specId) this.hud.setArmed(this.gen3dIdFor(specId), p.armed, p.armed ? `armed${p.by ? ` by ${p.by}` : ''}` : (p.reason ?? 'not armed'));
-    this.page.log(`arm.result: ${p.armed ? 'ARMED' : 'not armed'}${p.reason ? ` (${p.reason})` : ''}`, p.armed ? 'ok' : 'warn');
+    if (specId) this.hud.setArmed(this.gen3dIdFor(specId), p.armed, p.reason);
+    const tag = this.modes.byCard(p.cardId);
+    if (tag) { tag.busy = false; tag.connection = p.armed ? 'ready' : tag.connection; tag.sentence = p.reason; }
+    this.activeSetup = undefined; this.armRequest = undefined; this.acceptedArm = undefined;
+    this.refreshTags(); this.refreshHome();
   }
 
   private gen3dIdFor(uiSpecId: string): string {
@@ -724,6 +1044,12 @@ export class QuestApp {
   private readonly menuSpec = new Map<string, string>();
 
   private onUiSpec(p: UiSpecPayload): void {
+    if (!p.cardId) return;
+    if (!this.modes.byCard(p.cardId) || (this.activeSetup !== p.cardId && this.modes.byCard(p.cardId)?.connection !== 'ready')) {
+      this.deferredSpecs.set(p.cardId, p);
+      while (this.deferredSpecs.size > 64) this.deferredSpecs.delete(this.deferredSpecs.keys().next().value!);
+      return;
+    }
     // a card's spec sits at that device; a room-level spec (no cardId: daemons, combos) floats on its own
     const t = p.cardId ? this.targetForCard(p.cardId) : undefined;
     const menuKey = p.cardId ? (t?.id ?? p.cardId) : `room:${p.specId}`;
@@ -733,7 +1059,9 @@ export class QuestApp {
     }
     if (p.gen3d) {
       this.uiSpecOfGen3d.set(p.gen3d.specId, p.specId);
-      this.hud.renderSpec(p.gen3d, t ? { targetId: t.id } : {});
+      this.generated.set(p.cardId, p.gen3d);
+      this.hud.renderSpec({ ...p.gen3d, state: { ...p.gen3d.state, armed: false } }, t ? { targetId: t.id } : {});
+      this.hud.setArmed(p.gen3d.specId, this.armedCards.has(p.cardId));
     }
     if (p.hackset) {
       const ch = p.hackset.device.channel.type;
@@ -744,7 +1072,7 @@ export class QuestApp {
         return it;
       });
       this.menuSpec.set(menuKey, p.specId);
-      this.hud.showHackMenu(menuKey, { title: p.hackset.device.name, subtitle: 'HACKS · your devices', items });
+      this.hud.showHackMenu(menuKey, { title: p.hackset.device.name, subtitle: 'Device controls', items });
     }
     this.page.log(`ui.spec ${p.title ?? p.specId} rev ${p.rev ?? 1}${p.cardId ? '' : ' (room)'}${p.modelId ? ` · ${p.modelId}` : ''}${p.source === 'fixture' ? ' · FIXTURE' : ''}`, 'ok');
   }
@@ -764,6 +1092,7 @@ export class QuestApp {
 
   private async onSenseRequest(p: SenseRequestPayload): Promise<void> {
     if (!this.identity || p.sensorDeviceId !== this.identity.deviceId) return;
+    if (this.modes.mode !== 'control' || !p.cardId || !this.modes.byCard(p.cardId) || (this.activeSetup !== p.cardId && !this.canControl(p.cardId))) return;
     if (p.kind !== 'frame') {
       this.ws.send('sense.result', { senseId: p.senseId, kind: p.kind, at: Date.now(), ok: false, error: 'the headset senses frames only' }, { to: 'server' });
       return;
@@ -790,6 +1119,7 @@ export class QuestApp {
       r = await this.capture.capture('verify', p.senseId);
       if (!r) await new Promise((res) => setTimeout(res, 50));
     }
+    if (this.modes.mode !== 'control' || this.activeSetup !== p.cardId && !this.canControl(p.cardId)) return;
     if (!r) {
       this.ws.send('sense.result', { senseId: p.senseId, kind: 'frame', at: Date.now(), ok: false, error: 'no camera frame available' }, { to: 'server' });
       this.page.log('sense.request: no camera frame to send', 'error');
@@ -807,44 +1137,29 @@ export class QuestApp {
   // --- HUD events ----------------------------------------------------------------------------------
 
   onDeck(key: string, phase: 'press' | 'release'): void {
-    this.recorder.input('deck', { key, phase });
-    if (key === 'mic') {
-      if (phase === 'press') void this.ptt.press();
-      else this.ptt.release();
-      return;
-    }
-    if (phase !== 'press') return;
-    switch (key) {
-      case 'scan':
-        this.toggleScan();
-        break;
-      case 'ping':
-        this.pingVisible = !this.pingVisible;
-        this.refreshPing();
-        this.hud.toast(this.pingVisible ? 'PING · grey dashed = hypothesis, solid = proven' : 'ping off');
-        break;
-      case 'undo':
-        this.ws.send('voice.text', { text: 'undo', final: true }, { to: 'server' });
-        this.hud.toast('undo requested');
-        break;
-      case 'panic':
-        this.ws.send('panic', { reason: 'STOP ALL from the deck' }, { to: 'server' });
-        this.hud.toast('STOP ALL', 'warn');
-        break;
-      case 'daemons':
-        this.hud.toast('DAEMONS · automations: none running yet');
-        break;
-    }
+    if (key !== 'panic' || phase !== 'press' || this.modes.mode !== 'control') return;
+    this.stopControls();
+    this.ws.send('panic', { reason: 'Stop from the home bar' }, { to: 'server' });
+    this.hud.toast('Stopped', 'warn');
   }
 
-  toggleScan(): void {
-    if (!this.scanner.active) {
-      // a new scan clears what the user has not locked or linked
-      const keep = (t: Target) => t.id === this.lockedId || Boolean(t.cardId) || t.status !== 'scanned';
-      for (const id of this.targets.clearTransient(keep)) this.hud.removeTarget(id);
-      if (this.cameraState !== 'on') void this.startCamera();
+  private stopControls(): void {
+    for (const tag of this.modes.tags.values()) if (tag.cardId && (this.armedCards.has(tag.cardId) || this.activeSetup === tag.cardId)) {
+      this.cancelledCards.add(tag.cardId);
+      tag.busy = false; tag.sentence = 'Stopped. Set up control to continue.';
+      if (tag.connection === 'ready') tag.connection = 'setup';
     }
-    this.scanner.toggle();
+    this.activeSetup = undefined; this.pendingArm = undefined; this.armRequest = undefined; this.acceptedArm = undefined;
+    this.armedCards.clear(); this.controls.clear(); this.handMapping = undefined;
+    for (const specId of this.specByCard.values()) this.hud.setArmed(this.gen3dIdFor(specId), false);
+    this.hud.showConfirm(null); this.refreshTags(); this.refreshHome();
+  }
+
+  /** Desktop helper: scanning is automatic whenever Annotate is active. */
+  toggleScan(): void {
+    if (this.modes.mode !== 'annotate') return;
+    if (this.cameraState !== 'on') void this.startCamera();
+    this.scanner.start();
   }
 
   private lastHack = { key: '', at: 0 };
@@ -857,6 +1172,7 @@ export class QuestApp {
     this.lastHack = { key, at: now };
     // the pinch IS the human confirmation: an action hack fires as {widgetId: hackId, value: true, phase: 'end'}
     const t = this.targets.get(e.targetId);
+    if (!t?.cardId || !this.canControl(t.cardId) || this.lockedId !== t.id) return;
     const specId = this.menuSpec.get(e.targetId) ?? (t?.cardId ? this.specByCard.get(t.cardId) : undefined);
     const payload: PayloadOf<'control.event'> = { widgetId: e.itemId, value: true, ts: Date.now(), phase: 'end' };
     if (specId) payload.specId = specId;
@@ -884,8 +1200,13 @@ export class QuestApp {
     }
     // only controls of specs the server sent drive devices; HUD-internal objects (hack menus, deck) never do
     const ui = this.uiSpecOfGen3d.get(e.specId);
-    if (!ui) return;
-    this.controls.push({ ...e, specId: ui });
+    if (!ui || !this.canControl(this.cardOfSpec.get(ui))) return;
+    this.controlValues.set(`${e.specId}:${e.controlId}`, e.value);
+    const cardId = this.cardOfSpec.get(ui);
+    const control = cardId ? this.generated.get(cardId)?.controls.find((c) => c.id === e.controlId) : undefined;
+    if (!control || control.armed === false) return;
+    // One-shot commands execute on release; their activation value must stay true.
+    this.controls.push({ ...e, value: control?.kind === 'trigger' ? true : e.value, specId: ui });
   }
 
   private refreshPing(force = false): void {
@@ -920,6 +1241,7 @@ export class QuestApp {
     const list = this.aimBuffer;
     list.length = 0;
     for (const t of this.targets.targets.values()) {
+      if (!this.visibleTargets.has(t.id)) continue;
       let aim = this.aimTargets.get(t.id);
       if (!aim) {
         aim = { id: t.id, position: t.position, size: 0 };
@@ -929,7 +1251,8 @@ export class QuestApp {
       list.push(aim);
     }
     for (const id of this.aimTargets.keys()) if (!this.targets.get(id)) this.aimTargets.delete(id);
-    this.live?.appendAimables(list);
+    if (this.modes.mode === 'annotate') this.live?.appendAimables(list);
+    for (let i = list.length - 1; i >= 0; i--) if (!this.visibleTargets.has(list[i]!.id)) list.splice(i, 1);
     return list;
   }
 
@@ -965,73 +1288,61 @@ export class QuestApp {
       if (!h.controller && h.joints['thumb-tip'] && h.joints['index-finger-tip']) {
         const touch = touching(h.pinchPoint, list, 0.06, this.touchHit);
         if (touch) {
-          const t = isLiveId(touch.id) ? undefined : this.targets.refine(touch.id, h.pinchPoint);
-          if (t) this.hud.upsertTarget(toHudTarget(t));
-          if (touch.id !== this.lockedId) this.lock(touch.id, 'touch');
+          this.lock(touch.id, 'touch');
           continue;
         }
       }
       const pick = handAim?.id ?? this.candidate.shown ?? null;
       if (!pick) continue;
-      if (pick === this.lockedId) this.release();
-      else this.lock(pick, handAim ? 'ray' : 'gaze');
+      this.lock(pick, handAim ? 'ray' : 'gaze');
     }
   }
 
-  /** Lock a target; `send: false` only shows it (replay playback must not drive the live server). */
+  /** Select a device; annotation only records an explicit tag. */
   lock(id: string, how = 'api', opts: { send?: boolean } = {}): void {
+    if (this.modes.mode === 'control' && !this.modes.tags.has(id)) return;
     if (isLiveId(id)) {
       const claimed = this.live?.claimOf(id);
       if (claimed) return this.lock(claimed, how, opts);
-      // A fast local box has no server detection id yet. Keep scanning until SAM supplies one.
-      if (!this.live?.pick(id)) return;
-      if (this.lockedId && this.lockedId !== id) {
-        this.release();
-        this.live.pick(id);
-      }
-      this.lockedId = id;
-      this.pendingSelect = undefined;
-      this.candidate.shown = null;
-      this.hud.setCandidate(null);
-      this.hud.setLocked(id);
-      this.page.log('box selected: waiting for the device scan');
-      return;
+      const snapshot = this.live?.targetSnapshot(id);
+      if (!snapshot) return;
+      const target = this.materializeTarget(snapshot);
+      this.live?.onSamTargets();
+      id = target.id;
     }
     const t = this.targets.get(id);
     if (!t) return;
-    if (this.lockedId && this.lockedId !== id) this.release();
-    this.lockedId = id;
-    if (t.status === 'scanned') {
-      t.status = 'locked';
-      t.subtitle = 'locked · identifying…';
+    if (this.activeSetup && this.activeSetup !== this.modes.tags.get(id)?.cardId) {
+      const active = this.modes.byCard(this.activeSetup);
+      if (active) this.cancelControl(active.targetId);
     }
+    this.handMapping = undefined;
+    this.pairingUntil = 0;
+    this.lockedId = id;
     this.hud.setCandidate(null);
     this.candidate.shown = null;
     this.hud.setLocked(id);
-    this.hud.upsertTarget(toHudTarget(t));
-    if (this.scanner.active) this.scanner.stop();
-    if (opts.send === false) {
-      this.page.log(`replay: locked ${t.label} (shown only, nothing sent)`);
-      return;
+    if (this.modes.mode === 'annotate' && !this.modes.tags.has(id)) {
+      const payload: PayloadOf<'tag.add'> = { targetId: id, label: t.label.slice(0, 80), position: { x: t.position.x, y: t.position.y, z: t.position.z } };
+      if (t.frameId && t.detId) { payload.frameId = t.frameId; payload.detId = t.detId; }
+      if (t.cardId) this.modes.removals.delete(t.cardId);
+      this.modes.add(id, payload);
+      if (opts.send !== false) this.ws.send('tag.add', payload, { to: 'server' });
+      this.recorder.input('tag', { targetId: id, label: t.label, how });
+      this.lockedId = null;
+      this.hud.setLocked(null);
     }
-    const sel: TargetSelectPayload = t.cardId ? { cardId: t.cardId } : t.deviceId ? { deviceId: t.deviceId } : { frameId: t.frameId, detId: t.detId };
-    const sent = this.ws.send('target.select', sel, { to: 'server' });
-    this.pendingSelect = { targetId: id, frameId: t.frameId, detId: t.detId, at: Date.now() };
-    this.recorder.input('lock', { targetId: id, label: t.label, how, position: [t.position.x, t.position.y, t.position.z] });
-    this.page.log(`locked ${t.label} (${how}) → target.select${sent ? '' : ' NOT SENT (offline)'}`, sent ? 'ok' : 'warn');
+    this.hud.upsertTarget(toHudTarget(t));
+    this.refreshHome();
   }
 
   release(): void {
-    const t = this.lockedId ? this.targets.get(this.lockedId) : undefined;
-    this.live?.unpick();
+    this.handMapping = undefined;
+    this.pairingUntil = 0;
     this.lockedId = null;
     this.hud.setLocked(null);
-    if (t && t.status === 'locked' && !t.cardId) {
-      t.status = 'scanned';
-      t.subtitle = 'unverified';
-      this.hud.upsertTarget(toHudTarget(t));
-    }
-    this.recorder.input('release', { targetId: t?.id });
+    this.hud.setDeviceState?.(null);
+    this.refreshHome();
   }
 
   // --- frame loop -----------------------------------------------------------------------------------
@@ -1085,6 +1396,9 @@ export class QuestApp {
     if (inXr && this.camera instanceof LiveCamera) this.camera.pollFromXr(time);
     this.room?.update(time);
     this.deckGesture(f, time);
+    this.refreshAnnotations();
+    this.updateHandControl(f, time);
+    if (this.pairingUntil) void this.capturePairing(time);
     for (const m of this.handheld.update(this.wrists(f), time, this.heldMoves)) {
       const t = this.targets.get(m.id);
       if (!t) continue;
@@ -1126,14 +1440,14 @@ export class QuestApp {
     return out;
   }
 
-  private deckGesture(f: ShellFrame, time: number): void {
-    const nd = f.hands[this.nonDominant];
-    if (!nd?.palmUp || nd.palmUpMs < 500 || time - this.deckSpawnedAt < 3000) return;
-    const wrist = nd.joints.wrist?.position;
+  private deckGesture(f: ShellFrame, _time: number): void {
+    const hand = f.hands[this.nonDominant];
+    if (!hand?.palmUp) { if (this.palmOpened) this.hud.setDeck({ open: false }); this.palmOpened = false; return; }
+    if (this.palmOpened || hand.palmUpMs < 500) return;
+    const wrist = hand.joints.wrist?.position;
     if (!wrist) return;
-    this.deckSpawnedAt = time;
+    this.palmOpened = true;
     this.hud.setDeck({ open: true, at: [wrist.x, wrist.y + 0.15, wrist.z] });
-    this.recorder.input('deck-open', { at: [wrist.x, wrist.y + 0.15, wrist.z] });
   }
 
   // --- camera, XR ------------------------------------------------------------------------------------
@@ -1181,6 +1495,7 @@ export class QuestApp {
       await this.prepareMedia();
       const s = await startXr(this.renderer, { allowVr: Boolean(this.emulator) });
       this.session = s.session;
+      this.setMode('annotate');
       this.refSpace = s.refSpace;
       this.xrHit.attach(s.session, s.refSpace);
       this.input.attach(s.session);
@@ -1189,6 +1504,7 @@ export class QuestApp {
       this.recorder.input('xr', { on: true, mode: s.mode });
       s.session.addEventListener('end', () => {
         if (this.session !== s.session) return;
+        this.scanner.stop();
         this.session = undefined;
         this.refSpace = undefined;
         this.xrHit.detach();
@@ -1230,7 +1546,7 @@ export class QuestApp {
   saveTake(): void {
     const name = this.recorder.download();
     if (!name) return;
-    this.page.log(`saved ${name} (on the headset: adb pull /sdcard/Download/${name})`, 'ok');
+    this.page.log(`saved ${name} in Downloads`, 'ok');
     // on the Mac the server keeps a copy in the repo (apps/quest/public/takes/<take>/), ready to replay and commit
     if (!isLocalPage()) return;
     const take = name.replace(/\.zip$/, '');
@@ -1288,7 +1604,7 @@ export class QuestApp {
     const p = this.page;
     p.enter.onclick = () => void this.enterXr();
     p.prepare.onclick = () => void this.prepareMedia();
-    p.scan.onclick = () => this.toggleScan();
+    p.scan.hidden = true;
     p.record.onclick = () => this.toggleRecord();
     p.save.onclick = () => this.saveTake();
     p.repair.onclick = () => {
@@ -1314,7 +1630,7 @@ export class QuestApp {
       if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
       switch (e.key.toLowerCase()) {
         case 's':
-          this.toggleScan();
+          this.setMode('annotate');
           break;
         case 'l':
         case 'enter':
@@ -1349,8 +1665,11 @@ export class QuestApp {
         case 'y':
           this.toggleLive();
           break;
+        case 'm':
+          this.setMode(this.modes.mode === 'annotate' ? 'control' : 'annotate');
+          break;
         case 'c':
-          // cycle the live-box category chips
+          // cycle the object filter
           if (this.live) this.setLiveCategory(CATEGORIES[(CATEGORIES.findIndex((x) => x.id === this.live!.category) + 1) % CATEGORIES.length]!.id);
           break;
       }

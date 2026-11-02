@@ -2,7 +2,7 @@
  * Usage: npm run build && npm run e2e:judge (requires system Chrome; no browser download).
  * Runs a muted fixture demo on its own ports 8796/8446. Screenshots and failure diagnostics
  * go to research/screens/v2-flow/. Never reuses an existing server; removes its temporary data.
- * Optional YOLO preview is disabled: this checks the server scan and HUD v2 judge path.
+ * Optional YOLO preview is disabled: this checks the two-mode server scan and HUD judge path.
  */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -141,7 +141,8 @@ async function screenshot(name) {
       node.sync();
       if (node._needsSync || node._isSyncing || (node.text && !node.textRenderInfo)) ready = false;
     });
-    return ready && window.__ce.hud.card.scale.x > 0.99 && window.__ce.hud.controls.scale.y > 0.99;
+    const { card, controls } = window.__ce.hud;
+    return ready && (!card.visible || card.scale.x > 0.99) && (!controls.visible || controls.scale.y > 0.99);
   });
   await renderedFrames();
   // IWER moves the renderer canvas out of #stage when XR starts.
@@ -165,6 +166,10 @@ async function phase(name, action, capture = true) {
 
 async function pinch({ targetId, nodeName, turn = false }) {
   await renderedFrames();
+  if (targetId && !turn) await waitQuest((id) => {
+    const app = window.__ce;
+    return app.visibleTargets.has(id) && (app.modes.tags.has(id) || Date.now() - (app.observed.get(id)?.at ?? 0) < 200);
+  }, targetId);
   const point = await quest.evaluate(({ targetId, nodeName, turn }) => {
     const app = window.__ce;
     const object = nodeName ? app.hud.root.getObjectByName(nodeName) : null;
@@ -239,7 +244,8 @@ async function run() {
     await quest.evaluate(() => {
       window.__judgeEvents = [];
       window.__judgeControls = [];
-      const types = new Set(['target.status', 'device.card', 'agent.step', 'verify.result', 'ui.spec', 'arm.request', 'arm.result']);
+      window.__judgeRequests = [];
+      const types = new Set(['mode.state', 'tags.state', 'target.status', 'device.card', 'agent.step', 'verify.result', 'ui.spec', 'arm.request', 'arm.result']);
       window.__ce.ws.tap('in', ({ type, payload }) => {
         if (!types.has(type)) return;
         window.__judgeEvents.push({ type, payload });
@@ -247,6 +253,8 @@ async function run() {
       });
       window.__ce.ws.tap('out', ({ type, payload }) => {
         if (type === 'control.event') window.__judgeControls.push(payload);
+        window.__judgeRequests.push({ type, payload });
+        if (window.__judgeRequests.length > 500) window.__judgeRequests.shift();
       });
     });
     await quest.locator('#btn-enter').click();
@@ -254,31 +262,50 @@ async function run() {
   });
 
   let targetId;
-  await phase('02-scan', async () => {
-    await pinch({ nodeName: 'scan-toggle' });
-    await waitQuest(() => window.__ce.scanner.active
+  await phase('02-annotate', async () => {
+    await waitQuest(() => window.__ce.modes.mode === 'annotate' && window.__ce.scanner.active
       && window.__ce.targets.list().some((t) => /ceiling (light|lamp)/i.test(t.label)));
+    assert(await quest.evaluate(() => window.__judgeRequests.some((e) => e.type === 'mode.set' && e.payload.mode === 'annotate')),
+      'Entering AR explicitly starts in Annotate');
     targetId = await quest.evaluate(() => window.__ce.targets.list().find((t) => /ceiling (light|lamp)/i.test(t.label)).id);
   });
-  await phase('03-select-light', async () => {
+  await phase('03-tag-light', async () => {
     await pinch({ targetId });
-    await waitQuest((id) => window.__ce.lockedId === id && window.__ce.targets.get(id)?.cardId, targetId);
-    cardId = await quest.evaluate((id) => window.__ce.targets.get(id).cardId, targetId);
+    await waitQuest((id) => window.__ce.modes.tags.has(id) && window.__ce.modes.tags.get(id).cardId, targetId);
+    cardId = await quest.evaluate((id) => window.__ce.modes.tags.get(id).cardId, targetId);
+    assert(await quest.evaluate((id) => window.__judgeRequests.some((e) => e.type === 'tag.add' && e.payload.targetId === id), targetId),
+      'Pinching an annotation must tag the device');
   });
   await phase('04-identify', async () => {
-    await until('identified ceiling light', async () => {
-      const t = await target();
-      return t.card && /light|lamp/i.test(t.card.name);
-    });
+    await waitQuest((id) => window.__judgeEvents.some((e) => e.type === 'tags.state'
+      && e.payload.tags.some((tag) => tag.cardId === id && /light|lamp/i.test(tag.name ?? tag.label))), cardId);
+    assert.equal(await quest.evaluate(() => window.__ce.modes.mode), 'annotate');
+    assert.equal(await quest.evaluate(() => window.__judgeRequests.some((e) => ['target.select', 'control.setup', 'control.event', 'arm.confirm'].includes(e.type))), false,
+      'Annotation must not request setup, arming, or physical control');
+    assert.equal(await quest.evaluate(() => window.__judgeEvents.some((e) => ['agent.step', 'verify.result', 'ui.spec', 'arm.request'].includes(e.type))), false,
+      'Tagging must not start the control pipeline');
+    assert.equal(await sim.evaluate(() => window.ceSim.lamp().power), 'off');
   });
-  await phase('05-learn-remote', async () => {
+  await phase('05-control-mode', async () => {
+    await pinch({ nodeName: 'mode-control', turn: true });
+    await waitQuest(() => window.__ce.modes.mode === 'control' && !window.__ce.scanner.active);
+    await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'setup', cardId);
+    assert.equal(await quest.evaluate(() => window.__judgeRequests.some((e) => e.type === 'control.setup')), false,
+      'Switching mode alone must not start setup');
+  });
+  await phase('06-set-up-control', async () => {
+    await pinch({ targetId, turn: true });
+    await pinch({ nodeName: 'control-setup' });
+    await waitQuest((id) => window.__judgeRequests.some((e) => e.type === 'control.setup' && e.payload.cardId === id), cardId);
+  });
+  await phase('07-learn-remote', async () => {
     await until('all seven remote buttons captured', async () => {
       const t = await target();
       return t.research?.learned?.length === 7;
     }, PIPELINE_TIMEOUT);
     assert(await sim.evaluate(() => window.ceSimDebug.device.logLines.some((l) => l.kind === 'learn' && l.text.includes('captured press'))), 'Sim must capture the virtual remote');
   });
-  await phase('06-verify', async () => {
+  await phase('08-verify', async () => {
     await until('physical verification completed', async () => {
       const t = await target();
       return ['verified', 'forging', 'forged', 'arming'].includes(t.state)
@@ -287,7 +314,7 @@ async function run() {
     await waitQuest((id) => window.__judgeEvents.some((e) => e.type === 'verify.result'
       && e.payload.cardId === id && e.payload.pass && e.payload.observed?.sense === 'camera'), cardId);
   });
-  await phase('07-controls-ready', async () => {
+  await phase('09-controls-ready', async () => {
     await waitQuest((id) => {
       const app = window.__ce;
       return app.pendingArm && app.hud.confirm
@@ -295,14 +322,14 @@ async function run() {
     }, targetId, PIPELINE_TIMEOUT);
     assert.equal((await target()).armed, false, 'Server must gate controls until ARM');
   });
-  await phase('08-arm', async () => {
+  await phase('10-arm', async () => {
     assert.equal(await quest.evaluate(() => !!window.__ce.hud.confirm.hold), false, 'Light should use one-tap confirmation');
     await pinch({ nodeName: 'confirm-yes' });
     await waitQuest((id) => window.__judgeEvents.some((e) => e.type === 'arm.result' && e.payload.cardId === id && e.payload.armed)
       && [...window.__ce.hud.specs.values()].some((m) => m.targetId === window.__ce.lockedId && m.armed), cardId);
     assert.equal((await target()).armed, true);
   });
-  await phase('09-control-changes-light', async () => {
+  await phase('11-control-changes-light', async () => {
     await sim.waitForFunction(() => window.ceSim.lamp().power === 'on' && window.ceSimDebug.device.animator.settled);
     const before = await sim.evaluate(() => window.ceSim.lamp());
     const control = await quest.evaluate((cardId) => {
@@ -342,8 +369,9 @@ async function diagnostics() {
   if (quest && !quest.isClosed()) {
     state.quest = await quest.evaluate(() => ({
       camera: window.__ce?.cameraState, hud: window.__ce?.hudKind,
+      mode: window.__ce?.modes.mode, tags: window.__ce?.modes.tags && [...window.__ce.modes.tags.values()],
       lockedId: window.__ce?.lockedId, pendingArm: window.__ce?.pendingArm,
-      targets: window.__ce?.targets.list(), events: window.__judgeEvents, controls: window.__judgeControls,
+      targets: window.__ce?.targets.list(), events: window.__judgeEvents, requests: window.__judgeRequests, controls: window.__judgeControls,
       specs: window.__ce?.hud.specs && [...window.__ce.hud.specs.values()].map((m) => ({
         specId: m.spec.specId, targetId: m.targetId, armed: m.armed,
         controls: m.spec.controls.map((c) => ({ id: c.id, action: c.binding?.action, armed: c.armed })),

@@ -60,6 +60,17 @@ describe('generated controls resource lifetime', () => {
     expect(materialDispose).toHaveBeenCalledOnce();
   });
 
+  it('does not globally arm a control marked unverified by its spec', () => {
+    const { obj, spec } = fixture();
+    spec.controls.find((control) => control.id === 'blue')!.armed = false;
+    obj.applySpec(spec, 'none'); obj.setArmed(false); obj.setArmed(true);
+    const emit = vi.fn(); obj.emitter.on('control', emit);
+    obj.setValue('blue', 100, { phase: 'move' });
+    expect(obj.getValue('blue')).toBe(64);
+    expect(emit).not.toHaveBeenCalled();
+    obj.dispose();
+  });
+
   it('keeps a spec without explicit arming inert while allowing device echoes', () => {
     const { obj, spec } = fixture();
     delete spec.state;
