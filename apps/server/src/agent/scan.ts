@@ -61,6 +61,18 @@ function specificity(prompt: string): number {
   return prompt === 'electronic device' || prompt === 'electronics' ? 0 : 1;
 }
 
+/** Screen overlap is meaningful only across nearby captures in the same camera pose. */
+function continuous(previous: ScanFramePayload, current: ScanFramePayload): boolean {
+  const age = current.capturedAt - previous.capturedAt;
+  if (age <= 0 || age > 2_000 || previous.space !== current.space || previous.width !== current.width || previous.height !== current.height) return false;
+  const a = previous.camera?.cameraPose ?? previous.pose;
+  const b = current.camera?.cameraPose ?? current.pose;
+  if (!a || !b) return false;
+  const distance = Math.hypot(a.position.x - b.position.x, a.position.y - b.position.y, a.position.z - b.position.z);
+  const dot = Math.abs(a.orientation.x * b.orientation.x + a.orientation.y * b.orientation.y + a.orientation.z * b.orientation.z + a.orientation.w * b.orientation.w);
+  return distance < 0.25 && dot > Math.cos(15 * Math.PI / 360);
+}
+
 export class ScanService {
   private readonly inFlight = new Map<string, number>();
   private readonly frames = new Map<string, StoredFrame>();
@@ -85,7 +97,7 @@ export class ScanService {
     const f = this.frames.get(frameId);
     const det = f?.detections.find((x) => x.detId === detId);
     if (!f || !det) return undefined;
-    return { frameId, detId, sensorDeviceId: f.deviceId, label: det.label, prompt: det.prompt, score: det.score, box: det.box as [number, number, number, number], polygon: det.polygon, width: f.frame.width, height: f.frame.height, jpeg: f.frame.jpeg, capturedAt: f.frame.capturedAt };
+    return { frameId, detId, trackId: det.trackId, sensorDeviceId: f.deviceId, label: det.label, prompt: det.prompt, score: det.score, box: det.box as [number, number, number, number], polygon: det.polygon, width: f.frame.width, height: f.frame.height, jpeg: f.frame.jpeg, capturedAt: f.frame.capturedAt };
   }
 
   /** The newest frame from a sender (for a select by deviceId without a frame). */
@@ -126,9 +138,20 @@ export class ScanService {
       let result: ScanResultPayload;
       if (frame.purpose === 'pair') {
         result = { frameId: frame.frameId, width: frame.width, height: frame.height, detections: [], modelId: 'none', source: this.d.sam.mode, latencyMs: Date.now() - started, prompts: [] };
+      } else if (frame.fixtureDetections && this.d.sam.mode === 'fixture' && frame.camera?.source === 'synthetic' && (from.canApprove || from.local)) {
+        const detections: ScanDetection[] = frame.fixtureDetections
+          .filter((d) => !FORBIDDEN.test(d.label) && !FORBIDDEN.test(d.prompt) && d.score >= MIN_SCORE)
+          .filter((d) => d.box.every(Number.isFinite) && d.box[0] >= 0 && d.box[1] >= 0 && d.box[2] > 0 && d.box[3] > 0 && d.box[0] + d.box[2] <= frame.width && d.box[1] + d.box[3] <= frame.height)
+          .map(({ detId, label, prompt, score, box, polygon }) => ({ detId, label, prompt, score, box, polygon }));
+        this.track(stored, detections, from.deviceId);
+        this.matchTargets(stored, detections);
+        stored.detections = detections;
+        result = { frameId: frame.frameId, width: frame.width, height: frame.height, detections, modelId: 'fixture-layout', source: 'fixture', latencyMs: 0 };
       } else {
         const runs = await this.d.sam.segmentAll(this.prompts, frame.jpeg, { width: frame.width, height: frame.height, pose: frame.camera?.cameraPose ?? frame.pose, label: 'scan' });
         if (this.d.enabled?.() === false) return undefined;
+        const latest = this.lastBySender.get(from.deviceId);
+        if (latest && latest.frame.capturedAt >= frame.capturedAt) return undefined;
         const detections = this.toDetections(stored, runs.flatMap((r) => r.records.map((rec) => ({ rec, prompt: r.prompt }))));
         this.track(stored, detections, from.deviceId);
         this.matchTargets(stored, detections);
@@ -200,8 +223,11 @@ export class ScanService {
   /** Stable trackIds across consecutive frames from the same sender. */
   private track(s: StoredFrame, detections: ScanDetection[], deviceId: string): void {
     const prev = this.lastBySender.get(deviceId);
+    const used = new Set<string>();
     for (const det of detections) {
-      const match = prev?.detections.find((p) => p.label === det.label && iou(p.box as [number, number, number, number], det.box as [number, number, number, number]) > 0.3);
+      const match = prev && continuous(prev.frame, s.frame)
+        ? prev.detections.find((p) => !used.has(p.detId) && p.label === det.label && iou(p.box as [number, number, number, number], det.box as [number, number, number, number]) > 0.3) : undefined;
+      if (match) used.add(match.detId);
       det.trackId = match?.trackId ?? `t-${deviceId.slice(-4)}-${det.detId}`;
     }
   }
@@ -211,9 +237,12 @@ export class ScanService {
     for (const t of this.d.targets.list()) {
       const td = t.detection;
       if (!td || td.sensorDeviceId !== s.deviceId) continue;
+      const previous = this.frames.get(td.frameId);
+      if (!previous || !continuous(previous.frame, s.frame) || !td.trackId) continue;
       let best: ScanDetection | undefined;
       let bestIou = 0.3;
       for (const det of detections) {
+        if (det.cardId || det.label !== td.label || det.trackId !== td.trackId) continue;
         const o = iou(td.box, det.box as [number, number, number, number]);
         if (o > bestIou) {
           bestIou = o;
@@ -222,7 +251,7 @@ export class ScanService {
       }
       if (!best) continue;
       best.cardId = t.cardId;
-      t.detection = { ...td, frameId: s.frame.frameId, detId: best.detId, box: best.box as [number, number, number, number], polygon: best.polygon, width: s.frame.width, height: s.frame.height, jpeg: s.frame.jpeg, capturedAt: s.frame.capturedAt };
+      t.detection = { ...td, frameId: s.frame.frameId, detId: best.detId, trackId: best.trackId, box: best.box as [number, number, number, number], polygon: best.polygon, width: s.frame.width, height: s.frame.height, jpeg: s.frame.jpeg, capturedAt: s.frame.capturedAt };
     }
   }
 

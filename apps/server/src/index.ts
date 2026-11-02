@@ -47,7 +47,10 @@ lines.push(`  agent     scan prompts: ${agent.scan.prompts.join(' · ')} · prof
 // a Nature Remo on the LAN as IR learner + blaster (REMO_HOST=<ip> or CE_REMO=1); it never sends until REMO_SEND=1
 const remoConfig = resolveRemoConfig(process.env);
 const remo = ctx.bound.http
-  ? await startRemoBridge({ config: remoConfig, serverBase: `http://127.0.0.1:${ctx.bound.http}`, dataDir: config.dataDir, log: ctx.log }).catch((e) => {
+  ? await startRemoBridge({
+      config: remoConfig, serverBase: `http://127.0.0.1:${ctx.bound.http}`, dataDir: config.dataDir, log: ctx.log,
+      register: (name) => ctx.registry.add({ name, kind: 'remo', capabilities: ['ir'], canApprove: false }),
+    }).catch((e) => {
       console.error(`[remo] bridge not started: ${(e as Error).message}`);
       return undefined;
     })

@@ -1,6 +1,6 @@
 /**
- * Drives the iPhone app through the real hub without the agent loop: pairs as a localhost "web" client
- * (auto-approved), then sends the paired iPhone a ui.spec (gen3d + hackset), a run of agent.step lines, and
+ * Drives the iPhone app through the real hub without the agent loop: pairs as a native "web" client
+ * (approved from the companion), then sends the paired iPhone a ui.spec (gen3d + hackset), a run of agent.step lines, and
  * "x."-prefixed twins of the server-only messages (exec.command, arm.request, verify.result, scan.result),
  * which the app accepts in DEBUG builds only. Prints everything the iPhone sends back.
  *
@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
 import { EXAMPLES } from '../../../packages/gen3d/src/index';
-import { makeMessage, parseMessage, type MessageType, type PayloadOf } from '../../../packages/protocol/src/index';
+import { makeMessage, parseMessage, type MessageType, type PairStartResponse, type PairStatusResponse, type PayloadOf } from '../../../packages/protocol/src/index';
 
 const SERVER = process.env.CE_SERVER ?? 'http://localhost:8787';
 const TOKEN_FILE = join(tmpdir(), 'ce-mock-brain-token.json');
@@ -41,8 +41,16 @@ async function credentials(): Promise<{ deviceId: string; deviceToken: string }>
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ name: 'mock-brain', kind: 'web' }),
   });
-  const j = (await r.json()) as { status: string; deviceId?: string; deviceToken?: string };
-  if (j.status !== 'approved' || !j.deviceToken || !j.deviceId) throw new Error(`pairing was not auto-approved (run on the Mac): ${JSON.stringify(j)}`);
+  let j = (await r.json()) as PairStartResponse;
+  if (!r.ok) throw new Error(`pairing failed: HTTP ${r.status}`);
+  if (j.status === 'pending') console.log(`Approve mock-brain in the companion with code ${j.display}.`);
+  while (j.status === 'pending' && Date.now() < j.expiresAt) {
+    await sleep(1000);
+    const status = await fetch(`${SERVER}/api/pair/status?pairingId=${encodeURIComponent(j.pairingId)}&pollSecret=${encodeURIComponent(j.pollSecret)}`);
+    if (!status.ok) throw new Error(`pairing status failed: HTTP ${status.status}`);
+    j = { ...j, ...await status.json() as PairStatusResponse };
+  }
+  if (j.status !== 'approved' || !j.deviceToken || !j.deviceId) throw new Error(`pairing was not approved (${j.status})`);
   writeFileSync(TOKEN_FILE, JSON.stringify({ deviceId: j.deviceId, deviceToken: j.deviceToken }));
   return { deviceId: j.deviceId, deviceToken: j.deviceToken };
 }

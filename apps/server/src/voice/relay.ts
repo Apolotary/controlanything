@@ -4,7 +4,7 @@
  * is routed: panic / undo / scan / a hack by name / an edit of the current spec ("make resonance a big red lever").
  * Typed voice.text from a client takes the same route.
  */
-import type { VoiceAudioPayload, VoiceTextPayload } from '@ce/protocol';
+import { newId, type VoiceAudioPayload, type VoiceTextPayload } from '@ce/protocol';
 import type { Hub } from '../hub';
 import type { Transcriber } from '../muse/transcribe';
 
@@ -71,17 +71,22 @@ interface Utterance {
 
 export class VoiceRelay {
   private readonly utterances = new Map<string, Utterance>();
+  private readonly transcribing = new Set<string>();
+  private readonly completed = new Map<string, { at: number; result: VoiceTextPayload }>();
   private readonly log: (line: string) => void;
 
   constructor(private readonly d: VoiceDeps) {
     this.log = d.log ?? (() => {});
   }
 
-  async onAudio(p: VoiceAudioPayload): Promise<VoiceTextPayload | undefined> {
-    let u = this.utterances.get(p.utteranceId);
+  async onAudio(p: VoiceAudioPayload, sender: string): Promise<VoiceTextPayload | undefined> {
+    const key = this.key(sender, p.utteranceId);
+    const completed = this.completed.get(key);
+    if (completed || this.transcribing.has(key)) return completed?.result;
+    let u = this.utterances.get(key);
     if (!u) {
       u = { chunks: new Map(), sampleRate: p.sampleRate, bytes: 0, cardId: p.cardId, specId: p.specId, startedAt: Date.now() };
-      this.utterances.set(p.utteranceId, u);
+      this.utterances.set(key, u);
       if (this.utterances.size > 8) this.utterances.delete(this.utterances.keys().next().value!);
     }
     const bytes = Buffer.from(p.pcm16, 'base64');
@@ -90,32 +95,48 @@ export class VoiceRelay {
       u.bytes += bytes.length;
     }
     if (!p.final) return undefined;
-    this.utterances.delete(p.utteranceId);
+    this.utterances.delete(key);
+    this.transcribing.add(key);
     const ordered = [...u.chunks.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c);
     const pcm = Buffer.concat(ordered);
     const started = Date.now();
     try {
       const r = await this.d.transcriber.transcribe(wavFromPcm16(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength), u.sampleRate));
       const out: VoiceTextPayload = { utteranceId: p.utteranceId, text: r.text, final: true, source: r.source, modelId: r.model, latencyMs: Date.now() - started, cardId: u.cardId, specId: u.specId };
-      return this.route(out);
+      return this.route(out, key);
     } catch (e) {
+      const completed = this.completed.get(key);
+      if (completed) return completed.result;
       const out: VoiceTextPayload = { utteranceId: p.utteranceId, text: '', final: true, intent: 'none', latencyMs: Date.now() - started };
       this.log(`[voice] transcription failed: ${(e as Error).message}`);
       this.d.hub.broadcast('voice.text', out);
       return out;
+    } finally {
+      this.transcribing.delete(key);
     }
   }
 
   /** A typed command (or the transcript): decide what it means and do it. */
-  async onText(p: VoiceTextPayload): Promise<VoiceTextPayload> {
+  async onText(p: VoiceTextPayload, sender: string): Promise<VoiceTextPayload> {
     if (!p.final) {
       this.d.hub.broadcast('voice.text', p);
       return p;
     }
-    return this.route({ ...p });
+    return this.route({ ...p }, this.key(sender, p.utteranceId));
   }
 
-  private async route(out: VoiceTextPayload): Promise<VoiceTextPayload> {
+  private key(sender: string, utteranceId?: string): string {
+    const now = Date.now();
+    for (const [key, value] of this.completed) if (now - value.at > 10 * 60_000) this.completed.delete(key);
+    return JSON.stringify([sender, utteranceId ?? newId('voice-')]);
+  }
+
+  private async route(out: VoiceTextPayload, key: string): Promise<VoiceTextPayload> {
+    const previous = this.completed.get(key);
+    if (previous) return previous.result;
+    // Claim before any action: HTTP fallback and socket transcription race on this key.
+    this.completed.set(key, { at: Date.now(), result: out });
+    if (this.completed.size > 1024) this.completed.delete(this.completed.keys().next().value!);
     const text = out.text.trim();
     let intent: Intent = text ? classify(text) : 'none';
     const a = this.d.actions;

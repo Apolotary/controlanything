@@ -49,11 +49,11 @@ function setup(options: { dataDir?: string; devices?: DeviceInfo[] } = {}) {
     ctx.hub.close();
   };
   cleanups.push(close);
-  const emit = <T extends MessageType>(type: T, payload: PayloadOf<T>) => {
+  const emit = <T extends MessageType>(type: T, payload: PayloadOf<T>, canApprove = true, local = false) => {
     const event: HubMessageEvent = {
       message: makeMessage(type, payload, { from: owner.deviceId, to: 'server' }),
-      device: { ...owner, canApprove: true, kind: 'quest', capabilities: ['camera'], tokenHash: 'test-token', pairedAt: 1 },
-      connection: { local: false } as HubMessageEvent['connection'],
+      device: { ...owner, canApprove, kind: 'quest', capabilities: ['camera'], tokenHash: 'test-token', pairedAt: 1 },
+      connection: { local } as HubMessageEvent['connection'],
     };
     for (const [listener] of messages.mock.calls) listener(event);
   };
@@ -85,6 +85,45 @@ afterEach(async () => {
 });
 
 describe('annotation and control mode boundary', () => {
+  it('refuses peripheral selection, retry and setup while accepting an owner page', () => {
+    const s = setup({ devices: [remo] });
+    const target = s.addKnown();
+    s.emit('mode.set', { mode: 'control' }, false);
+    expect(s.agent.mode()).toBe('annotate');
+    s.emit('target.select', { deviceId: 'remo' }, false);
+    expect(s.agent.tagsState().tags).toHaveLength(1);
+    s.agent.setMode('control');
+    s.emit('control.setup', { cardId: target.cardId }, false);
+    s.emit('target.retry', { cardId: target.cardId }, false);
+    expect(tryLink).not.toHaveBeenCalled();
+    expect(target.abort).toBeUndefined();
+    s.emit('control.setup', { cardId: target.cardId }, false, true);
+    expect(tryLink).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['socket', 'voice', 'direct'] as const)('shares complete Stop cancellation through %s', async (entry) => {
+    const s = setup({ devices: [remo] });
+    const target = s.addKnown();
+    s.agent.setMode('control');
+    s.agent.setup(target.cardId, owner);
+    const abort = target.abort!;
+    const cancelCombo = vi.spyOn(s.agent.combos, 'cancel');
+    const stopDaemons = vi.spyOn(s.agent.daemons, 'stopAll');
+    const consent = s.agent.arm.ask(target, { title: 'Arm?', summary: 'Confirm', actions: [] });
+    const armId = s.of('arm.request').at(-1)!.armId;
+    if (entry === 'socket') s.emit('panic', { reason: 'stop' });
+    else if (entry === 'voice') s.emit('voice.text', { utteranceId: 'stop', text: 'stop everything', final: true });
+    else s.agent.panic('stop');
+    await consent;
+    s.emit('arm.confirm', { armId, approve: true });
+    expect(abort.signal.aborted).toBe(true);
+    expect(s.agent.arm.pendingIds()).toEqual([]);
+    expect(target.armed).toBe(false);
+    expect(cancelCombo).toHaveBeenCalled();
+    expect(stopDaemons).toHaveBeenCalled();
+    expect(s.of('panic')).toHaveLength(1);
+  });
+
   it('defaults each space to annotation and sends the current mode and full tags on connection', () => {
     const s = setup();
     const another = setup();

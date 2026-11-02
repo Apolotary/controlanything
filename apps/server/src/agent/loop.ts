@@ -46,6 +46,7 @@ export interface LoopDeps {
   /** the "say" oracle: Muse Voice Transcribe hears a spoken line back */
   heard?: VerifyDeps['heard'];
   readVolume?: VerifyDeps['readVolume'];
+  restoreVolume?: VerifyDeps['restoreVolume'];
   log?: (line: string) => void;
   /** how long LINK waits for a companion to appear */
   companionWaitMs?: number;
@@ -248,7 +249,7 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       const mic = pickSensor(d.roster, 'mic', { preferDeviceId: executor.deviceId });
       const vstep = d.steps.begin('verify', `verifying on the real ${card.name}`, { ...base, kind: 'proof', ...stateGuidance(t, 'verifying') });
       const summary = await flow.wait(verifyDriver(
-        { dispatcher: d.dispatcher, sam: d.sam, heard: d.heard ? (...args) => flow.retry(() => d.heard!(...args), retryNotice) : undefined, readVolume: d.readVolume, silentSpeech: d.silentSpeech, log, settleMs: (tt, a) => d.settleMs?.(tt, a.encode.kind === 'ir' ? 'ir' : driver.transport) ?? (driver.transport === 'ir' ? 2000 : 350) },
+        { dispatcher: d.dispatcher, sam: d.sam, heard: d.heard ? (...args) => flow.retry(() => d.heard!(...args), retryNotice) : undefined, readVolume: d.readVolume, restoreVolume: d.restoreVolume, silentSpeech: d.silentSpeech, log, settleMs: (tt, a) => d.settleMs?.(tt, a.encode.kind === 'ir' ? 'ir' : driver.transport) ?? (driver.transport === 'ir' ? 2000 : 350) },
         t,
         driver,
         {

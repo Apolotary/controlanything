@@ -132,6 +132,7 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
         if (e.number === undefined) err('missing_program', `${path}.encode.number`, 'pc needs a program number');
       }
     } else if (e.kind === 'ir') {
+      if (a.expect?.sense !== 'camera') err('physical_oracle_required', `${path}.expect.sense`, 'IR actions require camera evidence of the device response');
       let filled: IrOp;
       try {
         filled = fillRaw(resolveIrRef(e, ctx));

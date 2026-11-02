@@ -70,6 +70,7 @@ export interface Agent {
   addTag(p: TagAddPayload, from: { deviceId: string; name?: string }): Target | undefined;
   removeTag(cardId: string): boolean;
   setup(cardId: string, from: { deviceId: string; name?: string }): Target | undefined;
+  panic(reason?: string, cardId?: string): { disarmed: string[]; sent: number };
   close(): void;
 }
 
@@ -127,6 +128,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const canControl = (t: Target) => mode === 'control' && tags.has(t.cardId) && evaluateConnection(t, roster).connection === 'ready';
   const dispatcher = new Dispatcher({ hub, macLocal, log, canExec: (request) => {
     const t = request.cardId ? targets.get(request.cardId) : undefined;
+    if (request.op.kind === 'midi' && request.op.msg === 'panic') return t?.driver?.executor.deviceId === request.executorDeviceId;
     if (!t || mode !== 'control' || !connected(t) || !t.driver) return false;
     if (t.driver.executor.deviceId !== request.executorDeviceId || (request.port && t.driver.executor.port !== request.port)) return false;
     if (request.driverId && request.driverId !== t.driver.driverId) return false;
@@ -186,7 +188,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const control = new ControlRouter({ targets, dispatcher, specs, steps, hub, log, onRoomHack, canControl });
   const daemons = new DaemonRunner({ hub, steps, log, drive: control });
   const roster0: Roster = { devices: () => hub.devices(), macLocal: macLocal.available, unhealthy: (id) => dispatcher.unhealthy(id) };
-  const combos = new ComboRunner({ hub, targets, steps, dispatcher, sam, roster: roster0, arm, daemons, heard, readVolume: () => macLocal.currentVolume(), silentSpeech, log });
+  const combos = new ComboRunner({ hub, targets, steps, dispatcher, sam, roster: roster0, arm, daemons, heard, readVolume: () => macLocal.currentVolume(), silentSpeech, log, canControl });
   const publishRoom = (): UiSpecPayload | undefined => {
     if (mode !== 'control') return undefined;
     const built = buildRoomSpec(targets.list(), (id) => specs.get(id), roomRev + 1);
@@ -213,8 +215,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     log,
     actions: {
       panic: (reason) => {
-        daemons.stopAll(reason);
-        control.panic(reason);
+        panic(reason);
       },
       undo: (cardId) => {
         // the newest thing that happened: a room combo or a device hack
@@ -260,7 +261,12 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     },
   });
 
-  const loopDeps = { hub, targets, steps, dispatcher, roster, sam, spark: muse, wonder, web, profiles, forge, arm, heard, readVolume: () => macLocal.currentVolume(), silentSpeech, log, companionWaitMs: opts.companionWaitMs, phaseTimeoutMs: opts.phaseTimeoutMs, settleMs: opts.settleMs, learnIr: opts.learnIr };
+  const restoreVolume = async (value: number, signal: AbortSignal) => {
+    signal.throwIfAborted();
+    const result = await macLocal.exec({ kind: 'local', op: 'volume', arg: value });
+    if (!result.ok) throw new Error(result.detail ?? 'volume restoration failed');
+  };
+  const loopDeps = { hub, targets, steps, dispatcher, roster, sam, spark: muse, wonder, web, profiles, forge, arm, heard, readVolume: () => macLocal.currentVolume(), restoreVolume, silentSpeech, log, companionWaitMs: opts.companionWaitMs, phaseTimeoutMs: opts.phaseTimeoutMs, settleMs: opts.settleMs, learnIr: opts.learnIr };
 
   const tagsState = (): TagsStatePayload => ({ tags: tags.list().map((tag) => tagSnapshot(tag, targets.get(tag.cardId)!, roster)) });
   const publishTags = () => hub.broadcast('tags.state', tagsState());
@@ -270,6 +276,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     publishTags();
   });
   const stop = (t: Target, reason = 'cancelled') => {
+    combos.cancel(t.cardId);
     setups.delete(t.cardId);
     t.abort?.abort(new Error(reason));
     arm.cancel(t, reason);
@@ -277,10 +284,19 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     steps.failRun(t.runId, CANCELLED_GUIDANCE);
     targets.setState(t, 'failed', reason, CANCELLED_GUIDANCE);
   };
+  const panic = (reason = 'panic', cardId?: string) => {
+    combos.cancel(cardId);
+    daemons.stopAll(reason);
+    for (const t of targets.list()) if ((!cardId || t.cardId === cardId) && (t.abort || t.armId)) stop(t, reason);
+    const result = control.panic(reason, cardId);
+    hub.broadcast('panic', { reason, ...(cardId ? { cardId } : {}) });
+    return result;
+  };
   const setMode = (next: Mode) => {
     if (mode === next) return;
     mode = next;
     if (mode === 'annotate') {
+      combos.cancel();
       daemons.stopAll('annotation mode');
       for (const t of targets.list()) {
         if ((setups.has(t.cardId) && !t.armed) || t.armId) stop(t, 'annotation mode');
@@ -465,6 +481,10 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (EXPERIMENTAL_TYPE.test(e.message.type)) return;
     const m = e.message as AgentMessage;
     const from = { deviceId: e.device.deviceId, name: e.device.name, canApprove: e.device.canApprove, local: e.connection.local };
+    if (['mode.set', 'tag.add', 'tag.remove', 'control.setup', 'target.select', 'target.retry'].includes(m.type) && !from.canApprove && !from.local) {
+      hub.sendToDevice(from.deviceId, 'log', { level: 'error', code: 'forbidden', message: 'Only an owner may tag or set up devices.' });
+      return;
+    }
     switch (m.type) {
       case 'mode.set':
         setMode(m.payload.mode);
@@ -508,18 +528,16 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         return;
       }
       case 'panic':
-        for (const t of targets.list()) if ((!m.payload.cardId || t.cardId === m.payload.cardId) && (t.abort || t.armId)) stop(t, 'stopped');
-        daemons.stopAll(m.payload.reason ?? 'panic');
-        control.panic(m.payload.reason ?? `panic from ${from.name}`, m.payload.cardId);
+        panic(m.payload.reason ?? `panic from ${from.name}`, m.payload.cardId);
         return;
       case 'device.signal':
         daemons.onSignal(m.payload, from.deviceId);
         return;
       case 'voice.audio':
-        void voice.onAudio(m.payload);
+        void voice.onAudio(m.payload, from.deviceId);
         return;
       case 'voice.text':
-        void voice.onText(m.payload);
+        void voice.onText(m.payload, from.deviceId);
         return;
       case 'gen3d.generate': {
         const t = targets.get(m.payload.cardId);
@@ -568,11 +586,13 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     addTag,
     removeTag,
     setup,
+    panic,
     close: () => {
       unsubscribe();
       unsubscribePresence();
       unsubscribeTags();
       unsubscribeForge();
+      combos.cancel();
       daemons.close();
       for (const t of targets.list()) t.abort?.abort();
       control.close();

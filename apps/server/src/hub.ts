@@ -32,6 +32,7 @@ import {
 import { type RawData, WebSocket, WebSocketServer } from 'ws';
 import { type Approver, PairingError, type PairingManager } from './pairing/manager';
 import type { DeviceRecord, DeviceRegistry } from './pairing/registry';
+import { allowedSocketOrigin, sameHostOrigin } from './origin';
 
 export const WS_PATH = '/ws';
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
@@ -50,6 +51,8 @@ export interface Connection {
   deviceId?: string;
   role?: Role;
   ports?: Port[];
+  capabilities?: DeviceInfo['capabilities'];
+  executor?: boolean;
   app?: string;
   /** pairing requests started or watched on this socket */
   watching: Set<string>;
@@ -104,6 +107,10 @@ export class Hub {
         socket.destroy();
         return;
       }
+      if (!allowedSocketOrigin(req.headers)) {
+        socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+        return;
+      }
       this.wss.handleUpgrade(req, socket, head, (ws) => this.onConnection(ws, req));
     });
   }
@@ -150,13 +157,14 @@ export class Hub {
     const conns = this.authed();
     return this.o.registry.list().map((d) => {
       const mine = conns.filter((c) => c.deviceId === d.deviceId);
-      const latest = mine.at(-1);
+      const latest = mine.findLast((c) => c.executor === true)
+        ?? mine.findLast((c) => c.executor !== false);
       const info: DeviceInfo = {
         deviceId: d.deviceId,
         name: d.name,
         kind: d.kind,
         role: latest?.role ?? DEFAULT_ROLE[d.kind],
-        capabilities: d.capabilities,
+        capabilities: latest?.capabilities ?? (mine.length ? [] : d.capabilities),
         canApprove: d.canApprove,
         online: mine.length > 0,
         connections: mine.length,
@@ -198,7 +206,7 @@ export class Hub {
       clientId: newId('c'),
       ws,
       address,
-      local: this.o.isLocal(address),
+      local: this.o.isLocal(address) && sameHostOrigin(req.headers),
       alive: true,
       watching: new Set(),
       connectedAt: Date.now(),
@@ -304,7 +312,9 @@ export class Hub {
     c.role = p.role ?? DEFAULT_ROLE[device.kind];
     if (p.ports) c.ports = p.ports;
     if (p.app) c.app = p.app;
-    if (p.capabilities) this.o.registry.update(device.deviceId, { capabilities: p.capabilities });
+    if (p.executor !== undefined) c.executor = p.executor;
+    c.capabilities = p.capabilities ?? c.capabilities ?? device.capabilities;
+    if (p.capabilities && c.executor !== false) this.o.registry.update(device.deviceId, { capabilities: p.capabilities });
     this.o.registry.touch(device.deviceId);
     if (first) {
       this.send(c, 'welcome', {

@@ -15,6 +15,7 @@ import { type Gen3dSpec, GEN3D_SPEC_VERSION } from '@ce/gen3d';
 import type { Daemon, Driver, DriverAction, Evidence, Hack, HackSet, UiSpecPayload } from '@ce/protocol';
 import { resolveOp } from '../devices/encode';
 import type { Hub } from '../hub';
+import { cancellableDelay, forwardCancellation, throwIfCancelled } from '../muse/cancellation';
 import type { Sam } from '../scan/sam';
 import type { ArmService } from './arm';
 import type { DaemonRunner } from './daemons';
@@ -195,6 +196,7 @@ export interface ComboDeps {
   /** CE_MAC_SILENT: a recorded clip stands in for the Mac's voice */
   silentSpeech?: VerifyDeps['silentSpeech'];
   log?: (line: string) => void;
+  canControl?: (target: Target) => boolean;
 }
 
 interface ComboStep {
@@ -219,6 +221,7 @@ export interface ComboRun {
 export class ComboRunner {
   lastRun?: ComboRun;
   private busy = false;
+  private active?: { abort: AbortController; cardIds: Set<string> };
 
   constructor(private readonly d: ComboDeps) {}
 
@@ -226,12 +229,18 @@ export class ComboRunner {
   async run(hack: Hack, spec: UiSpecPayload, opts: { signal?: AbortSignal; confirm?: boolean } = {}): Promise<ComboRun> {
     if (this.busy) throw new Error('a room hack is already running');
     this.busy = true;
+    const abort = new AbortController();
+    const detach = forwardCancellation(opts.signal, abort);
+    const signal = abort.signal;
+    this.active = { abort, cardIds: new Set([ROOM_CARD_ID, ...hack.commands.flatMap((c) => c.cardId ? [c.cardId] : [])]) };
     const room = this.roomTarget(spec.specId);
     const run: ComboRun = { hackId: hack.id, startedAt: Date.now(), steps: [], evidence: [], confirmed: false };
     try {
+      throwIfCancelled(signal);
       const names = hack.commands.map((c) => this.d.targets.get(c.cardId ?? '')?.card?.name ?? c.cardId ?? '?');
       if (opts.confirm !== false) {
-        const r = await this.d.arm.ask(room, { title: `Run ${hack.name}?`, summary: `${hack.blurb ?? hack.name}: ${names.join(', ')}`, actions: hack.commands.map((c) => ({ actionId: `${c.cardId}.${c.action}`, label: `${this.d.targets.get(c.cardId ?? '')?.card?.name ?? c.cardId}: ${c.action}`.slice(0, 40), verified: (this.d.targets.get(c.cardId ?? '')?.verification[c.action] ?? 'untested') as 'pass' | 'fail' | 'untested' | 'pending' })), irreversible: hack.commands.some((c) => c.action === 'print') });
+        const r = await this.d.arm.ask(room, { title: `Run ${hack.name}?`, summary: `${hack.blurb ?? hack.name}: ${names.join(', ')}`, actions: hack.commands.map((c) => ({ actionId: `${c.cardId}.${c.action}`, label: `${this.d.targets.get(c.cardId ?? '')?.card?.name ?? c.cardId}: ${c.action}`.slice(0, 40), verified: (this.d.targets.get(c.cardId ?? '')?.verification[c.action] ?? 'untested') as 'pass' | 'fail' | 'untested' | 'pending' })), irreversible: hack.commands.some((c) => c.action === 'print') }, signal);
+        throwIfCancelled(signal);
         if (!r.armed) {
           this.d.steps.note('control', `${hack.name} not run: ${r.reason ?? 'declined'}`, { cardId: ROOM_CARD_ID, kind: 'proof', status: 'fail' });
           this.lastRun = run;
@@ -244,6 +253,7 @@ export class ComboRunner {
       const mic = pickSensor(this.d.roster, 'mic');
       const vdeps: VerifyDeps = { dispatcher: this.d.dispatcher, sam: this.d.sam, heard: this.d.heard, silentSpeech: this.d.silentSpeech, log: this.d.log, settleMs: (_t, a) => (a.encode.kind === 'ir' ? 1800 : 350) }; // the lamp's fade is 1.2 s: let it finish before the 'after' frame
       for (const cmd of hack.commands) {
+        throwIfCancelled(signal);
         const t = cmd.cardId ? this.d.targets.get(cmd.cardId) : undefined;
         const name = t?.card?.name ?? cmd.cardId ?? '?';
         const a = t?.driver?.actions.find((x) => x.actionId === cmd.action);
@@ -260,7 +270,11 @@ export class ComboRunner {
           this.d.steps.note('control', `${hack.name}: ${name} is offline, skipped`, { cardId: ROOM_CARD_ID, kind: 'proof', status: 'fail', evidence: `${t.driver.executor.deviceId} offline` });
           continue;
         }
-        if (cmd.delayMs) await new Promise((r) => setTimeout(r, cmd.delayMs));
+        if (cmd.delayMs) await cancellableDelay(cmd.delayMs, signal);
+        if (!t.armed || t.verification[a.actionId] !== 'pass' || this.d.canControl?.(t) === false) {
+          step.skipped = 'control is not authorized for this device';
+          continue;
+        }
         // remember how to come back
         if (a.encode.kind === 'local' && a.encode.op === 'volume') {
           const prev = (await this.d.readVolume?.()) ?? t.paramValues[a.actionId];
@@ -269,14 +283,18 @@ export class ComboRunner {
         } else if (a.encode.kind === 'local' && a.encode.op === 'print') step.undo = 'none';
         else if (a.inverseActionId) step.undo = { actionId: a.inverseActionId };
         else step.undo = 'none';
+        throwIfCancelled(signal);
+        if (!t.armed || this.d.canControl?.(t) === false) continue;
         try {
-          const { evidence } = await verifyOnce(vdeps, t, t.driver, a, 1, { cameraDeviceId: camera?.deviceId, micDeviceId: mic?.deviceId, signal: opts.signal, confirmations: 1, value: cmd.value }, t.detection?.polygon);
+          const { evidence } = await verifyOnce(vdeps, t, t.driver, a, 1, { cameraDeviceId: camera?.deviceId, micDeviceId: mic?.deviceId, signal, confirmations: 1, value: cmd.value, retainVolume: true }, t.detection?.polygon);
+          throwIfCancelled(signal);
           run.evidence.push(evidence);
           this.d.hub.broadcast('verify.result', evidence);
-          step.ok = evidence.pass || evidence.observed.sense === 'ack';
+          step.ok = evidence.pass;
           this.d.steps.note('control', `${hack.name}: ${name} ${a.label} · ${evidence.note ?? ''}`, { cardId: ROOM_CARD_ID, kind: 'proof', status: step.ok ? 'ok' : 'fail', evidence: evidence.pass ? 'seen ✓' : 'sent, not seen ✗' });
           if (a.encode.kind === 'local' && a.encode.op === 'volume' && cmd.value !== undefined) t.paramValues[a.actionId] = cmd.value;
         } catch (e) {
+          throwIfCancelled(signal);
           step.skipped = (e as Error).message.slice(0, 120);
           this.d.steps.note('control', `${hack.name}: ${name} failed: ${step.skipped}`, { cardId: ROOM_CARD_ID, kind: 'proof', status: 'fail' });
         }
@@ -287,43 +305,63 @@ export class ComboRunner {
       this.lastRun = run;
       return run;
     } finally {
+      detach();
+      this.active = undefined;
       this.busy = false;
     }
   }
 
   /** UNDO the last combo: restore what can be restored, name what cannot. */
   async undo(): Promise<{ restored: string[]; cannot: string[] }> {
+    if (this.busy) throw new Error('a room hack is already running');
     const run = this.lastRun;
     const restored: string[] = [];
     const cannot: string[] = [];
     if (!run) return { restored, cannot };
-    for (const step of [...run.steps].reverse()) {
-      if (!step.ok || step.undone) continue;
-      const t = this.d.targets.get(step.cardId);
-      const said = t?.driver?.actions.find((x) => x.actionId === step.actionId)?.encode;
-      if (said?.kind === 'local' && said.op === 'say') continue; // words are not undone, and nothing is left to restore
-      if (!step.undo || step.undo === 'none' || !t?.driver) {
-        cannot.push(step.actionId === 'print' ? 'paper' : `${step.name}: ${step.actionId}`);
-        continue;
+    this.busy = true;
+    const abort = new AbortController();
+    this.active = { abort, cardIds: new Set([ROOM_CARD_ID, ...run.steps.map((step) => step.cardId)]) };
+    try {
+      for (const step of [...run.steps].reverse()) {
+        throwIfCancelled(abort.signal);
+        if (!step.ok || step.undone) continue;
+        const t = this.d.targets.get(step.cardId);
+        const said = t?.driver?.actions.find((x) => x.actionId === step.actionId)?.encode;
+        if (said?.kind === 'local' && said.op === 'say') continue; // words are not undone, and nothing is left to restore
+        if (!step.undo || step.undo === 'none' || !t?.driver) {
+          cannot.push(step.actionId === 'print' ? 'paper' : `${step.name}: ${step.actionId}`);
+          continue;
+        }
+        const a = t.driver.actions.find((x) => x.actionId === (step.undo as { actionId: string }).actionId);
+        if (!a || a.encode.kind === 'step' || !t.armed || t.verification[a.actionId] !== 'pass' || this.d.canControl?.(t) === false) {
+          cannot.push(`${step.name}: ${step.actionId}`);
+          continue;
+        }
+        try {
+          const op = resolveOp(a, step.undo.value);
+          await this.d.dispatcher.exec(t.driver.executor.deviceId, op, { port: t.driver.executor.port, cardId: t.cardId, driverId: t.driver.driverId, actionId: a.actionId, lightCap: t.driver.transport === 'ir', waitForSlot: true, timeoutMs: 4000, signal: abort.signal });
+          throwIfCancelled(abort.signal);
+          if (step.undo.value !== undefined) t.paramValues[a.actionId] = step.undo.value;
+          step.undone = true;
+          restored.push(step.undo.value !== undefined ? `${step.name} ${a.label.toLowerCase()} ${step.undo.value}` : `${step.name} ${a.label.toLowerCase()}`);
+        } catch (e) {
+          throwIfCancelled(abort.signal);
+          cannot.push(`${step.name}: ${(e as Error).message.slice(0, 60)}`);
+        }
       }
-      const a = t.driver.actions.find((x) => x.actionId === (step.undo as { actionId: string }).actionId);
-      if (!a || a.encode.kind === 'step') {
-        cannot.push(`${step.name}: ${step.actionId}`);
-        continue;
-      }
-      try {
-        const op = resolveOp(a, step.undo.value);
-        await this.d.dispatcher.exec(t.driver.executor.deviceId, op, { port: t.driver.executor.port, cardId: t.cardId, driverId: t.driver.driverId, actionId: a.actionId, lightCap: t.driver.transport === 'ir', waitForSlot: true, timeoutMs: 4000 });
-        if (step.undo.value !== undefined) t.paramValues[a.actionId] = step.undo.value;
-        step.undone = true;
-        restored.push(step.undo.value !== undefined ? `${step.name} ${a.label.toLowerCase()} ${step.undo.value}` : `${step.name} ${a.label.toLowerCase()}`);
-      } catch (e) {
-        cannot.push(`${step.name}: ${(e as Error).message.slice(0, 60)}`);
-      }
+      const summary = `undone · ${restored.join(' · ') || 'nothing restored'}${cannot.length ? ` · ${cannot.length} of ${run.steps.filter((s) => s.ok).length} cannot be undone: ${cannot.join(', ')}` : ''}`;
+      this.d.steps.note('control', summary.slice(0, 200), { cardId: ROOM_CARD_ID, kind: 'proof', evidence: `${restored.length} restored`, status: restored.length ? 'ok' : 'fail' });
+      return { restored, cannot };
+    } finally {
+      this.active = undefined;
+      this.busy = false;
     }
-    const summary = `undone · ${restored.join(' · ') || 'nothing restored'}${cannot.length ? ` · ${cannot.length} of ${run.steps.filter((s) => s.ok).length} cannot be undone: ${cannot.join(', ')}` : ''}`;
-    this.d.steps.note('control', summary.slice(0, 200), { cardId: ROOM_CARD_ID, kind: 'proof', evidence: `${restored.length} restored`, status: restored.length ? 'ok' : 'fail' });
-    return { restored, cannot };
+  }
+
+  /** Stop confirmations, spacing waits and dispatches owned by a running combo or undo. */
+  cancel(cardId?: string): void {
+    if (!cardId || this.active?.cardIds.has(cardId)) this.active?.abort.abort();
+    if (!cardId || cardId === ROOM_CARD_ID || this.lastRun?.steps.some((step) => step.cardId === cardId)) this.lastRun = undefined;
   }
 
   roomTarget(specId: string): Target {

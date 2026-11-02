@@ -34,6 +34,7 @@ import { MAX_AUDIO_BYTES, requestCancellation, RequestCancelledError, Transcribe
 import { type Approver, PairingError } from './pairing/manager';
 import type { DeviceRecord } from './pairing/registry';
 import { saveTake, TAKES_DIR, takeExists, takeName } from './takes';
+import { sameHostOrigin } from './origin';
 
 function bearer(req: Request): string | undefined {
   const m = /^Bearer\s+(\S+)\s*$/i.exec(req.get('authorization') ?? '');
@@ -103,7 +104,7 @@ export function createApp(ctx: ServerContext): express.Express {
       return;
     }
     const c = caller(req);
-    res.status(201).json(ctx.pairing.start(body.data, { origin: c.address, autoApprove: c.local }));
+    res.status(201).json(ctx.pairing.start(body.data, { origin: c.address, autoApprove: c.local && sameHostOrigin(req.headers) }));
   });
 
   api.get('/pair/status', (req, res) => {

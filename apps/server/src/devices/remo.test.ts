@@ -8,7 +8,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { IrOp, PayloadOf } from '@ce/protocol';
+import { makeMessage, type AnyMessage, type ExecCommandPayload, type IrOp, type PayloadOf, type SenseRequestPayload } from '@ce/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getAgent } from '../agent';
 import { Dispatcher } from '../agent/dispatch';
@@ -17,6 +17,7 @@ import { createApp } from '../app';
 import type { ServerConfig } from '../config';
 import { createContext, type RunningServers, startServers } from '../context';
 import { resolveMuseConfig } from '../muse';
+import { DeviceRegistry } from '../pairing/registry';
 import { analyseCapture, encodeFrame } from './ir';
 import { buildMdnsQuery, cleanFrame, frameToCapture, opToFrame, parseMdnsResponse, parseRemoFrame, RemoBridge, RemoClient, type RemoFrame, remoFromRecords, resolveRemoConfig, sameFrame, startRemoBridge } from './remo';
 
@@ -26,6 +27,7 @@ const OFF_BYTES = [0x2c, 0x52, 0x09, 0x2f, 0x26];
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const c of cleanups.splice(0).reverse()) await c();
+  vi.useRealTimers();
 });
 
 // --- a fake Nature Remo ---------------------------------------------------------------------------
@@ -111,10 +113,44 @@ async function startServer() {
     await servers.close();
     rmSync(tmp, { recursive: true, force: true });
   });
-  return { ctx, agent, dispatcher, tmp, base: `http://127.0.0.1:${ctx.bound.http}` };
+  const register = (name: string) => ctx.registry.add({ name, kind: 'remo', capabilities: ['ir'], canApprove: false });
+  return { ctx, agent, dispatcher, register, tmp, base: `http://127.0.0.1:${ctx.bound.http}` };
 }
 
 const OFF_OP: IrOp = { kind: 'ir', protocol: 'AEHA', bytes: OFF_BYTES, ref: 'lib:panasonic/ch1/off' };
+
+describe('Remo Stop', () => {
+  it.each(['panic', 'disconnect'])('cancels delayed sends and learning polls on %s', async (stop) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const remo = new RemoClient('http://unused.invalid');
+    const post = vi.spyOn(remo, 'postMessage').mockResolvedValue(undefined);
+    const get = vi.spyOn(remo, 'getMessages').mockResolvedValue(undefined);
+    const bridge = new RemoBridge({ serverBase: 'http://unused.invalid', remo, allowSend: true, minSendGapMs: 1000, pollMs: 100 });
+    Object.assign(bridge, { stopped: false, lastSendAt: Date.now() });
+    const internal = bridge as unknown as {
+      onExec(payload: ExecCommandPayload): Promise<void>;
+      onSense(payload: SenseRequestPayload): Promise<void>;
+      onMessage(message: AnyMessage): void;
+    };
+    const sending = internal.onExec({ execId: 'ir', executorDeviceId: 'remo', op: OFF_OP });
+    const learning = internal.onSense({ senseId: 'learn', sensorDeviceId: 'remo', kind: 'ir-capture', durationMs: 1000 });
+    await Promise.resolve();
+    const signal = get.mock.calls[0][0]!;
+    if (stop === 'panic') internal.onMessage(makeMessage('panic', {}));
+    else bridge.stop();
+    expect(signal.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(1500);
+    await Promise.all([sending, learning]);
+    expect(post).not.toHaveBeenCalled();
+    expect(get).toHaveBeenCalledOnce();
+    if (stop === 'panic') {
+      await internal.onExec({ execId: 'new-ir', executorDeviceId: 'remo', op: OFF_OP });
+      expect(post).toHaveBeenCalledOnce();
+      expect(post.mock.calls[0][1]?.aborted).toBe(false);
+    }
+  });
+});
 
 describe('Remo frames', () => {
   it('reads the local API body, cleans receiver noise and keeps what the learn step needs', () => {
@@ -168,6 +204,24 @@ function record(name: Buffer, type: number, rdata: Buffer): Buffer {
 }
 
 describe('Remo discovery', () => {
+  it('registers a configured bridge without HTTP pairing and persists a nonapprover identity', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'ce-remo-register-'));
+    cleanups.push(() => rmSync(tmp, { recursive: true, force: true }));
+    const registry = new DeviceRegistry();
+    const register = vi.fn((name: string) => registry.add({ name, kind: 'remo', capabilities: ['ir'], canApprove: false }));
+    const fetchImpl = vi.fn();
+    const tokenFile = join(tmp, 'token.json');
+    const options = { serverBase: 'http://127.0.0.1:1', remo: new RemoClient('http://127.0.0.1:2'), tokenFile, register, fetchImpl };
+    const bridge = new RemoBridge(options);
+    await (bridge as unknown as { pair(): Promise<void> }).pair();
+    const stored = JSON.parse(readFileSync(tokenFile, 'utf8'));
+    expect(registry.authenticate(stored.deviceToken)).toMatchObject({ deviceId: bridge.deviceId, kind: 'remo', capabilities: ['ir'], canApprove: false });
+    const again = new RemoBridge(options);
+    await (again as unknown as { pair(): Promise<void> }).pair();
+    expect(again.deviceId).toBe(bridge.deviceId);
+    expect(register).toHaveBeenCalledOnce();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
   it('asks for _remo._tcp with a unicast reply and reads PTR, SRV and A records with name compression', () => {
     const q = buildMdnsQuery();
     expect(q.readUInt16BE(4)).toBe(1);
@@ -212,10 +266,10 @@ describe('Remo discovery', () => {
 // --- the whole path through the hub ---------------------------------------------------------------
 
 describe('Remo bridge through the hub', () => {
-  it('pairs over loopback, learns by polling, refuses to send until approved, then sends >= 1 s apart', { timeout: 20_000 }, async () => {
+  it('registers the configured bridge, learns by polling, refuses to send until approved, then sends >= 1 s apart', { timeout: 20_000 }, async () => {
     const remo = await mockRemo();
-    const { ctx, agent, dispatcher, tmp, base } = await startServer();
-    const bridge = new RemoBridge({ serverBase: base, remo: new RemoClient(remo.base), name: 'Nature Remo (test)', tokenFile: join(tmp, 'remo.json'), pollMs: 30, minSendGapMs: 400 });
+    const { ctx, agent, dispatcher, register, tmp, base } = await startServer();
+    const bridge = new RemoBridge({ serverBase: base, register, remo: new RemoClient(remo.base), name: 'Nature Remo (test)', tokenFile: join(tmp, 'remo.json'), pollMs: 30, minSendGapMs: 400 });
     cleanups.push(() => bridge.stop());
     await bridge.start();
     expect(bridge.connected).toBe(true);
@@ -281,8 +335,8 @@ describe('Remo bridge through the hub', () => {
   });
 
   it('reports an unreachable Remo instead of stalling the learn window', { timeout: 10_000 }, async () => {
-    const { dispatcher, tmp, base } = await startServer();
-    const bridge = new RemoBridge({ serverBase: base, remo: new RemoClient('http://127.0.0.1:9', { timeoutMs: 300 }), tokenFile: join(tmp, 'remo.json'), pollMs: 30 });
+    const { dispatcher, register, tmp, base } = await startServer();
+    const bridge = new RemoBridge({ serverBase: base, register, remo: new RemoClient('http://127.0.0.1:9', { timeoutMs: 300 }), tokenFile: join(tmp, 'remo.json'), pollMs: 30 });
     cleanups.push(() => bridge.stop());
     await bridge.start();
     const t0 = Date.now();

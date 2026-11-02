@@ -9,6 +9,7 @@ import type { IrLibrary, MidiProfile } from '../devices/profiles';
 export interface TargetDetection {
   frameId: string;
   detId: string;
+  trackId?: string;
   /** the paired device whose camera saw it (the Quest, the iPhone, the sim) */
   sensorDeviceId: string;
   label: string;
