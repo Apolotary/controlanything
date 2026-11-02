@@ -1,0 +1,377 @@
+/**
+ * Usage: npm run build && npm run e2e:judge (requires system Chrome; no browser download).
+ * Runs a muted fixture demo on its own ports 8796/8446. Screenshots and failure diagnostics
+ * go to research/screens/v2-flow/. Never reuses an existing server; removes its temporary data.
+ * Optional YOLO preview is disabled: this checks the server scan and HUD v2 judge path.
+ */
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createConnection } from 'node:net';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
+import { chromium } from 'playwright-core';
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const SCREENS = join(ROOT, 'research/screens/v2-flow');
+const BASE = 'http://127.0.0.1:8796';
+const UI_TIMEOUT = 30_000;
+const PIPELINE_TIMEOUT = 180_000;
+let server, browser, quest, sim, dataDir, cardId;
+let serverReady = false;
+let serverError;
+let serverLog = '';
+let currentPhase = '00-server';
+const browserLog = [];
+const abort = new AbortController();
+
+async function json(path) {
+  const response = await fetch(`${BASE}${path}`, { signal: AbortSignal.timeout(3000) });
+  assert(response.ok, `${path}: HTTP ${response.status}`);
+  return response.json();
+}
+
+async function until(description, probe, timeout = UI_TIMEOUT) {
+  const deadline = Date.now() + timeout;
+  do {
+    abort.signal.throwIfAborted();
+    if (serverError) throw serverError;
+    if (server && (server.exitCode !== null || server.signalCode !== null)) {
+      throw new Error(`Fixture server exited (${server.exitCode ?? server.signalCode})`);
+    }
+    const result = await probe();
+    if (result) return result;
+    await delay(200, undefined, { signal: abort.signal });
+  } while (Date.now() < deadline);
+  throw new Error(`Timed out after ${timeout / 1000}s: ${description}`);
+}
+
+async function portMustBeFree(port) {
+  await new Promise((resolvePort, reject) => {
+    const socket = createConnection({ host: '127.0.0.1', port });
+    socket.once('connect', () => {
+      socket.destroy();
+      reject(new Error(`Port ${port} is occupied; stop its owner or run this check later.`));
+    });
+    socket.once('error', (error) => error.code === 'ECONNREFUSED' ? resolvePort() : reject(error));
+    socket.setTimeout(1500, () => {
+      socket.destroy();
+      reject(new Error(`Could not check port ${port}`));
+    });
+  });
+}
+
+async function startServer() {
+  for (const app of ['sim', 'quest']) {
+    await access(join(ROOT, `apps/${app}/dist/index.html`)).catch(() => {
+      throw new Error(`${app} is not built. Run npm run build before npm run e2e:judge.`);
+    });
+  }
+  await portMustBeFree(8796);
+  await portMustBeFree(8446);
+  const freshDir = await mkdtemp(join(tmpdir(), 'ce-e2e-judge-'));
+  if (abort.signal.aborted) {
+    await rm(freshDir, { recursive: true, force: true });
+    abort.signal.throwIfAborted();
+  }
+  dataDir = freshDir;
+  server = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
+    cwd: join(ROOT, 'apps/server'),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      HTTP_PORT: '8796', HTTPS_PORT: '8446',
+      HTTP_HOST: '127.0.0.1', HTTPS_HOST: '127.0.0.1', PUBLIC_HOST: '127.0.0.1',
+      CE_DATA_DIR: dataDir, MODEL_MODE: 'fixture', MODEL_API_KEY: '', CE_SCAN_PROMPTS: '',
+      CE_MAC_SILENT: '1', CE_MAC_LOCAL: '0',
+      CE_REMO: '0', REMO_HOST: '', REMO_SEND: '0',
+      CE_TRUST_FIRST_DEVICE: '1', CE_TRUST_LOOPBACK: '1', CE_CONSOLE_APPROVE: '0',
+      MUSE_REPLAY: '1', MUSE_RECORD: '0', MUSE_RECORD_DIR: '',
+      FIXTURE_DELAY_MS: '300', GEN3D_REPLAY_SPEED: '0', VITEST: '',
+    },
+  });
+  server.on('error', (error) => { serverError = error; });
+  for (const stream of [server.stdout, server.stderr]) stream.on('data', (chunk) => {
+    serverLog = (serverLog + chunk.toString()).slice(-250_000);
+    // HTTP starts before HTTPS: wait until the entry point has finished starting both.
+    serverReady ||= serverLog.includes('ControlEverything server ');
+  });
+  await until('own HTTP/HTTPS fixture server startup', () => serverReady);
+  const health = await json('/api/health');
+  assert.equal(health.mode, 'fixture');
+  assert.equal(health.space.pairedDevices, 0, 'Server must start with an empty registry');
+  assert.equal(new URL(health.urls.https).port, '8446');
+}
+
+function watchPage(page, name) {
+  const log = (text) => {
+    browserLog.push(`${name}: ${text}`);
+    if (browserLog.length > 300) browserLog.shift();
+  };
+  page.on('pageerror', (error) => log(error.stack ?? error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error' || message.type() === 'warning') log(message.text());
+  });
+  page.on('requestfailed', (request) => log(`${request.method()} ${request.url()}: ${request.failure()?.errorText}`));
+}
+
+async function waitQuest(predicate, arg, timeout = UI_TIMEOUT) {
+  abort.signal.throwIfAborted();
+  await quest.waitForFunction(predicate, arg, { timeout, polling: 100 });
+  abort.signal.throwIfAborted();
+}
+
+async function renderedFrames(count = 2) {
+  // Observe the app loop, including emulated XR frames, instead of sleeping for GPU timing.
+  for (let i = 0; i < count; i++) {
+    const time = await quest.evaluate(() => window.__ce.lastFrame?.time ?? 0);
+    await waitQuest((previous) => window.__ce.lastFrame?.time > previous, time);
+  }
+}
+
+async function screenshot(name) {
+  await quest.bringToFront();
+  await waitQuest(() => {
+    let ready = true;
+    window.__ce.hud.root.traverse((node) => {
+      if (typeof node.sync !== 'function') return;
+      // Troika does not invoke sync callbacks for text that is already clean.
+      node.sync();
+      if (node._needsSync || node._isSyncing || (node.text && !node.textRenderInfo)) ready = false;
+    });
+    return ready && window.__ce.hud.card.scale.x > 0.99 && window.__ce.hud.controls.scale.y > 0.99;
+  });
+  await renderedFrames();
+  // IWER moves the renderer canvas out of #stage when XR starts.
+  const canvas = await quest.evaluateHandle(() => window.__ce.renderer.domElement);
+  try {
+    await canvas.asElement().screenshot({ path: join(SCREENS, `${name}.png`), timeout: UI_TIMEOUT });
+  } finally {
+    await canvas.dispose();
+  }
+}
+
+async function phase(name, action, capture = true) {
+  abort.signal.throwIfAborted();
+  currentPhase = name;
+  const started = Date.now();
+  await action();
+  abort.signal.throwIfAborted();
+  if (capture) await screenshot(name);
+  console.log(`PASS ${name} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
+}
+
+async function pinch({ targetId, nodeName, turn = false }) {
+  await renderedFrames();
+  const point = await quest.evaluate(({ targetId, nodeName, turn }) => {
+    const app = window.__ce;
+    const object = nodeName ? app.hud.root.getObjectByName(nodeName) : null;
+    if (nodeName && !object) throw new Error(`HUD node not found: ${nodeName}`);
+    for (let node = object; node; node = node.parent) {
+      if (!node.visible) throw new Error(`HUD node is hidden: ${nodeName}`);
+    }
+    const world = object
+      ? object.getWorldPosition(app.desktopCam.position.clone())
+      : app.targets.get(targetId)?.position.clone();
+    if (!world) throw new Error(`Target not found: ${targetId}`);
+    if (turn) {
+      app.emulator.lookAt(world);
+      return null;
+    }
+    const camera = app.renderer.xr.isPresenting ? app.renderer.xr.getCamera().cameras[0] : app.desktopCam;
+    const ndc = world.project(camera);
+    const rect = app.renderer.domElement.getBoundingClientRect();
+    if (Math.abs(ndc.x) > 0.98 || Math.abs(ndc.y) > 0.98 || Math.abs(ndc.z) > 1) {
+      throw new Error(`Outside emulator view: ${nodeName ?? targetId} (${ndc.x}, ${ndc.y})`);
+    }
+    return { x: rect.left + (ndc.x + 1) * rect.width / 2, y: rect.top + (1 - ndc.y) * rect.height / 2 };
+  }, { targetId, nodeName, turn });
+  if (turn) return pinch({ targetId, nodeName });
+  await quest.mouse.move(point.x, point.y);
+  await quest.mouse.down();
+  try {
+    await renderedFrames();
+  } finally {
+    await quest.mouse.up();
+  }
+  await renderedFrames();
+}
+
+async function target() {
+  const result = await json(`/api/agent/targets/${encodeURIComponent(cardId)}`);
+  assert.notEqual(result.state, 'failed', `Agent failed: ${JSON.stringify(result)}`);
+  return result;
+}
+
+async function run() {
+  await mkdir(SCREENS, { recursive: true });
+  await phase('00-server', startServer, false);
+  await phase('01-emulator-ready', async () => {
+    const launched = await chromium.launch({
+      channel: 'chrome', headless: true,
+      args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--mute-audio'],
+    });
+    if (abort.signal.aborted) {
+      await launched.close();
+      abort.signal.throwIfAborted();
+    }
+    browser = launched;
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
+    context.setDefaultTimeout(UI_TIMEOUT);
+    context.setDefaultNavigationTimeout(UI_TIMEOUT);
+    await context.addInitScript(() => { window.__ceMute = true; });
+    sim = await context.newPage();
+    watchPage(sim, 'sim');
+    await sim.goto(`${BASE}/sim/?mute=1&autopress=1`, { waitUntil: 'domcontentloaded' });
+    await sim.waitForFunction(() => window.ceSim?.leader()
+      && window.ceSimDebug?.device.conn?.open
+      && document.querySelector('#b-conn')?.textContent.includes('ONLINE'));
+    assert.equal(await sim.evaluate(() => window.ceSim.lamp().power), 'off');
+
+    quest = await context.newPage();
+    watchPage(quest, 'quest');
+    await quest.goto(`${BASE}/quest/?emulate=1&camera=sim&mute=1&mic=0&hud=v2&yolo=0`, { waitUntil: 'domcontentloaded' });
+    await waitQuest(() => window.__ce?.welcome && window.__ce.ws.open && window.__ce.room?.sim?.canvas);
+    assert.equal(await quest.evaluate(() => window.__ce.hudKind), 'v2', 'HUD v2 must load without fallback');
+    assert.equal(await quest.evaluate(() => window.__ce.welcome.mode), 'fixture');
+    await quest.evaluate(() => {
+      window.__judgeEvents = [];
+      const types = new Set(['target.status', 'device.card', 'agent.step', 'verify.result', 'ui.spec', 'arm.request', 'arm.result']);
+      window.__ce.ws.tap('in', ({ type, payload }) => {
+        if (!types.has(type)) return;
+        window.__judgeEvents.push({ type, payload });
+        if (window.__judgeEvents.length > 300) window.__judgeEvents.shift();
+      });
+    });
+    await quest.locator('#btn-enter').click();
+    await waitQuest(() => window.__ce.renderer.xr.isPresenting && window.__ce.cameraState === 'on');
+  });
+
+  let targetId;
+  await phase('02-scan', async () => {
+    await pinch({ nodeName: 'scan-toggle' });
+    await waitQuest(() => window.__ce.scanner.active
+      && window.__ce.targets.list().some((t) => /ceiling (light|lamp)/i.test(t.label)));
+    targetId = await quest.evaluate(() => window.__ce.targets.list().find((t) => /ceiling (light|lamp)/i.test(t.label)).id);
+  });
+  await phase('03-select-light', async () => {
+    await pinch({ targetId });
+    await waitQuest((id) => window.__ce.lockedId === id && window.__ce.targets.get(id)?.cardId, targetId);
+    cardId = await quest.evaluate((id) => window.__ce.targets.get(id).cardId, targetId);
+  });
+  await phase('04-identify', async () => {
+    await until('identified ceiling light', async () => {
+      const t = await target();
+      return t.card && /light|lamp/i.test(t.card.name);
+    });
+  });
+  await phase('05-learn-remote', async () => {
+    await until('all seven remote buttons captured', async () => {
+      const t = await target();
+      return t.research?.learned?.length === 7;
+    }, PIPELINE_TIMEOUT);
+    assert(await sim.evaluate(() => window.ceSimDebug.device.logLines.some((l) => l.kind === 'learn' && l.text.includes('captured press'))), 'Sim must capture the virtual remote');
+  });
+  await phase('06-verify', async () => {
+    await until('physical verification completed', async () => {
+      const t = await target();
+      return ['verified', 'forging', 'forged', 'arming'].includes(t.state)
+        && Object.values(t.verification).includes('pass') && t;
+    }, PIPELINE_TIMEOUT);
+    await waitQuest((id) => window.__judgeEvents.some((e) => e.type === 'verify.result'
+      && e.payload.cardId === id && e.payload.pass && e.payload.observed?.sense === 'camera'), cardId);
+  });
+  await phase('07-controls-ready', async () => {
+    await waitQuest((id) => {
+      const app = window.__ce;
+      return app.pendingArm && app.hud.confirm
+        && [...app.hud.specs.values()].some((m) => m.targetId === id && m.spec.controls.length > 0);
+    }, targetId, PIPELINE_TIMEOUT);
+    assert.equal((await target()).armed, false, 'Server must gate controls until ARM');
+  });
+  await phase('08-arm', async () => {
+    assert.equal(await quest.evaluate(() => !!window.__ce.hud.confirm.hold), false, 'Light should use one-tap confirmation');
+    await pinch({ nodeName: 'confirm-yes' });
+    await waitQuest((id) => window.__judgeEvents.some((e) => e.type === 'arm.result' && e.payload.cardId === id && e.payload.armed)
+      && [...window.__ce.hud.specs.values()].some((m) => m.targetId === window.__ce.lockedId && m.armed), cardId);
+    assert.equal((await target()).armed, true);
+  });
+  await phase('09-control-changes-light', async () => {
+    await sim.waitForFunction(() => window.ceSim.lamp().power === 'on' && window.ceSimDebug.device.animator.settled);
+    const before = await sim.evaluate(() => window.ceSim.lamp());
+    const control = await quest.evaluate(() => {
+      const app = window.__ce;
+      const mounted = [...app.hud.specs.values()].find((m) => m.targetId === app.lockedId && m.armed);
+      const off = mounted?.spec.controls.find((c) => /off/i.test(c.label)
+        && c.armed !== false && app.hud.root.getObjectByName(`control:${c.id}`));
+      return off && { id: off.id, sent: app.controls.sent };
+    });
+    assert(control, 'Armed HUD must expose an Off button');
+    // Looking at the controls after verification is complete leaves its camera evidence undisturbed.
+    await pinch({ nodeName: `control:${control.id}`, turn: true });
+    await waitQuest((sent) => window.__ce.controls.sent > sent, control.sent);
+    await sim.waitForFunction(() => window.ceSim.lamp().power === 'off' && window.ceSimDebug.device.animator.settled);
+    const after = await sim.evaluate(() => window.ceSim.lamp());
+    assert.notDeepEqual(after, before);
+    assert.equal(await sim.evaluate(() => window.ceSimDebug.device.lastIr?.source), 'exec', 'Lamp must change through the server executor');
+    console.log(`  lamp: ${before.power} -> ${after.power} (HUD ${control.id})`);
+  });
+}
+
+async function diagnostics() {
+  await mkdir(SCREENS, { recursive: true });
+  await writeFile(join(SCREENS, 'server.log'), serverLog);
+  await writeFile(join(SCREENS, 'browser.log'), browserLog.join('\n'));
+  const state = {};
+  if (quest && !quest.isClosed()) {
+    state.quest = await quest.evaluate(() => ({
+      camera: window.__ce?.cameraState, hud: window.__ce?.hudKind,
+      lockedId: window.__ce?.lockedId, pendingArm: window.__ce?.pendingArm,
+      targets: window.__ce?.targets.list(), events: window.__judgeEvents,
+      log: document.querySelector('#log')?.textContent,
+    })).catch((e) => ({ error: e.message }));
+    await quest.screenshot({ path: join(SCREENS, `${currentPhase}-FAIL.png`), timeout: 5000 }).catch(() => {});
+  }
+  if (sim && !sim.isClosed()) state.sim = await sim.evaluate(() => ({
+    lamp: window.ceSim?.lamp(), learn: window.ceSim?.learn(), logs: window.ceSimDebug?.device.logLines,
+  })).catch((e) => ({ error: e.message }));
+  await writeFile(join(SCREENS, 'failure.json'), JSON.stringify(state, null, 2));
+}
+
+async function cleanup() {
+  if (server?.pid && server.exitCode === null && server.signalCode === null) {
+    const exited = new Promise((resolveExit) => server.once('exit', resolveExit));
+    server.kill('SIGTERM');
+    const force = setTimeout(() => server.kill('SIGKILL'), 5000);
+    try { await exited; } finally { clearTimeout(force); }
+  }
+  try {
+    await browser?.close();
+  } finally {
+    if (dataDir) await rm(dataDir, { recursive: true, force: true });
+  }
+}
+
+const interrupted = new Promise((_, reject) => abort.signal.addEventListener('abort', () => reject(abort.signal.reason), { once: true }));
+const stop = (signal) => {
+  process.exitCode = signal === 'SIGINT' ? 130 : 143;
+  abort.abort(new Error(`Interrupted by ${signal}`));
+};
+process.on('SIGINT', stop);
+process.on('SIGTERM', stop);
+const deadline = setTimeout(() => abort.abort(new Error('Judge path exceeded 8 minutes')), 8 * 60_000);
+try {
+  await Promise.race([run(), interrupted]);
+  console.log(`PASS judge path; screenshots: ${SCREENS}`);
+} catch (error) {
+  process.exitCode ||= 1;
+  console.error(`FAIL ${currentPhase}: ${error.stack ?? error}`);
+  await diagnostics().catch((e) => console.error(`Diagnostics: ${e.message}`));
+} finally {
+  clearTimeout(deadline);
+  await cleanup();
+  process.off('SIGINT', stop);
+  process.off('SIGTERM', stop);
+}

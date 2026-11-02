@@ -19,11 +19,13 @@
     "test:watch": "vitest",
     "start": "npm run start -w @ce/server",
     "smoke": "npm run smoke -w @ce/server",
-    "demo:sim": "tsx apps/sim/scripts/demo-sim.ts"
+    "demo:sim": "tsx apps/sim/scripts/demo-sim.ts",
+    "e2e:judge": "node scripts/e2e-judge.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
     "concurrently": "^10.0.6",
+    "playwright-core": "^1.64.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"
