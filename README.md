@@ -1,8 +1,10 @@
 # ControlAnything
 
-**Tag a device you own. Choose to set it up. Meta's models generate controls, and a camera or microphone checks that the device actually reacts.**
+**First Meta made Segment Anything. Built on it, ControlAnything lets you *use* anything: Muse agents write an XR interface for a device on the fly, and the headset's camera or microphone checks that the device really reacts.**
 
-A Meta Quest 3 WebXR app and a Node/TypeScript server on your Mac, built for the **Meta Global AI Developer Hackathon**, Indie Developer track, *Push the Frontier*. Control an infrared light, USB synthesizer or laptop through a paired bridge. No hardware? Start with the simulated room below.
+XR gives natural control with hands, head, immersive visuals and spatial audio, yet most devices and technologies have no XR interface at all. ControlAnything is a software layer that connects a Meta Quest 3 (hands or controllers) to the electronics around you. Pair it with a helper device (your laptop, a phone, or a Cardputer), tag a device, and choose to set it up: Muse agents link to it, write and physically verify a driver, and generate the controls you then use in XR.
+
+A WebXR app and a Node/TypeScript server on your Mac, built for the **Meta Global AI Developer Hackathon**, Indie Developer track, *Push the Frontier*. Today: a USB synthesizer via the Mac (verified by the headset mic), an infrared light (verified by the headset camera) and the laptop itself. No hardware? Start with the simulated room below. (The name nods to Meta's *Segment Anything*; this is an independent project, not a Meta product.)
 
 <!-- VIDEO_URL -->
 **▶ 3-minute demo video:** _link coming Wednesday Nov 4_

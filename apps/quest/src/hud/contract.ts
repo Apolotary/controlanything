@@ -11,6 +11,7 @@ export type ObjectFilter = 'electronics' | 'lights' | 'everything';
 export type DeviceConnection = 'ready' | 'setup' | 'offline' | 'unknown';
 export interface HomeState { mode: AppMode; filter: ObjectFilter; tagged: number; status: string; canStop?: boolean }
 export interface DeviceState { targetId: string; connection: DeviceConnection; hint?: string; action?: TaggedDevice['action']; busy?: boolean; sentence?: string; handControl?: boolean; pairingSeconds?: number }
+export interface HelperPairingView { urls: string[]; pairedName?: string }
 
 export interface JointState {
   position: Vector3;
@@ -141,6 +142,7 @@ export interface HudEvents {
   pair: { targetId: string };
   pairCancel: { targetId: string };
   pairCode: { targetId: string; code: string };
+  helperSkip: Record<string, never>;
   handControl: { targetId: string; enabled: boolean };
   deck: { key: DeckKey; phase: 'press' | 'release' };
   hack: { ts?: number; targetId: string; itemId: string; controlId?: string; index: number; hold?: boolean };
@@ -192,6 +194,7 @@ export interface Hud {
 
   // pairing, voice, deck, toasts
   showPairing(p: { display: string; qr: string; message?: string } | null): void;
+  showHelperPairing?(view: HelperPairingView | null): void;
   showApprovals(list: { pairingId: string; name: string; kind: string; display: string }[]): void;
   setVoice(v: { listening: boolean; level?: number; partial?: string; final?: string }): void;
   setDeck(d: { open?: boolean; scanning?: boolean; daemons?: boolean; at?: [number, number, number] }): void;

@@ -8,6 +8,7 @@ export const THEME = {
     medium: '/quest/fonts/inter-latin-500-normal.woff',
     semibold: '/quest/fonts/inter-latin-600-normal.woff',
     tabular: '/quest/fonts/ce-inter-tabular-600.woff',
+    mono: '/quest/fonts/JetBrainsMono-Regular.ttf',
     // Inter's cap height is .7275 em: these yield 18 mm titles and 12 mm body text.
     label: 0.0165, body: 0.0165, title: 0.025, detail: 0.015, lineHeight: 1.25, letterSpacing: -0.012,
   },

@@ -22,6 +22,15 @@ export function localHostnames(): string[] {
   return [...names];
 }
 
+/** Short helper URLs, with the address for this Mac first. Inputs are injectable for tests. */
+export function helperPairUrls(port: number, lan = lanIPv4(), names = localHostnames()): string[] {
+  const hosts = ['localhost'];
+  if (lan[0]) hosts.push(lan[0]);
+  const local = names.find((name) => name.endsWith('.local') && name !== 'localhost.local');
+  if (local) hosts.push(local);
+  return [...new Set(hosts)].map((host) => `http://${host}:${port}/pair`);
+}
+
 /** True for a loopback peer address (IPv4, IPv6 or IPv4-mapped IPv6). */
 export function isLoopback(address: string | undefined): boolean {
   if (!address) return false;

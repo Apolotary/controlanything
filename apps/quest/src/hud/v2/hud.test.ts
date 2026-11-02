@@ -792,7 +792,7 @@ describe('explicit annotation and control modes', () => {
     const { hud, frame, pinch } = setup();
     hud.upsertTarget({ ...target, label: 'OP-1 Field', connection: 'offline' }); hud.setLocked(target.id);
     const card = hud.root.getObjectByName('device-card');
-    const state = { targetId: target.id, connection: 'offline' as const, hint: 'Open ControlEverything on your Mac and plug in the synth', action: 'open-companion' as const };
+    const state = { targetId: target.id, connection: 'offline' as const, hint: 'Open ControlAnything on your Mac and plug in the synth', action: 'open-companion' as const };
     const actions: string[] = [];
     hud.on('pair', ({ targetId }) => actions.push(`pair:${targetId}`));
     hud.on('pairCancel', ({ targetId }) => actions.push(`cancel:${targetId}`));

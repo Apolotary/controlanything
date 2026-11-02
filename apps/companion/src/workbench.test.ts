@@ -263,6 +263,61 @@ const pairButton = (name: string) => {
 };
 
 describe('Calm companion behavior', () => {
+  it('opens the short pairing page directly into a QR and code without waiting for health', async () => {
+    mocks.identity.mockReturnValue(undefined);
+    vi.stubGlobal('location', new URL('http://localhost/companion/?pair=1'));
+    let healthReady!: (result: unknown) => void;
+    mocks.api.health.mockReturnValue(new Promise((resolve) => { healthReady = resolve; }));
+    mocks.api.pairStart.mockResolvedValue({ status: 'pending', pairingId: 'p1', code: 'K7Q4M2', display: 'K7Q-4M2', qr: 'https://localhost/p/p1#K7Q4M2', pollSecret: 'secret', expiresAt: Date.now() + 30_000 });
+    const { bootWorkbench } = await import('./workbench');
+    const booting = bootWorkbench();
+    await flush();
+    expect(mocks.api.pairStart).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ requireApproval: true }));
+    expect(byId('app-header').hidden).toBe(true);
+    expect(byId('workbench').classList.contains('pair-only')).toBe(true);
+    expect(byId('onboarding').dataset.state).toBe('pairing');
+    expect(byId('onboarding-next').textContent).toBe('Look at this QR code with your Quest 3.');
+    expect(byId('self-code').textContent).toBe('K7Q-4M2');
+    expect(byId('self-qr').htmlWrites[0]).toContain('<svg');
+    for (const id of ['connection-steps', 'headset-open', 'enable-midi', 'paired-summary']) expect(byId(id).hidden).toBe(true);
+    healthReady({ mode: 'live', models: { chat: 'meta-model' }, urls: { lan: [] } });
+    await booting;
+    expect(mocks.api.pairStart).toHaveBeenCalledOnce();
+  });
+
+  it('shows pairing confirmation immediately after approval, then keeps the USB steps', async () => {
+    mocks.identity.mockReturnValue(undefined);
+    mocks.api.pairStart.mockResolvedValue({ status: 'pending', pairingId: 'p1', code: 'K7Q4M2', display: 'K7Q-4M2', qr: 'https://localhost/p/p1#K7Q4M2', pollSecret: 'secret', expiresAt: Date.now() + 30_000 });
+    mocks.api.pairStatus.mockResolvedValue({ status: 'approved', deviceId: 'mac-1', deviceToken: 'saved-token' });
+    await boot('?pair=1');
+    await vi.advanceTimersByTimeAsync(600);
+    expect(byId('pairscreen').hidden).toBe(true);
+    expect(byId('paired-summary').hidden).toBe(false);
+    expect(byId('onboarding-title').textContent).toBe('Waiting for Quest 3');
+    expect(byId('app-header').hidden).toBe(false);
+    const { saveIdentity } = await import('./identity');
+    expect(saveIdentity).toHaveBeenCalledWith({ deviceId: 'mac-1', deviceToken: 'saved-token', kind: 'mac', name: 'Mac' });
+    const { Connection } = await import('./connection');
+    const connection = (Connection as unknown as { instances: { inject(message: { type: string; payload: unknown }): void }[] }).instances.at(-1)!;
+    connection.inject({ type: 'presence', payload: { devices: [{ deviceId: 'quest', kind: 'quest', name: 'Quest 3', online: true, capabilities: [], ports: [] }] } });
+    await flush();
+    expect(byId('paired-summary').hidden).toBe(false);
+    expect(byId('onboarding').dataset.state).toBe('midi-permission');
+    expect(byId('enable-midi').hidden).toBe(false);
+  });
+
+  it('reuses the saved token when reloading the short pairing page', async () => {
+    const app = await boot('?pair=1');
+    const { clearIdentity } = await import('./identity');
+    expect(clearIdentity).not.toHaveBeenCalled();
+    expect(mocks.api.pairStart).not.toHaveBeenCalled();
+    expect(mocks.start).toHaveBeenCalledOnce();
+    expect(byId('pairscreen').hidden).toBe(true);
+    await app.emit('presence', { devices: [{ deviceId: 'quest', kind: 'quest', name: 'Quest 3', online: true, capabilities: [], ports: [] }] });
+    expect(byId('paired-summary').hidden).toBe(false);
+    expect(byId('enable-midi').hidden).toBe(false);
+  });
+
   it('shows a QR for a new Mac joining an existing room and refreshes it after expiry despite poll errors', async () => {
     mocks.identity.mockReturnValue(undefined);
     mocks.api.health.mockResolvedValue({ mode: 'live', models: { chat: 'meta-model' }, urls: { lan: [] }, space: { pairedDevices: 1 } });

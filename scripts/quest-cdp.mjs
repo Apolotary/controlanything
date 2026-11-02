@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Evaluate a JavaScript expression inside the ControlEverything page running in Quest Browser,
+// Evaluate a JavaScript expression inside the ControlAnything page running in Quest Browser,
 // over the Chrome DevTools Protocol forwarded by adb. Dev tool only.
 //
 //   adb forward tcp:9222 localabstract:chrome_devtools_remote

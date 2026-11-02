@@ -2,10 +2,11 @@ import { Camera, Group, Matrix4, Mesh, MeshBasicMaterial, Object3D, PlaneGeometr
 import { applyPatch, type Control, type ControlEvent, type Gen3dSpec, type HackItem, type ModelChip, type Patch } from '@ce/gen3d';
 import { Emitter } from '../../gen3d/events';
 import { handCursor, newCursor, type Cursor } from '../../gen3d/interact';
-import type { AgentStepLike, ConfirmRequest, DeviceState, HomeState, EvidenceState, Hud, HudEvents, HudFrame, HudTarget, PingLine, UploadState } from '../contract';
+import type { AgentStepLike, ConfirmRequest, DeviceState, HomeState, EvidenceState, HelperPairingView, Hud, HudEvents, HudFrame, HudTarget, PingLine, UploadState } from '../contract';
 import { homeHint } from '../home';
 import { controlPower, isBrightness } from './control-state';
 import { PairCodeEntry, PAIR_CODE_KEYS } from './pair-code';
+import { HelperPairingCard, HELPER_PAIRING_TARGET } from './helper-pairing';
 import { targetChipLabel } from './target-chip';
 import { BoxField } from './boxes';
 import { makeText, setText, type SdfText } from './text';
@@ -91,6 +92,8 @@ export class LeanHud implements Hud {
     accent: new MeshBasicMaterial({ color: THEME.color.accent, transparent: true, depthWrite: false, toneMapped: false }),
   };
   private readonly surfaces = new GlassSurfaces();
+  private readonly helperPairing = new HelperPairingCard(this.surfaces);
+  private helperPairingView: HelperPairingView | null = null;
   private readonly trackGeometry = new PlaneGeometry(1, 1);
   private readonly reticles = new PinchReticles();
   private readonly reticlePoints = [new Vector3(), new Vector3()];
@@ -147,6 +150,7 @@ export class LeanHud implements Hud {
   private confirm: ConfirmRequest | null = null;
   private pairing: { display: string; qr: string; message?: string } | null = null;
   private codeEntry: PairCodeEntry | null = null;
+  private codeTarget: string | null = null;
   private approvals: { pairingId: string; name: string; kind: string; display: string }[] = [];
   private time = 0;
   private noticeUntil = 0;
@@ -199,6 +203,12 @@ export class LeanHud implements Hud {
     this.coach.name = 'hand-menu-coach';
     this.notice.name = 'notice';
     this.root.add(this.boxes, this.card, this.modal, this.deck, this.deck.wrist, this.coach, this.notice, this.reticles, this.tether);
+    this.root.add(this.helperPairing);
+    this.widgets.push({ group: this.helperPairing, w: this.helperPairing.width, h: this.helperPairing.height, kind: 'handle', start: () => {}, lastMove: 0 });
+    for (const group of [this.helperPairing.typeCode, this.helperPairing.skip]) this.widgets.push({
+      group, w: this.helperPairing.buttonWidth, h: THEME.control.buttonHeight, kind: 'handle', button: true, lastMove: 0,
+      start: () => group === this.helperPairing.typeCode ? this.openPairCode(HELPER_PAIRING_TARGET) : this.events.emit('helperSkip', {}),
+    });
     this.dockHint.name = 'dock-hint';
     this.dockHint.position.set(0, -0.048, THEME.panel.depth);
     this.dockHint.visible = false;
@@ -343,7 +353,7 @@ export class LeanHud implements Hud {
   private refreshCard(): void {
     const target = this.selected(), m = this.mounted();
     const menu = this.menus.get(this.locked ?? this.menuTarget ?? '');
-    this.card.visible = this.home.mode === 'control' && !!target?.tagged && !this.modal.visible;
+    this.card.visible = this.home.mode === 'control' && !!target?.tagged && !this.modal.visible && !this.helperPairingView;
     setText(this.heading, title(target?.label ?? menu?.title ?? m?.spec.title ?? 'Look at a device', 24));
     this.details.visible = this.detailsOpen && this.card.visible && this.selectedConnection() === 'ready' && !this.deviceState?.busy;
     this.refreshStatus();
@@ -372,7 +382,8 @@ export class LeanHud implements Hud {
       if (connection === 'offline' && (state?.action === 'open-companion' || state?.action === 'pair-device')) {
         if (state.pairingSeconds) this.button(this.controls, 'control-pair-cancel', 'Cancel', -0.09, THEME.card.buttonsY, 0.16, 'handle', () => this.events.emit('pairCancel', { targetId: target!.id }));
         else {
-          const primary = this.button(this.controls, 'control-pair', state.action === 'open-companion' ? 'Connect Mac' : 'Connect device', 0, THEME.card.buttonsY, 0.24, 'handle', () => this.events.emit('pair', { targetId: target!.id }));
+          const pairLabel = state.hint?.includes('/pair on this laptop') ? 'Pair' : state.action === 'open-companion' ? 'Connect Mac' : 'Connect device';
+          const primary = this.button(this.controls, 'control-pair', pairLabel, 0, THEME.card.buttonsY, 0.24, 'handle', () => this.events.emit('pair', { targetId: target!.id }));
           this.selectButton(primary.group, true, 0.24);
         }
         if (state.pairingSeconds) this.button(this.controls, 'control-pair-code', 'Type code', 0.09, THEME.card.buttonsY, 0.16, 'handle', () => this.openPairCode());
@@ -634,7 +645,7 @@ export class LeanHud implements Hud {
     if (id && this.targets.has(id)) this.refreshTargetLabel(this.targets.get(id)!);
   }
   setLocked(id: string | null): void {
-    if (id !== this.locked && this.codeEntry) this.closePairCode();
+    if (id !== this.locked && this.codeEntry && this.codeTarget !== HELPER_PAIRING_TARGET) this.closePairCode();
     const old = this.locked; this.locked = id;
     if (old !== id) { this.pinned = false; this.card.userData.pinned = false; this.evidence = null; this.upload = null; this.selectedAction = null; this.unfoldStarted = this.time; }
     if (old && this.targets.has(old)) this.refreshTargetLabel(this.targets.get(old)!);
@@ -700,6 +711,7 @@ export class LeanHud implements Hud {
   }
   showConfirm(confirm: ConfirmRequest | null): void {
     if (confirm && this.home.mode !== 'control') return;
+    if (!confirm && this.codeTarget === HELPER_PAIRING_TARGET) { this.confirm = null; return; }
     this.confirm = confirm; this.clear(this.modal); this.modal.visible = !!confirm; if (!confirm) {
       if (this.approvals.length) this.showApprovals(this.approvals);
       else if (this.pairing) this.showPairing(this.pairing);
@@ -724,6 +736,7 @@ export class LeanHud implements Hud {
   }
   showPairing(pair: { display: string; qr: string; message?: string } | null): void {
     this.pairing = pair;
+    if (this.codeEntry) return;
     if (this.confirm) return;
     if (this.approvals.length) { this.showApprovals(this.approvals); return; }
     this.clear(this.modal); this.modal.visible = !!pair; if (!pair) return;
@@ -731,6 +744,12 @@ export class LeanHud implements Hud {
     this.label(this.modal, 'Pair this headset', THEME.panel.row, THEME.font.title);
     this.label(this.modal, pair.display, 0, THEME.font.title);
     this.label(this.modal, pair.message ?? 'Enter this code on the Mac.', -THEME.panel.row, THEME.font.label); this.place();
+  }
+  showHelperPairing(view: HelperPairingView | null): void {
+    this.helperPairingView = view;
+    this.helperPairing.setState(view);
+    if ((!view || view.pairedName) && this.codeTarget === HELPER_PAIRING_TARGET) this.closePairCode();
+    this.refreshCard(); this.place();
   }
   showApprovals(list: { pairingId: string; name: string; kind: string; display: string }[]): void {
     this.approvals = list;
@@ -751,9 +770,11 @@ export class LeanHud implements Hud {
     const modeChanged = this.home.mode !== state.mode;
     this.home = { ...state };
     if (modeChanged) {
-      this.codeEntry = null;
+      const helperKeyboard = this.codeTarget === HELPER_PAIRING_TARGET;
+      if (!helperKeyboard) { this.codeEntry = null; this.codeTarget = null; }
       this.detailsOpen = false; this.details.visible = false;
-      this.confirm = null; this.clear(this.modal); this.modal.visible = false;
+      this.confirm = null;
+      if (!helperKeyboard) { this.clear(this.modal); this.modal.visible = false; }
       this.deviceState = null; this.pinned = false; this.card.userData.pinned = false;
       for (const target of this.targets.values()) this.refreshTargetLabel(target);
       this.refreshCard();
@@ -769,7 +790,7 @@ export class LeanHud implements Hud {
     if (sameContent && previous.pairingSeconds === state.pairingSeconds) return;
     this.deviceState = state;
     if (sameContent && !!previous.pairingSeconds === !!state.pairingSeconds) { this.refreshStatus(); return; }
-    if (this.codeEntry && (!state || state.targetId !== previous?.targetId || state.connection !== 'offline' || !state.action)) this.closePairCode();
+    if (this.codeEntry && this.codeTarget !== HELPER_PAIRING_TARGET && (!state || state.targetId !== previous?.targetId || state.connection !== 'offline' || !state.action)) this.closePairCode();
     const current = state ? this.targets.get(state.targetId) : undefined;
     if (current && state) this.boxes.setReady(current.id, state.connection === 'ready');
     if (current && state) this.targets.set(current.id, { ...current, connection: state.connection, busy: state.busy });
@@ -780,23 +801,29 @@ export class LeanHud implements Hud {
     this.refreshCard();
     this.syncHome();
   }
-  private openPairCode(): void {
-    if (!this.locked) return;
-    this.events.emit('pairCancel', { targetId: this.locked });
+  private openPairCode(targetId = this.locked): void {
+    if (!targetId) return;
+    if (targetId === this.locked && this.deviceState?.hint?.includes('/pair on this laptop')) {
+      this.events.emit('pair', { targetId });
+      targetId = HELPER_PAIRING_TARGET;
+    }
+    if (targetId !== HELPER_PAIRING_TARGET) this.events.emit('pairCancel', { targetId });
+    this.codeTarget = targetId;
     this.codeEntry = new PairCodeEntry();
     this.drawPairCode();
   }
   private closePairCode(): void {
     this.codeEntry = null;
+    this.codeTarget = null;
     this.clear(this.modal); this.modal.visible = false;
-    this.refreshCard();
+    this.refreshCard(); this.place();
   }
   private drawPairCode(): void {
     const entry = this.codeEntry;
     if (!entry) return;
     this.clear(this.modal); this.modal.visible = true; this.card.visible = false;
     this.modal.add(this.plate(0.48, 0.48));
-    this.label(this.modal, this.deviceState?.action === 'open-companion' ? 'Code shown on your Mac' : 'Code shown on the device', 0.205, THEME.font.label);
+    this.label(this.modal, this.codeTarget === HELPER_PAIRING_TARGET ? 'Code shown on your laptop' : this.deviceState?.action === 'open-companion' ? 'Code shown on your Mac' : 'Code shown on the device', 0.205, THEME.font.label);
     this.label(this.modal, entry.display, 0.16, THEME.font.title).name = 'pair-code-value';
     const update = (key: string) => { entry.key(key); this.drawPairCode(); };
     PAIR_CODE_KEYS.forEach((key, i) => this.button(this.modal, `pair-key:${key}`, key, (i % 8 - 3.5) * 0.057, 0.10 - Math.floor(i / 8) * 0.056, 0.05, 'handle', () => update(key)));
@@ -804,7 +831,7 @@ export class LeanHud implements Hud {
     this.button(this.modal, 'pair-code-close', 'Cancel', -0.09, -0.13, 0.16, 'handle', () => this.closePairCode());
     if (entry.valid) {
       const submit = this.button(this.modal, 'pair-code-submit', 'Connect', 0, -0.195, 0.16, 'handle', () => {
-        const targetId = this.locked;
+        const targetId = this.codeTarget;
         this.closePairCode();
         if (targetId) this.events.emit('pairCode', { targetId, code: entry.value });
       });
@@ -885,7 +912,9 @@ export class LeanHud implements Hud {
   private place(): void {
     if (!this.hasFrame) return;
     const target = this.selected(), m = this.mounted();
-    this.card.visible = this.home.mode === 'control' && !!target?.tagged && !this.modal.visible;
+    this.card.visible = this.home.mode === 'control' && !!target?.tagged && !this.modal.visible && !this.helperPairingView;
+    this.helperPairing.visible = !!this.helperPairingView && !this.modal.visible;
+    this.helperPairing.update({ head: this.headPose, time: this.time * 1000 });
     const unfold = target ? unfoldEase((this.time - this.unfoldStarted) / THEME.motion.duration) : 1;
     this.card.scale.x = Math.max(0.001, unfold);
     const controls = unfoldEase((this.time - this.controlsStarted) / THEME.motion.duration);
@@ -969,6 +998,7 @@ export class LeanHud implements Hud {
   }
   private interactive(widget: Widget, cursor: Cursor): boolean {
     if (!visible(widget.group) || this.suppressedHands.has(cursor.hand)) return false;
+    if (this.helperPairing.visible && !this.helperPairing.getObjectById(widget.group.id) && !this.deck.getObjectById(widget.group.id)) return false;
     if (widget.group.userData.dockIcon && (!this.handDock.open || this.handDock.tracked && cursor.hand === (this.handDock.source === 'controller' ? 'left' : this.handDock.nonDominant))) return false;
     return !this.modal.visible || !!this.modal.getObjectById(widget.group.id) || !!this.deck.getObjectById(widget.group.id);
   }
@@ -1175,6 +1205,7 @@ export class LeanHud implements Hud {
   dispose(): void {
     this.root.traverse((o) => { if ('sync' in o && 'dispose' in o) (o as SdfText).dispose(); });
     this.deck.dispose();
+    this.helperPairing.dispose();
     this.boxes.dispose();
     this.checkGeometry.dispose(); this.arrowGeometry.dispose(); this.lockGeometry.dispose();
     this.surfaces.dispose();

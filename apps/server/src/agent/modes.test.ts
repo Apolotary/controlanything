@@ -267,7 +267,7 @@ describe('annotation and control mode boundary', () => {
     s.agent.setMode('control');
     s.emit('control.setup', { cardId: target.cardId });
     const disconnected = s.agent.tagsState().tags[0];
-    expect(disconnected).toMatchObject({ hint: 'Open ControlEverything on your Mac and plug in the synth', action: 'open-companion' });
+    expect(disconnected).toMatchObject({ hint: 'Open ControlAnything on your Mac and plug in the synth', action: 'open-companion' });
     expect(s.of('agent.step').at(-1)).toMatchObject({ sentence: disconnected.hint, hint: disconnected.hint, action: disconnected.action });
     s.changePresence([mac], 'join', mac.deviceId);
     s.emit('control.setup', { cardId: target.cardId });

@@ -3,6 +3,7 @@
  * so a self-signed certificate accepted once covers the page and its WebSocket.
  *
  *   GET    /api/health                    mode, models, uptime, connected clients (public)
+ *   GET    /api/helper                    short pairing URLs and companion presence (public)
  *   GET    /api/muse/calls                every model call: model id, latency, tokens (public)
  *   POST   /api/pair/start                {name, kind, capabilities} -> {pairingId, code, display, qr, expiresAt, pollSecret, status}
  *   GET    /api/pair/status               ?pairingId&pollSecret -> {status, deviceId?, deviceToken? (once)}
@@ -35,6 +36,8 @@ import { type Approver, PairingError } from './pairing/manager';
 import type { DeviceRecord } from './pairing/registry';
 import { saveTake, TAKES_DIR, takeExists, takeName } from './takes';
 import { sameHostOrigin } from './origin';
+import { helperPairUrls } from './net';
+import { helperDevices } from './helpers';
 
 function bearer(req: Request): string | undefined {
   const m = /^Bearer\s+(\S+)\s*$/i.exec(req.get('authorization') ?? '');
@@ -90,6 +93,10 @@ export function createApp(ctx: ServerContext): express.Express {
       urls: ctx.urls(),
       warnings: m.warnings,
     });
+  });
+
+  api.get('/helper', (_req, res) => {
+    res.json({ urls: helperPairUrls(ctx.bound.http ?? ctx.config.http.port), helpers: helperDevices(ctx.hub.devices()) });
   });
 
   // every model call with its model id, latency and tokens (for the demo's "which Meta model did what")
@@ -232,6 +239,10 @@ export function createApp(ctx: ServerContext): express.Express {
     res.status(404).json({ error: 'not_found', message: `No route ${req.method} ${req.originalUrl}` });
   });
   app.use('/api', api);
+
+  app.get('/pair', (_req, res) => {
+    res.redirect(302, '/companion/?pair=1');
+  });
 
   // QR target. Browsers keep the #code fragment across this redirect.
   app.get('/p/:pairingId', (req, res) => {

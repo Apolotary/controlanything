@@ -48,7 +48,7 @@ describe('local tags and server snapshots', () => {
 
   it('clears the offline hint when the next full snapshot reports an online bridge', () => {
     const state = new ModeState();
-    state.snapshot([{ cardId: 'synth', label: 'Keyboard', connection: 'offline', hint: 'Open ControlEverything on your Mac and plug in the synth', action: 'open-companion' }]);
+    state.snapshot([{ cardId: 'synth', label: 'Keyboard', connection: 'offline', hint: 'Open ControlAnything on your Mac and plug in the synth', action: 'open-companion' }]);
     const original = state.byCard('synth');
     state.snapshot([{ cardId: 'synth', label: 'Keyboard', connection: 'offline', hint: 'Plug the synth into your Mac' }]);
     expect(state.byCard('synth')).toBe(original);

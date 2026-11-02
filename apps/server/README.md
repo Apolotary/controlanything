@@ -1,4 +1,4 @@
-# ControlEverything server (the "malleable server")
+# ControlAnything server (the "malleable server")
 
 Node 22.12+ / TypeScript (developed on Node 26). One process on the Mac: the WebSocket hub every client pairs with, the Meta model
 adapters, and the **brain**: an explicit setup loop that turns a tagged device into verified, generated controls when the user asks.

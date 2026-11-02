@@ -34,7 +34,7 @@ export function stepGuidance(phase: AgentPhase, status: StepStatus): AgentGuidan
 }
 
 export function synthConnectionGuidance(companionOnline = false): AgentGuidance {
-  const sentence = companionOnline ? 'Plug the synth into your Mac' : 'Open ControlEverything on your Mac and plug in the synth';
+  const sentence = companionOnline ? 'Plug the synth into your Mac' : 'Open ControlAnything on your Mac and plug in the synth';
   return { sentence, hint: sentence, ...(companionOnline ? {} : { action: 'open-companion' as const }) };
 }
 

@@ -4,18 +4,23 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <title>ControlEverything Companion</title>
+    <title>ControlAnything Companion</title>
     <link rel="icon" href="data:," />
   </head>
   <body>
     <div id="workbench" class="app" hidden>
-      <header class="app-header">
-        <div class="wordmark">ControlEverything</div>
+      <header id="app-header" class="app-header">
+        <div class="wordmark">ControlAnything</div>
         <button id="details-open" class="ghost" type="button" aria-controls="drawer" aria-haspopup="dialog" aria-expanded="false">Details</button>
       </header>
 
       <main class="calm-center">
         <section id="onboarding" class="onboarding panel" data-state="connecting" aria-labelledby="onboarding-title">
+          <div id="paired-summary" class="paired-summary" role="status" aria-live="polite" hidden>
+            <span class="paired-check" aria-hidden="true">✓</span>
+            <p class="paired-title">Paired with Quest 3</p>
+            <p class="onboarding-next">You can leave this page open; the headset uses it to reach your devices.</p>
+          </div>
           <p class="eyebrow">Your Mac + Quest</p>
           <h1 id="onboarding-title">Connecting to your room</h1>
           <p id="onboarding-next" class="onboarding-next" role="status" aria-live="polite"></p>
@@ -30,7 +35,7 @@
             </div>
           </div>
           <div id="headset-open" class="pairing-code" hidden>
-            <div id="headset-qr" class="qr" aria-label="Open ControlEverything in Quest Browser"></div>
+            <div id="headset-qr" class="qr" aria-label="Open ControlAnything in Quest Browser"></div>
             <p id="headset-url" class="small dim"></p>
           </div>
           <div id="connection-steps" class="connection-steps" hidden>

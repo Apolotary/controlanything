@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DeviceInfo } from '@ce/protocol';
 import type { Roster } from './executors';
-import { evaluateConnection, TagStore, tagSnapshot } from './tags';
+import { evaluateConnection, TagStore, tagSnapshot, tagCapability } from './tags';
 import { TargetStore } from './targets';
 import type { Target } from './types';
 
@@ -98,7 +98,7 @@ describe('tag connection evaluation', () => {
     ['only a headset', [device({ kind: 'quest', role: 'hmd', capabilities: ['camera', 'mic'], ports: [] })]],
   ])('offers Connect Mac for %s, without mistaking the server Mac for a MIDI bridge', (_name, devices) => {
     expect(evaluateConnection(target(), { devices: () => devices, macLocal: true })).toEqual({
-      connection: 'offline', hint: 'Open ControlEverything on your Mac and plug in the synth', action: 'open-companion',
+      connection: 'offline', hint: 'Open ControlAnything on your Mac and plug in the synth', action: 'open-companion',
     });
   });
 
@@ -110,7 +110,7 @@ describe('tag connection evaluation', () => {
 
   it('requires the original companion when a saved synth is assigned to it', () => {
     expect(evaluateConnection(ready(target()), { devices: () => [device({ deviceId: 'another-mac' })], macLocal: false })).toEqual({
-      connection: 'offline', hint: 'Open ControlEverything on your Mac and plug in the synth', action: 'open-companion',
+      connection: 'offline', hint: 'Open ControlAnything on your Mac and plug in the synth', action: 'open-companion',
     });
   });
 
@@ -159,13 +159,54 @@ describe('tag connection evaluation', () => {
     expect(evaluateConnection(tv, roster).connection).toBe('setup');
   });
 
-  it('uses the local Mac executor for a laptop, and supports the simulated room', () => {
+  it('requires a helper before using the local Mac executor for a laptop, and supports the simulated room', () => {
     const t = target('computer');
-    expect(evaluateConnection(t, { devices: () => [], macLocal: true }).connection).toBe('setup');
+    expect(evaluateConnection(t, { devices: () => [], macLocal: true })).toEqual({
+      connection: 'offline', hint: 'Open localhost:8787/pair on this laptop', action: 'open-companion',
+    });
+    expect(evaluateConnection(t, { devices: () => [device()], macLocal: true }).connection).toBe('setup');
     expect(evaluateConnection(t, { devices: () => [device({ capabilities: ['midi'] })], macLocal: false }).connection).toBe('offline');
     expect(evaluateConnection(t, { devices: () => [device({ kind: 'sim', capabilities: ['local'] })], macLocal: false }).connection).toBe('setup');
     expect(evaluateConnection(t, { devices: () => [device({ kind: 'mac', capabilities: ['local'] })], macLocal: false }).connection).toBe('setup');
     expect(evaluateConnection(t, { devices: () => [device({ kind: 'devterm', capabilities: ['local'] })], macLocal: false }).connection).toBe('offline');
+  });
+
+  it.each(['laptop', 'computer', 'MacBook'])('maps a detected %s to local control and the server pairing URL', (label) => {
+    const t = target('other');
+    t.card!.name = label;
+    expect(tagCapability(t)).toBe('local');
+    expect(evaluateConnection(t, { devices: () => [], macLocal: true, helperUrl: () => 'http://localhost:9876/pair' })).toEqual({
+      connection: 'offline', hint: 'Open localhost:9876/pair on this laptop', action: 'open-companion',
+    });
+  });
+
+  it('offers pairing for a laptop detection before model identification completes', () => {
+    const t = target();
+    t.card = undefined;
+    t.detection = { frameId: 'frame', detId: 'laptop', label: 'laptop', prompt: 'electronics', sensorDeviceId: 'headset',
+      score: 0.9, box: [0, 0, 100, 100], width: 100, height: 100, jpeg: '', capturedAt: 1 };
+    expect(evaluateConnection(t, { devices: () => [], macLocal: true })).toMatchObject({
+      connection: 'offline', hint: 'Open localhost:8787/pair on this laptop', action: 'open-companion',
+    });
+  });
+
+  it('keeps the laptop pairing hint when a local tag arrives before its camera frame', () => {
+    const t = target();
+    t.card = undefined;
+    const tag = new TagStore().add(t, 'laptop');
+    expect(tagSnapshot(tag, t, { devices: () => [], macLocal: true })).toMatchObject({
+      label: 'laptop', connection: 'offline', hint: 'Open localhost:8787/pair on this laptop', action: 'open-companion',
+    });
+  });
+
+  it('drops laptop readiness when its helper goes offline even if the internal Mac executor remains available', () => {
+    const t = ready(target('computer'));
+    t.driver!.executor = { deviceId: 'mac-local' };
+    const helper = device({ capabilities: [] });
+    const roster: Roster = { devices: () => [helper], macLocal: true };
+    expect(evaluateConnection(t, roster).connection).toBe('ready');
+    helper.online = false;
+    expect(evaluateConnection(t, roster)).toMatchObject({ connection: 'offline', action: 'open-companion' });
   });
 
   it('keeps an explicitly selected local device offline when only another executor is online', () => {
