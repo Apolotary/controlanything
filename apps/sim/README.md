@@ -12,26 +12,24 @@ are exactly the same as with real devices; only the transport is simulated.
 npm install
 cp .env.example .env     # optional: put MODEL_API_KEY in .env for live Meta models.
                          # Without a key the server runs in FIXTURE mode and replays recorded real responses.
-npm run demo:sim         # builds what is missing, starts the server, prints the URLs below
+CE_MAC_SILENT=1 CE_MAC_LOCAL=0 npm run demo:sim -- --fixture
+                         # builds missing apps; starts a silent fixture server
 ```
 
-1. **Open the sim room: <http://localhost:8787/sim/>** and click once anywhere (browsers only allow audio after a
-   click). It pairs itself (the page is on localhost, which the server trusts) and shows `PAIRED · ONLINE`.
-2. **Open the headset app: <http://localhost:8787/quest/>** (desktop emulation of the Quest 3; it shows the sim room
-   as its passthrough view).
-3. **Scan and link the light.** SCAN sends camera frames to the server; SAM 3.1 outlines the ceiling light and
-   Muse Spark identifies it. To link it, the agent sends IR codes from the sim's virtual IR LED while the camera
-   watches. Codes from other brands do nothing (the honest miss: `sent ✓ · seen ✗`), so the agent asks you to
-   **press the highlighted button on the virtual remote**; the sim captures that press like an IR receiver,
-   the agent replays the learned code, the camera sees the room get brighter (`seen ✓`), and the generated
-   controls arm after your one-tap confirmation. Move them and the light in the room changes.
-4. **The synth.** The synth answers the agent's MIDI identity request, plays the notes it sends, and every CC
-   it gets changes the sound and the synth's screen. The audio check reads the synth's own output.
+1. Open [the muted sim room](http://localhost:8787/sim/?mute=1&autopress=1). It pairs automatically on localhost. `autopress=1` presses the requested virtual remote button during learning; remove it for manual presses.
+2. Open [the desktop Quest emulator](http://localhost:8787/quest/?emulate=1&camera=sim&mute=1&mic=0) and choose **Enter AR**. Annotate starts automatically. Point at the light and click or press `L` to tag it; Muse Spark identifies it without starting setup.
+3. Switch to **Control** (`M`), select the tagged light, then choose **Set up control**. The server links, learns/researches codes, generates a driver, verifies reactions with the camera and generates controls. Wrong codes produce an honest miss. Tap **Enable controls** (`A`) before moving the control. **Stop** (`X`) cancels setup and disarms controls.
+4. Tag the synth in Annotate and switch to Control to inspect its bridge status. The audio verification path uses the synth's own analyser; the silent browser suites check synth setup eligibility, not its complete audio pipeline.
 
-Without the headset page you can still drive everything from the sim page: **SCAN 1 HZ** streams frames to the
-server, the **AGENT** panel shows each step with the Meta model that ran it, and the **WHAT THE SIM SEES AND DOES**
-log shows every IR frame the lamp received (and whether it obeyed), every MIDI message and every sensor reading.
-Model calls with ids, latency and tokens are listed at <http://localhost:8787/api/muse/calls>.
+The sim's **SCAN 1 HZ** streams frames for annotation; scanning alone never starts setup. The **AGENT** panel shows each step and model, and **WHAT THE SIM SEES AND DOES** logs IR, MIDI and sensor activity. Model ids, latency and tokens are at `/api/muse/calls`.
+
+```sh
+npm run build
+npm run e2e:judge    # 12 phases, ports 8796/8446
+npm run e2e:flows    # 18 phases, ports 8797/8447
+```
+
+Both checks require installed Chrome, use muted fixture servers and disable local YOLOX in favour of server fixture detections. Screenshots and diagnostics are saved under `research/screens/v2-flow/` and `research/screens/v2-flows/`. The broader flow check covers untagging, offline/reconnected bridges, mode switching, panel placement, Stop and emulated hand pinch.
 
 `npm run demo:sim -- --fixture` forces fixture mode; `-- --live` forces live calls; `-- --open` opens the pages.
 

@@ -4,7 +4,11 @@ How a thing the headset looked at becomes verified, generated controls. Companio
 
 ## 1. Principle
 
-**AI at compile time, deterministic runtime.** Meta models run only in the *discovery loop*, once per device: SCAN → IDENTIFY → LINK → LEARN/RESEARCH → DRIVE → VERIFY → FORGE → ARM. The *control loop* (hand or voice → `control.event` → driver action → `exec.command` → MIDI / IR / local op) is plain code with rate limits, under 1 ms of server time and no model in it. The agent sends nothing to a device before a person has selected it (`target.select`, approvers only); it drives the device only during VERIFY (one test per action) and, after ARM, in CONTROL; no control goes live before a second, deliberate tap. A command acknowledgement is never counted as success: the verdict comes from a sense (camera, microphone, USB descriptor, serial ack) and is named on screen.
+**Annotate first; Control only by request.** Entering AR selects Annotate: local YOLOX-Nano preview boxes plus background SAM device segmentation, All / Lights / Electronics filters, a default 3 m estimated range and a shared six-detection budget. The COCO people class is dropped in the detector worker; server scan prompts and labels also exclude people. Lights come from SAM, since the bundled COCO detector has no lamp class. Pinching sends `tag.add`; Muse Spark identifies the crop and the server persists the tag without starting setup.
+
+Switching to Control stops annotation scanning and hides untagged detections. `tags.state` reports `ready` (verified, armed, executor online), `setup` (reachable but needs setup) or `offline` (with a connection hint). Only **Set up control** (`control.setup`) starts LINK → LEARN/RESEARCH → DRIVE → VERIFY → FORGE → ARM. It requires Control mode, a tag and an available bridge, including a MIDI port for a synth. The setup request authorizes physical verification; **Enable controls** is a separate confirmation. `target.select` in Annotate only tags/identifies; selecting in Control reopens existing controls, never starts setup.
+
+**AI prepares controls; driver execution is deterministic.** `control.event` → validated driver action → `exec.command` → MIDI / IR / local operation contains no model call. Voice transcription, research and control edits still call models. Dispatch checks the mode, tag, executor and setup/armed state; a successful transport acknowledgement alone cannot prove a visible or audible effect. Stop cancels setup and queued work, disarms controls and stops automations. Returning to Annotate cancels unfinished setup and stops automations while preserving completed arming for a later return to Control.
 
 ## 2. Components
 
@@ -12,8 +16,11 @@ How a thing the headset looked at becomes verified, generated controls. Companio
   Quest 3 (WebXR, apps/quest)           Mac: server (apps/server)                         Executors / sensors
   ───────────────────────────           ──────────────────────────────────────────         ────────────────────────────
   passthrough frame + pose ─scan.frame─▶ SCAN   sam-3.1 (parallel device prompts)
-  outlines, tags, ping ◀────scan.result─ + QR decode (pairing by sight)
-  pinch a device ───────target.select──▶ IDENTIFY muse-spark-1.3 → DeviceCard ─device.card─▶ every HUD
+  YOLOX boxes (local worker)
+  SAM outlines ◀──────────scan.result─ + QR decode (pairing by sight)
+  pinch to tag ─────────────tag.add────▶ IDENTIFY muse-spark-1.3 → persisted tag
+  switch mode ─────────────mode.set───▶ CONTROL mode (no setup yet)
+  Set up control ───────control.setup─▶ check tag + bridge + explicit request
   "needs a companion" ◀───link.request── LINK   executor by capability; USB name + MIDI identity cross-check
                                         LEARN  one press per remote button ──sense.request(ir-capture)──▶ Cardputer IR receiver / sim remote
                                         RESEARCH curated charts + IR library (data/devices), web_search fallback
@@ -24,7 +31,7 @@ How a thing the headset looked at becomes verified, generated controls. Companio
   (companion / synth audio) ─sense.result─▶    audio oracle (RMS, centroid)            Mac local (osascript: volume, music, say)
   evidence strip ◀───────verify.result──                                               iPhone (torch, haptics, screen, say)
   hacks + 3D controls ◀────────ui.spec── FORGE  muse-spark-1.3 → ce.hackset/1 → compile → ce.gen3d/1   DevTerm (print, beep, say, screen)
-  one pinch ◀──arm.request / arm.confirm─▶ ARM   human confirmation (hold for irreversible)         Sim room (all of the above, virtual)
+  Enable controls ◀─arm.request / arm.confirm─▶ ARM   human confirmation (hold for irreversible)         Sim room (all of the above, virtual)
   pinch / twist ────────control.event──▶ CONTROL hack → action → op → exec.command (no model)  ──▶ device reacts
   push-to-talk PCM ───────voice.audio──▶ muse-voice-transcribe-1.0 → voice.text → scan / undo / panic / hack / edit
 ```
@@ -34,7 +41,7 @@ How a thing the headset looked at becomes verified, generated controls. Companio
 | Protocol | `packages/protocol` | zod schemas + TS types for every WebSocket message, the Driver, the HackSet, pairing helpers; zod → JSON Schema (`json-schema/*.json`) for the Python and Swift clients and as the Muse `json_schema` response formats. |
 | gen3d | `packages/gen3d` | The `ce.gen3d/1` spec (semantic controls + 3D presentation), archetype expansion, validator/repair, patches, theme. |
 | Server | `apps/server` | One Node process on the Mac: HTTPS/WSS `:8443` + HTTP/WS `:8787`, the hub at `/ws`, pairing, the Meta model adapters (`src/muse/`), the brain (`src/agent/`), the oracles (`src/oracle/`), SCAN (`src/scan/`), the forge (`src/gen3d/`), voice relay (`src/voice/`), curated device data (`data/devices/`), static hosting of `/quest/`, `/companion/`, `/sim/`. |
-| Quest app | `apps/quest` | WebXR hub: camera capture (`getUserMedia`, environment camera) with a pose ring buffer, `scan.frame` at ≤ 1 Hz in scan mode, HUD (outlines from SAM polygons, tags, brackets, ping lines, work log, model chips, evidence strip), pinch targeting with hit-test, voice push-to-talk, gen3d renderer, record/replay of takes, IWER desktop emulator. |
+| Quest app | `apps/quest` | WebXR app: camera capture with pose history, on-device YOLOX worker, SAM scans in Annotate, a mode/filter bar, tagged outlines and one selected control card. Inter SDF text via troika-three-text; poke and ray/pinch input; world-placed panels with gentle follow. Logs and evidence are in Details. IWER provides desktop emulation; record/replay is available. |
 | Mac workbench | `apps/companion` | Owner/approver UI; executors for MIDI (Web MIDI) and the Cardputer (Web Serial JSON lines); the audio oracle (synth USB audio or mic); the agent view (steps with model ids, driver, evidence, links, daemons). One tab executes (Web Locks), others stand by. |
 | Cardputer firmware | `firmware/cardputer` | IR node: raw / NEC / AEHA transmit at ≤ 4 frames/s, IR learning through a Grove IR receiver, pairing screen, hack menu on physical keys, serial protocol v1. |
 | iPhone | `apps/iphone` | SwiftUI client: pairing, 2D controls and hack lists, handheld scanner / second verification camera, local executor (torch, haptics, screen, say, beep). |
@@ -50,6 +57,7 @@ Every message is one envelope: `{ v: 1, type, id, ts, from, to?, payload }`. The
 | Session | `hello` / `welcome`, `presence`, `log`, `panic` | `hello` carries the device token; `welcome` the device id, role and model mode. |
 | Pairing | `pair.start`, `pair.status`, `pair.approve`, `pair.deny`, `pair.pending`, `pair.approved`, `pair.denied` | Device-code flow: QR + passcode on the unpaired client; approval from a paired quest/mac/iphone, localhost or the server terminal. Codes expire in 5 min, single use. |
 | Perception | `scan.frame` (quest → server), `scan.result` (server → HUDs), `target.select`, `target.status` | `scan.frame`: JPEG ≤ 1280 px, pose, camera info, purpose `scan` / `verify` / `pair`. `scan.result`: detections with label, score, box, ≤ 64-point polygon, matched `deviceId`, model id, latency. |
+| Modes/tags | `mode.set`, `mode.state`, `tag.add`, `tag.remove`, `tags.state`, `control.setup`, `control.cancel` | Server mode defaults to Annotate; tags are persisted. Setup is explicit and connection-gated. Full tag snapshots refresh on presence changes. |
 | Agent | `agent.step`, `device.card`, `link.request`, `link.result`, `driver.spec`, `driver.status` | Every step carries phase, status, model id, effort, latency, source (`live` / `fixture`) and an evidence line. `driver.status` has the per-action verdict (`pending` / `pass` / `fail` / `untested`). |
 | Execution | `exec.command` (server → executor), `exec.ack` (executor → server) | Op kinds: `midi` (cc, note, pc, identity request, panic), `ir` (raw µs timings or NEC/AEHA bytes), `local` (volume, music, say, torch, haptic, print, screen, beep). The ack says the bytes left; never that the device reacted. |
 | Sensing | `sense.request` (server → sensor), `sense.result` | Kinds: `frame` (a verify frame as `scan.frame`), `audio-features` (RMS, centroid, bands), `ir-capture` (raw timings from a receiver). |
@@ -76,13 +84,15 @@ IR codes are named by reference (`lib:<brand>/ch<n>/<key>` or `learned:<id>`); t
 
 ## 4. The agent state machine
 
-One `Target` per selected device (`TargetState`, `packages/protocol/src/primitives.ts`); every transition is broadcast as `target.status` and logged as an `agent.step` with the model that ran it.
+One `Target` per device (`TargetState`, `packages/protocol/src/primitives.ts`). Tagging stops at identification. The setup chain below begins only after an explicit `control.setup`; a newly available companion updates connection status and does not start setup automatically. Pipeline transitions use `target.status` and `agent.step`.
 
 ```
-scanned ─▶ identifying ─▶ identified ─▶ linking ─┬─▶ linked ─▶ researching ─▶ driving ─▶ verifying ─▶ verified ─▶ forging ─▶ forged ─▶ arming ─▶ armed ⇄ controlling
-                                                 └─▶ needs-companion ─(a client with the capability pairs)─▶ linked
-any state ─▶ failed   (no way to control this category · wrong device refused · no valid driver · nothing verified · cancelled)
-armed ─▶ verified/forged  (disarmed again: a later verification fails, or panic)
+ANNOTATE: scanned → identifying → identified (tag persisted; no setup)
+CONTROL:  explicit setup + tag + bridge → linking → linked → researching → driving
+          → verifying → verified → forging → forged → arming → armed ⇄ controlling
+no bridge → connection hint; connect it and request setup again
+setup failure/cancellation → failed
+Stop → cancel pending work, disarm controls, stop automations
 ```
 
 | Step (`src/agent/`) | What happens | Model |
@@ -95,7 +105,8 @@ armed ─▶ verified/forged  (disarmed again: a later verification fails, or pa
 | DRIVE `drive.ts` | `DriverDraft` via `json_schema` from the brief; validated; issues fed back. Writers in order: Spark low → Spark medium (repair) → Wonder low (token cap 4000, 60 s timeout, whitespace-loop guard) → curated template, labelled "no Meta model wrote it". | `muse-spark-1.3`, `muse-wonder-1.0` |
 | VERIFY `verify.ts` | Each action once, for real, visible-first (off, on, dimmer, brighter, colour, night last; the lamp is relit before brightness probes). Camera: a verify frame before and after (SAM re-finds the outline on the before frame), settle time for IR lamps (~3 s fade). Audio: a note held while sweeping the CC; feature windows before/after. Two consecutive confirmations make a pass. IR library candidates are cycled (bounded); every miss is a `verify.result` with `pass: false`. | `sam-3.1` (outline only) |
 | FORGE `../gen3d/forge.ts` | Hack set (`ce.hackset/1`) bound to verified `actionId`s via `json_schema`, streamed; deterministic checks (schema → bindings → geometry → safety); ≤ 2 repairs at medium effort; compiled to `ce.gen3d/1`. Controls bound to unverified actions are `armed: false`. | `muse-spark-1.3`, effort low |
-| ARM `arm.ts` | Before the generated controls go live: `arm.request` to every client; an approver (paired quest / mac / iphone, or localhost) answers `arm.confirm`; `hold: true` for irreversible drivers; 120 s expiry. The selection pinch that started the loop is the go-ahead for VERIFY's test drives. | none |
+| SKIN `../gen3d/skin.ts` | Optional device-inspired panel texture, generated alongside controls and published without delaying arming; `GEN3D_SKIN=0` disables it. | `muse-image-1.0` |
+| ARM `arm.ts` | Before the generated controls go live: `arm.request` to every client; an approver (paired quest / mac / iphone, or localhost) answers `arm.confirm`; `hold: true` for irreversible drivers; 120 s expiry. The explicit Set up control request is the go-ahead for VERIFY's test drives; tagging alone is not. | none |
 | CONTROL `control.ts`, `dispatch.ts` | `control.event` → hack → action → resolved op → `exec.command` with no await before the send; per-hack and per-executor token buckets; step planning for IR dimmers (≥ 334 ms between light changes); latest-wins coalescing under the limits; undo (inverse action or restore); panic. | none |
 
 Hack lifecycle on every surface (`HackStatus`): `ready` · `locked` (unverified) · `queued` · `uploading` (GEN · CHECK · SEND · SEEN) · `verified` · `failed`. Driver lifecycle (`DriverPhase`): `drafting` · `validating` · `verifying` · `verified` · `armed` · `disarmed` · `failed`.
@@ -140,7 +151,7 @@ A control bound to an unverified action has `armed: false`: it renders as a dim 
 | Agent runs | `GET /api/agent/steps` (work log with model ids), `/api/agent/exec` (every op and ack), `/api/agent/targets` (state, card, link, driver, verification, evidence), `/api/muse/calls` (every model call). | Tests replay the committed gen3d recordings through the current checks and require them to reach armed controls when the evidence passes. |
 | Learned codes | `apps/server/data/devices/<device>.learned.json`: capture timings, the hypothesis, the label the camera assigned, the evidence. | The sim lamp obeys exactly those codes once they exist, so the real remote's codes drive the virtual room too. |
 
-`npm test` runs 387 tests across 38 files (protocol, gen3d, oracles, codecs, the agent end to end over the real hub in sim mode, DevTerm contract tests against the JSON Schemas, Cardputer host tests separately).
+`npm test` covers the workspace suites (protocol, gen3d, oracles, codecs, the agent end to end over the real hub in sim mode, DevTerm contract tests against the JSON Schemas, Cardputer host tests separately). The muted Chrome checks `npm run e2e:judge` (12 phases) and `npm run e2e:flows` (18 phases) exercise the two-mode desktop flow; see the [judge path](../README.md#judge-path-no-hardware).
 
 ## 8. Measured numbers (Nov 2, 2026, live Meta Model API)
 
