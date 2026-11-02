@@ -3,7 +3,7 @@ import { PerspectiveCamera, Vector3 } from 'three';
 import { EXAMPLES, type ControlEvent } from '@ce/gen3d';
 import { SpecObject } from './build';
 import { MaterialClock } from './materials';
-import { newCursor, type Cursor } from './interact';
+import { MouseCursor, newCursor, type Cursor } from './interact';
 
 /** Headless harness: a SpecObject at the origin, a camera 0.6 m in front, one hand cursor. */
 function harness(name: string) {
@@ -82,5 +82,34 @@ describe('gen3d interaction (headless)', () => {
     step({ pinching: true });
     step({ pinching: false, justReleased: true });
     expect(events).toHaveLength(0);
+  });
+});
+
+describe('mouse raycast vs. HUD effects', () => {
+  it('a mouse ray through the room-dim plane (even while visible) still lands on a knob', async () => {
+    const { Group, PerspectiveCamera: Cam } = await import('three');
+    const { RoomDim } = await import('../fx/roomDim');
+    const camera = new Cam(60, 1, 0.02, 50);
+    camera.position.set(0, 0, 0);
+    camera.updateMatrixWorld(true);
+    const root = new Group();
+    const dim = new RoomDim();
+    dim.target = 0.5;
+    dim.update(camera, 1); // parked 0.3 m in front of the eyes, visible
+    root.add(dim);
+    const obj = new SpecObject(EXAMPLES['op1-knobs']!, { clock: new MaterialClock(), sink: { control: () => {} } });
+    obj.position.set(0, 0, -0.6);
+    root.add(obj);
+    root.updateMatrixWorld(true);
+    const cap = obj.nodes.get('k1.cap')!.getWorldPosition(new Vector3());
+    const ndc = cap.clone().project(camera);
+    const el = { addEventListener() {}, getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const mouse = new MouseCursor(el, camera);
+    (mouse as unknown as { ndc: { set(x: number, y: number): void } }).ndc.set(ndc.x, ndc.y);
+    mouse.setTargets([root]);
+    const c = mouse.update();
+    expect(dim.visible).toBe(true);
+    expect(c.tracked).toBe(true);
+    expect(c.position.distanceTo(cap)).toBeLessThan(0.03);
   });
 });
