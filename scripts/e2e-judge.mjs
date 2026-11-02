@@ -238,11 +238,15 @@ async function run() {
     assert.equal(await quest.evaluate(() => window.__ce.welcome.mode), 'fixture');
     await quest.evaluate(() => {
       window.__judgeEvents = [];
+      window.__judgeControls = [];
       const types = new Set(['target.status', 'device.card', 'agent.step', 'verify.result', 'ui.spec', 'arm.request', 'arm.result']);
       window.__ce.ws.tap('in', ({ type, payload }) => {
         if (!types.has(type)) return;
         window.__judgeEvents.push({ type, payload });
         if (window.__judgeEvents.length > 300) window.__judgeEvents.shift();
+      });
+      window.__ce.ws.tap('out', ({ type, payload }) => {
+        if (type === 'control.event') window.__judgeControls.push(payload);
       });
     });
     await quest.locator('#btn-enter').click();
@@ -301,17 +305,27 @@ async function run() {
   await phase('09-control-changes-light', async () => {
     await sim.waitForFunction(() => window.ceSim.lamp().power === 'on' && window.ceSimDebug.device.animator.settled);
     const before = await sim.evaluate(() => window.ceSim.lamp());
-    const control = await quest.evaluate(() => {
+    const control = await quest.evaluate((cardId) => {
       const app = window.__ce;
-      const mounted = [...app.hud.specs.values()].find((m) => m.targetId === app.lockedId && m.armed);
-      const off = mounted?.spec.controls.find((c) => /off/i.test(c.label)
-        && c.armed !== false && app.hud.root.getObjectByName(`control:${c.id}`));
-      return off && { id: off.id, sent: app.controls.sent };
-    });
-    assert(control, 'Armed HUD must expose an Off button');
+      const ui = window.__judgeEvents.findLast((e) => e.type === 'ui.spec' && e.payload.cardId === cardId)?.payload;
+      const mounted = app.hud.specs.get(ui?.gen3d?.specId);
+      if (!mounted?.armed || mounted.targetId !== app.lockedId) return null;
+      const hack = ui.hackset?.hacks.find((h) => h.kind === 'action' && h.commands.some((c) => c.action === 'off'));
+      const off = mounted.spec.controls.find((c) => c.armed !== false && (c.kind === 'trigger' || c.kind === 'toggle')
+        && (hack ? c.id === hack.id || c.binding?.args?.hack === hack.id : c.binding?.action === 'off'));
+      if (!off) return null;
+      const node = app.hud.root.getObjectByName(`control:${off.id}`)
+        ?? app.hud.root.getObjectByName(`action:${hack?.id ?? off.id}`);
+      if (!node) return null;
+      for (let current = node; current; current = current.parent) if (!current.visible) return null;
+      const id = node.name.startsWith('action:') ? hack?.id ?? off.id : off.id;
+      return { id, nodeName: node.name, specId: ui.specId, sent: window.__judgeControls.length };
+    }, cardId);
+    assert(control, 'Armed device HUD must expose its off action by hack id or command role');
     // Looking at the controls after verification is complete leaves its camera evidence undisturbed.
-    await pinch({ nodeName: `control:${control.id}`, turn: true });
-    await waitQuest((sent) => window.__ce.controls.sent > sent, control.sent);
+    await pinch({ nodeName: control.nodeName, turn: true });
+    await waitQuest(({ id, specId, sent }) => window.__judgeControls.slice(sent)
+      .some((event) => event.specId === specId && event.widgetId === id && event.value === true), control);
     await sim.waitForFunction(() => window.ceSim.lamp().power === 'off' && window.ceSimDebug.device.animator.settled);
     const after = await sim.evaluate(() => window.ceSim.lamp());
     assert.notDeepEqual(after, before);
@@ -329,7 +343,11 @@ async function diagnostics() {
     state.quest = await quest.evaluate(() => ({
       camera: window.__ce?.cameraState, hud: window.__ce?.hudKind,
       lockedId: window.__ce?.lockedId, pendingArm: window.__ce?.pendingArm,
-      targets: window.__ce?.targets.list(), events: window.__judgeEvents,
+      targets: window.__ce?.targets.list(), events: window.__judgeEvents, controls: window.__judgeControls,
+      specs: window.__ce?.hud.specs && [...window.__ce.hud.specs.values()].map((m) => ({
+        specId: m.spec.specId, targetId: m.targetId, armed: m.armed,
+        controls: m.spec.controls.map((c) => ({ id: c.id, action: c.binding?.action, armed: c.armed })),
+      })),
       log: document.querySelector('#log')?.textContent,
     })).catch((e) => ({ error: e.message }));
     await quest.screenshot({ path: join(SCREENS, `${currentPhase}-FAIL.png`), timeout: 5000 }).catch(() => {});

@@ -600,6 +600,8 @@ export class QuestApp {
     if (t) return t;
     if (hint.frameId && hint.detId) t = this.targets.list().find((x) => x.frameId === hint.frameId && x.detId === hint.detId);
     if (!t && this.pendingSelect && Date.now() - this.pendingSelect.at < 180_000) t = this.targets.get(this.pendingSelect.targetId);
+    // A room spec can arrive while a device selection is still pending.
+    if (t?.cardId && t.cardId !== cardId) return undefined;
     if (t && !t.cardId) t.cardId = cardId;
     return t;
   }
