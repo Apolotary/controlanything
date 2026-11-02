@@ -45,7 +45,7 @@ describe('HUD world placement', () => {
     head.position.set(2, 1.75, 3);
     head.quaternion.setFromAxisAngle(UP, Math.PI / 4);
     update(0);
-    const expected = new Vector3(-0.19, -0.32, -0.6).applyQuaternion(head.quaternion).add(head.position);
+    const expected = new Vector3(-0.24, -0.4, -0.6).applyQuaternion(head.quaternion).add(head.position);
     expect(panel.position.distanceTo(expected)).toBeLessThan(1e-6);
     expect(panel.quaternion.angleTo(head.quaternion)).toBeLessThan(1e-6);
   });
@@ -86,7 +86,7 @@ describe('HUD world placement', () => {
     head.quaternion.setFromAxisAngle(UP, Math.PI);
     update(1751);
     const distance = kind === 'card' ? THEME.card.dockDistance : 0.6;
-    const lateral = kind === 'idle' ? -0.19 : 0;
+    const lateral = kind === 'idle' ? -0.24 : 0;
     expect(panel.position.x).toBeCloseTo((lateral - distance) / 2);
     expect(panel.position.z).toBeCloseTo((-distance - lateral) / 2);
     update(1901);
@@ -100,14 +100,14 @@ describe('HUD world placement', () => {
     update(0);
     head.position.x = 0.75;
     update(100);
-    expect(panel.position.x).toBe(-0.19);
+    expect(panel.position.x).toBe(-0.24);
     head.position.x = 0.8;
     update(200);
-    expect(panel.position.x).toBe(-0.19);
+    expect(panel.position.x).toBe(-0.24);
     update(350);
-    expect(panel.position.x).toBeCloseTo(0.4 - 0.19);
+    expect(panel.position.x).toBeCloseTo(0.4 - 0.24);
     update(500);
-    expect(panel.position.x).toBeCloseTo(0.8 - 0.19);
+    expect(panel.position.x).toBeCloseTo(0.8 - 0.24);
     expect(panel.position.z).toBeCloseTo(-0.6);
   });
 

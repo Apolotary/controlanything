@@ -1439,8 +1439,8 @@ export class QuestApp {
       this.mouseCursor.update();
       const hands = { ...f.hands };
       if (hands.right?.controller && this.input.mouseAsHand) delete hands.right;
-      this.hud.update({ ...f, hands });
-    } else this.hud.update(f);
+      this.hud.update({ ...f, hands, ...(this.input.mouseAsHand ? { pointer: 'mouse' as const } : {}) });
+    } else this.hud.update(this.input.mouseAsHand ? { ...f, pointer: 'mouse' } : f);
     this.interact(f, time);
     this.handFeedback.update(f, this.input.diagnostics, this.renderer.info.render.calls);
     this.scanner.tick(time);

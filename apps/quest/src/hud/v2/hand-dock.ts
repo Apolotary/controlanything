@@ -38,7 +38,7 @@ export class HandDockAnchor {
     this.justOpened = false;
     if (this.previousTime !== null && frame.time < this.previousTime) this.closeImmediately();
     this.previousTime = frame.time;
-    this.tracked = realHand(frame.hands.left) || realHand(frame.hands.right);
+    this.tracked = frame.pointer !== 'mouse' && (realHand(frame.hands.left) || realHand(frame.hands.right));
     const hand = frame.hands[this.nonDominant];
 
     if (!this.tracked) {

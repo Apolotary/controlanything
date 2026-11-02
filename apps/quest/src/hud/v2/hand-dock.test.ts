@@ -152,4 +152,17 @@ describe('HandDockAnchor', () => {
     expect(anchor.opacity).toBe(0);
     expect(wrist.visible).toBe(true);
   });
+
+  it('uses the fallback while the desktop mouse drives input, even with emulated hands present', () => {
+    const { anchor, wrist, frame, update } = setup();
+    frame.hands = { left: hand(-0.2, false, 0), right: hand(0.2, false, 0) };
+    frame.pointer = 'mouse';
+    update(100);
+    expect(anchor.tracked).toBe(false);
+    expect(anchor.open).toBe(true);
+    expect(wrist.visible).toBe(false);
+    delete frame.pointer;
+    update(200);
+    expect(anchor.tracked).toBe(true);
+  });
 });

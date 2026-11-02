@@ -148,7 +148,7 @@ export class LeanHud implements Hud {
   private readonly dockPlacement = new WorldPanel({ distance: THEME.card.dockDistance, height: THEME.panel.headY });
   private readonly modalPlacement = new WorldPanel({ height: -0.06 });
   private readonly panelSeparation = new PanelSeparation();
-  private readonly deckPlacement = new WorldPanel({ distance: 0.6, height: -0.32, lateral: -0.19 });
+  private readonly deckPlacement = new WorldPanel({ distance: 0.6, height: -0.4, lateral: -0.24 });
   private readonly headPose = { position: this.head, quaternion: this.headQuaternion };
   private readonly noticePlacement = new WorldPanel({ height: THEME.panel.toastY });
   private placementKey = '';

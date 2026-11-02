@@ -38,6 +38,8 @@ export interface HudFrame {
   refSpace?: XRReferenceSpace;
   head: { position: Vector3; quaternion: Quaternion; ray?: { origin: Vector3; dir: Vector3 } };
   hands: { left?: HandState; right?: HandState };
+  /** 'mouse' while the desktop emulator's mouse drives input: hand-anchored UI uses its fallback. */
+  pointer?: 'mouse';
 }
 
 /** A detection the shell has placed in the world (capture pose + hit-test, pinch-to-refine). */
