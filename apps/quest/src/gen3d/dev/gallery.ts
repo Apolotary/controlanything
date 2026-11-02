@@ -325,7 +325,7 @@ async function lightScene(): Promise<void> {
   hud.upsertTarget(light);
   hud.setLocked('light');
   hud.setModelChips([{ id: 'sam-3.1', state: 'done' }, { id: 'muse-spark-1.3', state: 'done' }, { id: 'muse-voice-transcribe-1.0', state: 'idle' }]);
-  const steps: [string, string, 'ok' | 'running' | 'pending', string][] = [['s1', 'SCAN', 'ok', 'camera says ceiling light'], ['s2', 'IDENTIFY', 'ok', 'Koizumi · learned 7 codes'], ['s3', 'LINK', 'ok', 'seen ✓ · 8 of 8'], ['s4', 'HACK', 'ok', '5 hacks · 2 controls'], ['s5', 'UPLOAD', 'ok', 'armed by pinch'], ['s6', 'ROOM', 'running', 'blackout · breathe to tempo']];
+  const steps: [string, string, 'ok' | 'running' | 'pending', string][] = [['s1', 'SCAN', 'ok', 'camera says ceiling light'], ['s2', 'IDENTIFY', 'ok', 'Koizumi · learned 7 codes'], ['s3', 'LINK', 'ok', 'seen ✓ · 8 of 8'], ['s4', 'HACK', 'ok', '5 hacks · 2 controls'], ['s5', 'UPLOAD', 'ok', 'armed by pinch'], ['s6', 'ROOM', 'ok', 'blackout · breathe to tempo']];
   for (const [id, title, status, evidence] of steps) hud.logStep({ stepId: id, title, status, evidence, kind: status === 'ok' ? 'proof' : undefined });
   hud.showHackMenu('light', { title: 'CEILING LIGHT', subtitle: 'HACKS · your devices', items: [
     { id: 'h_bright', label: 'SET BRIGHTNESS', detail: 'brightness 0-100', kind: 'control', channel: 'ir', status: 'verified', verdict: 'seen' },

@@ -65,6 +65,8 @@ describe('gen3d interaction (headless)', () => {
       step({ pinching: true });
     }
     step({ pinching: false, justReleased: true });
+    // a flick keeps the knob turning for a moment (momentum), then it settles with its own 'end'
+    for (let i = 0; i < 60; i++) step({ pinching: false });
     const value = obj.getValue('blue') as number;
     expect(value).toBeGreaterThan(64);
     expect(events.some((e) => e.controlId === 'blue' && e.phase === 'move')).toBe(true);

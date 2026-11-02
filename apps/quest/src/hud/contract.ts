@@ -53,6 +53,8 @@ export interface HudTarget {
   contour?: [number, number][];
   score?: number;
   modelId?: string;
+  /** sam (default): full outline, tag, twin when locked · yolo: thin dashed brackets + a small class tag, never a focal object */
+  source?: 'sam' | 'yolo';
 }
 
 export interface PingLine {

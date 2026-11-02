@@ -85,60 +85,100 @@ describe('MouseCursor raycaster', () => {
   });
 });
 
-describe('HUD declutter', () => {
+describe('HUD redesign: one focal object, anchored to the device', () => {
   const light = { id: 'light', label: 'CEILING LIGHT', status: 'verified' as const, channel: 'ir' as const, position: [0.5, 1.95, -1.7] as [number, number, number], confirmed: true, sizeM: [0.45, 0.06, 0.45] as [number, number, number] };
+  const byName = (h: { root: { children: { name: string }[] } }, name: string) => h.root.children.find((o) => o.name === name) as unknown as { getObjectByName(n: string): unknown; position: Vector3 } | undefined;
 
   it('shows exactly one hack list per device: the spec\u2019s embedded list hides behind the HUD menu', async () => {
     const { h, frame } = hud();
     const { EXAMPLES } = await import('@ce/gen3d');
     h.upsertTarget(light);
     h.showHackMenu('light', { title: 'CEILING LIGHT', items: items('l') });
-    h.renderSpec(EXAMPLES['ceiling-dimmer']!, { targetId: 'light' }); // this example carries its own hack-list part "hacks"
+    h.renderSpec(EXAMPLES['ceiling-dimmer']!, { targetId: 'light' });
     h.update(frame());
-    const spec = h.root.children.find((o) => o.name === 'spec:ex_ceiling_dimmer')!;
-    expect(spec.getObjectByName('hacks')!.visible).toBe(false);
+    const spec = byName(h, 'spec:ex_ceiling_dimmer')!;
+    expect((spec.getObjectByName('hacks') as { visible: boolean }).visible).toBe(false);
     expect(h.root.children.filter((o) => o.name.startsWith('spec:hack_'))).toHaveLength(1);
   });
 
-  it('with a device locked, other menus collapse to a chip that a pinch expands', () => {
+  it('the focal device gets a one-sentence status pill above it and <= 4 big hack buttons below; other menus collapse to chips', () => {
     const { h, frame } = hud();
     h.upsertTarget(light);
     h.setLocked('light');
-    h.showHackMenu('light', { title: 'CEILING LIGHT', items: items('l') });
+    h.showHackMenu('light', { title: 'CEILING LIGHT', items: [
+      { id: 'a', label: 'TURN FULL ON', kind: 'action' }, { id: 'b', label: 'TURN OFF', kind: 'action' }, { id: 'c', label: 'SET NIGHT GLOW', kind: 'action' },
+      { id: 'd', label: 'BLINK', kind: 'action' }, { id: 'e', label: 'STROBE', kind: 'action' }, { id: 'f', label: 'SET BRIGHTNESS', kind: 'control' },
+    ] });
     h.showHackMenu('room', { title: 'ROOM', items: items('r') });
     h.update(frame());
-    const lightMenu = h.root.children.find((o) => o.name === 'spec:hack_light')!;
-    const room = h.root.children.find((o) => o.name === 'spec:hack_room')!;
-    expect(lightMenu.getObjectByName('list.row0')).toBeTruthy();
-    expect(room.getObjectByName('list.row0')).toBeFalsy();
+    const status = byName(h, 'spec:status')!;
+    expect(status).toBeTruthy();
+    expect(status.position.y).toBeGreaterThan(1.0);
+    const buttons = byName(h, 'spec:hack_light')!;
+    expect(buttons.getObjectByName('b0')).toBeTruthy();
+    expect(buttons.getObjectByName('b3')).toBeTruthy();
+    expect(buttons.getObjectByName('b4')).toBeFalsy(); // 5 actions → 4 buttons + "more"
+    expect(buttons.getObjectByName('more')).toBeTruthy();
+    expect(buttons.getObjectByName('list.row0')).toBeFalsy();
+    const room = byName(h, 'spec:hack_room')!;
     expect(room.getObjectByName('plate')).toBeTruthy();
-    expect(room.position.distanceTo(lightMenu.position)).toBeGreaterThan(0.25);
-    const p = room.getObjectByName('plate')!.getWorldPosition(new Vector3());
+    expect(room.getObjectByName('list.row0')).toBeFalsy();
+    // a pinch on the room chip expands it to the full list
+    const p = (room.getObjectByName('plate') as Vector3Holder).getWorldPosition(new Vector3());
     h.update(frame({ pinchPoint: p.clone(), pinching: true, justPinched: true }));
     h.update(frame({ pinchPoint: p.clone(), justReleased: true }));
     h.update(frame());
-    const expanded = h.root.children.find((o) => o.name === 'spec:hack_room')!;
-    expect(expanded.getObjectByName('list.row0')).toBeTruthy();
+    expect(byName(h, 'spec:hack_room')!.getObjectByName('list.row0')).toBeTruthy();
   });
 
-  it('once controls are armed the work log becomes a 3-line ticker; a pinch brings the full log back', async () => {
+  it('the work log lives in a Details chip; a pinch opens the full log and another closes it', () => {
     const { h, frame } = hud();
-    const { EXAMPLES } = await import('@ce/gen3d');
     for (let i = 0; i < 6; i++) h.logStep({ stepId: `s${i}`, title: `STEP ${i}`, status: 'ok' });
-    h.renderSpec(EXAMPLES['op1-knobs']!, { position: [0.4, 1.2, -0.6] });
     h.update(frame());
     const rows = (o: { getObjectByName(n: string): unknown }) => [0, 1, 2, 3, 4, 5, 6, 7].filter((i) => o.getObjectByName(`log.r${i}.t`)).length;
-    let log = h.root.children.find((o) => o.name === 'spec:worklog')!;
-    expect(rows(log)).toBe(6);
-    h.setArmed('ex_op1_knobs', true, 'heard');
-    h.update(frame());
-    log = h.root.children.find((o) => o.name === 'spec:worklog')!;
-    expect(rows(log)).toBe(3);
-    const p = log.getObjectByName('hit')!.getWorldPosition(new Vector3());
+    let det = byName(h, 'spec:details')!;
+    expect(rows(det)).toBe(0);
+    expect(det.getObjectByName('plate')).toBeTruthy();
+    const p = (det.getObjectByName('plate') as Vector3Holder).getWorldPosition(new Vector3());
     h.update(frame({ pinchPoint: p.clone(), pinching: true, justPinched: true }));
     h.update(frame({ pinchPoint: p.clone(), justReleased: true }));
     h.update(frame());
-    log = h.root.children.find((o) => o.name === 'spec:worklog')!;
-    expect(rows(log)).toBe(6);
+    det = byName(h, 'spec:details')!;
+    expect(rows(det)).toBe(6);
+    const q = (det.getObjectByName('hit') as Vector3Holder).getWorldPosition(new Vector3());
+    h.update(frame({ pinchPoint: q.clone(), pinching: true, justPinched: true }));
+    h.update(frame({ pinchPoint: q.clone(), justReleased: true }));
+    h.update(frame());
+    expect(rows(byName(h, 'spec:details')!)).toBe(0);
+  });
+
+  it('a verdict pulses the device and reads on the sentence; evidence history goes to details', () => {
+    const { h, frame } = hud();
+    h.upsertTarget(light);
+    h.setLocked('light');
+    h.update(frame());
+    h.showEvidence({ targetId: 'light', sent: '0x20DF10EF', expect: 'on', seen: 'brighter', verdict: 'ok' });
+    h.update(frame());
+    const status = byName(h, 'spec:status')!;
+    const text = (status.getObjectByName('text') as { text: string }).text;
+    expect(text.toLowerCase()).toContain('seen');
+    expect(h.root.children.some((o) => o.name === 'spec:evidence')).toBe(false);
+  });
+
+  it('yolo targets draw as thin boxes, move cheaply and are never lockable', () => {
+    const { h, frame } = hud();
+    h.upsertTarget({ id: 'y1', label: 'KEYBOARD', status: 'scanned', position: [0, 1, -1], confirmed: false, sizeM: [0.3, 0.1, 0.2], score: 0.82, source: 'yolo' });
+    h.update(frame());
+    const y = byName(h, 'spec:yolo_y1')!;
+    expect(y).toBeTruthy();
+    expect((y.getObjectByName('tag') as { text: string }).text).toBe('KEYBOARD 82');
+    h.upsertTarget({ id: 'y1', label: 'KEYBOARD', status: 'scanned', position: [0.1, 1, -1], confirmed: false, sizeM: [0.3, 0.1, 0.2], score: 0.9, source: 'yolo' });
+    h.update(frame());
+    expect(byName(h, 'spec:yolo_y1')).toBe(y); // same object, moved
+    expect(y.position.x).toBeCloseTo(0.1, 5);
+    h.setLocked('y1');
+    expect(h.root.children.some((o) => o.name === 'spec:tgt_y1')).toBe(false);
   });
 });
+
+type Vector3Holder = { getWorldPosition(v: Vector3): Vector3 };

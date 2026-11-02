@@ -51,6 +51,8 @@ interface BRun {
   b: Behavior;
   node: Object3D;
   parent: Object3D;
+  /** rotate: residual angular velocity (normalised units per second) after release, decays over ~0.3 s */
+  momentum: number;
   ctrl?: ControlState;
   /** archetype group this behaviour belongs to (for hover visibility) */
   archetypeId?: string;
@@ -71,6 +73,8 @@ interface BRun {
 interface Grab {
   run: BRun;
   cursorId: string;
+  /** smoothed rate of change of t (per second) for momentum on release */
+  vel: number;
   startLocal: Vector3;
   lastLocal: Vector3;
   lastAngle: number;
@@ -187,7 +191,7 @@ export class SpecObject extends Group {
       const part = this.parts.get(b.partId)!;
       const archetypeId = this.expanded.origin.get(b.partId) ?? (part.kind === 'group' ? part.id : undefined);
       const radius = b.grabRadius ?? Math.max(0.03, this.subtreeRadius(node) + 0.02);
-      this.runs.push({ b, node, parent: node.parent ?? this, ctrl, archetypeId, restPos: node.position.clone(), restQuat: node.quaternion.clone(), radius, owner: null, pressedBy: null, pressAmt: 0, pull: 0, pokeArmed: new Set(), lastPress: 0, hover: 0, hoverBy: new Set(), toggleDragged: false });
+      this.runs.push({ b, node, parent: node.parent ?? this, momentum: 0, ctrl, archetypeId, restPos: node.position.clone(), restQuat: node.quaternion.clone(), radius, owner: null, pressedBy: null, pressAmt: 0, pull: 0, pokeArmed: new Set(), lastPress: 0, hover: 0, hoverBy: new Set(), toggleDragged: false });
     }
 
     // feedback
@@ -619,6 +623,16 @@ export class SpecObject extends Group {
       }
     }
 
+    // momentum after a flick
+    for (const r of this.runs) {
+      if (!r.momentum || r.owner || !r.ctrl) continue;
+      r.momentum *= Math.exp(-dt / 0.3);
+      const t = clamp(r.ctrl.t + r.momentum * dt, 0, 1);
+      if (Math.abs(r.momentum) < 0.05 || t === 0 || t === 1) {
+        r.momentum = 0;
+        this.setT(r.ctrl, t, undefined, 'end');
+      } else this.setT(r.ctrl, this.detent(r, t), undefined, 'move');
+    }
     // smoothing of control visuals
     for (const c of this.controls.values()) {
       c.visualT = damp(c.visualT, c.t, 0.05, dt);
@@ -697,7 +711,9 @@ export class SpecObject extends Group {
       objectOffset: new Vector3(),
       committedT: r.ctrl?.t ?? 0,
       committedTy: r.ctrl?.ty ?? 0,
+      vel: 0,
     };
+    r.momentum = 0;
     const axis = r.b.axis ?? (r.b.type === 'slide' ? 'y' : 'z');
     if (r.b.type === 'slide' || r.b.type === 'pull') {
       const travel = r.b.travel ?? [0, 0.16];
@@ -757,6 +773,7 @@ export class SpecObject extends Group {
         let dT = g.mode === 'drag' ? (dDrag / gain) * sign : (dTwist / sweepLen) * sign;
         if (r.b.detents && r.b.detents > 0) dT *= 1; // detents are applied by quantisation below
         const nextT = clamp(g.committedT + dT, 0, 1);
+        g.vel = damp(g.vel, dT / Math.max(dt, 1e-3), 0.08, dt);
         g.committedT = nextT;
         this.setT(ctrl, this.detent(r, nextT), undefined, 'move');
         break;
@@ -814,6 +831,11 @@ export class SpecObject extends Group {
     if (r.b.type === 'pull') {
       if (r.pull >= 0.6) this.firePull(r, ctrl);
       r.pull = 0;
+      return;
+    }
+    // momentum: a flick keeps the knob turning for ~0.3 s (continuous controls only), ends with its own 'end'
+    if (r.b.type === 'rotate' && ctrl.control.kind === 'continuous' && Math.abs(g.vel) > 0.6) {
+      r.momentum = clamp(g.vel, -4, 4);
       return;
     }
     // release jump guard: the committed value is what the hand held before the fingers opened

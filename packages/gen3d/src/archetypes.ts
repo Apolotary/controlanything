@@ -280,7 +280,8 @@ export function expandArchetype(a: Part, ctx: ExpandContext): Expansion {
       if (round) parts.push(cyl(`${id}.face`, `${id}.cap`, size / 2, h, [0, 0, h / 2], holo(body, { fresnel: 3, opacity: 0.95 }), { transform: { position: [0, 0, h / 2], rotationDeg: [90, 0, 0] } }));
       else parts.push(box(`${id}.face`, `${id}.cap`, size, size, h, [0, 0, h / 2], holo(body, { fresnel: 3, opacity: 0.95 }), { dims: { radius: 0.006 } }));
       parts.push(ring(`${id}.rim`, `${id}.cap`, size / 2 - 0.004, size / 2 - 0.001, [0, 0, h + 0.0005], solidGlow(accent), 360, 0, { role: 'indicator' }));
-      if (showLabel && label) parts.push(text(`${id}.label`, `${id}.cap`, label, [0, 0, h + 0.001], { heightM: Math.min(0.008, size * 0.16), color: NEON.text }, { role: 'label' }));
+      const capText = p.title ?? label;
+      if (showLabel && capText) parts.push(text(`${id}.label`, `${id}.cap`, capText, [0, 0, h + 0.001], { heightM: p.title && p.title.length <= 2 ? Math.min(0.016, size * 0.34) : Math.min(0.008, size * 0.16), color: p.title && p.title.length <= 2 ? accent : NEON.text, uppercase: false }, { role: 'label' }));
       if (cid) {
         const momentary = p.momentary ?? c?.kind === 'trigger';
         behaviors.push({ id: `${id}.press`, partId: `${id}.cap`, controlId: cid, type: momentary ? 'press' : 'toggle', axis: 'z', depth: 0.007, gestures: ['poke', 'pinch'], grabRadius: size / 2 + 0.02 });
