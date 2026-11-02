@@ -15,6 +15,7 @@ export class ModeState {
   mode: AppMode = 'annotate';
   readonly tags = new Map<string, LocalTag>();
   readonly removals = new Set<string>();
+  readonly savedCards = new Set<string>();
   private readonly cancelled = new Map<string, LocalTag>();
 
   add(targetId: string, payload: PayloadOf<'tag.add'>): LocalTag {
@@ -54,6 +55,8 @@ export class ModeState {
       let nearest = Infinity;
       for (const candidate of this.tags.values()) {
         if (candidate.cardId) continue;
+        if (candidate.pending?.targetId === remote.cardId) { tag = candidate; break; }
+        if (this.savedCards.has(remote.cardId)) continue;
         const a = candidate.pending?.position ?? candidate.position, b = remote.position;
         const distance = a && b ? Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) : Infinity;
         const sameLabel = candidate.label.toLowerCase() === remote.label.toLowerCase();
@@ -74,6 +77,8 @@ export class ModeState {
   }
 
   private matches(local: LocalTag, remote: TaggedDevice): boolean {
+    if (local.pending?.targetId === remote.cardId) return true;
+    if (this.savedCards.has(remote.cardId)) return false;
     const a = local.pending?.position ?? local.position, b = remote.position;
     if (a && b) return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) < 0.5;
     return local.label.toLowerCase() === remote.label.toLowerCase();

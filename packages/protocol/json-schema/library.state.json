@@ -1,0 +1,283 @@
+{
+  "title": "library.state",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "library.state"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "devices": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "cardId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "displayName": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "hidden": {
+                "type": "boolean"
+              },
+              "identity": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "appearance": {
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "maker": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "model": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "category": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "executorDeviceId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "portId": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "portName": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "manufacturer": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "irFingerprint": {
+                    "type": "string",
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "label"
+                ],
+                "additionalProperties": false
+              },
+              "placement": {
+                "type": "object",
+                "properties": {
+                  "headsetId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "origin": {
+                    "type": "string",
+                    "maxLength": 2048,
+                    "format": "uri"
+                  },
+                  "handle": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "panelOffset": {
+                    "type": "object",
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      },
+                      "z": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "x",
+                      "y",
+                      "z"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "fallback": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120
+                      },
+                      "appearance": {
+                        "type": "string",
+                        "maxLength": 2000
+                      }
+                    },
+                    "required": [
+                      "label"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "updatedAt": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "headsetId",
+                  "origin",
+                  "panelOffset",
+                  "fallback",
+                  "updatedAt"
+                ],
+                "additionalProperties": false
+              },
+              "createdAt": {
+                "type": "number",
+                "minimum": 0
+              },
+              "updatedAt": {
+                "type": "number",
+                "minimum": 0
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "activeVersionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "versions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "versionId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "createdAt": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "specId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    }
+                  },
+                  "required": [
+                    "versionId",
+                    "createdAt"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "lastKnownState": {
+                "type": "object",
+                "properties": {
+                  "at": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "stepIndex": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "number"
+                    }
+                  },
+                  "paramValues": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "required": [
+                  "at",
+                  "stepIndex",
+                  "paramValues"
+                ],
+                "additionalProperties": false
+              },
+              "connection": {
+                "type": "string",
+                "enum": [
+                  "ready",
+                  "setup",
+                  "offline"
+                ]
+              }
+            },
+            "required": [
+              "cardId",
+              "displayName",
+              "hidden",
+              "identity",
+              "createdAt",
+              "updatedAt",
+              "enabled",
+              "versions",
+              "connection"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "devices"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

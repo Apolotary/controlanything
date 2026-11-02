@@ -24,6 +24,7 @@ export {
   type ForgeProgress,
   type ForgeRequest,
   type ForgeResult,
+  ForgeSnapshot,
   MAX_REPAIRS,
   REPAIR_EFFORT,
   type UiSpec,

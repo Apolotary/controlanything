@@ -30,6 +30,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { SERVER_NAME, SERVER_VERSION } from './config';
 import type { ServerContext } from './context';
 import { agentRouter } from './agent/routes';
+import { libraryRouter } from './agent/libraryRoutes';
 import { gen3dRouter, skinsRouter } from './gen3d';
 import { MAX_AUDIO_BYTES, requestCancellation, RequestCancelledError, TranscribeInputError, TranscribeUpstreamError } from './muse';
 import { type Approver, PairingError } from './pairing/manager';
@@ -154,6 +155,8 @@ export function createApp(ctx: ServerContext): express.Express {
     requireApprover(req);
     res.json({ spaceId: ctx.registry.spaceId, devices: ctx.hub.devices() });
   });
+
+  api.use('/library', libraryRouter(ctx));
 
   api.delete('/devices/:id', (req, res) => {
     requireApprover(req);

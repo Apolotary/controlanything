@@ -30,6 +30,11 @@ export class TargetStore {
     return () => this.listeners.delete(fn);
   }
 
+  /** Notify durable observers after an acknowledged value changes without a state transition. */
+  changed(t: Target): void {
+    if (this.targets.get(t.cardId) === t) for (const fn of this.listeners) fn(t);
+  }
+
   private counters = new Map<string, number>();
 
   /** "ceiling-light-1", "synthesizer-2": stable across runs for the same path, so recorded runs replay. */
@@ -75,7 +80,7 @@ export class TargetStore {
     } catch (e) {
       this.log(`[target] status broadcast failed: ${(e as Error).message}`);
     }
-    for (const fn of this.listeners) fn(t);
+    this.changed(t);
   }
 
   /** Current wire state for a reconnect; reading it never starts work. */

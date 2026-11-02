@@ -53,7 +53,7 @@ describe('TagStore', () => {
     store.sync(t);
     const saved = new TagStore(file).get(t.cardId);
     expect(saved).toMatchObject({ label: 'Keyboard', position: { x: 1, y: 2, z: -1 }, card: t.card, driver: t.driver, verification: { cutoff: 'pass' }, specId: 'spec', uiSpec: { specId: 'spec', cardId: t.cardId, driverId: 'driver' }, armed: true });
-    expect(readFileSync(file, 'utf8')).not.toContain('abort');
+    expect(readFileSync(join(dir, 'library.json'), 'utf8')).not.toContain('abort');
     const restored = new TargetStore({ broadcast: () => 0 }).create(saved);
     expect(evaluateConnection(restored, { devices: () => [device()], macLocal: false }).connection).toBe('ready');
   });

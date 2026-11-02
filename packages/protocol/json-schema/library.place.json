@@ -1,0 +1,126 @@
+{
+  "title": "library.place",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "library.place"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "cardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "placement": {
+          "type": "object",
+          "properties": {
+            "headsetId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "origin": {
+              "type": "string",
+              "maxLength": 2048,
+              "format": "uri"
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "panelOffset": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "number"
+                },
+                "y": {
+                  "type": "number"
+                },
+                "z": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "x",
+                "y",
+                "z"
+              ],
+              "additionalProperties": false
+            },
+            "fallback": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                "appearance": {
+                  "type": "string",
+                  "maxLength": 2000
+                }
+              },
+              "required": [
+                "label"
+              ],
+              "additionalProperties": false
+            },
+            "updatedAt": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "headsetId",
+            "origin",
+            "panelOffset",
+            "fallback",
+            "updatedAt"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "cardId",
+        "placement"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}
