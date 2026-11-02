@@ -38,6 +38,7 @@ describe('HandFeedback', () => {
     expect(feedback.root.children).toHaveLength(4);
     expect(left.geometry).toBe(right.geometry);
     expect(left.material).toBe(right.material);
+    expect((left.material as MeshBasicMaterial).depthTest).toBe(true);
     expect(left.geometry.parameters.widthSegments).toBe(8);
     expect(left.position.toArray()).toEqual([0, 0, -0.4]);
     expect(left.visible).toBe(true);
@@ -55,6 +56,7 @@ describe('HandFeedback', () => {
     expect(right.visible).toBe(false);
     expect(left.geometry).toBe(right.geometry);
     expect(left.material).toBe(right.material);
+    expect((left.material as MeshBasicMaterial).depthTest).toBe(true);
     expect(left.position.y).toBeCloseTo(2.006);
     expect(left.scale.x).toBeCloseTo(0.335);
     expect(new Vector3(0, 0, 1).applyQuaternion(left.quaternion).y).toBeCloseTo(1);

@@ -2,7 +2,7 @@ import { Camera, Group, Matrix4, Mesh, MeshBasicMaterial, Object3D, PlaneGeometr
 import { applyPatch, type Control, type ControlEvent, type Gen3dSpec, type HackItem, type ModelChip, type Patch } from '@ce/gen3d';
 import { Emitter } from '../../gen3d/events';
 import { handCursor, newCursor, type Cursor } from '../../gen3d/interact';
-import type { AgentStepLike, ConfirmRequest, DeckKey, EvidenceState, Hud, HudEvents, HudFrame, HudTarget, PingLine, UploadState } from '../contract';
+import type { AgentStepLike, ConfirmRequest, DeviceState, HomeState, EvidenceState, Hud, HudEvents, HudFrame, HudTarget, PingLine, UploadState } from '../contract';
 import { BoxField } from './boxes';
 import { makeText, setText, type SdfText } from './text';
 import { THEME } from './theme';
@@ -41,8 +41,9 @@ interface Capture {
   hasTip: boolean;
   pokeBlocked: boolean;
   pokePlane: Matrix4;
+  dragNear: boolean;
 }
-const newCapture = (): Capture => ({ widget: null, mode: null, wasPinching: false, tip: new Vector3(), hasTip: false, pokeBlocked: false, pokePlane: new Matrix4() });
+const newCapture = (): Capture => ({ widget: null, mode: null, wasPinching: false, tip: new Vector3(), hasTip: false, pokeBlocked: false, pokePlane: new Matrix4(), dragNear: false });
 
 function title(value: string, length = 36): string {
   const s = value.trim().slice(0, length);
@@ -80,6 +81,8 @@ export class LeanHud implements Hud {
   private readonly surfaces = new GlassSurfaces();
   private readonly trackGeometry = new PlaneGeometry(1, 1);
   private readonly reticles = new PinchReticles();
+  private readonly reticlePoints = [new Vector3(), new Vector3()];
+  private readonly reticleHits: (Vector3 | null)[] = [null, null];
   private readonly tether = new TargetTether();
   private readonly verdict = new Group();
   private readonly progress = new Group();
@@ -92,9 +95,16 @@ export class LeanHud implements Hud {
   private readonly details = new Group();
   private readonly modal = new Group();
   private readonly deck = new Group();
+  private home: HomeState = { mode: 'annotate', filter: 'electronics', tagged: 0, status: 'Tag the devices you want to control' };
+  private deviceState: DeviceState | null = null;
+  private wristOpen = false;
+  private readonly homePosition = new Vector3();
+  private readonly homeRotation = new Quaternion();
+  private readonly homeCount = makeText({ text: '0 tagged', size: THEME.font.detail, anchorX: 'center', singleLine: true, maxWidth: 0.11 });
+  private readonly homeStatus = makeText({ text: '', size: THEME.font.detail, anchorX: 'center', singleLine: true, maxWidth: 0.44 });
   private readonly notice = new Group();
   private readonly heading = makeText({ text: 'Look at a device', size: THEME.font.title, weight: 600, singleLine: true, maxWidth: THEME.card.width - THEME.card.padding * 2 - THEME.card.chipWidth - THEME.card.padding });
-  private readonly status = makeText({ text: 'Pinch a box to learn.', color: THEME.color.muted, singleLine: true, maxWidth: THEME.control.width });
+  private readonly status = makeText({ text: '', color: THEME.color.muted, maxWidth: THEME.control.width, maxHeight: 0.105, anchorY: 'top' });
   private readonly detailText = makeText({ text: '', size: THEME.font.detail, maxWidth: THEME.panel.textWidth, anchorY: 'top' });
   private readonly noticeText = makeText({ text: '', maxWidth: THEME.panel.textWidth, anchorX: 'center' });
   private locked: string | null = null;
@@ -127,7 +137,8 @@ export class LeanHud implements Hud {
   private readonly idlePlacement = new WorldPanel({ distance: THEME.card.distance, height: THEME.panel.headY });
   private readonly dockPlacement = new WorldPanel({ distance: THEME.card.dockDistance, height: THEME.panel.headY });
   private readonly modalPlacement = new WorldPanel({ height: -0.06 });
-  private readonly deckPlacement = new WorldPanel();
+  private readonly deckPlacement = new WorldPanel({ distance: 0.6, height: -0.4 });
+  private readonly headPose = { position: this.head, quaternion: this.headQuaternion };
   private readonly noticePlacement = new WorldPanel({ height: THEME.panel.toastY });
   private placementKey = '';
   private docked = false;
@@ -140,18 +151,20 @@ export class LeanHud implements Hud {
     this.controls.name = 'device-controls';
     this.details.name = 'details-panel';
     this.modal.name = 'confirmation-panel';
-    this.deck.name = 'deck';
+    this.deck.name = 'home-bar';
     this.notice.name = 'notice';
     this.root.add(this.boxes, this.card, this.modal, this.deck, this.notice, this.reticles, this.tether);
     this.card.add(this.plate(THEME.card.width, THEME.card.height), this.heading, this.status, this.controls, this.details, this.verdict, this.progress);
     this.heading.position.set(-THEME.card.width / 2 + THEME.card.padding, THEME.card.titleY, THEME.panel.depth);
     this.status.position.set(this.heading.position.x, THEME.card.statusY, THEME.panel.depth);
-    this.details.position.y = -THEME.card.height / 2 - THEME.panel.detailHeight / 2 - THEME.panel.gap;
-    this.details.add(this.plate(THEME.panel.width, THEME.panel.detailHeight), this.detailText);
-    this.detailText.position.set(-THEME.panel.textWidth / 2, THEME.panel.detailHeight / 2 - THEME.card.padding, THEME.panel.depth);
+    this.details.position.z = THEME.panel.depth;
+    this.details.add(this.detailText);
+    this.detailText.position.set(-THEME.panel.textWidth / 2, 0.06, THEME.panel.depth);
     this.details.visible = false;
     this.notice.add(this.noticeText);
-    this.notice.visible = this.modal.visible = this.deck.visible = false;
+    this.notice.visible = this.modal.visible = false;
+    this.deck.visible = true;
+    this.widgets.push({ group: this.card, w: THEME.card.width, h: THEME.card.height, kind: 'handle', start: () => {}, lastMove: 0 });
     this.heading.name = 'device-name';
     this.status.name = 'device-status';
     this.verdict.name = 'verdict-chip';
@@ -179,6 +192,7 @@ export class LeanHud implements Hud {
     scene.add(this.root);
     this.camera.getWorldPosition(this.head);
     this.camera.getWorldQuaternion(this.headQuaternion);
+    this.refreshHome();
     this.refreshCard();
     this.place();
   }
@@ -235,20 +249,19 @@ export class LeanHud implements Hud {
     }
     return last;
   }
-  private isArmed(m: Mounted, control: Control): boolean { return m.armed && (control.armed ?? true); }
+  private isArmed(m: Mounted, control: Control): boolean { return this.home.mode === 'control' && !!this.selected()?.tagged && this.selectedConnection() === 'ready' && !this.deviceState?.busy && m.armed && (control.armed ?? true); }
+  private selectedConnection(): DeviceState['connection'] { return this.deviceState?.targetId === this.locked ? this.deviceState.connection : this.selected()?.connection ?? 'unknown'; }
   private refreshStatus(): void {
     const target = this.selected(), m = this.mounted();
     const failed = this.evidence?.verdict === 'fail' || this.upload?.verdict === 'fail' || target?.status === 'failed' || target?.status === 'no-reaction';
     const pending = this.evidence?.verdict === 'pending' || this.upload?.verdict === 'pending';
     const verified = !failed && !pending && (this.evidence?.verdict === 'ok' || this.upload?.verdict === 'ok' || target?.status === 'verified' || target?.status === 'controlled');
-    let text = this.locked ? 'Learning this device…' : this.scanning ? 'Pinch a box to learn.' : 'Start scanning to find devices.';
-    if (target?.status === 'uploading' || target?.status === 'awaiting' || pending) text = 'Testing: did it react?';
-    else if (m && m.spec.controls.some((c) => this.isArmed(m, c))) text = 'Ready to control';
-    else if (verified) text = 'Response verified';
-    if (failed) text = 'No reaction. Try again.';
-    setText(this.status, text);
+    const state = this.deviceState?.targetId === this.locked ? this.deviceState : null;
+    const connection = this.selectedConnection();
+    const text = state?.busy ? state.sentence ?? 'Setting up control…' : connection === 'offline' ? state?.hint ?? 'Connect a companion to control this device.' : connection === 'unknown' ? 'Waiting for connection status…' : connection === 'setup' ? state?.hint ?? 'Set up control for this device.' : m?.armed ? 'Ready to control' : 'Confirm to enable controls';
+    setText(this.status, text.slice(0, 200));
     this.verdict.visible = verified;
-    this.progress.visible = !!this.locked;
+    this.progress.visible = false;
     const steps = this.upload?.steps?.length ?? 0;
     const amount = failed ? 0 : verified ? 1 : steps ? Math.min(1, this.upload!.stepsDone / steps) : pending ? 0.5 : 0.12;
     this.progress.userData.value = amount;
@@ -259,22 +272,33 @@ export class LeanHud implements Hud {
   private refreshCard(): void {
     const target = this.selected(), m = this.mounted();
     const menu = this.menus.get(this.locked ?? this.menuTarget ?? '');
-    this.card.visible = !this.deck.visible && !this.modal.visible;
+    this.card.visible = this.home.mode === 'control' && !!target?.tagged && !this.modal.visible;
     setText(this.heading, title(target?.label ?? menu?.title ?? m?.spec.title ?? 'Look at a device', 24));
     this.refreshStatus();
+    this.details.visible = this.detailsOpen && this.card.visible && this.selectedConnection() === 'ready' && !this.deviceState?.busy;
+    this.status.visible = !this.details.visible;
     const signature = `${this.locked}/${m?.spec.specId}/${m?.armed}/${m?.spec.controls.filter((c) => this.isArmed(m, c)).map((c) => c.id).join(',')}/${menu?.items.map((item) => item.id).join(',')}`;
     if (signature !== this.controlsSignature) { this.controlsStarted = this.time; this.controlsSignature = signature; }
     this.clear(this.controls);
+    if (!this.card.visible) return;
+    const state = this.deviceState?.targetId === this.locked ? this.deviceState : null;
+    const connection = this.selectedConnection();
+    if (state?.busy) {
+      this.button(this.controls, 'control-cancel', 'Cancel', 0, THEME.card.buttonsY, 0.16, 'handle', () => this.events.emit('cancel', { targetId: target!.id }));
+      return;
+    }
+    if (connection !== 'ready') {
+      if (connection === 'setup') this.button(this.controls, 'control-setup', 'Set up control', 0, THEME.card.buttonsY, 0.24, 'handle', () => this.events.emit('setup', { targetId: target!.id }));
+      if (connection === 'offline') this.button(this.controls, 'control-pair', 'Look at pairing QR', 0, THEME.card.buttonsY, 0.26, 'handle', () => this.events.emit('pair', { targetId: target!.id }));
+      return;
+    }
     this.button(this.controls, 'details-toggle', this.detailsOpen ? 'Close details' : 'Details', 0, THEME.card.detailsY, THEME.control.buttonWidth * 1.5, 'handle', () => {
       this.detailsOpen = !this.detailsOpen;
       this.details.visible = this.detailsOpen;
       this.refreshDetails();
       this.refreshCard();
     });
-    if (!this.locked && !m && !menu) {
-      this.button(this.controls, 'scan-toggle', this.scanning ? 'Stop scan' : 'Scan', 0, THEME.card.mainY, THEME.control.width, 'deck', () => this.events.emit('deck', { key: 'scan', phase: 'press' }), () => this.events.emit('deck', { key: 'scan', phase: 'release' }));
-      return;
-    }
+    if (this.detailsOpen) return;
     let main: Control | undefined;
     const buttons: Control[] = [];
     if (m) for (const c of m.spec.controls) {
@@ -290,13 +314,14 @@ export class LeanHud implements Hud {
     };
     buttons.sort((a, b) => presetOrder(a) - presetOrder(b));
     buttons.splice(3);
-    if (m && main) {
-      const knobs = m.spec.controls.filter((c) => this.isArmed(m, c) && (c.kind === 'continuous' || c.kind === 'stepped')).slice(0, 4);
-      if (/synth/i.test(m.spec.device?.category ?? '') && knobs.length > 1) knobs.forEach((c, i) => this.knobControl(m, c, i, knobs.length));
-      else this.mainControl(m, main);
+    if (m && main) this.mainControl(m, main);
+    if (m && main && /synth|keyboard/i.test(m.spec.device?.category ?? '')) {
+      this.button(this.controls, 'hand-control', state?.handControl ? 'Hand control on' : 'Hand control off', -0.075, THEME.card.detailsY, 0.19, 'handle', () => this.events.emit('handControl', { targetId: target!.id, enabled: !state?.handControl }));
+      const details = this.controls.getObjectByName('details-toggle');
+      if (details) { details.position.x = 0.13; details.scale.x = 0.6; }
     }
     if (m && buttons.length) buttons.forEach((c, index) => this.controlButton(m, c, index, buttons.length));
-    else if (menu && (m?.armed || target?.status === 'verified' || target?.status === 'controlled')) {
+    else if (menu && m?.armed) {
       const shown = menu.items.filter((item) => item.kind !== 'control' && item.status !== 'locked').slice(0, 3);
       shown.forEach((item, index) => {
         const widget = this.button(this.controls, `action:${item.id}`, title(item.label, 12), (index - (shown.length - 1) / 2) * (THEME.control.buttonWidth + THEME.control.buttonGap), THEME.card.buttonsY, THEME.control.buttonWidth, 'hack', () => {
@@ -332,33 +357,6 @@ export class LeanHud implements Hud {
     }, () => { if (c.kind === 'trigger') m.values.set(c.id, false); this.emitControl(m, c, 'end'); });
     widget.group.userData.controlId = c.id;
     this.refreshButtons(m);
-  }
-  private knobControl(m: Mounted, c: Control, index: number, count: number): void {
-    const group = new Group();
-    group.name = `main-control:${c.id}`;
-    const width = THEME.control.width / count;
-    group.position.set((index - (count - 1) / 2) * width, THEME.card.mainY, 0);
-    group.userData.knob = true;
-    const face = this.surfaces.create(THEME.control.knobDiameter, THEME.control.knobDiameter, 'button', true);
-    const thumb = new Mesh(this.trackGeometry, this.materials.accent);
-    thumb.name = 'value'; thumb.renderOrder = THEME.render.text;
-    thumb.scale.set(THEME.surface.stroke * 2, THEME.control.knobTick, 1);
-    thumb.position.z = THEME.panel.depth;
-    const label = makeText({ text: title(c.label), size: THEME.font.label, anchorX: 'center', singleLine: true, maxWidth: width - THEME.control.buttonGap });
-    label.position.set(0, THEME.control.labelOffset + THEME.panel.depth, THEME.panel.depth);
-    const value = makeText({ text: '', size: THEME.font.detail, color: THEME.color.accent, tabular: true, anchorX: 'center' });
-    value.name = 'control-value'; value.position.z = THEME.panel.depth;
-    group.add(face, thumb, label, value); this.controls.add(group);
-    const update = (point: Vector3) => {
-      const range = c.range ?? { min: 0, max: 1 };
-      let value = range.min + Math.min(1, Math.max(0, point.x / width + 0.5)) * (range.max - range.min);
-      if (range.step) value = Math.min(range.max, Math.max(range.min, range.min + Math.round((value - range.min) / range.step) * range.step));
-      m.values.set(c.id, value); this.positionThumb(m, c, thumb);
-    };
-    this.widgets.push({ group, w: width, h: THEME.control.knobDiameter, kind: 'control', lastMove: 0,
-      start: (p) => { update(p); this.emitControl(m, c, 'start'); },
-      move: (p) => { update(p); this.emitControl(m, c, 'move'); }, end: () => this.emitControl(m, c, 'end') });
-    this.positionThumb(m, c, thumb);
   }
   private mainControl(m: Mounted, c: Control): void {
     const group = new Group();
@@ -428,24 +426,28 @@ export class LeanHud implements Hud {
     const previous = this.targets.get(t.id);
     this.targets.set(t.id, t);
     this.point.fromArray(t.position);
-    if (!this.boxes.set(t.id, this.point, t.sizeM?.[0] ?? THEME.box.defaultWidth, t.sizeM?.[1] ?? THEME.box.defaultHeight, this.locked === t.id || this.candidate === t.id ? THEME.color.accent : THEME.color.line)) return;
+    if (!this.boxes.set(t.id, this.point, t.sizeM?.[0] ?? THEME.box.defaultWidth, t.sizeM?.[1] ?? THEME.box.defaultHeight, t.tagged || this.locked === t.id || this.candidate === t.id ? THEME.color.accent : THEME.color.line)) return;
     this.boxes.setFacing(t.id, t.facing);
+    if (!previous || previous.label !== t.label || previous.tagged !== t.tagged || previous.connection !== t.connection) this.refreshTargetLabel(t);
+    if (this.locked === t.id && (previous?.label !== t.label || previous?.status !== t.status || previous?.connection !== t.connection || previous?.tagged !== t.tagged)) this.refreshCard();
+  }
+  private refreshTargetLabel(t: HudTarget): void {
     let label = this.labels.get(t.id);
-    if (!label) {
-      label = new Group(); label.name = `target-label:${t.id}`;
-      this.labels.set(t.id, label); this.root.add(label);
-    }
-    if (!label.children.length || !previous || previous.label !== t.label) {
-      this.clear(label);
-      const text = title(t.label, 22);
-      const width = Math.max(0.065, text.length * THEME.font.label * 0.56 + THEME.box.labelPadding * 3);
-      const pill = this.surfaces.create(width, THEME.box.labelHeight, 'plate', true);
+    if (!label) { label = new Group(); label.name = `target-label:${t.id}`; this.labels.set(t.id, label); this.root.add(label); }
+    this.clear(label);
+    const removable = this.home.mode === 'annotate' && t.tagged && this.locked === t.id;
+    const connection = t.connection ?? 'unknown';
+    const status = this.home.mode === 'control' && t.tagged ? ({ ready: 'Ready', setup: 'Set up', offline: 'Not connected', unknown: 'Unknown' } as const)[connection] : '';
+    const text = removable ? 'Untag' : `${title(t.label, 22)}${status ? ` · ${status}` : ''}`;
+    const width = Math.max(0.09, Math.ceil((text.length * THEME.font.label * 0.56 + THEME.box.labelPadding * 3) * 100) / 100);
+    if (removable) this.button(label, `tag-remove:${t.id}`, text, width / 2, 0, width, 'handle', () => this.events.emit('tagRemove', { targetId: t.id }));
+    else {
+      const pill = this.surfaces.create(width, THEME.box.labelHeight, t.tagged ? 'selected' : 'plate', true);
       pill.position.x = width / 2;
-      const name = makeText({ text: `•  ${text}`, size: THEME.font.label, weight: 500, singleLine: true, maxWidth: width - THEME.box.labelPadding * 2 });
+      const name = makeText({ text, size: THEME.font.label, weight: 500, singleLine: true, maxWidth: width - THEME.box.labelPadding * 2 });
       name.position.set(THEME.box.labelPadding, 0, THEME.panel.depth);
       label.add(pill, name);
     }
-    if (this.locked === t.id && (previous?.label !== t.label || previous?.status !== t.status)) this.refreshCard();
   }
   removeTarget(id: string): void {
     this.targets.delete(id); this.boxes.remove(id);
@@ -455,14 +457,16 @@ export class LeanHud implements Hud {
   clearTargets(): void { for (const id of this.targets.keys()) this.removeTarget(id); }
   setCandidate(id: string | null): void {
     const old = this.candidate; this.candidate = id;
-    if (old && old !== this.locked) this.boxes.boxes.get(old)?.tColor.set(THEME.color.line);
+    if (old && old !== this.locked) this.boxes.boxes.get(old)?.tColor.set(this.targets.get(old)?.tagged ? THEME.color.accent : THEME.color.line);
     if (id) this.boxes.boxes.get(id)?.tColor.set(THEME.color.accent);
   }
   setLocked(id: string | null): void {
     const old = this.locked; this.locked = id;
     if (old !== id) { this.evidence = null; this.upload = null; this.selectedAction = null; this.unfoldStarted = this.time; }
-    if (old && old !== this.candidate) this.boxes.boxes.get(old)?.tColor.set(THEME.color.line);
+    if (old && old !== this.candidate) this.boxes.boxes.get(old)?.tColor.set(this.targets.get(old)?.tagged ? THEME.color.accent : THEME.color.line);
     if (id) this.boxes.boxes.get(id)?.tColor.set(THEME.color.accent);
+    if (old && this.targets.has(old)) this.refreshTargetLabel(this.targets.get(old)!);
+    if (id && this.targets.has(id)) this.refreshTargetLabel(this.targets.get(id)!);
     this.refreshCard(); this.place();
   }
   setPing(lines: PingLine[]): void { this.pings = lines; this.refreshDetails(); }
@@ -484,11 +488,17 @@ export class LeanHud implements Hud {
     if (this.upload?.modelId) lines.push(this.upload.modelId);
     for (const chip of this.chips) lines.push(`${chip.id} · ${chip.state}`);
     for (const ping of this.pings) lines.push(`${ping.channel}: ${ping.proven ? 'Connected' : 'Checking'}`);
-    setText(this.detailText, lines.slice(-THEME.panel.detailLines).join('\n') || 'No activity yet.');
+    const wrapped: string[] = [];
+    for (const line of lines) for (const row of line.split('\n')) {
+      const words = row.split(/\s+/); let current = '';
+      for (const word of words) { if ((current + ' ' + word).trim().length > 34) { if (current) wrapped.push(current); current = word.slice(0, 34); } else current = (current + ' ' + word).trim(); }
+      if (current) wrapped.push(current);
+    }
+    setText(this.detailText, wrapped.slice(-THEME.panel.detailLines).join('\n') || 'No activity yet.');
   }
   renderSpec(spec: Gen3dSpec, at: { targetId?: string; position?: [number, number, number]; yawDeg?: number }): void {
     const previous = this.specs.get(spec.specId);
-    const m: Mounted = { spec, targetId: at.targetId ?? previous?.targetId, position: at.position ?? previous?.position, armed: spec.state?.armed ?? false, values: previous?.values ?? new Map(), selectedButton: previous?.selectedButton };
+    const m: Mounted = { spec, targetId: at.targetId ?? previous?.targetId, position: at.position ?? previous?.position, armed: previous?.armed ?? false, values: previous?.values ?? new Map(), selectedButton: previous?.selectedButton };
     for (const c of spec.controls) if (!m.values.has(c.id)) m.values.set(c.id, c.default ?? 0);
     this.specs.set(spec.specId, m); this.refreshCard(); this.place();
   }
@@ -496,13 +506,14 @@ export class LeanHud implements Hud {
     const m = this.specs.get(id); if (!m) return { ok: false, errors: [`No spec ${id}`] };
     const result = applyPatch(m.spec, patch);
     if (!result.ok) return { ok: false, errors: result.errors.map((e) => `${e.path}: ${e.message}`) };
-    m.spec = result.spec; m.armed = result.spec.state?.armed ?? m.armed; this.refreshCard(); return { ok: true };
+    m.spec = result.spec; this.refreshCard(); return { ok: true };
   }
   removeSpec(id: string): void { this.specs.delete(id); this.refreshCard(); }
   setArmed(id: string, armed: boolean, _reason?: string, controlIds?: string[]): void {
     const m = this.specs.get(id); if (!m) return;
+    if (controlIds && armed) m.armed = true;
     if (controlIds) m.spec = { ...m.spec, controls: m.spec.controls.map((c) => controlIds.includes(c.id) ? { ...c, armed } : c) };
-    else { m.armed = armed; m.spec = { ...m.spec, state: { ...m.spec.state, armed }, controls: m.spec.controls.map((c) => ({ ...c, armed })) }; }
+    else { m.armed = armed; m.spec = { ...m.spec, state: { ...m.spec.state, armed } }; }
     this.refreshCard();
   }
   setControlValue(id: string, controlId: string, value: ControlEvent['value']): void {
@@ -514,19 +525,22 @@ export class LeanHud implements Hud {
     }
   }
   showConfirm(confirm: ConfirmRequest | null): void {
+    if (confirm && this.home.mode !== 'control') return;
     this.confirm = confirm; this.clear(this.modal); this.modal.visible = !!confirm; if (!confirm) {
       if (this.approvals.length) this.showApprovals(this.approvals);
       else if (this.pairing) this.showPairing(this.pairing);
       return;
     }
-    this.modal.add(this.plate(THEME.panel.width, THEME.panel.height));
-    this.label(this.modal, title(confirm.title), THEME.panel.row, THEME.font.title);
-    this.label(this.modal, confirm.summary ?? (confirm.hold ? 'Hold to confirm.' : 'Confirm this action.'), 0, THEME.font.label);
+    this.modal.add(this.plate(THEME.panel.width, 0.32));
+    this.label(this.modal, title(confirm.title), 0.105, THEME.font.title);
+    const summary = makeText({ text: (confirm.summary ?? (confirm.hold ? 'Hold to confirm.' : 'Confirm this action.')).slice(0, 200), size: THEME.font.label, anchorX: 'center', anchorY: 'top', maxWidth: THEME.panel.textWidth, maxHeight: 0.11 });
+    summary.name = 'confirmation-summary'; summary.position.set(0, 0.05, THEME.panel.depth); this.modal.add(summary);
+    const arm = confirm.title.trim().toLowerCase() === 'arm controls';
     let startedAt = 0;
-    this.button(this.modal, 'confirm-yes', confirm.hold ? 'Hold to allow' : 'Allow', THEME.control.buttonWidth / 1.5, -THEME.panel.row, THEME.control.buttonWidth * 1.5, 'confirm', () => { startedAt = this.time; }, () => {
+    this.button(this.modal, 'confirm-yes', confirm.hold ? arm ? 'Hold to arm' : 'Hold to allow' : arm ? 'Arm' : 'Allow', THEME.control.buttonWidth / 1.5, -0.1, THEME.control.buttonWidth * 1.5, 'confirm', () => { startedAt = this.time; }, () => {
       if ((!confirm.expiresAt || Date.now() < confirm.expiresAt) && (!confirm.hold || (this.time - startedAt) * 1000 >= THEME.control.holdMs)) this.events.emit('confirm', { id: confirm.id, approve: true, hold: !!confirm.hold });
     });
-    this.button(this.modal, 'confirm-no', 'Cancel', -THEME.control.buttonWidth, -THEME.panel.row, THEME.control.buttonWidth, 'confirm', () => this.events.emit('confirm', { id: confirm.id, approve: false }));
+    this.button(this.modal, 'confirm-no', 'Cancel', -THEME.control.buttonWidth, -0.1, THEME.control.buttonWidth, 'confirm', () => this.events.emit('confirm', { id: confirm.id, approve: false }));
     this.place();
   }
   showPairing(pair: { display: string; qr: string; message?: string } | null): void {
@@ -553,24 +567,69 @@ export class LeanHud implements Hud {
   setVoice(v: { listening: boolean; level?: number; partial?: string; final?: string }): void {
     if (v.listening || v.final) this.toast(v.final ?? v.partial ?? 'Listening…');
   }
-  setDeck(d: { open?: boolean; scanning?: boolean; daemons?: boolean; at?: [number, number, number] }): void {
-    if (d.open && !this.deck.visible) { this.deckPlacement.reset(); this.deckAt = undefined; }
-    if (d.at) this.deckAt = d.at;
-    if (d.open !== undefined) this.deck.visible = d.open;
-    if (!this.deck.visible) return;
-    this.clear(this.deck);
-    const keys: [DeckKey, string][] = [['scan', 'Scan'], ['ping', 'Connect'], ['daemons', 'Automations'], ['undo', 'Undo'], ['mic', 'Voice'], ['panic', 'Stop']];
-    const rows = Math.ceil(keys.length / 3);
-    this.deck.add(this.plate(THEME.panel.width, rows * THEME.panel.row + THEME.card.padding * 2));
-    keys.forEach(([key, label], i) => this.button(this.deck, `deck:${key}`, label, (i % 3 - 1) * (THEME.control.buttonWidth + THEME.control.buttonGap), ((rows - 1) / 2 - Math.floor(i / 3)) * THEME.panel.row, THEME.control.buttonWidth, 'deck', () => this.events.emit('deck', { key, phase: 'press' }), () => this.events.emit('deck', { key, phase: 'release' })));
+  setHome(state: HomeState): void {
+    const changed = this.home.mode !== state.mode || this.home.filter !== state.filter;
+    const modeChanged = this.home.mode !== state.mode;
+    this.home = { ...state };
+    if (modeChanged) {
+      this.detailsOpen = false; this.details.visible = false;
+      this.confirm = null; this.clear(this.modal); this.modal.visible = false;
+      this.deviceState = null;
+      for (const target of this.targets.values()) this.refreshTargetLabel(target);
+      this.refreshCard();
+    }
+    if (changed) this.refreshHome();
+    setText(this.homeCount, `${state.tagged} tagged`);
+    setText(this.homeStatus, state.status);
     this.place();
+  }
+  setDeviceState(state: DeviceState | null): void {
+    const previous = this.deviceState;
+    if (previous === state || previous && state && previous.targetId === state.targetId && previous.connection === state.connection && previous.hint === state.hint && previous.busy === state.busy && previous.sentence === state.sentence && previous.handControl === state.handControl) return;
+    this.deviceState = state;
+    this.refreshCard();
+  }
+  private refreshHome(): void {
+    // These persistent labels are detached before clearing the buttons.
+    this.homeCount.removeFromParent(); this.homeStatus.removeFromParent();
+    this.clear(this.deck);
+    const annotate = this.home.mode === 'annotate';
+    this.deck.add(this.plate(0.48, annotate ? 0.22 : 0.16));
+    for (const [mode, text, x] of [['annotate', 'Annotate', -0.115], ['control', 'Control', 0.115]] as const) {
+      const button = this.button(this.deck, `mode-${mode}`, text, x, annotate ? 0.066 : 0.036, 0.216, 'deck', () => this.events.emit('mode', { mode }));
+      this.selectButton(button.group, this.home.mode === mode, 0.216);
+    }
+    this.homeCount.position.set(annotate && !this.wristOpen ? 0 : -0.145, annotate ? 0.015 : -0.022, THEME.panel.depth);
+    this.homeStatus.position.set(0, annotate ? -0.088 : -0.058, THEME.panel.depth);
+    this.deck.add(this.homeCount, this.homeStatus);
+    setText(this.homeCount, `${this.home.tagged} tagged`); setText(this.homeStatus, this.home.status);
+    if (annotate) for (const [filter, text, x] of [['electronics', 'Electronics', -0.152], ['lights', 'Lights', 0], ['everything', 'All devices', 0.152]] as const) {
+      const button = this.button(this.deck, `filter:${filter}`, text, x, -0.035, 0.14, 'deck', () => this.events.emit('filter', { filter }));
+      this.selectButton(button.group, this.home.filter === filter, 0.14);
+    }
+    else this.button(this.deck, 'deck:panic', 'Stop', 0.15, -0.022, 0.12, 'deck', () => this.events.emit('deck', { key: 'panic', phase: 'press' }), () => this.events.emit('deck', { key: 'panic', phase: 'release' }));
+    if (this.wristOpen) this.button(this.deck, 'deck-close', 'Close', annotate ? 0.15 : 0, annotate ? 0.015 : -0.022, 0.11, 'deck', () => this.setDeck({ open: false }));
+    this.homeCount.visible = true;
+  }
+  setDeck(d: { open?: boolean; scanning?: boolean; daemons?: boolean; at?: [number, number, number] }): void {
+    if (d.open === true && !this.wristOpen) {
+      this.homePosition.copy(this.deck.position); this.homeRotation.copy(this.deck.quaternion);
+      this.wristOpen = true;
+      this.deckAt = d.at;
+      if (this.deckAt) { this.deck.position.fromArray(this.deckAt); this.face(this.deck); }
+      this.refreshHome();
+    } else if (d.open === false && this.wristOpen) {
+      this.wristOpen = false; this.deckAt = undefined;
+      this.deck.position.copy(this.homePosition); this.deck.quaternion.copy(this.homeRotation);
+      this.refreshHome();
+    }
   }
   toast(text: string, _level?: 'info' | 'ok' | 'warn' | 'error'): void { setText(this.noticeText, text.slice(0, 72)); if (!this.notice.visible) this.noticePlacement.reset(); this.notice.visible = true; this.noticeUntil = this.time + 3; this.place(); }
   private face(object: Object3D): void {
     this.boxes.facingQuaternion(this.head, object.position, this.facing); object.quaternion.copy(this.facing);
   }
   private follow(panel: Group, placement: WorldPanel): void {
-    placement.update(panel, { position: this.head, quaternion: this.headQuaternion }, this.time * 1000);
+    placement.update(panel, this.headPose, this.time * 1000);
   }
   private placeTether(targetId: string): void {
     if (!this.card.visible || !this.boxes.nearestBorder(targetId, this.card.position, this.head, this.tetherStart)) { this.tether.hide(); return; }
@@ -587,8 +646,8 @@ export class LeanHud implements Hud {
   }
   private place(): void {
     if (!this.hasFrame) return;
-    this.card.visible = !this.deck.visible && !this.modal.visible;
     const target = this.selected(), m = this.mounted();
+    this.card.visible = this.home.mode === 'control' && !!target?.tagged && !this.modal.visible;
     const unfold = target ? unfoldEase((this.time - this.unfoldStarted) / THEME.motion.duration) : 1;
     this.card.scale.x = Math.max(0.001, unfold);
     const controls = unfoldEase((this.time - this.controlsStarted) / THEME.motion.duration);
@@ -615,10 +674,7 @@ export class LeanHud implements Hud {
     }
     if (this.modal.visible) this.follow(this.modal, this.modalPlacement);
     else this.modalPlacement.reset();
-    if (this.deck.visible) {
-      if (this.deckAt) { this.deck.position.fromArray(this.deckAt); this.face(this.deck); }
-      else this.follow(this.deck, this.deckPlacement);
-    }
+    if (!this.wristOpen) this.follow(this.deck, this.deckPlacement);
     if (this.notice.visible) this.follow(this.notice, this.noticePlacement);
   }
   private inside(widget: Widget, point: Vector3): boolean {
@@ -665,9 +721,9 @@ export class LeanHud implements Hud {
     }
     let hover: Widget | null = null, poke: Widget | null = null, distance = Infinity;
     for (const widget of this.widgets) {
-      if (!visible(widget.group) || this.modal.visible && !this.modal.getObjectById(widget.group.id)) continue;
+      if (!visible(widget.group) || this.modal.visible && !this.modal.getObjectById(widget.group.id) && !this.deck.getObjectById(widget.group.id)) continue;
       const candidate = this.hit(widget, cursor);
-      if (candidate < distance) { distance = candidate; hover = widget; }
+      if (candidate !== Infinity && candidate <= distance) { distance = candidate; hover = widget; }
       if (!poke && this.crosses(widget, cursor, capture)) poke = widget;
     }
     if (hover) hover.group.userData.hovered = true;
@@ -680,6 +736,7 @@ export class LeanHud implements Hud {
         capture.widget = winner; capture.mode = pinch ? 'pinch' : 'poke';
         capture.pokeBlocked = cursor.canPoke;
         capture.pokePlane.copy(winner.group.matrixWorld).invert();
+        capture.dragNear = cursor.canPoke && Math.abs(this.point.copy(cursor.tip).applyMatrix4(capture.pokePlane).z) <= THEME.control.near;
         this.pressUntil.set(winner.group.name, this.time + 0.12);
         this.events.emit('consumed', { hand: cursor.hand, widget: winner.kind });
         winner.start(this.local);
@@ -695,16 +752,32 @@ export class LeanHud implements Hud {
       this.events.emit('consumed', { hand: cursor.hand, widget: active.kind });
       if (released) {
         capture.widget = null; capture.mode = null;
-        if (active.move && this.hit(active, cursor, true) !== Infinity) active.move(this.local);
+        if (active.move && this.dragPoint(cursor, capture)) active.move(this.local);
         active.end?.();
       } else if (cursor.pinching && active.move && this.time - active.lastMove >= 1 / THEME.control.dragHz) {
         active.lastMove = this.time;
-        if (this.hit(active, cursor, true) !== Infinity) active.move(this.local);
+        if (this.dragPoint(cursor, capture)) active.move(this.local);
       }
     } else if (released) capture.mode = null;
     capture.wasPinching = cursor.pinching;
     capture.hasTip = cursor.canPoke;
     if (cursor.canPoke) capture.tip.copy(cursor.tip);
+  }
+  private dragPoint(cursor: Cursor, capture: Capture): boolean {
+    if (capture.dragNear) {
+      if (!cursor.canPoke) return false;
+      this.local.copy(cursor.tip).applyMatrix4(capture.pokePlane);
+      // A lost depth estimate cannot turn a near drag into an unrelated ray drag.
+      return Math.abs(this.local.z) < 0.15;
+    }
+    if (!cursor.ray) return false;
+    this.origin.copy(cursor.ray.origin).applyMatrix4(capture.pokePlane);
+    this.direction.copy(cursor.ray.origin).add(cursor.ray.dir).applyMatrix4(capture.pokePlane).sub(this.origin);
+    if (Math.abs(this.direction.z) < 1e-6) return false;
+    const distance = -this.origin.z / this.direction.z;
+    if (distance < 0 || distance > THEME.control.rayDistance) return false;
+    this.local.copy(this.origin).addScaledVector(this.direction, distance);
+    return true;
   }
   private buttonFeedback(): void {
     for (const [name, until] of this.pressUntil) if (until < this.time) this.pressUntil.delete(name);
@@ -725,6 +798,10 @@ export class LeanHud implements Hud {
     this.time = frame.time / 1000;
     this.hasFrame = true;
     this.head.copy(frame.head.position); this.headQuaternion.copy(frame.head.quaternion);
+    for (const target of this.targets.values()) {
+      if (this.home.mode === 'control' && !target.tagged) this.boxes.setOpacity(target.id, 0);
+      else if (this.home.mode === 'annotate' && this.boxes.boxes.get(target.id)?.opacity === 0) this.boxes.setOpacity(target.id, 1);
+    }
     this.boxes.setActive(this.locked ?? this.candidate);
     this.boxes.update(frame.dt, this.head);
     for (const [id, label] of this.labels) {
@@ -737,7 +814,16 @@ export class LeanHud implements Hud {
     handCursor('left', frame.hands.left, this.cursors[0]!); handCursor('right', frame.hands.right, this.cursors[1]!);
     this.cursors[0]!.canPoke &&= !frame.hands.left?.controller;
     this.cursors[1]!.canPoke &&= !frame.hands.right?.controller;
-    this.reticles.update(this.cursors, this.head, frame.dt, this.boxes);
+    for (let i = 0; i < this.cursors.length; i++) {
+      const cursor = this.cursors[i]!; let distance = Infinity; this.reticleHits[i] = null;
+      if (!cursor.tracked) continue;
+      for (const widget of this.widgets) {
+        if (!visible(widget.group)) continue;
+        const hit = this.hit(widget, cursor);
+        if (hit < distance) { distance = hit; this.reticleHits[i] = this.reticlePoints[i]!.copy(this.local).applyMatrix4(widget.group.matrixWorld); }
+      }
+    }
+    this.reticles.update(this.cursors, this.head, frame.dt, this.boxes, this.reticleHits);
     for (const widget of this.widgets) widget.group.userData.hovered = false;
     for (const cursor of this.cursors) this.interact(cursor);
     for (const cursor of this.devCursors) this.interact(cursor);

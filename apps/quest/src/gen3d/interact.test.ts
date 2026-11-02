@@ -37,7 +37,7 @@ describe('hand cursor tracking loss', () => {
 /** Headless harness: a SpecObject at the origin, a camera 0.6 m in front, one hand cursor. */
 function harness(name: string) {
   const events: ControlEvent[] = [];
-  const obj = new SpecObject(EXAMPLES[name]!, { clock: new MaterialClock(), sink: { control: (e) => events.push(e) } });
+  const obj = new SpecObject(structuredClone(EXAMPLES[name]!), { clock: new MaterialClock(), sink: { control: (e) => events.push(e) } });
   const camera = new PerspectiveCamera(60, 1, 0.02, 50);
   camera.position.set(0, 0, 0.6);
   obj.updateMatrixWorld(true);
@@ -49,7 +49,7 @@ function harness(name: string) {
     t += 1 / 72;
     obj.update(1 / 72, t, [cursor], camera);
   };
-  return { obj, events, cursor, step };
+  return { obj, events, cursor, step, camera };
 }
 
 describe('gen3d interaction (headless)', () => {
@@ -102,17 +102,86 @@ describe('gen3d interaction (headless)', () => {
     expect(events.at(-1)?.phase).toBe('end');
   });
 
-  it('a disarmed object moves but emits nothing', () => {
+  it('a disarmed object cannot acquire a control or change its value', () => {
     const { obj, events, cursor, step } = harness('resonance-lever');
     const arm = obj.nodes.get('arm')!;
     const p = arm.getWorldPosition(new Vector3());
+    const before = [...obj.controls.values()].map((c) => c.value);
     cursor.position.copy(p);
     cursor.tip.copy(p);
     step({ pinching: true, justPinched: true });
+    expect(obj.interacting).toBe(false);
     cursor.position.set(p.x, p.y, p.z + 0.05);
     step({ pinching: true });
     step({ pinching: false, justReleased: true });
     expect(events).toHaveLength(0);
+    expect([...obj.controls.values()].map((c) => c.value)).toEqual(before);
+  });
+
+  it('cancels a held control when disarmed and requires a fresh pinch after rearming', () => {
+    const { obj, events, cursor, step } = harness('op1-knobs');
+    const p = obj.nodes.get('k1.cap')!.getWorldPosition(new Vector3());
+    cursor.position.copy(p);
+    step({ pinching: true, justPinched: true });
+    expect(obj.interacting).toBe(true);
+    obj.setArmed(false);
+    expect(obj.interacting).toBe(false);
+    const before = obj.getValue('blue');
+    const count = events.length;
+    for (let i = 0; i < 10; i++) {
+      cursor.position.y += 0.01;
+      step({ pinching: true });
+    }
+    obj.setArmed(true);
+    step({ pinching: true });
+    step({ pinching: false, justReleased: true });
+    expect(obj.getValue('blue')).toEqual(before);
+    expect(events).toHaveLength(count);
+    expect(obj.interacting).toBe(false);
+  });
+
+  it('cancels a lost hand without continuing knob momentum or emitting a release command', () => {
+    const { obj, events, cursor, step, camera } = harness('op1-knobs');
+    cursor.position.copy(obj.nodes.get('k1.cap')!.getWorldPosition(new Vector3()));
+    step({ pinching: true, justPinched: true });
+    for (let i = 0; i < 5; i++) {
+      cursor.position.y += 0.003;
+      step({ pinching: true });
+    }
+    const count = events.length;
+    const before = obj.getValue('blue');
+    for (let i = 0; i < 20; i++) obj.update(1 / 72, 1 + i / 72, [], camera);
+    expect(obj.interacting).toBe(false);
+    expect(obj.getValue('blue')).toEqual(before);
+    expect(events).toHaveLength(count);
+  });
+
+  it('does not emit a trigger release after cancel and starts the next press with true', () => {
+    const { obj, events, cursor, step } = harness('ceiling-dimmer');
+    cursor.position.copy(obj.nodes.get('hacks.row0')!.getWorldPosition(new Vector3()));
+    step({ pinching: true, justPinched: true });
+    obj.setArmed(false);
+    step({ pinching: false, justReleased: true });
+    expect(events.map((e) => [e.phase, e.value])).toEqual([['start', true]]);
+    obj.setArmed(true);
+    step({ pinching: true, justPinched: true });
+    expect(events.map((e) => [e.phase, e.value])).toEqual([['start', true], ['start', true]]);
+  });
+
+  it('preserves arc buffers throughout value changes', () => {
+    const { obj, step } = harness('op1-knobs');
+    step({ pinching: false });
+    const arc = obj.meshes.find((mesh) => mesh.geometry.type === 'RingGeometry' && mesh.userData.arcKey !== undefined)!;
+    obj.setValue('blue', 5, { emit: false, immediate: true });
+    step({ pinching: false });
+    const geometry = arc.geometry;
+    const positions = geometry.getAttribute('position').array;
+    const first = [...positions];
+    obj.setValue('blue', 115, { emit: false, immediate: true });
+    step({ pinching: false });
+    expect(arc.geometry).toBe(geometry);
+    expect(geometry.getAttribute('position').array).toBe(positions);
+    expect([...positions]).not.toEqual(first);
   });
 });
 

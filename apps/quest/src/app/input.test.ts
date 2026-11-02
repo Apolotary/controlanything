@@ -296,6 +296,39 @@ describe('InputSampler hand joints', () => {
 });
 
 describe('InputSampler system pinch', () => {
+  it('does not repeat a finished joint pinch when native select arrives late', () => {
+    const f = fixture();
+    f.state.distance = 0.01;
+    f.sample(0);
+    expect(f.sample(10)).toMatchObject({ pinching: true, justPinched: true });
+    f.state.distance = 0.05;
+    f.sample(20);
+    expect(f.sample(30)).toMatchObject({ pinching: false, justReleased: true });
+    f.session.select('selectstart');
+    expect(f.sample(40)).toMatchObject({ pinching: false, justPinched: false });
+    expect(f.sample(50)).toMatchObject({ pinching: false, justPinched: false });
+    f.session.select('selectend');
+    expect(f.sample(60)).toMatchObject({ pinching: false, justReleased: false });
+    // A new measured gesture is still available immediately after the delayed event.
+    f.state.distance = 0.01;
+    f.sample(70);
+    expect(f.sample(80)).toMatchObject({ pinching: true, justPinched: true });
+  });
+
+  it('allows native-only gestures after the duplicate window', () => {
+    const f = fixture();
+    f.state.distance = 0.01;
+    f.sample(0);
+    f.sample(10);
+    f.state.distance = 0.05;
+    f.sample(20);
+    f.sample(30);
+    f.state.joints = false;
+    f.sample(200);
+    f.session.select('selectstart');
+    expect(f.sample(210)).toMatchObject({ pinching: true, justPinched: true });
+  });
+
   it('starts, holds and releases from native select when every joint pose is null', () => {
     const f = fixture();
     f.state.joints = false;

@@ -79,6 +79,7 @@ describe('live selection and SAM handover', () => {
   it('reclaims a full outline slot for the SAM label and shape without a duplicate', () => {
     const field = new BoxField(1);
     const { live, targets, views, sam } = setup(field);
+    field.setLimit(1);
     live.apply([detection], frame, 0);
     live.apply([detection], frame, 150);
     const oldId = live.aimables()[0]!.id;
@@ -98,6 +99,7 @@ describe('live selection and SAM handover', () => {
   it('makes room for SAM-only classes when the scan limit is full', () => {
     const field = new BoxField(1);
     const { live, targets, views, sam } = setup(field);
+    field.setLimit(1);
     live.apply([detection], frame, 0);
     live.apply([detection], frame, 150);
     const target = sam();
@@ -185,7 +187,7 @@ describe('live selection and SAM handover', () => {
     live.appendAimables(out);
     expect(out[0]).toBe(aim);
     live.pick(aim.id);
-    live.setCategory('electronics');
+    live.setCategory('everything');
     expect(live.pickedId).toBeUndefined();
     expect(views.get(aim.id)?.status).toBe('scanned');
     live.pick(aim.id);
@@ -199,6 +201,49 @@ describe('live selection and SAM handover', () => {
     const { live } = setup();
     live.apply([{ ...detection, cls: 0 }, { ...detection, cls: 56 }], frame, 0);
     expect(live.aimables()).toEqual([]);
+  });
+
+  it('filters low scores and objects farther than three metres before allocating live tracks', () => {
+    const { live, views } = setup();
+    const distant = { ...detection, box: [198, 146, 20, 20] as [number, number, number, number] };
+    for (const now of [0, 150]) live.apply([{ ...detection, score: 0.49 }, distant], frame, now);
+    expect(views.size).toBe(0);
+    expect(live.tracker.list()).toHaveLength(0);
+    live.rangeM = 8;
+    for (const now of [300, 450]) live.apply([distant], frame, now);
+    expect(views.size).toBe(1);
+  });
+
+  it('refreshes an unchanged visible box before the shell observation expires', () => {
+    const { live, views } = setup();
+    live.apply([detection], frame, 0);
+    live.apply([detection], frame, 150);
+    const id = live.aimables()[0]!.id;
+    const initial = views.get(id);
+    live.apply([detection], frame, 250);
+    expect(views.get(id)).toBe(initial);
+    live.apply([detection], frame, 350);
+    expect(views.get(id)).not.toBe(initial);
+    expect(live.aimables()[0]?.id).toBe(id);
+  });
+
+  it('snapshots a live object for immediate tagging and follows its claimed outline smoothly', () => {
+    const { live, targets, sam } = setup();
+    live.apply([detection], frame, 0);
+    live.apply([detection], frame, 150);
+    const id = live.aimables()[0]!.id;
+    const snapshot = live.targetSnapshot(id)!;
+    expect(snapshot).toMatchObject({ id, label: 'Laptop', source: 'yolo', score: 0.9 });
+    const target = sam();
+    target.cardId = 'tagged-laptop';
+    const start = target.position.clone();
+    targets.push(target);
+    live.onSamTargets();
+    expect(live.targetSnapshot(id)).toBeUndefined();
+    live.apply([{ ...detection, box: [128, 106, 200, 100] }], frame, 300);
+    expect(target.position.x).toBeGreaterThan(start.x);
+    expect(target.position.x - start.x).toBeLessThan(0.03);
+    expect(target.lastSeenAt).toBeGreaterThan(0);
   });
 });
 

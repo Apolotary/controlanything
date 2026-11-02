@@ -3,11 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FrameCapture } from '../scan/capture';
 import { PoseRing } from '../scan/poses';
 import { Scanner } from '../scan/scanner';
-import { TargetStore } from '../scan/targets';
+import { TargetStore, toHudTarget } from '../scan/targets';
 import type { WsClient } from '../io/ws';
 import { QuestApp } from './app';
 import type { Hud, ShellFrame } from './hud-contract';
 import { InputSampler } from './input';
+import { ModeState } from './modes';
 
 async function setup() {
   // Use the real HUD wiring and render-frame ordering, without opening media, WebGL, or a socket.
@@ -17,6 +18,8 @@ async function setup() {
     hud: Hud;
     lastFrame: ShellFrame;
     consumed: { left: boolean; right: boolean };
+    modes: ModeState;
+    setMode(mode: 'annotate' | 'control'): void;
   };
   const camera = new PerspectiveCamera();
   camera.position.set(0, 1.4, 0);
@@ -39,8 +42,10 @@ async function setup() {
     getJointPose: (space: XRJointSpace) => jointsVisible ? pose(space === jointSpaces.get('index-finger-tip') ? index : thumb) : null,
   } as unknown as XRFrame;
   const recorder = { input: vi.fn(), pose: vi.fn() };
-  const lock = vi.fn();
+  const lock = vi.fn(), send = vi.fn<(type: string, payload: unknown, routing?: unknown) => void>();
   Object.assign(app, {
+    modes: new ModeState(), filter: 'electronics', observed: new Map(), visibleTargets: new Set(),
+    lastAnnotationsAt: 0, controls: { clear: vi.fn() }, ws: { send },
     params: new URLSearchParams('hud=v2'), scene: new Scene(), desktopCam: camera,
     renderer: {
       xr: { getSession: () => session, getReferenceSpace: () => refSpace, getCamera: () => camera },
@@ -66,20 +71,29 @@ async function setup() {
   Object.assign(app, { scanner });
   const states: boolean[] = [];
   scanner.on('state', ({ on }) => states.push(on));
+  app.setMode('annotate');
   let time = 0;
   const step = (elapsed = 16) => app.frameInner(time += elapsed, xrFrame);
   step(200);
-  const button = () => app.hud.root.getObjectByName('scan-toggle')!;
+  let chosen: 'annotate' | 'control' = 'control';
+  const button = () => app.hud.root.getObjectByName(`mode-${chosen}`)!;
   const point = button().getWorldPosition(new Vector3());
   rayRotation.setFromUnitVectors(new Vector3(0, 0, -1), point.clone().sub(rayOrigin).normalize());
   const behind = targets.upsert(
-    { detId: 'behind-scan', label: 'Laptop', score: 1, box: [0, 0, 100, 100] },
+    { detId: 'behind-home', label: 'Laptop', score: 1, box: [0, 0, 100, 100] },
     { position: point.clone().sub(rayOrigin).multiplyScalar(3).add(rayOrigin), facing: new Vector3(0, 0, 1), confirmed: true, method: 'fixture', depth: 2, sizeM: [0.2, 0.2, 0.1] },
-    'scan-frame',
+    'home-frame',
   ).target;
   behind.status = 'verified';
+  app.modes.add(behind.id, { targetId: behind.id, label: behind.label, position: { x: behind.position.x, y: behind.position.y, z: behind.position.z } });
+  app.hud.upsertTarget(toHudTarget(behind));
   return {
-    app, scanner, states, step, button, index, thumb, lock, recorder,
+    app, scanner, states, step, button, index, thumb, lock, recorder, send,
+    choose: (mode: 'annotate' | 'control') => {
+      chosen = mode;
+      const point = button().getWorldPosition(new Vector3());
+      rayRotation.setFromUnitVectors(new Vector3(0, 0, -1), point.sub(rayOrigin).normalize());
+    },
     setJointsVisible: (on: boolean) => { jointsVisible = on; },
     select: (type: 'selectstart' | 'selectend') => session.dispatchEvent(Object.assign(new Event(type), { inputSource: source, frame: xrFrame })),
     pointTip: (z: number) => {
@@ -91,8 +105,8 @@ async function setup() {
   };
 }
 
-describe('HUD v2 Scan through the Quest frame loop', () => {
-  it.each(['system select', 'joint pinch'] as const)('starts and stops scanning once per %s using the hand target ray', async (kind) => {
+describe('HUD v2 mode toggle through the Quest frame loop', () => {
+  it.each(['system select', 'joint pinch'] as const)('switches between annotation and control once per %s using the hand target ray', async (kind) => {
     const f = await setup();
     try {
       if (kind === 'system select') f.setJointsVisible(false);
@@ -105,44 +119,51 @@ describe('HUD v2 Scan through the Quest frame loop', () => {
       };
       pinch(true);
       expect(f.app.lastFrame.hands.right?.controller).toBe(false);
-      expect(f.scanner.active).toBe(true);
-      expect(f.states).toEqual([true]);
+      expect(f.app.modes.mode).toBe('control');
+      expect(f.scanner.active).toBe(false);
+      expect(f.states).toEqual([true, false]);
       expect(f.lock).not.toHaveBeenCalled();
       if (kind === 'joint pinch') {
         f.select('selectstart'); f.step();
         f.select('selectend'); f.step();
       }
       for (let i = 0; i < 6; i++) f.step();
-      expect(f.states).toEqual([true]);
-      expect(f.button()).toBeTruthy();
-      expect(f.app.hud.root.getObjectByName('device-card')!.visible).toBe(true);
-      pinch(false);
-      expect(f.scanner.active).toBe(true);
-      pinch(true);
-      expect(f.scanner.active).toBe(false);
       expect(f.states).toEqual([true, false]);
+      expect(f.button()).toBeTruthy();
+      expect(f.app.hud.root.getObjectByName('device-card')!.visible).toBe(false);
+      pinch(false);
+      expect(f.scanner.active).toBe(false);
+      f.choose('annotate'); pinch(true);
+      expect(f.app.modes.mode).toBe('annotate');
+      expect(f.scanner.active).toBe(true);
+      expect(f.states).toEqual([true, false, true]);
+      expect(f.app.hud.root.getObjectByName('device-card')!.visible).toBe(false);
       expect(f.lock).not.toHaveBeenCalled();
-      const presses = f.recorder.input.mock.calls.filter(([kind, event]) => kind === 'deck' && event.phase === 'press');
-      expect(presses).toEqual([['deck', { key: 'scan', phase: 'press' }], ['deck', { key: 'scan', phase: 'press' }]]);
+      expect(f.send.mock.calls.filter(([type]) => type === 'mode.set').map(([, payload]) => payload)).toEqual([{ mode: 'annotate' }, { mode: 'control' }, { mode: 'annotate' }]);
     } finally { f.dispose(); }
   });
 
-  it('starts and stops scanning by crossing the button plane with an open index finger', async () => {
+  it('switches modes by crossing the button plane with an open index finger', async () => {
     const f = await setup();
     try {
       f.pointTip(0.03); f.step();
-      expect(f.scanner.active).toBe(false);
+      expect(f.scanner.active).toBe(true);
+      expect(f.app.hud.root.getObjectByName('device-card')!.visible).toBe(false);
       f.pointTip(-0.005); f.step();
       expect(f.app.lastFrame.hands.right?.pinching).toBe(false);
-      expect(f.scanner.active).toBe(true);
+      expect(f.app.modes.mode).toBe('control');
+      expect(f.scanner.active).toBe(false);
       expect(f.app.consumed.right).toBe(true);
       for (let i = 0; i < 6; i++) f.step();
-      expect(f.states).toEqual([true]);
-      f.pointTip(0.03); f.step();
-      expect(f.scanner.active).toBe(true);
-      f.pointTip(-0.005); f.step();
-      expect(f.scanner.active).toBe(false);
       expect(f.states).toEqual([true, false]);
+      f.choose('annotate'); f.pointTip(0.03); f.step();
+      expect(f.scanner.active).toBe(false);
+      f.pointTip(-0.005); f.step();
+      expect(f.app.modes.mode).toBe('annotate');
+      expect(f.scanner.active).toBe(true);
+      expect(f.states).toEqual([true, false, true]);
+      expect(f.app.hud.root.getObjectByName('device-card')!.visible).toBe(false);
+      expect(f.send.mock.calls.filter(([type]) => type === 'mode.set').map(([, payload]) => payload)).toEqual([{ mode: 'annotate' }, { mode: 'control' }, { mode: 'annotate' }]);
       expect(f.lock).not.toHaveBeenCalled();
     } finally { f.dispose(); }
   });

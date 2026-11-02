@@ -5,8 +5,8 @@
  * world-anchored targets and handed to the HUD.
  */
 import { Emitter } from '../app/emitter';
+import type { Vector3 } from 'three';
 import type { Hud } from '../app/hud-contract';
-import type { BoxField } from '../hud/v2/boxes';
 import { type Det, normalizeDetections, type ScanResultPayload } from '../io/v1';
 import type { WsClient } from '../io/ws';
 import type { FrameCapture, FrameRecord } from './capture';
@@ -15,6 +15,8 @@ import { type DepthProvider, placeDetection, rejectReason } from './placement';
 import type { PoseRing } from './poses';
 import type { VirtualRoom } from './synthetic';
 import { type Target, type TargetStore, toHudTarget } from './targets';
+import { ANNOTATION_MAX_BOXES, ANNOTATION_MIN_SCORE, ANNOTATION_RANGE_M, inAnnotationRange, matchesAnnotationFilter } from './policy';
+import type { Category } from './yolo/classes';
 
 export interface ScannerDeps {
   /** a getter: replay swaps the camera (and with it the capture) at runtime */
@@ -24,6 +26,8 @@ export interface ScannerDeps {
   targets: TargetStore;
   poses: PoseRing;
   depth: () => DepthProvider[];
+  /** Current head position, for the nearby-object limit when a delayed result arrives. */
+  headPosition?: () => Vector3;
   log: (msg: string, level?: 'info' | 'warn' | 'error') => void;
   /** local fixture detector (desktop emulator + test photo) */
   fixture?: () => { fix: SamFixture; room: VirtualRoom } | null;
@@ -51,6 +55,8 @@ export interface ScannerEvents extends Record<string, unknown> {
 export class Scanner extends Emitter<ScannerEvents> {
   active = false;
   purpose: 'scan' | 'pair' = 'scan';
+  category: Category = 'electronics';
+  rangeM = ANNOTATION_RANGE_M;
   periodMs = 1000;
   maxInFlight = 2;
   /** frames taken while the head turns faster than this are blurry and badly stamped (research/04 §3) */
@@ -58,19 +64,21 @@ export class Scanner extends Emitter<ScannerEvents> {
   timeoutMs = 12_000;
   readonly stats: ScannerStats = { sent: 0, results: 0, detections: 0, rejected: 0, lastLatencyMs: 0, lastModelId: '', lastSource: '', inFlight: 0 };
   private readonly inFlight = new Map<string, number>();
+  private readonly frameGenerations = new Map<string, number>();
   private lastSentAt = 0;
   private waitingSince = 0;
   private ticking = false;
   private startedAt = 0;
+  private generation = 0;
 
   constructor(private readonly d: ScannerDeps) {
     super();
-    (d.hud().root?.getObjectByName('boxField') as BoxField | undefined)?.setLimit(8);
   }
 
   start(purpose: 'scan' | 'pair' = 'scan'): void {
     if (this.active && this.purpose === purpose) return;
     this.active = true;
+    this.generation++;
     this.purpose = purpose;
     this.startedAt = Date.now();
     this.lastSentAt = 0;
@@ -81,6 +89,9 @@ export class Scanner extends Emitter<ScannerEvents> {
   stop(): void {
     if (!this.active) return;
     this.active = false;
+    this.generation++;
+    this.inFlight.clear();
+    this.stats.inFlight = 0;
     this.d.hud().setScanning(false);
     this.emit('state', { on: false });
   }
@@ -89,6 +100,10 @@ export class Scanner extends Emitter<ScannerEvents> {
     if (this.active) this.stop();
     else this.start();
     return this.active;
+  }
+
+  setCategory(category: Category): void {
+    this.category = category;
   }
 
   /** Call every frame (cheap when idle). */
@@ -114,8 +129,11 @@ export class Scanner extends Emitter<ScannerEvents> {
   }
 
   private async shoot(now: number): Promise<void> {
+    const generation = this.generation;
     const r = await this.d.capture().capture(this.purpose);
-    if (!r) return;
+    if (!r || !this.active || generation !== this.generation) return;
+    this.frameGenerations.set(r.payload.frameId, generation);
+    if (this.frameGenerations.size > 64) this.frameGenerations.delete(this.frameGenerations.keys().next().value!);
     this.emit('frame', { frameId: r.payload.frameId, jpeg: r.payload.jpeg, width: r.payload.width, height: r.payload.height });
     const fx = this.d.fixture?.();
     if (fx) {
@@ -156,7 +174,10 @@ export class Scanner extends Emitter<ScannerEvents> {
     const rec = this.d.capture().get(p.frameId);
     this.inFlight.delete(p.frameId);
     this.stats.inFlight = this.inFlight.size;
-    if (!rec) return;
+    if (!rec || !this.active || this.purpose !== 'scan') return;
+    const capturedGeneration = this.frameGenerations.get(p.frameId);
+    if (capturedGeneration !== undefined && capturedGeneration !== this.generation) return;
+    const generation = this.generation;
     this.stats.results++;
     this.stats.lastLatencyMs = p.latencyMs;
     this.stats.lastModelId = p.modelId;
@@ -172,13 +193,25 @@ export class Scanner extends Emitter<ScannerEvents> {
     }
     const placed: Target[] = [];
     const rejected: { det: Det; reason: string }[] = [];
-    for (const det of dets) {
-      const why = rejectReason(det, rec);
+    for (const det of dets.sort((a, b) => b.score - a.score)) {
+      const why = rejectReason(det, rec)
+        ?? (det.score < ANNOTATION_MIN_SCORE ? 'low confidence' : null)
+        ?? (!matchesAnnotationFilter(det.label, this.category) ? 'outside object filter' : null);
       if (why) {
         rejected.push({ det, reason: why });
         continue;
       }
       const pl = await placeDetection(det, rec, this.d.depth());
+      if (!this.active || generation !== this.generation) return;
+      if (!matchesAnnotationFilter(det.label, this.category)) continue;
+      if (!inAnnotationRange(pl.position, this.d.headPosition?.() ?? rec.head.position, this.rangeM)) {
+        rejected.push({ det, reason: 'outside nearby range' });
+        continue;
+      }
+      if (placed.length >= ANNOTATION_MAX_BOXES) {
+        rejected.push({ det, reason: 'annotation limit' });
+        continue;
+      }
       const { target } = this.d.targets.upsert(det, pl, rec.frameId, p.modelId);
       placed.push(target);
       this.d.hud().upsertTarget(toHudTarget(target));

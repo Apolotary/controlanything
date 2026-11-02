@@ -9,7 +9,7 @@ export class GlassSurfaces {
   private readonly materials = new Map<string, ShaderMaterial>();
 
   material(w: number, h: number, style: SurfaceStyle, pill = false): ShaderMaterial {
-    const key = `${w}/${h}/${style}/${pill}`;
+    const key = `${style}/${pill}`;
     let material = this.materials.get(key);
     if (material) return material;
     const selected = style === 'selected' || style === 'selected-hover' || style === 'pressed';
@@ -50,6 +50,11 @@ export class GlassSurfaces {
   create(w: number, h: number, style: SurfaceStyle = 'plate', pill = false): Mesh<PlaneGeometry, ShaderMaterial> {
     const mesh = new Mesh(this.geometry, this.material(w, h, style, pill));
     mesh.scale.set(w, h, 1);
+    mesh.onBeforeRender = () => {
+      mesh.material.uniforms.size!.value.set(w, h);
+      mesh.material.uniforms.radius!.value = pill ? h / 2 : THEME.card.radius;
+      mesh.material.uniformsNeedUpdate = true;
+    };
     mesh.renderOrder = THEME.render.plates;
     return mesh;
   }

@@ -142,11 +142,11 @@ describe('YOLOX NMS and tracking', () => {
     expect(next.tracks[0]?.live).toBe(false);
   });
 
-  it('drops people at the tracker boundary and defaults to eight tracks', () => {
+  it('drops people at the tracker boundary and defaults to six tracks', () => {
     const tracker = new BoxTracker();
     expect(tracker.update([{ ...laptop, cls: PERSON_CLASS }], 0).tracks).toEqual([]);
     const detections: Candidate[] = Array.from({ length: 10 }, (_, i) => ({ ...laptop, box: [i * 200, 0, 100, 80] }));
-    expect(tracker.update(detections, 100).tracks).toHaveLength(8);
+    expect(tracker.update(detections, 100).tracks).toHaveLength(6);
   });
 
   it('uses capture-pose prediction to match a device after head movement', () => {
