@@ -25,11 +25,18 @@ export interface HandState {
   justReleased: boolean;
   pinchPoint: Vector3;
   ray: { origin: Vector3; dir: Vector3 };
+  /** Unfiltered pose used to detect a pinch-induced ray jump. */
+  rawRay?: { origin: Vector3; dir: Vector3 };
   /** Palm facing the head; the HUD uses its dwell to reveal the hand menu. */
   palmUp?: boolean;
   palmUpMs?: number;
   /** true when this "hand" is really a controller */
   controller?: boolean;
+  /** Located controller grip, independent of the pointing ray. */
+  grip?: { position: Vector3; quaternion: Quaternion };
+  /** Left controller menu button, when exposed by the runtime. */
+  menuDown?: boolean;
+  menuPressed?: boolean;
 }
 
 export interface HudFrame {
@@ -124,6 +131,8 @@ export interface ConfirmRequest {
 export type DeckKey = 'scan' | 'ping' | 'hacks' | 'daemons' | 'undo' | 'mic' | 'panic';
 
 export interface HudEvents {
+  exit: Record<string, never>;
+  selectTarget: { targetId: string };
   mode: { mode: AppMode };
   filter: { filter: ObjectFilter };
   tagRemove: { targetId: string };
@@ -134,7 +143,7 @@ export interface HudEvents {
   pairCode: { targetId: string; code: string };
   handControl: { targetId: string; enabled: boolean };
   deck: { key: DeckKey; phase: 'press' | 'release' };
-  hack: { targetId: string; itemId: string; controlId?: string; index: number; hold?: boolean };
+  hack: { ts?: number; targetId: string; itemId: string; controlId?: string; index: number; hold?: boolean };
   control: ControlEvent;
   approve: { pairingId: string; approve: boolean };
   confirm: { id: string; approve: boolean; hold?: boolean };
@@ -153,6 +162,7 @@ export interface Hud {
   setScanning(on: boolean, info?: { prompts?: number; pending?: number; startedAt?: number; modelId?: string }): void;
   upsertTarget(t: HudTarget): void;
   isTargetVisible?(id: string): boolean;
+  getTargetAim?(id: string, out: { position: Vector3; size: number }): boolean;
   removeTarget(id: string): void;
   clearTargets(): void;
   setCandidate(id: string | null): void;
@@ -178,6 +188,7 @@ export interface Hud {
   removeSpec(specId: string): void;
   setArmed(specId: string, armed: boolean, reason?: string, controlIds?: string[]): void;
   setControlValue(specId: string, controlId: string, value: ControlEvent['value']): void;
+  setCommandResult?(specId: string, controlId: string, ts: number, ok: boolean): void;
 
   // pairing, voice, deck, toasts
   showPairing(p: { display: string; qr: string; message?: string } | null): void;

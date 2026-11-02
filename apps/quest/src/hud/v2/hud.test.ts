@@ -24,7 +24,7 @@ function setup(mode: 'annotate' | 'control' = 'control') {
   let time = 0;
   function frame(hand?: Partial<HandState>, elapsedMs = 1000 / 72): HudFrame {
     time += elapsedMs;
-    return { time, dt: elapsedMs / 1000, head: { position: camera.position, quaternion: camera.quaternion }, hands: hand ? { right: { joints: hand.pinchPoint && !hand.controller ? { 'index-finger-tip': { position: hand.pinchPoint, quaternion: new Quaternion(), radius: 0.008 } } : {}, pinchPoint: new Vector3(10, 10, 10), ray: { origin: camera.position.clone(), dir: new Vector3(0, 0, -1) }, pinching: false, justPinched: false, justReleased: false, ...hand } } : {} };
+    return { time, dt: elapsedMs / 1000, pointer: 'mouse', head: { position: camera.position, quaternion: camera.quaternion }, hands: hand ? { right: { joints: hand.pinchPoint && !hand.controller ? { 'index-finger-tip': { position: hand.pinchPoint, quaternion: new Quaternion(), radius: 0.008 } } : {}, pinchPoint: new Vector3(10, 10, 10), ray: { origin: camera.position.clone(), dir: new Vector3(0, 0, -1) }, pinching: false, justPinched: false, justReleased: false, ...hand } } : {} };
   }
   function pinch(object: Object3D, heldMs = 20) {
     hud.update(frame(undefined, 200));
@@ -146,22 +146,20 @@ describe('Calm Glass HUD scene budget', () => {
     expect(labels).toEqual([]);
     hud.dispose();
   });
-  it('unfolds the card horizontally from the picked box edge in 180 ms', () => {
+  it('unfolds at a fixed comfortable position in 180 ms and preserves angular target size', () => {
     const { hud, frame } = setup();
     hud.upsertTarget(target); hud.setLocked(target.id); hud.update(frame(undefined, 0));
     const card = hud.root.getObjectByName('device-card')!;
-    const edge = target.position[0] + target.sizeM![0] / 2 + THEME.card.gap;
+    const position = card.position.clone(), scale = card.scale.y;
     expect(card.scale.x).toBeLessThan(0.01);
-    expect(card.scale.y).toBe(1);
-    expect(card.position.x - THEME.card.width / 2 * card.scale.x).toBeCloseTo(edge);
+    expect(scale).toBeGreaterThanOrEqual(1);
     hud.update(frame(undefined, 90));
-    expect(card.scale.x).toBeGreaterThan(0.5);
-    expect(card.scale.x).toBeLessThan(1);
-    expect(card.scale.y).toBe(1);
-    expect(card.position.x - THEME.card.width / 2 * card.scale.x).toBeCloseTo(edge);
+    expect(card.scale.x / scale).toBeGreaterThan(0.5);
+    expect(card.scale.x / scale).toBeLessThan(1);
+    expect(card.position).toEqual(position);
     hud.update(frame(undefined, 90));
-    expect(card.scale.x).toBeCloseTo(1);
-    expect(card.position.x - THEME.card.width / 2).toBeCloseTo(edge);
+    expect(card.scale.x).toBeCloseTo(scale);
+    expect(card.position).toEqual(position);
     hud.dispose();
   });
   it.each([
@@ -175,23 +173,25 @@ describe('Calm Glass HUD scene budget', () => {
     hud.renderSpec(spec(), { targetId: target.id }); hud.update(frame(undefined, 200));
     const card = hud.root.getObjectByName('device-card')!;
     const head = new Vector3(0, 1.4, 0), offset = card.position.clone().sub(head);
-    expect(Math.hypot(offset.x, offset.z)).toBeCloseTo(THEME.card.dockDistance);
-    expect(offset.y).toBeCloseTo(THEME.panel.headY);
+    expect(offset.length()).toBeGreaterThanOrEqual(0.55 - 1e-6);
+    expect(offset.length()).toBeLessThanOrEqual(0.9 + 1e-6);
+    expect(card.position.x).not.toBe(x);
     const normal = new Vector3(0, 0, 1).applyQuaternion(card.quaternion);
     expect(normal.y).toBe(0);
     expect(normal.dot(offset.clone().setY(0).normalize())).toBeCloseTo(-1);
-    expect(card.scale.toArray()).toEqual([1, 1, 1]);
+    expect(card.scale.x).toBeCloseTo(card.scale.y);
+    expect(2 * Math.atan(THEME.control.buttonHeight * card.scale.y / (2 * offset.length())) * 180 / Math.PI).toBeGreaterThanOrEqual(4 - 1e-6);
     const heading = hud.root.getObjectByName('device-name') as Object3D & { fontSize: number };
     expect(heading.fontSize).toBe(THEME.font.title);
     const button = hud.root.getObjectByName('control:action0')!;
-    expect(button.getWorldPosition(new Vector3()).distanceTo(head)).toBeLessThan(0.8);
+    expect(button.getWorldPosition(new Vector3()).distanceTo(head)).toBeLessThan(1.05);
     const events: string[] = [];
     hud.on('control', (event) => events.push(`${event.controlId}:${event.phase}`));
     pinch(button);
     expect(events).toEqual(['action0:start', 'action0:end']);
     const tether = hud.root.getObjectByName('target-tether') as Mesh;
-    expect(tether.visible).toBe(true);
-    expect(tether.geometry.drawRange.count).toBe(6);
+    expect(tether.visible || hud.root.getObjectByName('device-edge-pill')!.visible).toBe(true);
+    if (tether.visible) expect(tether.geometry.drawRange.count).toBe(6);
     hud.removeTarget(target.id); hud.update(frame());
     expect(tether.visible).toBe(false);
     expect(tether.geometry.drawRange.count).toBe(0);
@@ -377,11 +377,11 @@ describe('Calm Glass HUD controls and details', () => {
 });
 
 describe('HUD button interaction feedback', () => {
-  it('hands take over the fallback dock immediately and restore a world anchor when tracking ends', () => {
+  it('hands take over the mouse dock and tracking loss hides it until the mouse returns', () => {
     const { hud, frame } = setup();
     hud.update(frame(undefined, 200));
     const dock = hud.root.getObjectByName('hand-dock')!, anchor = dock.position.clone();
-    const withPalm = frame();
+    const withPalm = frame(); delete withPalm.pointer;
     withPalm.hands.left = { ...frame({}).hands.right!, palmUp: true, palmUpMs: 300,
       joints: { wrist: { position: new Vector3(-0.3, 1, -0.3), quaternion: new Quaternion(), radius: 0.008 } } };
     hud.update(withPalm);
@@ -390,6 +390,9 @@ describe('HUD button interaction feedback', () => {
     withPalm.time += 180; withPalm.dt = 0.18; hud.update(withPalm);
     expect(dock.visible).toBe(true);
     withPalm.hands = {}; withPalm.time += 16; hud.update(withPalm);
+    expect(dock.userData.anchor).toBe('none');
+    expect(dock.visible).toBe(false);
+    withPalm.pointer = 'mouse'; withPalm.time += 16; hud.update(withPalm);
     expect(dock.userData.anchor).toBe('fallback');
     expect(dock.position.equals(anchor)).toBe(true);
     expect(dock.visible).toBe(true);
@@ -423,7 +426,7 @@ describe('HUD button interaction feedback', () => {
     const menuHand: HandState = { ...frame({}).hands.right!, palmUp: true, palmUpMs: 300,
       joints: { wrist: { position: new Vector3(-0.2, 1.1, -0.4), quaternion: new Quaternion(), radius: 0.008 } } };
     const update = (other?: Partial<HandState>, elapsed = 16) => {
-      const f = frame(other, elapsed); f.hands.left = menuHand; hud.update(f);
+      const f = frame(other, elapsed); delete f.pointer; f.hands.left = menuHand; hud.update(f);
     };
     update(); update(undefined, 200);
     const button = hud.root.getObjectByName('mode-control')!;
@@ -504,7 +507,7 @@ describe('HUD button interaction feedback', () => {
     expect(feedback().y).toBe(1);
     update(-0.003);
     expect(phases).toEqual(['press']);
-    expect(button.scale.x).toBe(0.96);
+    expect(button.scale.x).toBe(0.92);
     expect(feedback().z).toBe(1);
     for (const z of [0.004, -0.002, 0.006, -0.004]) update(z);
     expect(phases).toEqual(['press']);
@@ -623,7 +626,7 @@ describe('explicit annotation and control modes', () => {
     const hud = createHud({ scene, camera, renderer: {} as WebGLRenderer });
     hud.upsertTarget(target); hud.setLocked(target.id); hud.setScanning(true);
     hud.renderSpec(spec(true), { targetId: target.id }); hud.setArmed('device_controls', true);
-    hud.update({ time: 0, dt: 0, head: { position: new Vector3(0, 1.4, 0), quaternion: new Quaternion() }, hands: {} });
+    hud.update({ time: 0, dt: 0, pointer: 'mouse', head: { position: new Vector3(0, 1.4, 0), quaternion: new Quaternion() }, hands: {} });
     expect(hud.root.getObjectByName('device-card')!.visible).toBe(false);
     expect(hud.root.getObjectByName('hand-dock')!.visible).toBe(true);
     expect(hud.root.getObjectByName('tag-remove:device')).toBeTruthy();
@@ -748,7 +751,7 @@ describe('bounded card wording and stable home updates', () => {
     hud.setHome?.({ mode: 'control', filter: 'electronics', tagged: 2, status: 'stale hint' });
     hud.update(frame());
     expect(dock.userData.height).toBe(0.032);
-    expect(dock.userData.width).toBeCloseTo(0.072);
+    expect(dock.userData.width).toBeCloseTo(0.12);
     expect(hud.root.getObjectByName('filter:electronics')).toBeUndefined();
     expect(hint.text).toBe('Pinch a tagged device to open it');
     expect(hint.visible).toBe(true);
@@ -796,18 +799,18 @@ describe('bounded card wording and stable home updates', () => {
     expect(text().text).toBe('Ceiling light · Identifying…');
     expect(label().getObjectByName('tagged-check')).toBeTruthy();
     hud.upsertTarget({ ...target, label: 'KOIZUMI ceiling light', identifying: false, connection: 'setup' });
-    expect(text().text).toBe('KOIZUMI ceiling light');
+    expect(text().text).toBe('KOIZUMI ceiling l…');
     hud.setCandidate(target.id);
     expect(text().text).toBe('Pinch to untag');
     hud.setCandidate(null);
-    expect(text().text).toBe('KOIZUMI ceiling light');
+    expect(text().text).toBe('KOIZUMI ceiling l…');
     hud.setHome?.({ mode: 'control', filter: 'everything', tagged: 1, status: '' });
-    expect(text().text).toBe('KOIZUMI ceiling light · Needs setup');
+    expect(text().text).toBe('KOIZUMI ceiling l… · Needs setup');
     hud.setLocked(target.id);
     hud.setDeviceState?.({ targetId: target.id, connection: 'setup', busy: true });
-    expect(text().text).toBe('KOIZUMI ceiling light · Setting up…');
+    expect(text().text).toBe('KOIZUMI ceiling l… · Setting up…');
     hud.setLocked(null); hud.setDeviceState?.(null);
-    expect(text().text).toBe('KOIZUMI ceiling light · Setting up…');
+    expect(text().text).toBe('KOIZUMI ceiling l… · Setting up…');
     hud.dispose();
   });
 
@@ -831,7 +834,7 @@ describe('bounded card wording and stable home updates', () => {
       expect((plate.material as ShaderMaterial).uniforms.edgeAlpha!.value).toBe(0.26);
       expect(button.getObjectByName('sdf')!.position.y).toBe(0);
     }
-    expect(hud.root.getObjectByName('device-status')!.visible).toBe(false);
+    expect(hud.root.getObjectByName('device-status')!.visible).toBe(true);
     hud.setControlValue(light.specId, 'level', 80);
     const value = () => hud.root.getObjectByName('control-value') as Object3D & { text: string; color: string };
     pinch(buttons[1]!);

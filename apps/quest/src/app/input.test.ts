@@ -20,12 +20,12 @@ function xrFixture(withHand = false) {
     handedness: 'right', targetRaySpace: {}, ...(withHand ? { hand: joints } : {}),
   } as unknown as XRInputSource;
   session.inputSources.push(source);
-  const pose = (point: Vector3) => ({ transform: { position: point, orientation: { x: 0, y: 0, z: 0, w: 1 } }, radius: 0.008 });
-  const state = { rayTracked: true };
+  const pose = (point: Vector3, orientation = new Quaternion()) => ({ transform: { position: point, orientation }, radius: 0.008 });
+  const state = { rayTracked: true, rayPosition: new Vector3(0.2, 1.2, -0.3), rayOrientation: new Quaternion() };
   const frame = {
     session,
     getViewerPose: () => pose(new Vector3(0, 1.6, 0)),
-    getPose: () => state.rayTracked ? pose(new Vector3(0.2, 1.2, -0.3)) : null,
+    getPose: () => state.rayTracked ? pose(state.rayPosition, state.rayOrientation) : null,
     getJointPose: (space: XRJointSpace) => {
       const point = positions.get(space);
       return point ? pose(point) : null;
@@ -43,6 +43,48 @@ function xrFixture(withHand = false) {
 }
 
 describe('InputSampler', () => {
+  it('filters hand rays while preserving raw aim and the physical fingertip', () => {
+    const f = xrFixture(true);
+    const point = new Vector3(0.2, 1.2, -0.3);
+    f.setJoint('index-finger-tip', point);
+    const hand = f.sample().hands.right!;
+    const oldOrigin = hand.ray.origin.x;
+    const rawStorage = hand.rawRay;
+    point.x += 0.01;
+    f.state.rayPosition.x += 0.01;
+    f.state.rayOrientation.setFromAxisAngle(new Vector3(0, 1, 0), 2 * Math.PI / 180);
+    // A fingertip remains physically exact; only the pointing ray is filtered.
+    f.sample();
+    expect(hand.joints['index-finger-tip']!.position.x).toBeCloseTo(0.21);
+    expect(hand.rawRay).toBe(rawStorage);
+    expect(hand.rawRay!.origin.x).toBeCloseTo(0.21);
+    expect(hand.ray.origin.x).toBeGreaterThan(oldOrigin);
+    expect(hand.ray.origin.x).toBeLessThan(0.202);
+    expect(Math.abs(hand.ray.dir.x)).toBeLessThan(Math.abs(hand.rawRay!.dir.x));
+  });
+
+  it('reuses the located controller grip and emits one edge for each left menu press', () => {
+    const f = xrFixture();
+    const buttons = Array.from({ length: 7 }, () => ({ pressed: false }));
+    Object.assign(f.source, { handedness: 'left', gripSpace: {}, gamepad: { buttons } });
+    const hand = f.sample().hands.left!;
+    const grip = hand.grip;
+    expect(grip?.position.toArray()).toEqual([0.2, 1.2, -0.3]);
+    expect(hand.menuPressed).toBe(false);
+    buttons[6]!.pressed = true;
+    expect(f.sample().hands.left).toMatchObject({ menuDown: true, menuPressed: true });
+    expect(f.sample().hands.left).toMatchObject({ menuDown: true, menuPressed: false });
+    f.state.rayPosition.x += 0.1;
+    expect(f.sample().hands.left?.grip).toBe(grip);
+    expect(grip!.position.x).toBeCloseTo(0.3);
+    // Controller aim remains immediate; filtering is reserved for hands.
+    expect(hand.ray.origin.x).toBeCloseTo(0.3);
+    buttons[6]!.pressed = false;
+    expect(f.sample().hands.left).toMatchObject({ menuDown: false, menuPressed: false });
+    buttons[6]!.pressed = true;
+    expect(f.sample().hands.left?.menuPressed).toBe(true);
+  });
+
   it('preserves a platform select completed between render frames', () => {
     const f = xrFixture();
     f.select('selectstart');

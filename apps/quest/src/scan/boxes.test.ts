@@ -42,7 +42,7 @@ describe('scan box interaction', () => {
     field.dispose();
   });
 
-  it('keeps tagged outlines accented after hover leaves and independently fades each outline', () => {
+  it('replaces a tagged box with a chip marker while candidate outlines retain their fade', () => {
     const field = new BoxField();
     field.set('lamp', center, 0.4, 0.2, THEME.color.line, true);
     field.set('laptop', new Vector3(1, 1.4, -1), 0.4, 0.2, THEME.color.line, true);
@@ -52,16 +52,16 @@ describe('scan box interaction', () => {
     field.setTagged('lamp', true);
     field.setSelected('lamp'); field.setHovered(null);
     field.setOpacity('lamp', 0.25); field.update(0, head);
-    expect(new Color().fromArray(colors.array, 0).getHexString()).toBe(new Color(THEME.color.accent).getHexString());
+    expect(new Color().fromArray(colors.array, 0).getHexString()).toBe('ffffff');
     const alpha = field.geometry.getAttribute('boxOpacity');
-    expect(alpha.getX(0)).toBe(0.25);
-    expect(alpha.getX(alpha.count / THEME.box.max) * field.material.opacity).toBeCloseTo(0.4);
+    expect(alpha.getX(0) * field.material.opacity).toBeCloseTo(0.4);
+    expect(alpha.getX(alpha.count / THEME.box.max)).toBe(0);
     field.setSelected(null); field.update(0, head);
-    expect(new Color().fromArray(colors.array, 0).getHexString()).toBe(new Color(THEME.color.accent).getHexString());
+    expect(new Color().fromArray(colors.array, 0).getHexString()).toBe('ffffff');
     field.remove('lamp'); field.update(0, head);
     expect(alpha.getX(0) * field.material.opacity).toBeCloseTo(0.4);
     expect([...alpha.array.slice(alpha.count / THEME.box.max)].every((value) => value === 0)).toBe(true);
-    expect(field.children).toHaveLength(0);
+    expect(field.children.map((child) => child.name)).toEqual(['chip-markers']);
     field.dispose();
   });
 
@@ -79,28 +79,26 @@ describe('scan box interaction', () => {
 });
 
 describe('scan label layout', () => {
-  it('keeps angular label size readable at one to three metres and separates crowded labels', () => {
+  it('keeps labels four degrees tall and fixed 12 cm above devices as the head moves', () => {
     const field = new BoxField();
     for (let i = 0; i < 8; i++) {
       const depth = 1 + i * 2 / 7;
       field.set(String(i), new Vector3(0, 1.4, -depth), 0.4 * depth, 0.2 * depth, THEME.color.line, true);
     }
     field.update(0, head);
-    let previousTop = -Infinity;
     const first = [];
     for (const box of field.boxes.values()) {
       const anchor = field.labelAnchor(box, head, new Vector3());
-      const depth = -anchor.z;
-      const height = THEME.box.labelHeight * field.labelScale(box, head) / depth;
-      expect(field.labelScale(box, head) / depth).toBeCloseTo(1);
-      const bottom = (anchor.y - head.y) / depth - height / 2;
-      expect(bottom).toBeGreaterThan(previousTop);
-      previousTop = bottom + height;
+      const height = THEME.box.labelHeight * field.labelScale(box, head);
+      expect(2 * Math.atan(height / (2 * anchor.distanceTo(head))) * 180 / Math.PI).toBeGreaterThanOrEqual(4);
+      expect(anchor.x).toBe(box.center.x);
+      expect(anchor.y - box.center.y - box.h / 2).toBeCloseTo(0.12);
       first.push(anchor.clone());
     }
     field.update(0, head);
     let i = 0;
-    for (const box of field.boxes.values()) expect(field.labelAnchor(box, head, new Vector3())).toEqual(first[i++]);
+    const movedHead = new Vector3(0.4, 1.5, 0.1);
+    for (const box of field.boxes.values()) expect(field.labelAnchor(box, movedHead, new Vector3())).toEqual(first[i++]);
     field.dispose();
   });
 
@@ -115,7 +113,7 @@ describe('scan label layout', () => {
     const text = new LabelText(); label.add(text);
     field.setOpacity('lamp', 0.25); field.update(0, head);
     field.labelAnchor(box, head, label.position);
-    expect(label.scale.x).toBe(2);
+    expect(label.scale.x).toBeCloseTo(2, 1);
     expect(text.fillOpacity).toBe(0.25);
     plate.onBeforeRender(null!, null!, null!, plate.geometry, material, null!);
     expect(material.uniforms.fillAlpha.value).toBeCloseTo(0.2);

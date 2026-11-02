@@ -5,6 +5,7 @@ import { TargetStore, toHudTarget } from '../scan/targets';
 import { QuestApp } from './app';
 import { ModeState } from './modes';
 import type { ShellFrame } from './hud-contract';
+import { PinchTargetHistory } from './precision';
 
 function shell() {
   const app = Object.create(QuestApp.prototype) as QuestApp;
@@ -26,10 +27,11 @@ function shell() {
   const modes = new ModeState();
   Object.assign(app, {
     targets, live, hud, scanner, ws, modes, lockedId: null, filter: 'electronics', params: new URLSearchParams(), cameraState: 'on',
-    desktopCam: { position: new Vector3(0, 1.6, 0) }, controls: { clear: vi.fn(), push: vi.fn() },
+    desktopCam: { position: new Vector3(0, 1.6, 0), quaternion: new Quaternion() }, controls: { clear: vi.fn(), push: vi.fn() },
     handFeedback: { setHover: vi.fn() }, recorder: { input: vi.fn() }, page: { log: vi.fn() },
     input: { mouseAsHand: true, pointer: { inside: true } },
     candidate: { id: null, shown: null, since: 0 }, consumed: { left: false, right: false },
+    targetHistory: { left: new PinchTargetHistory<string>(), right: new PinchTargetHistory<string>() }, annotationForward: new Vector3(),
     aimTargets: new Map(), aimBuffer: [], observed: new Map(), visibleTargets: new Set([target.id, liveBox.id]),
     armedCards: new Set(), cancelledCards: new Set(), generated: new Map(), deferredSpecs: new Map(), controlValues: new Map(), specByCard: new Map(), cardOfSpec: new Map(), uiSpecOfGen3d: new Map(), menuSpec: new Map(),
     gazeHit: { id: '', angleDeg: 0, distance: 0 }, handHit: { id: '', angleDeg: 0, distance: 0 }, touchHit: { id: '', angleDeg: 0, distance: 0 },
@@ -287,7 +289,7 @@ describe('explicit annotation and control', () => {
     expect(ws.send.mock.calls.some(([type]) => type === 'control.setup')).toBe(false);
   });
 
-  it('applies one six-box budget, fades stale detections, and hides out-of-range devices', () => {
+  it('keeps five central candidates, fades stale detections, and hides distant or peripheral devices', () => {
     const { app, receive } = shell();
     const draw = vi.fn(), erase = vi.fn();
     Object.assign(app, { drawTarget: draw, eraseTarget: erase });
@@ -295,13 +297,14 @@ describe('explicit annotation and control', () => {
       position: [i / 10, 1.6, -1], confirmed: true, status: 'scanned' });
     receive('observeTarget', { id: 'far', label: 'Laptop', score: 1, position: [0, 1.6, -4], confirmed: true, status: 'scanned' });
     const visible = Reflect.get(app, 'visibleTargets') as Set<string>;
-    expect(visible.size).toBe(6); expect(visible.has('far')).toBe(false);
+    expect([...visible]).toEqual(['yolo_box0', 'yolo_box1', 'yolo_box2', 'yolo_box3', 'box4']);
+    expect(visible.has('far')).toBe(false);
     const observed = Reflect.get(app, 'observed') as Map<string, { at: number }>;
     // live YOLO boxes fade after 0.4 s unseen; SAM-only boxes (refreshed once per scan cycle) after 3.5 s
     for (const entry of observed.values()) entry.at -= 401;
     receive('refreshAnnotations', true);
     expect([...visible].some((id) => id.startsWith('yolo_'))).toBe(false);
-    expect(visible.size).toBe(4);
+    expect([...visible]).toEqual(['box4', 'box5']);
     expect(erase).toHaveBeenCalled();
     for (const entry of observed.values()) entry.at -= 3500;
     receive('refreshAnnotations', true);

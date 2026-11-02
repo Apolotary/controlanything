@@ -4,6 +4,7 @@ import { QuestApp } from './app';
 import type { ShellFrame, ShellHand } from './hud-contract';
 import { InputSampler } from './input';
 import { ModeState } from './modes';
+import { PinchTargetHistory } from './precision';
 
 function hand(overrides: Partial<ShellHand> = {}): ShellHand {
   return {
@@ -44,6 +45,7 @@ function appHarness(targets: ReturnType<typeof target>[] = []) {
     input, handFeedback: { setHover, update: vi.fn() },
     targets: { targets: targetMap, get: (id: string) => targetMap.get(id), refine },
     candidate: { id: null, since: 0, shown: null }, consumed: { left: false, right: false },
+    targetHistory: { left: new PinchTargetHistory<string>(), right: new PinchTargetHistory<string>() },
     aimTargets: new Map(), aimBuffer: [],
     gazeHit: { id: '', angleDeg: 0, distance: 0 },
     handHit: { id: '', angleDeg: 0, distance: 0 },

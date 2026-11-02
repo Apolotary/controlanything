@@ -50,7 +50,7 @@ describe('automatic annotation scanning', () => {
     expect(targets.list().map((target) => target.label)).toEqual(['microwave', 'ceiling light', 'synthesizer', 'lamp', 'screen']);
   });
 
-  it('rejects objects beyond the configured range and caps each batch at six devices', async () => {
+  it('rejects objects beyond the configured range and caps each batch at five devices', async () => {
     const { scanner, targets, result } = setup();
     scanner.rangeM = 1.5;
     scanner.start();
@@ -58,7 +58,7 @@ describe('automatic annotation scanning', () => {
     expect(targets.list()).toHaveLength(0);
     scanner.rangeM = 3;
     await scanner.onResult(result(['laptop', 'screen', 'phone', 'keyboard', 'ceiling light', 'remote', 'mouse']));
-    expect(targets.list()).toHaveLength(6);
+    expect(targets.list()).toHaveLength(5);
   });
 
   it('ignores delayed segmentation after leaving Annotate, including while placement is pending', async () => {

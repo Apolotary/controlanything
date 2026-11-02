@@ -110,8 +110,13 @@ export class Page {
   }
 
   setButton(b: HTMLButtonElement, text: string, on = false, disabled = false): void {
+    const returningFromXr = b === this.enter && b.textContent === 'Exit AR' && text.startsWith('Enter AR');
     b.textContent = text;
     b.classList.toggle('on', on);
     b.disabled = disabled;
+    if (returningFromXr) {
+      b.scrollIntoView({ block: 'nearest' });
+      b.focus({ preventScroll: true });
+    }
   }
 }

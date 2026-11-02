@@ -172,9 +172,10 @@ async function pinch({ targetId, nodeName, turn = false }) {
   }, targetId);
   const point = await quest.evaluate(({ targetId, nodeName, turn }) => {
     const app = window.__ce;
-    const object = nodeName ? app.hud.root.getObjectByName(nodeName) : null;
+    const object = nodeName ? app.hud.root.getObjectByName(nodeName)
+      : app.modes.tags.has(targetId) ? app.hud.root.getObjectByName(`target-label:${targetId}`) : null;
     if (nodeName && !object) throw new Error(`HUD node not found: ${nodeName}`);
-    for (let node = object; node; node = node.parent) {
+    for (let node = turn ? null : object; node; node = node.parent) {
       if (!node.visible) throw new Error(`HUD node is hidden: ${nodeName}`);
     }
     const world = object
@@ -193,7 +194,11 @@ async function pinch({ targetId, nodeName, turn = false }) {
     }
     return { x: rect.left + (ndc.x + 1) * rect.width / 2, y: rect.top + (1 - ndc.y) * rect.height / 2 };
   }, { targetId, nodeName, turn });
-  if (turn) return pinch({ targetId, nodeName });
+  if (turn) {
+    const time = await quest.evaluate(() => window.__ce.lastFrame.time);
+    await waitQuest((time) => window.__ce.lastFrame.time >= time + 300, time);
+    return pinch({ targetId, nodeName });
+  }
   await quest.mouse.move(point.x, point.y);
   await quest.mouse.down();
   try {
@@ -217,7 +222,7 @@ async function assertDockIcons(mode, canStop = false) {
     if (!dock) throw new Error('Hand dock is missing');
     const icons = [];
     dock.traverse((node) => {
-      if (!/^(mode-(annotate|control)|filter:(everything|lights|electronics)|deck:panic)$/.test(node.name)) return;
+      if (!/^(mode-(annotate|control)|filter:(everything|lights|electronics)|deck:panic|exit-ar)$/.test(node.name)) return;
       for (let current = node; current; current = current.parent) if (!current.visible) return;
       icons.push(node.name);
     });
@@ -225,11 +230,11 @@ async function assertDockIcons(mode, canStop = false) {
       oldBar: !!hud.root.getObjectByName('home-bar'), oldHint: !!hud.root.getObjectByName('home-hint'),
       close: !!hud.root.getObjectByName('deck-close') };
   });
-  const expected = ['mode-annotate', 'mode-control'];
+  const expected = ['mode-annotate', 'mode-control', 'exit-ar'];
   if (mode === 'annotate') expected.push('filter:everything', 'filter:lights', 'filter:electronics');
   if (canStop) expected.push('deck:panic');
   assert.deepEqual(state.icons, expected.sort(), `${mode} dock must expose only its available actions`);
-  assert.equal(state.anchor, 'fallback', 'Controller and mouse input must use the fallback dock');
+  assert.equal(state.anchor, 'fallback', 'Mouse emulator input must use the fallback dock');
   assert.equal(state.oldBar || state.oldHint || state.close, false, 'The old bar, permanent hint, and Close button must be removed');
 }
 

@@ -5,6 +5,7 @@
  */
 import { ArrayCamera, type Camera, Quaternion, Raycaster, Vector2, Vector3 } from 'three';
 import type { Handedness, JointSample, ShellFrame, ShellHand } from './hud-contract';
+import { OneEuroRayFilter } from './precision';
 
 const JOINTS: XRHandJoint[] = [
   'wrist',
@@ -88,6 +89,9 @@ interface HandTrack {
   jointReleasedAt: number;
   jointCount: number;
   pinchDistanceCm: number | null;
+  rayFilter: OneEuroRayFilter;
+  grip: { position: Vector3; quaternion: Quaternion };
+  menuDown: boolean;
   hand: ShellHand;
   jointPool: Record<XRHandJoint, JointSample>;
 }
@@ -110,6 +114,7 @@ function makeHand(): ShellHand {
   return {
     joints: {}, pinching: false, justPinched: false, justReleased: false,
     pinchPoint: new Vector3(), ray: { origin: new Vector3(), dir: new Vector3(0, 0, -1) },
+    rawRay: { origin: new Vector3(), dir: new Vector3(0, 0, -1) },
     palmUp: false, palmUpMs: 0, controller: false,
   };
 }
@@ -122,6 +127,7 @@ function makeTrack(): HandTrack {
     jointPinching: false, pinching: false, lastJointTime: null, lastPinchPoint: new Vector3(), hasPinchPoint: false,
     palmUpSince: null, selectDown: false, selectLatched: false, selectDuplicate: false,
     jointReleasedAt: -Infinity, jointCount: 0, pinchDistanceCm: null,
+    rayFilter: new OneEuroRayFilter(), grip: { position: new Vector3(), quaternion: new Quaternion() }, menuDown: false,
     hand: makeHand(), jointPool,
   };
 }
@@ -324,6 +330,14 @@ export class InputSampler {
       ray.origin.set(p.x, p.y, p.z);
       ray.dir.set(0, 0, -1).applyQuaternion(this.rayQuaternion.set(o.x, o.y, o.z, o.w));
     }
+    hand.rawRay!.origin.copy(ray.origin); hand.rawRay!.dir.copy(ray.dir);
+    if (src.hand && rayPose) track.rayFilter.update(ray.origin, ray.dir, time, ray.origin, ray.dir);
+    else track.rayFilter.reset();
+    delete hand.grip;
+    // The runtime may reserve the menu button; when exposed, xr-standard's optional menu is index 6.
+    const menuDown = !src.hand && src.handedness === 'left' && Boolean(src.gamepad?.buttons[6]?.pressed);
+    hand.menuPressed = menuDown && !track.menuDown;
+    hand.menuDown = track.menuDown = menuDown;
     let distance: number | null = null;
     pinchPoint.copy(ray.origin);
     let palmUp = false;
@@ -373,6 +387,10 @@ export class InputSampler {
       const grip = src.gripSpace ? frame.getPose(src.gripSpace, ref) : undefined;
       if (grip) {
         pinchPoint.set(grip.transform.position.x, grip.transform.position.y, grip.transform.position.z);
+        track.grip.position.copy(pinchPoint);
+        const orientation = grip.transform.orientation;
+        track.grip.quaternion.set(orientation.x, orientation.y, orientation.z, orientation.w);
+        hand.grip = track.grip;
         hasSpatialPose = true;
       }
     }
@@ -437,6 +455,7 @@ export class InputSampler {
       ray.origin.copy(head.position);
       ray.dir.copy(head.ray.dir);
     }
+    hand.rawRay!.origin.copy(ray.origin); hand.rawRay!.dir.copy(ray.dir);
     const pinch = this.desktopPinch.update(null, this.pointer.down || this.pointer.latched, this.desktopState);
     this.pointer.latched = false;
     hand.pinching = pinch.pinching;

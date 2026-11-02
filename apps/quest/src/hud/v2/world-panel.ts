@@ -48,7 +48,8 @@ export class WorldPanel {
     this.placed = true;
     this.previousTime = timeMs;
     this.anchorHead.copy(head.position);
-    this.lookPoint.copy(panel.position).setY(head.position.y);
+    this.direction.set(0, 0, -1).applyQuaternion(head.quaternion).setY(0).normalize();
+    this.lookPoint.copy(head.position).add(this.direction);
   }
 
   update(panel: Object3D, head: HeadPose, timeMs: number): void {

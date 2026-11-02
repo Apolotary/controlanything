@@ -3,6 +3,7 @@ import { Matrix4, PerspectiveCamera, Quaternion, Scene, Vector3, type WebGLRende
 import { EXAMPLES } from '@ce/gen3d';
 import type { Hud, HudTarget } from '../contract';
 import { createHud } from './index';
+import { CardPlacement } from './comfort';
 import { THEME } from './theme';
 
 const UP = new Vector3(0, 1, 0);
@@ -21,7 +22,7 @@ function setup(kind: 'idle' | 'card' | 'modal' = 'idle') {
   if (kind === 'card') { hud.upsertTarget(target); hud.setLocked(target.id); }
   if (kind === 'modal') hud.showConfirm({ id: 'allow', title: 'Allow device control' });
   const panel = hud.root.getObjectByName(kind === 'modal' ? 'confirmation-panel' : kind === 'idle' ? 'hand-dock' : 'device-card')!;
-  const update = (time: number) => hud.update({ time, dt: 1 / 72, head, hands: {} });
+  const update = (time: number) => hud.update({ time, dt: 1 / 72, pointer: 'mouse', head, hands: {} });
   return { hud, head, panel, update };
 }
 
@@ -87,8 +88,8 @@ describe('HUD world placement', () => {
     update(1751);
     const distance = kind === 'card' ? THEME.card.dockDistance : 0.6;
     const lateral = kind === 'idle' ? -0.24 : 0;
-    expect(panel.position.x).toBeCloseTo((lateral - distance) / 2);
-    expect(panel.position.z).toBeCloseTo((-distance - lateral) / 2);
+    expect(panel.position.x).toBeCloseTo((position.x - distance) / 2);
+    expect(panel.position.z).toBeCloseTo((position.z - lateral) / 2);
     update(1901);
     expect(panel.position.x).toBeCloseTo(-distance);
     expect(panel.position.z).toBeCloseTo(-lateral);
@@ -130,9 +131,10 @@ describe('HUD world placement', () => {
     hud.upsertTarget(next);
     hud.setLocked(next.id);
     update(400);
-    const expected = new Vector3(0, -0.14, -THEME.card.dockDistance).applyQuaternion(head.quaternion).add(head.position);
+    const expected = new Vector3(), nextRotation = new Quaternion();
+    new CardPlacement().place(head.position, new Vector3(...next.position), next.sizeM![0], expected, nextRotation);
     expect(panel.position.distanceTo(expected)).toBeLessThan(1e-6);
-    expect(panel.quaternion.angleTo(head.quaternion)).toBeLessThan(1e-6);
+    expect(panel.quaternion.angleTo(nextRotation)).toBeLessThan(1e-6);
   });
 
   it('holds the open card and fallback dock through a sustained 20 degree turn', () => {

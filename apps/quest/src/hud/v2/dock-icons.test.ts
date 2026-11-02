@@ -9,16 +9,35 @@ describe('hand dock icons', () => {
   it('shows mode buttons and annotation filters, then only modes and an available Stop in Control', () => {
     const dock = new DockIcons();
     const names = () => dock.buttons.map((button) => button.name);
-    expect(names()).toEqual(['mode-annotate', 'mode-control', 'filter:everything', 'filter:lights', 'filter:electronics']);
-    expect(dock.height).toBe(0.032); expect(dock.width).toBeCloseTo(0.192);
-    expect(dock.buttons[1]!.position.x - dock.buttons[0]!.position.x).toBeCloseTo(0.04);
+    expect(names()).toEqual(['mode-annotate', 'mode-control', 'filter:everything', 'filter:lights', 'filter:electronics', 'exit-ar']);
+    expect(dock.height).toBe(0.032); expect(dock.width).toBeCloseTo(0.252);
+    expect(dock.buttons[1]!.position.x - dock.buttons[0]!.position.x).toBeCloseTo(0.044);
     dock.setState({ ...annotate, mode: 'control' }, false);
-    expect(names()).toEqual(['mode-annotate', 'mode-control']);
-    expect(dock.width).toBeCloseTo(0.072);
+    expect(names()).toEqual(['mode-annotate', 'mode-control', 'exit-ar']);
+    expect(dock.width).toBeCloseTo(0.12);
     dock.setState({ ...annotate, mode: 'control' }, true);
-    expect(names()).toEqual(['mode-annotate', 'mode-control', 'deck:panic']);
+    expect(names()).toEqual(['mode-annotate', 'mode-control', 'deck:panic', 'exit-ar']);
     dock.setState(annotate, true);
     expect(names()).not.toContain('deck:panic');
+    dock.dispose();
+  });
+
+  it('labels Exit on hover and fills its existing disc while a hold is active', () => {
+    const dock = new DockIcons();
+    const exit = dock.getObjectByName('exit-ar')!;
+    exit.userData.hovered = true;
+    dock.updateFeedback(1);
+    expect(dock.getObjectByName('dock-label')).toMatchObject({ visible: true, text: 'Exit AR (hold)' });
+    dock.beginExitHold(0);
+    expect(dock.updateExitHold(300)).toBe(false);
+    expect(exit.userData.holdProgress).toBe(0.5);
+    const material = (dock.getObjectByName('dock-discs') as Mesh).material as ShaderMaterial;
+    expect(material.uniforms.holdProgress!.value).toBe(0.5);
+    expect(dock.updateExitHold(600)).toBe(true);
+    expect(dock.updateExitHold(700)).toBe(false);
+    dock.cancelExitHold();
+    expect(exit.userData.holdProgress).toBe(0);
+    expect(material.uniforms.holdProgress!.value).toBe(0);
     dock.dispose();
   });
 
