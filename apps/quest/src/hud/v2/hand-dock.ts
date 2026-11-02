@@ -3,11 +3,109 @@ import type { HandState, HudFrame } from '../contract';
 import { unfoldEase } from './motion';
 
 const UP = new Vector3(0, 1, 0);
-const WRIST_FACE = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), -Math.PI / 2);
 const KNUCKLES = ['index-finger-phalanx-proximal', 'middle-finger-phalanx-proximal', 'ring-finger-phalanx-proximal', 'pinky-finger-phalanx-proximal'] as const;
 const DWELL_MS = 300, HIDE_DELAY_MS = 300, FADE_MS = 180;
 const RAISED_ENTER_COS = Math.cos(35 * Math.PI / 180);
 const RAISED_EXIT_COS = Math.cos(45 * Math.PI / 180);
+const FINGER_JOINTS = {
+  middle: 'middle-finger-tip',
+  ring: 'ring-finger-tip',
+  pinky: 'pinky-finger-tip',
+} as const;
+export type FingerMenuFinger = keyof typeof FINGER_JOINTS;
+const MENU_FINGERS = Object.keys(FINGER_JOINTS) as FingerMenuFinger[];
+const TOUCH_ENTER = 0.015, TOUCH_RELEASE = 0.022, TOUCH_NEAR = 0.04;
+const TOUCH_DEBOUNCE_MS = 30, MAX_HAND_SPEED = 0.6;
+
+export interface FingerTouchState {
+  finger: FingerMenuFinger | null;
+  justTouched: boolean;
+  touching: boolean;
+  near: Record<FingerMenuFinger, boolean>;
+  ready: boolean;
+}
+
+/** Thumb-to-finger touches, with a fresh release required after any unsafe pose. */
+export class FingerTouchDetector {
+  private readonly state: FingerTouchState = {
+    finger: null, justTouched: false, touching: false,
+    near: { middle: false, ring: false, pinky: false }, ready: false,
+  };
+  private readonly distances = { middle: Infinity, ring: Infinity, pinky: Infinity };
+  private readonly armed = { middle: false, ring: false, pinky: false };
+  private readonly previousWrist = new Vector3();
+  private previousTime: number | null = null;
+  private candidate: FingerMenuFinger | null = null;
+  private candidateSince = 0;
+
+  update(hand: HandState | undefined, open: boolean, time: number): FingerTouchState {
+    const state = this.state;
+    state.justTouched = false;
+    state.ready = false;
+    const wrist = hand?.joints.wrist;
+    const validWrist = !!wrist && Number.isFinite(wrist.position.lengthSq());
+    const thumb = hand?.joints['thumb-tip'];
+    const elapsed = this.previousTime === null ? null : time - this.previousTime;
+    const moved = validWrist ? wrist.position.distanceTo(this.previousWrist) : 0;
+    const fast = elapsed !== null && (elapsed < 0 || (elapsed === 0 ? moved > 0 : moved / (elapsed / 1000) > MAX_HAND_SPEED));
+    if (validWrist && Number.isFinite(time)) { this.previousWrist.copy(wrist.position); this.previousTime = time; }
+    else this.previousTime = null;
+
+    let hasFinger = false;
+    for (const finger of MENU_FINGERS) {
+      const tip = hand?.joints[FINGER_JOINTS[finger]];
+      const distance = thumb && tip ? thumb.position.distanceTo(tip.position) : Infinity;
+      this.distances[finger] = distance;
+      if (Number.isFinite(distance)) hasFinger = true;
+      else this.armed[finger] = false;
+      state.near[finger] = open && !hand?.controller && !!hand?.palmUp && distance < TOUCH_NEAR;
+    }
+    const valid = open && !hand?.controller && !!hand?.palmUp
+      && (hand.palmUpMs ?? 0) >= DWELL_MS && validWrist && hasFinger && !fast && Number.isFinite(time);
+    if (!valid) {
+      this.cancel();
+      return state;
+    }
+    for (const finger of MENU_FINGERS) {
+      if (Number.isFinite(this.distances[finger]) && this.distances[finger] > TOUCH_RELEASE) this.armed[finger] = true;
+    }
+    state.ready = state.finger !== null || MENU_FINGERS.some((finger) => this.armed[finger]);
+    if (state.finger !== null) {
+      if (this.distances[state.finger] <= TOUCH_RELEASE) return state;
+      state.finger = null;
+      state.touching = false;
+      this.candidate = null;
+      return state;
+    }
+
+    let nearest: FingerMenuFinger | null = null;
+    let closest = TOUCH_ENTER;
+    for (const finger of MENU_FINGERS) {
+      if (this.armed[finger] && this.distances[finger] < closest) {
+        closest = this.distances[finger];
+        nearest = finger;
+      }
+    }
+    if (nearest !== this.candidate) {
+      this.candidate = nearest;
+      this.candidateSince = time;
+    }
+    if (nearest !== null && time - this.candidateSince >= TOUCH_DEBOUNCE_MS) {
+      state.finger = nearest;
+      state.touching = state.justTouched = true;
+      this.armed[nearest] = false;
+      this.candidate = null;
+    }
+    return state;
+  }
+
+  private cancel(): void {
+    this.state.finger = null;
+    this.state.touching = false;
+    this.candidate = null;
+    for (const finger of MENU_FINGERS) this.armed[finger] = false;
+  }
+}
 
 /** A hold commits once, and release or a clock reset always cancels unfinished progress. */
 export class DockHold {
@@ -63,16 +161,13 @@ export class HandDockAnchor {
   private readonly destination = new Vector3();
   private readonly direction = new Vector3();
   private readonly wristPosition = new Vector3();
-  private readonly localTip = new Vector3();
-  private readonly nearest = new Vector3();
   private readonly rotation = new Quaternion();
-  private readonly wristRotation = new Quaternion();
   private readonly matrix = new Matrix4();
   private readonly headForward = new Vector3();
 
   constructor(readonly nonDominant: 'left' | 'right' = 'left') {}
 
-  update(frame: HudFrame, dock: Object3D, wrist: Object3D, width: number): void {
+  update(frame: HudFrame, dock: Object3D, wrist: Object3D, _width: number): void {
     this.justOpened = false;
     if (this.previousTime !== null && frame.time < this.previousTime) this.closeImmediately();
     this.previousTime = frame.time;
@@ -113,7 +208,7 @@ export class HandDockAnchor {
     this.place(frame, hand, dock, wrist, firstPose);
 
     const other = frame.hands[this.nonDominant === 'left' ? 'right' : 'left'];
-    const held = this.open && this.fingerNear(other, dock, width);
+    const held = this.open && this.fingerNear(other, hand);
     const palmReady = hand.palmUp && (hand.palmUpMs ?? 0) >= DWELL_MS;
     let nextOpen = this.open;
     if (palmReady || (this.open && (hand.palmUp || held))) {
@@ -124,7 +219,7 @@ export class HandDockAnchor {
       if (frame.time - this.awaySince >= HIDE_DELAY_MS) nextOpen = false;
     }
     this.fade(nextOpen, frame.time);
-    this.wristOpacity = 0.6 * (1 - this.opacity);
+    this.wristOpacity = 0.6;
     wrist.visible = this.wristOpacity > 0.001;
   }
 
@@ -197,33 +292,26 @@ export class HandDockAnchor {
     else this.destination.set(0, 0, -0.075).applyQuaternion(joint.quaternion).add(joint.position);
     this.direction.subVectors(frame.head.position, this.destination).normalize();
     this.destination.addScaledVector(this.direction, 0.06);
-    // A fixed up axis keeps the row level as the wrist rolls.
+    // A fixed up axis keeps the menu content level as the wrist rolls.
     this.matrix.lookAt(frame.head.position, this.destination, UP);
     this.rotation.setFromRotationMatrix(this.matrix);
     const alpha = first ? 1 : 1 - Math.exp(-Math.max(0, frame.dt) / 0.08);
     dock.position.lerp(this.destination, alpha);
     dock.quaternion.slerp(this.rotation, alpha);
 
-    // WebXR +Y points out of the back of the hand; the glyph's +Y follows the fingers.
+    // Keep the mode label near the wrist and facing the reader.
     this.wristPosition.set(0, 0.012, 0).applyQuaternion(joint.quaternion).add(joint.position);
-    this.wristRotation.copy(joint.quaternion).multiply(WRIST_FACE);
     wrist.position.lerp(this.wristPosition, alpha);
-    wrist.quaternion.slerp(this.wristRotation, alpha);
+    wrist.quaternion.slerp(this.rotation, alpha);
   }
 
-  private fingerNear(hand: HandState | undefined, dock: Object3D, width: number): boolean {
+  private fingerNear(hand: HandState | undefined, menuHand: HandState): boolean {
     const tip = hand && !hand.controller ? hand.joints['index-finger-tip'] : undefined;
     if (!tip) return false;
-    dock.updateWorldMatrix(true, false);
-    this.localTip.copy(tip.position);
-    dock.worldToLocal(this.localTip);
-    // Distance to the finite row, including its ends, rather than an infinite interaction plane.
-    this.nearest.set(
-      Math.max(-width / 2, Math.min(width / 2, this.localTip.x)),
-      Math.max(-0.016, Math.min(0.016, this.localTip.y)),
-      0,
-    );
-    dock.localToWorld(this.nearest);
-    return this.nearest.distanceToSquared(tip.position) <= 0.1 ** 2;
+    // The fallback follows the finger targets rather than a fixed row over the palm.
+    return MENU_FINGERS.some((finger) => {
+      const target = menuHand.joints[FINGER_JOINTS[finger]];
+      return !!target && target.position.distanceToSquared(tip.position) <= 0.1 ** 2;
+    });
   }
 }

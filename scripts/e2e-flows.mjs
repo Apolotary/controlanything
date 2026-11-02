@@ -923,8 +923,8 @@ async function run() {
   const handMethods = await quest.evaluate(() => window.__ce.emulator?.device.remote?.listMethods?.().map((m) => m.method) ?? []);
   const needed = ['set_input_mode', 'set_connected', 'set_hand_pose', 'set_transform', 'look_at', 'set_select_value', 'get_hand_state'];
   if (!needed.every((method) => handMethods.includes(method))) {
-    console.log(`SKIP 17-emulated-hand-pinch: IWER lacks hand input methods (${needed.filter((m) => !handMethods.includes(m)).join(', ')})`);
-  } else await phase('17-emulated-hand-pinch', async () => {
+    console.log(`SKIP 17-emulated-finger-menu: IWER lacks hand input methods (${needed.filter((m) => !handMethods.includes(m)).join(', ')})`);
+  } else await phase('17-emulated-finger-menu', async () => {
     // Bring the fallback dock into view, then hand tracking must take over without a mouse click.
     await quest.evaluate(() => {
       const app = window.__ce;
@@ -937,13 +937,17 @@ async function run() {
       app.hud.on('consumed', (e) => window.__flowsHandEvents.push(e));
     });
     await elapsedFrames(2200);
+    const hasFingerPose = await quest.evaluate(() => {
+      const poses = window.__ce.emulator.device.hands.left.poseIds ?? [];
+      return poses.includes('open') && poses.includes('pinch-middle');
+    });
     try {
-      await quest.evaluate(async () => {
+      await quest.evaluate(async (hasFingerPose) => {
         const app = window.__ce, remote = app.emulator.device.remote;
         await remote.dispatch('set_input_mode', { mode: 'hand' });
         for (const device of ['hand-left', 'hand-right']) {
-          await remote.dispatch('set_connected', { device, connected: true });
-          await remote.dispatch('set_hand_pose', { device, poseId: 'default' });
+          await remote.dispatch('set_connected', { device, connected: device === 'hand-left' });
+          await remote.dispatch('set_hand_pose', { device, poseId: hasFingerPose ? 'open' : 'default' });
           await remote.dispatch('set_select_value', { device, value: 0 });
         }
         const head = app.emulator.head();
@@ -954,30 +958,89 @@ async function run() {
         const xyz = (vector) => ({ x: vector.x, y: vector.y, z: vector.z });
         await remote.dispatch('set_transform', { device: 'hand-left', anchor: 'wrist', position: xyz(wrist),
           orientation: { fingers: xyz(fingers), palm: xyz(palm) } });
-      });
+      }, hasFingerPose);
       await waitQuest(() => window.__ce.lastFrame.hands.left?.palmUpMs >= 300
         && window.__ce.hud.deck.userData.anchor === 'left' && window.__ce.hud.deck.userData.open);
-      await elapsedFrames(250); // Let the 180 ms opening fade complete before targeting an icon.
-      await quest.evaluate(async () => {
+      await elapsedFrames(250); // Complete opening and observe released fingers before any touch.
+      const menu = await quest.evaluate(() => {
+        const app = window.__ce, fingers = [];
+        app.hud.deck.traverse((node) => {
+          if (!node.userData.finger) return;
+          for (let parent = node; parent; parent = parent.parent) if (!parent.visible) return;
+          const label = node.getObjectByName(`finger-label:${node.userData.finger}`);
+          fingers.push({ finger: node.userData.finger, name: node.name, label: label?.text, visible: label?.visible });
+        });
+        return { mode: app.modes.mode, fingers, wrist: app.hud.root.getObjectByName('wrist-mode-label')?.text };
+      });
+      assert.equal(menu.mode, 'control');
+      assert.equal(menu.wrist, 'Control', 'Current mode must stay readable at the wrist');
+      assert.deepEqual(menu.fingers.map((finger) => finger.finger).sort(), ['middle', 'pinky'], 'Stop must hide when no device can move');
+      assert(menu.fingers.every((finger) => finger.label && finger.visible), 'Finger labels must be visible without hover');
+      assert.equal(menu.fingers.find((finger) => finger.finger === 'middle')?.label, 'Annotate');
+
+      if (hasFingerPose) {
+        const sent = await quest.evaluate(() => window.__flowsRequests.length);
+        // IWER's per-finger pose blends drive XR joints; select stays released throughout.
+        await quest.evaluate(() => window.__ce.emulator.device.remote.dispatch('set_hand_pose', {
+          device: 'hand-left', poseId: 'open', fingers: { thumb: 'pinch-middle', middle: 'pinch-middle' }, duration: 0.25,
+        }));
+        await waitQuest((sent) => window.__ce.modes.mode === 'annotate' && window.__ce.scanner.active
+          && window.__flowsRequests.slice(sent).some((event) => event.type === 'mode.set' && event.payload.mode === 'annotate'), sent);
+        await elapsedFrames(800); // A held thumb touch must not toggle the mode back.
+        const touch = await quest.evaluate(async (sent) => {
+          const app = window.__ce, joints = app.lastFrame.hands.left.joints;
+          return { mode: app.modes.mode, requests: window.__flowsRequests.slice(sent).filter((event) => event.type === 'mode.set'),
+            middleDistance: joints['thumb-tip'].position.distanceTo(joints['middle-finger-tip'].position),
+            indexDistance: joints['thumb-tip'].position.distanceTo(joints['index-finger-tip'].position),
+            hand: await app.emulator.device.remote.dispatch('get_hand_state', { device: 'hand-left', joints: 'all' }) };
+        }, sent);
+        assert.equal(touch.mode, 'annotate');
+        assert.equal(touch.requests.length, 1, 'One held thumb-middle touch must switch mode exactly once');
+        assert(touch.middleDistance < 0.015 && touch.indexDistance > 0.035, 'Only the middle fingertip must touch the thumb');
+        assert(touch.hand.connected && !touch.hand.pressed && Object.keys(touch.hand.joints ?? {}).length >= 25,
+          'Finger activation must use tracked joints with index select released');
+        await writeFile(join(SCREENS, 'finger-touch-input.json'), JSON.stringify(touch, null, 2));
+        await quest.evaluate(() => window.__ce.emulator.device.remote.dispatch('set_hand_pose', {
+          device: 'hand-left', poseId: 'open', duration: 0.25,
+        }));
+        await waitQuest(() => {
+          const joints = window.__ce.lastFrame.hands.left.joints;
+          return joints['thumb-tip'].position.distanceTo(joints['middle-finger-tip'].position) > 0.04;
+        });
+        await elapsedFrames(250);
+        assert.equal(await quest.evaluate((sent) => window.__flowsRequests.slice(sent).filter((event) => event.type === 'mode.set').length, sent), 1,
+          'Releasing the finger touch must not activate again');
+      } else {
+        console.log('SKIP thumb-middle pose: this IWER build lacks per-finger touch poses; retaining other-hand fallback coverage');
+      }
+
+      const fallbackMode = await quest.evaluate(async () => {
         const app = window.__ce, remote = app.emulator.device.remote, device = 'hand-right';
+        const nextMode = app.modes.mode === 'annotate' ? 'control' : 'annotate';
         const head = app.emulator.head();
         const position = head.position.clone().add(head.position.clone().set(0.15, -0.2, -0.2).applyQuaternion(head.quaternion));
-        const button = app.hud.root.getObjectByName('mode-annotate').getWorldPosition(position.clone());
+        let button;
+        app.hud.deck.traverse((node) => { if (node.userData.finger === 'middle' && node.visible) button = node; });
+        if (!button) throw new Error('Middle-finger mode target is missing');
+        const target = button.getWorldPosition(position.clone());
+        await remote.dispatch('set_connected', { device, connected: true });
+        await remote.dispatch('set_hand_pose', { device, poseId: 'default' });
         await remote.dispatch('set_transform', { device, position: { x: position.x, y: position.y, z: position.z } });
-        await remote.dispatch('look_at', { device, target: { x: button.x, y: button.y, z: button.z } });
+        await remote.dispatch('look_at', { device, target: { x: target.x, y: target.y, z: target.z } });
+        return nextMode;
       });
       await waitQuest(() => window.__ce.lastFrame.hands.right?.joints['index-finger-tip']
         && !window.__ce.lastFrame.hands.right.controller && !window.__ce.lastFrame.hands.right.pinching);
       const sent = await quest.evaluate(() => window.__flowsRequests.length);
       await quest.evaluate(() => window.__ce.emulator.device.remote.dispatch('set_select_value', { device: 'hand-right', value: 1, duration: 0.15 }));
       await waitQuest(() => window.__ce.lastFrame.hands.right?.pinching);
-      await waitQuest((sent) => window.__ce.modes.mode === 'annotate' && window.__ce.scanner.active
-        && window.__flowsHandEvents.some((e) => e.hand === 'right' && e.widget === 'deck')
-        && window.__flowsRequests.slice(sent).some((e) => e.type === 'mode.set' && e.payload.mode === 'annotate'), sent);
+      await waitQuest(({ sent, fallbackMode }) => window.__ce.modes.mode === fallbackMode
+        && window.__flowsHandEvents.some((event) => event.hand === 'right' && event.widget === 'deck')
+        && window.__flowsRequests.slice(sent).some((event) => event.type === 'mode.set' && event.payload.mode === fallbackMode), { sent, fallbackMode });
       const hand = await quest.evaluate(() => window.__ce.emulator.device.remote.dispatch('get_hand_state', { device: 'hand-right', joints: 'all' }));
-      assert(hand.connected && hand.pressed && Object.keys(hand.joints ?? {}).length >= 25, 'Pinch must come from a tracked XR hand');
+      assert(hand.connected && hand.pressed && Object.keys(hand.joints ?? {}).length >= 25, 'Fallback pinch must come from the other tracked XR hand');
       await writeFile(join(SCREENS, 'hand-input.json'), JSON.stringify(hand, null, 2));
-      // Disconnect the interacting hand so it cannot hold the dock open while the left palm turns away.
+      // Disconnect the interacting hand so it cannot hold the menu open while the left palm turns away.
       await quest.evaluate(async () => {
         const app = window.__ce, remote = app.emulator.device.remote;
         await remote.dispatch('set_select_value', { device: 'hand-right', value: 0 });
@@ -990,7 +1053,7 @@ async function run() {
       await waitQuest(() => !window.__ce.lastFrame.hands.left?.palmUp
         && window.__ce.hud.deck.userData.anchor === 'left' && !window.__ce.hud.deck.userData.open);
       await elapsedFrames(250);
-      assert.equal(await quest.evaluate(() => window.__ce.hud.deck.visible), false, 'Palm-away dock must finish hiding');
+      assert.equal(await quest.evaluate(() => window.__ce.hud.deck.visible), false, 'Palm-away menu must finish hiding');
     } finally {
       await quest.evaluate(async () => {
         const app = window.__ce;
