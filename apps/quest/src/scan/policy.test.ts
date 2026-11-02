@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { annotationRange, annotationVisible, inAnnotationRange, matchesAnnotationFilter } from './policy';
+import { annotationFadeMs, annotationRange, annotationVisible, inAnnotationRange, matchesAnnotationFilter } from './policy';
 import { allowedClasses, CATEGORIES } from './yolo/classes';
 
 const head = { x: 0, y: 1.6, z: 0 };
@@ -40,5 +40,10 @@ describe('annotation policy', () => {
     expect(annotationVisible({ ...target, score: 0.49 }, head, 'electronics', 1000)).toBe(false);
     expect(annotationVisible({ ...target, score: 0.5 }, head, 'electronics', 1000)).toBe(true);
     expect(annotationVisible(target, head, 'electronics', 10_000, 3, true)).toBe(true);
+  });
+
+  it('keeps SAM-only boxes for one scan cycle and live YOLO boxes for 0.4 s', () => {
+    expect(annotationFadeMs(true)).toBe(400);
+    expect(annotationFadeMs(false)).toBeGreaterThanOrEqual(3000);
   });
 });

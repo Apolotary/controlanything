@@ -65,7 +65,7 @@ import { PushToTalk } from '../voice/ptt';
 import { ControlSender } from './controls';
 import { ModeState } from './modes';
 import type { AppMode, HudTarget, ObjectFilter } from '../hud/contract';
-import { annotationRange, matchesAnnotationFilter, inAnnotationRange } from '../scan/policy';
+import { annotationFadeMs, annotationRange, matchesAnnotationFilter, inAnnotationRange } from '../scan/policy';
 import { type Emulator, installEmulator } from './emulator';
 import { HandFeedback } from './hand-feedback';
 import { THEME as HUD_V2_THEME } from '../hud/v2/theme';
@@ -646,7 +646,7 @@ export class QuestApp {
     }
     if (this.modes.mode === 'annotate') {
       const candidates = [...this.observed.values()].filter(({ target, at }) => !this.modes.tags.has(target.id)
-        && now - at <= 400 && (target.score ?? 0) >= 0.5 && matchesAnnotationFilter(target.label, this.filter)
+        && now - at <= annotationFadeMs(isLiveId(target.id)) && (target.score ?? 0) >= 0.5 && matchesAnnotationFilter(target.label, this.filter)
         && inAnnotationRange(target.position, head, range));
       candidates.sort((a, b) => (b.target.score ?? 0) - (a.target.score ?? 0));
       for (const { target } of candidates.slice(0, Math.max(0, 6 - show.size))) {

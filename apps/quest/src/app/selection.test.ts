@@ -194,16 +194,21 @@ describe('explicit annotation and control', () => {
     const { app, receive } = shell();
     const draw = vi.fn(), erase = vi.fn();
     Object.assign(app, { drawTarget: draw, eraseTarget: erase });
-    for (let i = 0; i < 8; i++) receive('observeTarget', { id: `box${i}`, label: 'Laptop', score: 0.9,
+    for (let i = 0; i < 8; i++) receive('observeTarget', { id: i < 4 ? `yolo_box${i}` : `box${i}`, label: 'Laptop', score: 0.9,
       position: [i / 10, 1.6, -1], confirmed: true, status: 'scanned' });
     receive('observeTarget', { id: 'far', label: 'Laptop', score: 1, position: [0, 1.6, -4], confirmed: true, status: 'scanned' });
     const visible = Reflect.get(app, 'visibleTargets') as Set<string>;
     expect(visible.size).toBe(6); expect(visible.has('far')).toBe(false);
     const observed = Reflect.get(app, 'observed') as Map<string, { at: number }>;
+    // live YOLO boxes fade after 0.4 s unseen; SAM-only boxes (refreshed once per scan cycle) after 3.5 s
     for (const entry of observed.values()) entry.at -= 401;
     receive('refreshAnnotations', true);
-    expect(visible.size).toBe(0);
+    expect([...visible].some((id) => id.startsWith('yolo_'))).toBe(false);
+    expect(visible.size).toBe(4);
     expect(erase).toHaveBeenCalled();
+    for (const entry of observed.values()) entry.at -= 3500;
+    receive('refreshAnnotations', true);
+    expect(visible.size).toBe(0);
   });
 
   it('a HUD-consumed pinch never tags an object behind the panel', () => {

@@ -40,12 +40,15 @@ export async function loadHud(ctx: HudContext, force?: string | null): Promise<{
 /** Missing methods become no-ops (logged once); exceptions inside HUD calls are caught and logged. */
 export function tolerant(hud: Hud, name: string): Hud {
   const warned = new Set<string>();
-  const wrappers = new Map<PropertyKey, unknown>();
+  const wrappers = new Map<PropertyKey, { source: unknown; wrapped: unknown }>();
   return new Proxy(hud, {
     get(target, prop, receiver) {
       const v = Reflect.get(target, prop, receiver);
       if (prop === 'root' || typeof prop === 'symbol') return v;
-      if (wrappers.has(prop)) return wrappers.get(prop);
+      // Cache by the current value: the app re-assigns some methods (upsertTarget/removeTarget) after loading,
+      // and a stale wrapper of the original method would silently bypass the override.
+      const cached = wrappers.get(prop);
+      if (cached && cached.source === v) return cached.wrapped;
       if (v === undefined) {
         const missing = (..._args: unknown[]) => {
           if (!warned.has(String(prop))) {
@@ -54,7 +57,7 @@ export function tolerant(hud: Hud, name: string): Hud {
           }
           return prop === 'on' ? () => {} : undefined;
         };
-        wrappers.set(prop, missing);
+        wrappers.set(prop, { source: v, wrapped: missing });
         return missing;
       }
       if (typeof v !== 'function') return v;
@@ -69,7 +72,7 @@ export function tolerant(hud: Hud, name: string): Hud {
           return prop === 'on' ? () => {} : undefined;
         }
       };
-      wrappers.set(prop, wrapped);
+      wrappers.set(prop, { source: v, wrapped });
       return wrapped;
     },
   });

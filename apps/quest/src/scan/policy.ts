@@ -4,6 +4,13 @@ export const ANNOTATION_RANGE_M = 3;
 export const ANNOTATION_MIN_SCORE = 0.5;
 export const ANNOTATION_MAX_BOXES = 6;
 export const ANNOTATION_FADE_MS = 400;
+/** SAM 3.1 refreshes each device prompt about once per scan cycle (1-3 s), so its boxes must outlast one cycle or they flicker. */
+export const ANNOTATION_SAM_FADE_MS = 3500;
+
+/** Live YOLO boxes fade after 0.4 s unseen; SAM-only boxes after one scan cycle. */
+export function annotationFadeMs(live: boolean): number {
+  return live ? ANNOTATION_FADE_MS : ANNOTATION_SAM_FADE_MS;
+}
 
 export type AnnotationFilter = 'electronics' | 'lights' | 'everything';
 type Point = { x: number; y: number; z: number };

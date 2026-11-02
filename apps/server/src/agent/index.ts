@@ -25,7 +25,8 @@ import { Dispatcher } from './dispatch';
 import { hearBack } from './heard';
 import { fixtureDriverDraft, WONDER_MODEL } from './drive';
 import { macLocalInfo, type Roster } from './executors';
-import { fixtureDeviceCard } from './identify';
+import { cropJpeg, fixtureDeviceCard, identify, type IdentifyResult } from './identify';
+import { decodeJpeg } from '../oracle/image';
 import { runLoop } from './loop';
 import { CANCELLED_GUIDANCE, type TimedPhase } from './guidance';
 import { subscribeForge } from './forgeBridge';
@@ -289,9 +290,32 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     hub.broadcast('mode.state', { mode });
     publishTags();
   };
+  // Tagging only names the device (one quiet Muse Spark call, no agent.step / target.status / pipeline messages):
+  // the pipeline's own messages flow only after control.setup (research/20-two-modes.md).
+  const identifying = new Map<string, AbortController>();
+  const tagIdentity = new Map<string, Omit<IdentifyResult, 'card'>>();
   const identifyTag = (t: Target) => {
-    if (t.card || !t.detection || t.abort) return;
-    void runLoop(loopDeps, t, { ...t.selection, identifyOnly: true });
+    if (t.card || !t.detection || t.abort || identifying.has(t.cardId)) return;
+    const detection = t.detection;
+    const abort = new AbortController();
+    identifying.set(t.cardId, abort);
+    void (async () => {
+      try {
+        const crop = cropJpeg(decodeJpeg(detection.jpeg), detection.box);
+        const r = await identify(muse, detection, crop, detection.jpeg, { cardId: t.cardId, signal: AbortSignal.any([abort.signal, AbortSignal.timeout(45_000)]) });
+        if (abort.signal.aborted || !tags.has(t.cardId) || t.card) return;
+        t.card = r.card;
+        const { card: _card, ...identity } = r;
+        tagIdentity.set(t.cardId, identity);
+        hub.broadcast('device.card', r.card);
+        log(`[tag] ${t.cardId} is ${r.card.name} (${r.card.maker} ${r.card.model}) · ${r.model} ${r.latencyMs} ms`);
+        publishTags();
+      } catch (e) {
+        if (!abort.signal.aborted) log(`[tag] could not name ${t.cardId}: ${(e as Error).message}`);
+      } finally {
+        if (identifying.get(t.cardId) === abort) identifying.delete(t.cardId);
+      }
+    })();
   };
   const addTag = (p: TagAddPayload, from: { deviceId: string; name?: string }): Target | undefined => {
     if (mode !== 'annotate' || /\b(person|people|human|man|woman|child|face|hand|body)\b/i.test(p.label)) return undefined;
@@ -313,6 +337,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   };
   const removeTag = (cardId: string): boolean => {
     if (!tags.has(cardId)) return false;
+    identifying.get(cardId)?.abort();
+    identifying.delete(cardId);
     const t = targets.get(cardId);
     if (t) {
       stop(t, 'device untagged');
@@ -384,7 +410,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     t.armed = false;
     t.lastError = undefined;
     const runId = t.runId;
-    void runLoop(loopDeps, t, t.selection).finally(() => {
+    void runLoop(loopDeps, t, { ...t.selection, identified: tagIdentity.get(t.cardId) }).finally(() => {
       if (targets.get(t.cardId) === t && t.runId === runId) { setups.delete(t.cardId); tags.sync(t, t.specId ? specs.get(t.specId) : undefined); publishTags(); }
     });
     return t;

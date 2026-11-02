@@ -261,13 +261,20 @@ async function run() {
     await waitQuest(() => window.__ce.renderer.xr.isPresenting && window.__ce.cameraState === 'on');
   });
 
-  let targetId;
+  let targetId, tagGaze;
   await phase('02-annotate', async () => {
     await waitQuest(() => window.__ce.modes.mode === 'annotate' && window.__ce.scanner.active
       && window.__ce.targets.list().some((t) => /ceiling (light|lamp)/i.test(t.label)));
     assert(await quest.evaluate(() => window.__judgeRequests.some((e) => e.type === 'mode.set' && e.payload.mode === 'annotate')),
       'Entering AR explicitly starts in Annotate');
     targetId = await quest.evaluate(() => window.__ce.targets.list().find((t) => /ceiling (light|lamp)/i.test(t.label)).id);
+    // Where the head looks while tagging: the FIXTURE verify outline is the tag frame's box, so verify must see the same view.
+    tagGaze = await quest.evaluate(() => {
+      const head = window.__ce.lastFrame.head;
+      const p = head.position.clone();
+      const dir = p.clone().set(0, 0, -1).applyQuaternion(head.quaternion);
+      return p.addScaledVector(dir, 3).toArray();
+    });
   });
   await phase('03-tag-light', async () => {
     await pinch({ targetId });
@@ -297,6 +304,8 @@ async function run() {
     await pinch({ targetId, turn: true });
     await pinch({ nodeName: 'control-setup' });
     await waitQuest((id) => window.__judgeRequests.some((e) => e.type === 'control.setup' && e.payload.cardId === id), cardId);
+    // A user keeps the light in view while it is tested; FIXTURE SAM re-finds it at the tag-time image position.
+    await quest.evaluate((gaze) => { const app = window.__ce; app.emulator.lookAt(app.desktopCam.position.clone().fromArray(gaze)); }, tagGaze);
   });
   await phase('07-learn-remote', async () => {
     await until('all seven remote buttons captured', async () => {
