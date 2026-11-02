@@ -185,6 +185,7 @@ export class MidiExecutor {
     if (bad) return this.fail(cmd, t0, 'bad_args', bad);
     if (!this.io.enabled) return this.fail(cmd, t0, 'no_midi', 'Web MIDI is not enabled on the companion (press ENABLE MIDI)');
     if (op.msg === 'panic') {
+      if (cmd.dryRun) return this.ack(cmd, t0, true, { detail: 'dry run: panic' });
       const n = this.panic(cmd.port);
       return this.ack(cmd, t0, true, { detail: `panic: ${n} messages` });
     }

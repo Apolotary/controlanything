@@ -87,3 +87,35 @@ export class WorldPanel {
     this.toRotation.setFromAxisAngle(UP, Math.atan2(-this.direction.x, -this.direction.z));
   }
 }
+
+/** Keep the home bar below the card in the user's view, moving it only when their rectangles collide. */
+export class PanelSeparation {
+  private readonly inverse = new Quaternion();
+  private readonly point = new Vector3();
+  private readonly down = new Vector3();
+  private readonly upper = { left: 0, right: 0, top: 0, bottom: 0, depth: 0 };
+  private readonly lower = { left: 0, right: 0, top: 0, bottom: 0, depth: 0 };
+
+  update(card: Object3D, bar: Object3D, head: HeadPose, cardWidth: number, cardHeight: number, barWidth: number, barHeight: number): void {
+    this.inverse.copy(head.quaternion).invert();
+    this.bounds(card, head, cardWidth, cardHeight, this.upper);
+    this.bounds(bar, head, barWidth, barHeight, this.lower);
+    const a = this.upper, b = this.lower, gap = 0.035;
+    if (a.depth <= 0 || b.depth <= 0 || a.right < b.left || b.right < a.left || b.top + gap <= a.bottom || b.bottom > a.top) return;
+    // Translation along view-down leaves every corner's view depth unchanged.
+    this.down.set(0, -1, 0).applyQuaternion(head.quaternion);
+    bar.position.addScaledVector(this.down, (b.top - a.bottom + gap) * b.depth);
+  }
+
+  private bounds(panel: Object3D, head: HeadPose, width: number, height: number, out: typeof this.upper): void {
+    out.left = out.bottom = Infinity; out.right = out.top = -Infinity; out.depth = 0;
+    for (let x = -1; x <= 1; x += 2) for (let y = -1; y <= 1; y += 2) {
+      const p = this.point.set(x * width * panel.scale.x / 2, y * height * panel.scale.y / 2, 0)
+        .applyQuaternion(panel.quaternion).add(panel.position).sub(head.position).applyQuaternion(this.inverse);
+      if (p.z >= -0.01) { out.depth = -1; return; }
+      out.left = Math.min(out.left, p.x / -p.z); out.right = Math.max(out.right, p.x / -p.z);
+      out.bottom = Math.min(out.bottom, p.y / -p.z); out.top = Math.max(out.top, p.y / -p.z);
+      out.depth = Math.max(out.depth, -p.z);
+    }
+  }
+}

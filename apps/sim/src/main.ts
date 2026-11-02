@@ -180,7 +180,7 @@ function connect(id: Identity): void {
   });
   c.on('scan.result', (m) => device.onScanResult(m.payload));
   c.on('panic', (m) => {
-    synth.panic();
+    device.panic();
     device.log('midi', `panic from the server${m.payload.reason ? `: ${m.payload.reason}` : ''}`);
   });
   c.on('presence', (m) => renderPresence(m.payload));
@@ -192,6 +192,7 @@ function connect(id: Identity): void {
 }
 
 function stopLeader(): void {
+  device.panic();
   device.setScanning(false);
   conn?.stop();
   conn = undefined;
@@ -504,7 +505,10 @@ function wireUi(): void {
     synth.setLoop(!synth.looping);
     loopBtn.setAttribute('aria-pressed', String(synth.looping));
   });
-  $('panic').addEventListener('click', () => synth.panic());
+  $('panic').addEventListener('click', () => {
+    device.panic();
+    conn?.send('panic', { reason: 'Stop on the sim' }, { to: 'server' });
+  });
   const chSel = $<HTMLSelectElement>('midi-ch');
   for (let ch = 1; ch <= 16; ch++) chSel.append(new Option(`ch ${ch}`, String(ch), ch === 1, ch === 1));
   chSel.addEventListener('change', () => (synth.channel = Number(chSel.value)));

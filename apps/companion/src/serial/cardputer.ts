@@ -48,6 +48,7 @@ export class CardputerLink {
   private seq = 0;
   private irChain: Promise<unknown> = Promise.resolve();
   private irWaiting = 0;
+  private irGeneration = 0;
   private lastIrStart = -Infinity;
   private listening = false;
 
@@ -185,6 +186,7 @@ export class CardputerLink {
 
   /** Send one command and wait for its ack. Never throws. */
   async request(cmd: HostCommand, timeoutMs = 2000): Promise<SerialAck> {
+    if (cmd.t === 'panic') this.cancelIr();
     const id = `c${++this.seq}`;
     if (!this.writer) return { id, ok: false, err: 'offline', msg: 'no Cardputer connected' };
     let line: string;
@@ -214,9 +216,13 @@ export class CardputerLink {
   sendIr(raw: RawIr, extra: Partial<Extract<HostCommand, { t: 'ir' }>> = {}): Promise<SerialAck> {
     if (this.irWaiting >= IR_QUEUE_MAX) return Promise.resolve({ id: '-', ok: false, err: 'rate_limited', msg: `IR queue full (≤ ${IR_QUEUE_MAX} waiting, ≤ 4 Hz)` });
     this.irWaiting++;
+    const generation = this.irGeneration;
+    const cancelled = (): SerialAck => ({ id: '-', ok: false, err: 'cancelled', msg: 'IR cancelled by Stop or disconnect' });
     const run = async (): Promise<SerialAck> => {
+      if (generation !== this.irGeneration) return cancelled();
       const wait = this.lastIrStart + IR_MIN_GAP_MS - performance.now();
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      if (generation !== this.irGeneration) return cancelled();
       this.lastIrStart = performance.now();
       const frameMs = raw.us.reduce((s, x) => s + x, 0) / 1000;
       const budget = 1500 + (frameMs + raw.gapMs) * (raw.repeats + 1);
@@ -225,8 +231,14 @@ export class CardputerLink {
     const p = this.irChain.then(run, run);
     this.irChain = p.catch(() => {});
     return p.finally(() => {
-      this.irWaiting--;
+      if (generation === this.irGeneration) this.irWaiting--;
     });
+  }
+
+  private cancelIr(): void {
+    this.irGeneration++;
+    this.irChain = Promise.resolve();
+    this.irWaiting = 0;
   }
 
   learn(on: boolean, opts: { timeoutMs?: number; label?: string; step?: number; of?: number; slot?: string } = {}): Promise<SerialAck> {
@@ -238,6 +250,7 @@ export class CardputerLink {
   }
 
   private async dropPort(reason: string, deliberate = false): Promise<void> {
+    this.cancelIr();
     const port = this.port;
     const reader = this.reader;
     const writer = this.writer;

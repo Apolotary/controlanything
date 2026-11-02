@@ -50,6 +50,7 @@ export class ControlRouter {
   private readonly hackLimiters = new Map<string, RateLimiter>();
   private readonly stepTimers = new Map<string, { cardId: string; timer: ReturnType<typeof setTimeout> }>();
   private readonly commandTimers = new Map<ReturnType<typeof setTimeout>, { cardId: string; sourceCardId: string }>();
+  private readonly trailingControls = new Map<string, { cardId: string; timer: ReturnType<typeof setTimeout>; event: ControlEventPayload; from?: string }>();
   private readonly lastRun = new Map<string, LastRun>();
   private readonly log: (line: string) => void;
   private lastDisarmedLog = 0;
@@ -103,7 +104,26 @@ export class ControlRouter {
     if (unverified.length) return { ok: false, reason: `unverified actions: ${unverified.join(', ')}`, cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
     if (hack.kind === 'action' && ev.phase !== undefined && ev.phase !== 'end') return { ok: true, cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
     const limiter = this.limiter(target.cardId, hack);
-    if (!limiter.take()) return { ok: false, reason: 'rate limited', cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
+    const key = `${target.cardId}:${hack.id}`;
+    if (!limiter.take()) {
+      if (hack.kind !== 'control') return { ok: false, reason: 'rate limited', cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
+      const pending = this.trailingControls.get(key);
+      if (pending) {
+        pending.event = ev;
+        pending.from = from;
+      } else {
+        const runId = target.runId;
+        const entry = { cardId: target.cardId, event: ev, from, timer: setTimeout(() => {
+          this.trailingControls.delete(key);
+          if (target.runId === runId) this.onControlEvent(entry.event, entry.from);
+        }, Math.max(1, limiter.waitMs())) };
+        this.trailingControls.set(key, entry);
+      }
+      return { ok: true, cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
+    }
+    const pending = this.trailingControls.get(key);
+    if (pending) clearTimeout(pending.timer);
+    this.trailingControls.delete(key);
 
     const value = typeof ev.value === 'number' ? ev.value : ev.value === true ? 1 : ev.value === false ? 0 : (ev.value as { x: number }).x;
     const stepper = spec.gen3d?.controls.find((c) => c.id === ev.widgetId)?.binding.args?.drive === 'stepper';
@@ -159,7 +179,7 @@ export class ControlRouter {
       return p ? clamp(value, p.min, p.max) : value;
     })() : cmd.value;
     const send = () => {
-      if (!target.armed || target.runId !== runId || !target0.armed || target0.runId !== sourceRunId || !this.allowed(target) || !this.allowed(target0)) return 0;
+      if (!target.armed || target.runId !== runId || !target0.armed || target0.runId !== sourceRunId || !this.allowed(target) || !this.allowed(target0) || target.verification[a.actionId] !== 'pass') return 0;
       if (a.encode.kind === 'step') return this.fireSteps(target, driver, a, v ?? 0);
       try {
         const op = resolveOp(a, a.kind === 'set' ? (v ?? 0) : undefined);
@@ -196,7 +216,7 @@ export class ControlRouter {
     const fireOne = (): boolean => {
       if (!active()) return false;
       const t = this.action(driver, plan.actionIds[i]);
-      if (!t) return false;
+      if (!t || target.verification[t.actionId] !== 'pass') return false;
       const ok = this.d.dispatcher.fire(driver.executor.deviceId, resolveOp(t), { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: t.actionId, lightCap: driver.transport === 'ir' });
       if (ok) {
         target.stepIndex[a.actionId] = current + (plan.actionIds[i] === (a.encode as { upActionId: string }).upActionId ? 1 : -1) * (i + 1);
@@ -230,7 +250,7 @@ export class ControlRouter {
     const op = resolveOp(a);
     const runId = target.runId;
     const active = () => target.armed && target.runId === runId && this.allowed(target);
-    const fire = () => active() && this.d.dispatcher.fire(driver.executor.deviceId, op, { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: a.actionId, lightCap: driver.transport === 'ir' });
+    const fire = () => active() && target.verification[a.actionId] === 'pass' && this.d.dispatcher.fire(driver.executor.deviceId, op, { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: a.actionId, lightCap: driver.transport === 'ir' });
     let fired = fire() ? 1 : 0;
     const key = `${target.cardId}:${hack.id}:stepper`;
     const pending = this.stepTimers.get(key);
@@ -285,7 +305,7 @@ export class ControlRouter {
       for (const cmd of hack.commands) {
         const a = this.action(target.driver, cmd.action);
         const inv = a?.inverseActionId ? this.action(target.driver, a.inverseActionId) : undefined;
-        if (inv && inv.encode.kind !== 'step') fired += this.d.dispatcher.fire(target.driver.executor.deviceId, resolveOp(inv), { port: target.driver.executor.port, cardId: target.cardId, driverId: target.driver.driverId, actionId: inv.actionId, lightCap: target.driver.transport === 'ir' }) ? 1 : 0;
+        if (inv && inv.encode.kind !== 'step') fired += this.fireCommand(target, target.driver, hack, { action: inv.actionId }, 0, 0);
       }
     }
     this.lastRun.delete(target.cardId);
@@ -296,6 +316,11 @@ export class ControlRouter {
   /** Stop scheduled work; mode and connection changes can retain the owner's arm approval. */
   cancel(target: Target, opts: { preserveArmed?: boolean } = {}): void {
     if (!opts.preserveArmed) target.armed = false;
+    for (const [key, pending] of this.trailingControls) {
+      if (pending.cardId !== target.cardId) continue;
+      clearTimeout(pending.timer);
+      this.trailingControls.delete(key);
+    }
     for (const [key, pending] of this.stepTimers) {
       if (pending.cardId !== target.cardId) continue;
       clearTimeout(pending.timer);
@@ -320,9 +345,9 @@ export class ControlRouter {
       if (cardId && t.cardId !== cardId) continue;
       const armed = t.armed;
       const d = t.driver;
-      if (this.allowed(t) && d?.transport === 'midi' && !executorsDone.has(d.executor.deviceId)) {
+      if (d?.transport === 'midi' && !executorsDone.has(d.executor.deviceId)) {
         executorsDone.add(d.executor.deviceId);
-        if (this.d.dispatcher.fire(d.executor.deviceId, { kind: 'midi', msg: 'panic', channel: 1 }, { port: d.executor.port, cardId: t.cardId, driverId: d.driverId })) sent++;
+        if (this.d.dispatcher.fire(d.executor.deviceId, { kind: 'midi', msg: 'panic', channel: 1 }, { cardId: t.cardId, driverId: d.driverId })) sent++;
       }
       this.cancel(t);
       if (armed) {
@@ -335,6 +360,8 @@ export class ControlRouter {
   }
 
   close(): void {
+    for (const pending of this.trailingControls.values()) clearTimeout(pending.timer);
+    this.trailingControls.clear();
     for (const t of this.stepTimers.values()) clearTimeout(t.timer);
     this.stepTimers.clear();
     for (const timer of this.commandTimers.keys()) clearTimeout(timer);

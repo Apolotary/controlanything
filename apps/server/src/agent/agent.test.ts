@@ -141,7 +141,7 @@ class Client {
     });
   }
   static async pairAndOpen(h: Harness, kind: string, name: string, capabilities: string[], hello: Partial<PayloadOf<'hello'>> = {}): Promise<Client> {
-    const r = await fetch(`${h.base}/api/pair/start`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, kind, capabilities }) });
+    const r = await fetch(`${h.base}/api/pair/start`, { method: 'POST', headers: { 'content-type': 'application/json', Origin: h.base }, body: JSON.stringify({ name, kind, capabilities }) });
     const j = (await r.json()) as { status: string; deviceToken: string; deviceId: string };
     expect(j.status).toBe('approved');
     const c = await new Promise<Client>((resolve, reject) => {

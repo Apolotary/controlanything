@@ -265,6 +265,27 @@ export function validateSpec(input: unknown): ValidationResult {
   let stats: SpecStats | undefined;
   if (!errors.some((e) => e.code.startsWith('part.cycle'))) {
     const ex = expandSpec(spec);
+    // Generated children and behaviors share the authored id namespace.
+    for (const [kind, items] of [['parts', ex.parts], ['behaviors', ex.behaviors], ['feedback', ex.feedback]] as const) {
+      const ids = new Set<string>();
+      items.forEach((item, i) => {
+        if (ids.has(item.id)) err('id.duplicate', `expanded.${kind}[${i}].id`, `duplicate expanded ${kind} id "${item.id}"`);
+        ids.add(item.id);
+      });
+    }
+    const expandedParts = new Map(ex.parts.map((p) => [p.id, p]));
+    ex.parts.forEach((p, i) => {
+      const seen = new Set<string>();
+      let current: Part | undefined = p;
+      while (current) {
+        if (seen.has(current.id)) {
+          err('part.cycle', `expanded.parts[${i}].parentId`, `expanded cycle through "${current.id}"`);
+          break;
+        }
+        seen.add(current.id);
+        current = current.parentId ? expandedParts.get(current.parentId) : undefined;
+      }
+    });
     let tris = 0;
     for (const p of ex.parts) tris += estimateTriangles(p);
     const ext: [number, number, number] = [0, 0, 0];

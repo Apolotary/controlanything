@@ -4,7 +4,7 @@
  * against the maker Spark read. Verdicts: confirmed / consistent / mismatch ("wrong device, refused") / unknown.
  */
 import type { Capability, DeviceCardPayload, LinkResultPayload } from '@ce/protocol';
-import { makerMatches, parseIdentityReply } from '../devices/midi';
+import { makerMatches, parseIdentityReply, portMatches } from '../devices/midi';
 import type { MidiProfile } from '../devices/profiles';
 import type { Dispatcher } from './dispatch';
 import { type ExecutorPick, pickExecutor, type Roster } from './executors';
@@ -40,13 +40,15 @@ export async function tryLink(
   const pick = pickExecutor(deps.roster, cap, { portHint, preferDeviceId: opts.preferDeviceId });
   const base: LinkResultPayload = { linkId: opts.linkId, cardId: card.cardId, verdict: 'none', evidence: [] };
   if (!pick) return { result: { ...base, reason: `no online client with "${cap}"` } };
-  if (cap === 'midi' && !pick.port) return { result: { ...base, reason: 'connect the instrument and enable a MIDI output in the Mac app' } };
+  if (cap === 'midi' && !pick.port) return { result: { ...base, reason: 'connect the instrument and select a unique MIDI output in the Mac app' } };
   const result: LinkResultPayload = { ...base, executorDeviceId: pick.deviceId, channel: pick.kind === 'sim' ? 'sim' : cap };
   if (pick.port) result.port = pick.port;
 
   if (cap === 'midi') {
+    let modelConfirmed = false;
+    let identityMismatch = false;
     if (portHint && pick.port) {
-      const ok = pick.port.name.toLowerCase().includes(portHint.toLowerCase());
+      const ok = portMatches(pick.port, portHint);
       result.evidence.push({ kind: 'port-name', ok, detail: ok ? `USB says "${pick.port.name}" (chart expects "${portHint}")` : `port "${pick.port.name}" does not mention "${portHint}"` });
     } else if (pick.port) result.evidence.push({ kind: 'port-name', ok: true, detail: `MIDI output "${pick.port.name}" (no chart hint to compare)` });
     else result.evidence.push({ kind: 'port-name', ok: false, detail: `${pick.name} has no MIDI output port` });
@@ -59,10 +61,17 @@ export async function tryLink(
           // a generic id (7D non-commercial, or one not in the table) names no maker: it can neither confirm nor refute
           const generic = /^unknown|non-commercial/i.test(reply.manufacturer);
           const cameraKnows = card.maker.trim() !== '' && card.maker.toLowerCase() !== 'unknown';
+          const example = opts.profile?.identity?.replyExample;
+          const expected = example && /^(?:[\da-f]{2}\s+)+[\da-f]{2}$/i.test(example.trim())
+            ? parseIdentityReply(example.trim().split(/\s+/).map((b) => parseInt(b, 16))) : null;
+          const modelMatches = !expected || (expected.family === reply.family && expected.model === reply.model
+            && expected.manufacturerId.length === reply.manufacturerId.length && expected.manufacturerId.every((id, i) => id === reply.manufacturerId[i]));
+          identityMismatch = !modelMatches || (!generic && cameraKnows && !makerMatches(reply.manufacturer, card.maker));
+          modelConfirmed = Boolean(expected && !generic && !identityMismatch);
           if (generic) result.evidence.push({ kind: 'midi-identity', ok: true, detail: `identity reply: ${reply.manufacturer} id, family ${reply.family}, model ${reply.model} (names no maker; port name decides)` });
           else {
-            const ok = !cameraKnows || makerMatches(reply.manufacturer, card.maker);
-            result.evidence.push({ kind: 'midi-identity', ok, detail: `identity reply: ${reply.manufacturer}, family ${reply.family}, model ${reply.model}${ok ? '' : ` (camera said ${card.maker})`}` });
+            const ok = !identityMismatch;
+            result.evidence.push({ kind: 'midi-identity', ok, detail: `identity reply: ${reply.manufacturer}, family ${reply.family}, model ${reply.model}${ok ? '' : ` (camera said ${card.maker} ${card.model}; model must match the chart)`}` });
           }
         } else result.evidence.push({ kind: 'midi-identity', ok: false, detail: ack.reply?.length ? 'reply was not an identity message' : 'no identity reply (many devices stay silent; port name used instead)' });
       } catch (e) {
@@ -71,8 +80,8 @@ export async function tryLink(
     }
     const identity = result.evidence.find((e) => e.kind === 'midi-identity');
     const port = result.evidence.find((e) => e.kind === 'port-name');
-    if (identity?.ok && /identity reply/.test(identity.detail) && !/names no maker/.test(identity.detail)) result.verdict = 'confirmed';
-    else if (identity && !identity.ok && /camera said/.test(identity.detail)) result.verdict = 'mismatch';
+    if (identityMismatch || (portHint && !port?.ok)) result.verdict = 'mismatch';
+    else if (identity?.ok && modelConfirmed) result.verdict = 'confirmed';
     else if (port?.ok && portHint) result.verdict = 'consistent';
     else result.verdict = 'unknown';
     if (result.verdict === 'mismatch') result.reason = 'the connected instrument is not the one the camera identified';

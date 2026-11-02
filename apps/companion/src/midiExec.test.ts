@@ -38,6 +38,18 @@ class FakeMidi implements MidiIO {
 const cmd = (op: object, extra: object = {}) => ExecCommandPayload.parse({ execId: 'e1', executorDeviceId: 'mac-1', op, ...extra });
 
 describe('MidiScheduler', () => {
+  it('does not send panic messages or cancel pending notes in a dry run', async () => {
+    const io = new FakeMidi();
+    const clock = new FakeClock();
+    const executor = new MidiExecutor(io, { clock });
+    await executor.execute(cmd({ kind: 'midi', msg: 'note', channel: 1, number: 60, durationMs: 100 }));
+    const before = io.sent.length;
+    const ack = await executor.execute(cmd({ kind: 'midi', msg: 'panic', channel: 1 }, { dryRun: true }));
+    expect(ack).toMatchObject({ ok: true, detail: 'dry run: panic' });
+    expect(io.sent).toHaveLength(before);
+    clock.advance(101);
+    expect(io.sent.at(-1)?.bytes[0]).toBe(0x80);
+  });
   it('never sends more than maxPerSecond in a rolling second', () => {
     const clock = new FakeClock();
     const times: number[] = [];

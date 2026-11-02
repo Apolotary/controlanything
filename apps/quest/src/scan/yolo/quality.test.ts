@@ -5,15 +5,14 @@ import type { Box } from './prep';
 const box: Box = [100, 100, 80, 60];
 
 describe('projected hand suppression', () => {
-  it('suppresses a box with a single joint near an edge, not only a cluster at its center', () => {
-    expect(overlapsHand(box, [{ u: 101, v: 159, radius: 0 }])).toBe(true);
-    expect(overlapsHand(box, [{ u: 95, v: 125, radius: 6 }])).toBe(true);
+  it('keeps a device when a fingertip touches an edge or only part of it is occluded', () => {
+    expect(overlapsHand(box, [{ u: 101, v: 159, radius: 0 }])).toBe(false);
+    expect(overlapsHand(box, [{ u: 95, v: 125, radius: 6 }])).toBe(false);
+    expect(overlapsHand(box, [0, 1, 2, 3, 4].map((i) => ({ u: 105 + i * 2, v: 125, radius: 6 })))).toBe(false);
   });
 
-  it('uses the joint radius around corners without hiding nearby disjoint boxes', () => {
-    expect(overlapsHand(box, [{ u: 97, v: 96, radius: 5 }])).toBe(true);
-    expect(overlapsHand(box, [{ u: 96, v: 96, radius: 5 }])).toBe(false);
-    expect(overlapsHand(box, [{ u: 20, v: 20 }])).toBe(false);
+  it('suppresses a hand-sized detection substantially covered by a joint cluster', () => {
+    expect(overlapsHand(box, [{ u: 105, v: 105 }, { u: 175, v: 105 }, { u: 105, v: 155 }, { u: 175, v: 155 }])).toBe(true);
   });
 
   it('keeps boxes when tracking is unavailable or a projection is invalid', () => {

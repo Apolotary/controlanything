@@ -10,7 +10,7 @@ import { GlassSurfaces } from './surface';
 import { PinchReticles } from './reticle';
 import { unfoldEase } from './motion';
 import { TargetTether } from './tether';
-import { WorldPanel } from './world-panel';
+import { PanelSeparation, WorldPanel } from './world-panel';
 export { whenSdfReady } from './text';
 export { THEME } from './theme';
 
@@ -137,6 +137,7 @@ export class LeanHud implements Hud {
   private readonly idlePlacement = new WorldPanel({ distance: THEME.card.distance, height: THEME.panel.headY });
   private readonly dockPlacement = new WorldPanel({ distance: THEME.card.dockDistance, height: THEME.panel.headY });
   private readonly modalPlacement = new WorldPanel({ height: -0.06 });
+  private readonly panelSeparation = new PanelSeparation();
   private readonly deckPlacement = new WorldPanel({ distance: 0.6, height: -0.4 });
   private readonly headPose = { position: this.head, quaternion: this.headQuaternion };
   private readonly noticePlacement = new WorldPanel({ height: THEME.panel.toastY });
@@ -421,6 +422,7 @@ export class LeanHud implements Hud {
     if (this.isArmed(m, c)) this.events.emit('control', { specId: m.spec.specId, controlId: c.id, value: m.values.get(c.id) ?? c.default ?? 0, phase, ts: Date.now() });
   }
   setScanning(on: boolean, _info?: { modelId?: string }): void { if (this.scanning === on) return; this.scanning = on; this.refreshCard(); }
+  isTargetVisible(id: string): boolean { return this.boxes.has(id); }
   upsertTarget(t: HudTarget): void {
     if (t.label.trim().toLowerCase() === 'person') { this.removeTarget(t.id); return; }
     const previous = this.targets.get(t.id);
@@ -674,7 +676,10 @@ export class LeanHud implements Hud {
     }
     if (this.modal.visible) this.follow(this.modal, this.modalPlacement);
     else this.modalPlacement.reset();
-    if (!this.wristOpen) this.follow(this.deck, this.deckPlacement);
+    if (!this.wristOpen) {
+      this.follow(this.deck, this.deckPlacement);
+      if (this.card.visible) this.panelSeparation.update(this.card, this.deck, this.headPose, THEME.card.width, THEME.card.height, 0.48, 0.16);
+    }
     if (this.notice.visible) this.follow(this.notice, this.noticePlacement);
   }
   private inside(widget: Widget, point: Vector3): boolean {

@@ -98,6 +98,7 @@ interface Anchor {
   /** id of the SAM target that took over */
   claimedBy?: string;
   shown: boolean;
+  prediction: Box;
   aimable: { id: string; position: Vector3; size: number };
   sent?: { position: Vector3; sizeM: [number, number, number]; label: string; score: number; picked: boolean; seenAt: number };
 }
@@ -133,6 +134,7 @@ export class LiveDetector {
   private readonly jointPool: ProjectedJoint[] = [];
   private readonly projectPoint = new Vector3();
   private readonly projectInverse = new Quaternion();
+  private readonly agedTracks: Track[] = [];
 
   constructor(private readonly d: LiveDetectorDeps) {
     this.publishStats();
@@ -519,7 +521,7 @@ export class LiveDetector {
 
   /** Lifetime and fade use render time, even while inference is stalled. */
   private age(now: number): void {
-    for (const t of this.tracker.age(now, this.picked, this.retentionMs())) this.hide(t.id, true);
+    for (const t of this.tracker.age(now, this.picked, this.retentionMs(), this.agedTracks)) this.hide(t.id, true);
     const field = this.boxField();
     const fr = this.lastFrame;
     // Project each joint once per render frame, shared by every candidate box.
@@ -576,11 +578,15 @@ export class LiveDetector {
   private predict(t: Pick<Track, 'id'>, fr: Pick<PendingFrame, 'cam' | 'k'>): Box | null {
     const a = this.anchors.get(t.id);
     if (!a) return null;
-    const px = worldToPixel(a.position, fr.k, fr.cam);
-    if (!px) return null;
-    const w = (a.sizeM[0] * fr.k.fx) / px.depth;
-    const h = (a.sizeM[1] * fr.k.fy) / px.depth;
-    return [px.u - w / 2, px.v - h / 2, w, h];
+    this.projectInverse.copy(fr.cam.quaternion).invert();
+    const p = this.projectPoint.copy(a.position).sub(fr.cam.position).applyQuaternion(this.projectInverse);
+    if (p.z >= -0.001) return null;
+    const depth = -p.z, w = a.sizeM[0] * fr.k.fx / depth, h = a.sizeM[1] * fr.k.fy / depth;
+    const box = a.prediction;
+    box[0] = fr.k.cx + fr.k.fx * p.x / depth - w / 2;
+    box[1] = fr.k.cy - fr.k.fy * p.y / depth - h / 2;
+    box[2] = w; box[3] = h;
+    return box;
   }
 
   /** Box → world: a ray from the capture camera through the box centre, at the hit-test depth or a size prior. */
@@ -600,7 +606,7 @@ export class LiveDetector {
     const zCam = Math.max(0.05, depth * Math.max(0.2, ray.dir.dot(camFwd)));
     const sizeM: [number, number, number] = [r3((w * zCam) / k.fx), r3((h * zCam) / k.fy), r3(Math.min(w / k.fx, h / k.fy) * zCam * 0.5)];
     if (!a) {
-      a = { position, sizeM, facing: ray.origin.clone().sub(position).normalize(), hitPending: false, lastHitAt: 0, shown: false, aimable: { id: hudId(t.id), position, size: Math.max(0.06, sizeM[0], sizeM[1]) } };
+      a = { position, sizeM, facing: ray.origin.clone().sub(position).normalize(), hitPending: false, lastHitAt: 0, shown: false, prediction: [0, 0, 0, 0], aimable: { id: hudId(t.id), position, size: Math.max(0.06, sizeM[0], sizeM[1]) } };
       this.anchors.set(t.id, a);
     } else {
       a.position.lerp(position, 0.35);

@@ -120,7 +120,7 @@ async function json(res: Response): Promise<any> {
 
 async function pairLocally(h: Harness, name: string, kind: 'mac' | 'quest' | 'devterm' | 'cardputer' = 'mac') {
   h.setLocal(true);
-  const res = await fetch(`${h.base}/api/pair/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, kind, capabilities: ['midi'] }) });
+  const res = await fetch(`${h.base}/api/pair/start`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: h.base }, body: JSON.stringify({ name, kind, capabilities: ['midi'] }) });
   expect(res.status).toBe(201);
   const body = await json(res);
   expect(body.status).toBe('approved');
@@ -333,7 +333,7 @@ describe('HTTP API', () => {
     const h = await start({ https: { host: '127.0.0.1', port: 0, enabled: true }, http: { host: '127.0.0.1', port: 0, enabled: false } });
     expect(h.servers.certRegenerated).toBe(true);
     expect(h.servers.certAltNames).toContain('IP:127.0.0.1');
-    const ws = await Client.open(`wss://127.0.0.1:${h.ctx.bound.https}/ws`, { rejectUnauthorized: false });
+    const ws = await Client.open(`wss://127.0.0.1:${h.ctx.bound.https}/ws`, { rejectUnauthorized: false, origin: `https://127.0.0.1:${h.ctx.bound.https}` });
     ws.send('pair.start', { name: 'Quest 3', kind: 'quest' });
     const st = await ws.next('pair.status');
     expect(st.payload.status).toBe('approved'); // loopback = owner

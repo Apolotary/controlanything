@@ -9,11 +9,12 @@ const mocks = vi.hoisted(() => ({
   claim: vi.fn(), attach: vi.fn(), start: vi.fn(), send: vi.fn(), permission: vi.fn(),
   midiEnable: vi.fn(), serialChoose: vi.fn(), serialReconnect: vi.fn(), serialListen: vi.fn(), micStart: vi.fn(),
   replay: vi.fn(),
+  identity: vi.fn(), bridgeOnline: false, serialReady: false,
 }));
 
 vi.mock('./api', () => ({ api: mocks.api, ApiError: class extends Error {} }));
 vi.mock('./identity', () => ({
-  loadIdentity: () => ({ deviceId: 'mac-1', deviceToken: 'owner-token', kind: 'mac', name: 'Mac' }),
+  loadIdentity: mocks.identity,
   clearIdentity: vi.fn(), saveIdentity: vi.fn(), isLocalPage: () => true,
   defaultDevice: () => ({ kind: 'mac', name: 'Mac' }),
 }));
@@ -26,7 +27,7 @@ vi.mock('./connection', () => {
     handlers = new Map<string, ((message: unknown) => void)[]>();
     any: ((message: unknown) => void)[] = [];
     onState?: () => void;
-    constructor() { Connection.instances.push(this); }
+    constructor(_url: string, readonly hello: () => { capabilities: string[]; ports: unknown[]; executor: boolean }) { Connection.instances.push(this); }
     on(type: string, handler: (message: unknown) => void) {
       this.handlers.set(type, [...(this.handlers.get(type) ?? []), handler]);
     }
@@ -67,7 +68,7 @@ vi.mock('./midiExec', () => ({ MidiExecutor: class { scheduler = { rate: () => 0
 vi.mock('./serial/cardputer', () => ({
   CardputerLink: class {
     static supported = true;
-    ready = false;
+    get ready() { return mocks.serialReady; }
     hasPort = false;
     state = 'idle';
     choose = mocks.serialChoose;
@@ -79,6 +80,7 @@ vi.mock('./serial/cardputer', () => ({
 vi.mock('./serial/bridge', () => ({
   CardputerBridge: class {
     state = 'no-device';
+    get online() { return mocks.bridgeOnline; }
     learned = [];
     deviceReady = vi.fn();
     deviceGone = vi.fn();
@@ -207,6 +209,9 @@ beforeEach(() => {
   vi.stubGlobal('matchMedia', () => ({ matches: true }));
   vi.stubGlobal('requestAnimationFrame', (callback: () => void) => setTimeout(callback, 16));
   mocks.permission.mockResolvedValue({ state: 'prompt' });
+  mocks.identity.mockReturnValue({ deviceId: 'mac-1', deviceToken: 'owner-token', kind: 'mac', name: 'Mac' });
+  mocks.bridgeOnline = false;
+  mocks.serialReady = false;
   mocks.serialReconnect.mockResolvedValue(false);
   mocks.api.health.mockResolvedValue({ mode: 'live', models: { chat: 'meta-model' }, urls: { lan: [] } });
   mocks.api.calls.mockResolvedValue({ calls: [], totals: { calls: 0 } });
@@ -246,6 +251,52 @@ const pairButton = (name: string) => {
 };
 
 describe('Calm companion behavior', () => {
+  it('shares pairing between a stale-token reconnect and the initial health response', async () => {
+    let healthReady!: (result: unknown) => void;
+    let paired!: (result: unknown) => void;
+    mocks.api.health.mockReturnValue(new Promise((resolve) => { healthReady = resolve; }));
+    mocks.api.pairStart.mockReturnValue(new Promise((resolve) => { paired = resolve; }));
+    const { bootWorkbench } = await import('./workbench');
+    const booting = bootWorkbench();
+    const { Connection } = await import('./connection');
+    const connection = (Connection as unknown as { instances: { onState(state: string, info: { code: number }): void }[] }).instances.at(-1)!;
+    connection.onState('closed', { code: 4001 });
+    expect(mocks.api.pairStart).toHaveBeenCalledOnce();
+    healthReady({ mode: 'live', models: { chat: 'meta-model' }, urls: { lan: [] } });
+    await booting;
+    expect(mocks.api.pairStart).toHaveBeenCalledOnce();
+    paired({ status: 'approved', deviceId: 'mac-2', deviceToken: 'new-token' });
+    await flush();
+    expect(mocks.start).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries initial health failure and pairs a fresh browser when the server returns', async () => {
+    mocks.identity.mockReturnValue(undefined);
+    mocks.api.health.mockRejectedValueOnce(new Error('offline'));
+    mocks.api.pairStart.mockResolvedValue({ status: 'approved', deviceId: 'mac-1', deviceToken: 'new-token' });
+    const { bootWorkbench } = await import('./workbench');
+    await bootWorkbench();
+    expect(mocks.api.health).toHaveBeenCalledTimes(1);
+    expect(mocks.api.pairStart).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(mocks.api.health).toHaveBeenCalledTimes(2);
+    expect(mocks.api.pairStart).toHaveBeenCalledOnce();
+    expect(mocks.start).toHaveBeenCalledOnce();
+  });
+
+  it('advertises IR only after the attached Cardputer is approved and identifies the executor tab', async () => {
+    await live();
+    mocks.serialReady = true;
+    const { Connection } = await import('./connection');
+    const connection = (Connection as unknown as { instances: { hello(): { capabilities: string[]; ports: unknown[]; executor: boolean } }[] }).instances.at(-1)!;
+    expect(connection.hello()).toMatchObject({ executor: true, ports: [] });
+    expect(connection.hello().capabilities).not.toContain('ir');
+    mocks.bridgeOnline = true;
+    expect(connection.hello().capabilities).toContain('ir');
+    expect(connection.hello().ports).toHaveLength(1);
+    mocks.bridgeOnline = false;
+    expect(connection.hello().capabilities).not.toContain('ir');
+  });
   it('keeps replay display-only, including disabled bridge and approval actions', async () => {
     const app = await boot('?replay=1');
     await app.emit('welcome', { canApprove: true });

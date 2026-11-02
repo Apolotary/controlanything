@@ -8,16 +8,22 @@ export interface ProjectedJoint {
   radius?: number;
 }
 
-/** Suppress hand/arm candidates even when a joint only touches the edge of their box. */
+/** A device may be held or touched: only suppress a box mostly covered by a tracked hand cluster. */
 export function overlapsHand(box: Box, joints: readonly ProjectedJoint[]): boolean {
   const [x, y, width, height] = box;
   if (!(width > 0 && height > 0)) return false;
-  return joints.some(({ u, v, radius = 6 }) => {
-    if (![u, v, radius].every(Number.isFinite)) return false;
-    const dx = u - Math.max(x, Math.min(x + width, u));
-    const dy = v - Math.max(y, Math.min(y + height, v));
-    return dx * dx + dy * dy <= Math.max(0, radius) ** 2;
-  });
+  let count = 0, minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+  for (const { u, v, radius = 6 } of joints) {
+    if (!Number.isFinite(u) || !Number.isFinite(v) || !Number.isFinite(radius)) continue;
+    if (u < x || u > x + width || v < y || v > y + height) continue;
+    count++;
+    minU = Math.min(minU, u - radius); maxU = Math.max(maxU, u + radius);
+    minV = Math.min(minV, v - radius); maxV = Math.max(maxV, v + radius);
+  }
+  if (count < 4) return false;
+  const coverage = (Math.min(x + width, maxU) - Math.max(x, minU))
+    * (Math.min(y + height, maxV) - Math.max(y, minV)) / (width * height);
+  return coverage >= 0.7;
 }
 
 interface Position { x: number; y: number; z: number }

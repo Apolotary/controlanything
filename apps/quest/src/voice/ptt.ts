@@ -20,17 +20,22 @@ export interface PttEvents extends Record<string, unknown> {
   error: string;
 }
 
+type VoiceContext = { cardId?: string; specId?: string };
+
 export class PushToTalk extends Emitter<PttEvents> {
-  private current?: { id: string; seq: number; chunks: Int16Array[]; startedAt: number };
-  private awaiting = new Map<string, { chunks: Int16Array[]; timer: ReturnType<typeof setTimeout> }>();
+  private current?: { id: string; seq: number; chunks: Int16Array[]; startedAt: number; context: VoiceContext };
+  private awaiting = new Map<string, { chunks: Int16Array[]; timer: ReturnType<typeof setTimeout>; context: VoiceContext }>();
+  private pressGeneration = 0;
+  private preparing = false;
   /** wait this long after release for a WS transcript before using the HTTP fallback */
   fallbackMs = 6000;
-  context: { cardId?: string; specId?: string } = {};
+  context: VoiceContext = {};
 
   constructor(
     private readonly mic: Mic,
     private readonly ws: WsClient,
     private readonly token: () => string | undefined,
+    private readonly selectedContext: () => VoiceContext = () => this.context,
   ) {
     super();
     mic.on('level', (l) => this.emit('level', l));
@@ -43,19 +48,27 @@ export class PushToTalk extends Emitter<PttEvents> {
   }
 
   async press(): Promise<void> {
-    if (this.current) return;
+    if (this.current || this.preparing) return;
+    const generation = ++this.pressGeneration;
+    const context = { ...this.selectedContext() };
+    this.preparing = true;
     try {
       await this.mic.prepare();
     } catch (e) {
-      this.emit('error', `microphone: ${(e as Error).message}`);
+      if (generation === this.pressGeneration) this.emit('error', `microphone: ${(e as Error).message}`);
       return;
+    } finally {
+      if (generation === this.pressGeneration) this.preparing = false;
     }
-    this.current = { id: newId('u'), seq: 0, chunks: [], startedAt: performance.now() };
+    if (generation !== this.pressGeneration) return;
+    this.current = { id: newId('u'), seq: 0, chunks: [], startedAt: performance.now(), context };
     this.mic.start();
     this.emit('listening', { listening: true, utteranceId: this.current.id });
   }
 
   release(): void {
+    this.pressGeneration++;
+    this.preparing = false;
     if (!this.current) return;
     this.mic.stop(); // the worklet flushes a final chunk
   }
@@ -66,8 +79,8 @@ export class PushToTalk extends Emitter<PttEvents> {
     u.chunks.push(pcm);
     const payload: Record<string, unknown> = { utteranceId: u.id, seq: u.seq++, sampleRate: TARGET_RATE, pcm16: toBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)) };
     if (final) payload.final = true;
-    if (this.context.cardId) payload.cardId = this.context.cardId;
-    if (this.context.specId) payload.specId = this.context.specId;
+    if (u.context.cardId) payload.cardId = u.context.cardId;
+    if (u.context.specId) payload.specId = u.context.specId;
     this.ws.send('voice.audio', payload, { to: 'server' });
     if (final) {
       this.current = undefined;
@@ -78,7 +91,7 @@ export class PushToTalk extends Emitter<PttEvents> {
         return;
       }
       const timer = setTimeout(() => void this.fallback(u.id), this.fallbackMs);
-      this.awaiting.set(u.id, { chunks: u.chunks, timer });
+      this.awaiting.set(u.id, { chunks: u.chunks, timer, context: u.context });
     }
   }
 
@@ -93,19 +106,22 @@ export class PushToTalk extends Emitter<PttEvents> {
   private async fallback(utteranceId: string): Promise<void> {
     const a = this.awaiting.get(utteranceId);
     if (!a) return;
-    this.awaiting.delete(utteranceId);
     try {
       const wav = pcm16ToWav(concatPcm(a.chunks), TARGET_RATE);
       const r = await api.transcribe(wav, this.token());
+      if (this.awaiting.get(utteranceId) !== a) return;
+      this.awaiting.delete(utteranceId);
       const text = r.text?.trim() ?? '';
       this.emit('text', { utteranceId, text, final: true, modelId: r.model, via: 'http' });
       if (text) {
         const payload: Record<string, unknown> = { utteranceId, text, final: true };
-        if (this.context.cardId) payload.cardId = this.context.cardId;
-        if (this.context.specId) payload.specId = this.context.specId;
+        if (a.context.cardId) payload.cardId = a.context.cardId;
+        if (a.context.specId) payload.specId = a.context.specId;
         this.ws.send('voice.text', payload, { to: 'server' });
       }
     } catch (e) {
+      if (this.awaiting.get(utteranceId) !== a) return;
+      this.awaiting.delete(utteranceId);
       this.emit('error', `transcribe: ${(e as Error).message}`);
     }
   }

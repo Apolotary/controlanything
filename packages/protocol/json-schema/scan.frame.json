@@ -243,6 +243,62 @@
             "pair"
           ]
         },
+        "fixtureDetections": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "detId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 60
+              },
+              "prompt": {
+                "type": "string",
+                "maxLength": 60
+              },
+              "score": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "box": {
+                "minItems": 4,
+                "maxItems": 4,
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "polygon": {
+                "minItems": 3,
+                "maxItems": 64,
+                "type": "array",
+                "items": {
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  }
+                }
+              }
+            },
+            "required": [
+              "detId",
+              "label",
+              "prompt",
+              "score",
+              "box"
+            ],
+            "additionalProperties": false
+          }
+        },
         "cardId": {
           "type": "string",
           "minLength": 1,

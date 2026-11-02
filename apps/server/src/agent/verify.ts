@@ -27,6 +27,8 @@ export interface VerifyDeps {
   heard?: (line: string, wav: Uint8Array, signal?: AbortSignal) => Promise<HeardResult>;
   /** the Mac's current output volume, so a volume probe can put it back afterwards */
   readVolume?: () => Promise<number | undefined>;
+  /** Restore a snapshotted Mac volume even after its discovery run was cancelled. */
+  restoreVolume?: (volume: number, signal: AbortSignal) => Promise<void>;
   /**
    * CE_MAC_SILENT=1: the Mac does not speak, so a recorded clip of a line stands in for its voice and is what the
    * transcription oracle hears; the evidence names the recording instead of a microphone (recordedSpeech.ts).
@@ -53,6 +55,8 @@ export interface VerifyOptions {
   confirmations?: number;
   /** "set" actions: the value to send (default: the range's max on odd attempts, min on even) */
   value?: number;
+  /** A requested runtime combo keeps its chosen volume; discovery probes restore it. */
+  retainVolume?: boolean;
 }
 
 export interface VerifySummary {
@@ -137,6 +141,36 @@ export function spokenLine(op: ExecOp): string | undefined {
  */
 export async function verifyOnce(deps: VerifyDeps, t: Target, driver: Driver, a: DriverAction, attempt: number, o: VerifyOptions, polygon?: Polygon): Promise<{ evidence: Evidence; polygon?: Polygon }> {
   throwIfCancelled(o.signal);
+  if (a.encode.kind === 'ir' && a.expect?.sense !== 'camera') throw new ExecError('IR actions require camera evidence of the device response', 'refused');
+  const volumeProbe = a.encode.kind === 'local' && a.encode.op === 'volume' && !o.retainVolume;
+  if (volumeProbe && (!deps.readVolume || (deps.restoreVolume && driver.executor.deviceId !== 'mac-local'))) throw new ExecError('cannot snapshot volume on this executor before verification', 'refused');
+  const previousVolume = volumeProbe ? await deps.readVolume!() : undefined;
+  throwIfCancelled(o.signal);
+  if (volumeProbe && previousVolume === undefined) throw new ExecError('cannot snapshot volume before verification', 'refused');
+  try {
+    return await observeOnce(deps, t, driver, a, attempt, o, polygon);
+  } finally {
+    if (previousVolume !== undefined) {
+      const cleanup = new AbortController();
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const expired = new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => { cleanup.abort(); reject(new Error('volume restoration timed out')); }, 4000);
+        });
+        const restore = deps.restoreVolume
+          ? deps.restoreVolume(previousVolume, cleanup.signal)
+          : deps.dispatcher.exec(driver.executor.deviceId, { kind: 'local', op: 'volume', arg: previousVolume }, { port: driver.executor.port, cardId: t.cardId, driverId: driver.driverId, actionId: `${a.actionId}:restore`, waitForSlot: true, signal: cleanup.signal, timeoutMs: 4000 });
+        await Promise.race([restore, expired]);
+      } catch (error) {
+        deps.log?.(`[verify] could not restore the volume to ${previousVolume}: ${(error as Error).message}`);
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+  }
+}
+
+async function observeOnce(deps: VerifyDeps, t: Target, driver: Driver, a: DriverAction, attempt: number, o: VerifyOptions, polygon?: Polygon): Promise<{ evidence: Evidence; polygon?: Polygon }> {
   const d = deps.dispatcher;
   const expected = effectFor(a);
   const sense = a.expect?.sense ?? 'none';
@@ -241,19 +275,9 @@ export async function verifyOnce(deps: VerifyDeps, t: Target, driver: Driver, a:
       await sleep(400, o.signal);
     }
     const before = await audioWindow(d, o.micDeviceId, t.cardId, holdsNote ? undefined : -600, o.signal);
-    // a volume probe must not leave the Mac muted or blaring: remember the level and put it back
-    const isVolume = op.kind === 'local' && op.op === 'volume';
-    const prevVolume = isVolume ? await deps.readVolume?.() : undefined;
     const ack = await d.exec(exec.deviceId, op, { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: a.actionId, waitForSlot: true, signal: o.signal, timeoutMs: 4000 });
     await sleep(deps.settleMs?.(t, a) ?? 350, o.signal);
     const after = await audioWindow(d, o.micDeviceId, t.cardId, undefined, o.signal);
-    if (isVolume && prevVolume !== undefined) {
-      try {
-        await d.exec(exec.deviceId, { kind: 'local', op: 'volume', arg: prevVolume }, { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: `${a.actionId}:restore`, waitForSlot: true, signal: o.signal, timeoutMs: 4000 });
-      } catch (e) {
-        deps.log?.(`[verify] could not restore the volume to ${prevVolume}: ${(e as Error).message}`);
-      }
-    }
     const obs = observeAudio(before!, after!);
     const pass = audioMatches(obs, expected);
     const evidence: Evidence = { ...base, execId: ack.execId, sent: { op, at: ack.sentAt }, observed: { ...audioEvidence(obs, expected), sensorDeviceId: o.micDeviceId }, pass };
@@ -388,7 +412,7 @@ export async function verifyDriver(deps: VerifyDeps, t: Target, driver: Driver, 
       // a step composite is verified through its up/down triggers
       const up = verification[a.encode.upActionId];
       const down = verification[a.encode.downActionId];
-      verification[a.actionId] = up === 'pass' || down === 'pass' ? 'pass' : up === 'fail' && down === 'fail' ? 'fail' : 'untested';
+      verification[a.actionId] = up === 'pass' && down === 'pass' ? 'pass' : up === 'fail' || down === 'fail' ? 'fail' : 'untested';
       continue;
     }
     if (!a.expect || a.expect.sense === 'none') {
@@ -430,7 +454,7 @@ export async function verifyDriver(deps: VerifyDeps, t: Target, driver: Driver, 
     if (a.encode.kind !== 'step') continue;
     const up = verification[a.encode.upActionId];
     const down = verification[a.encode.downActionId];
-    verification[a.actionId] = up === 'pass' || down === 'pass' ? 'pass' : up === 'fail' && down === 'fail' ? 'fail' : 'untested';
+    verification[a.actionId] = up === 'pass' && down === 'pass' ? 'pass' : up === 'fail' || down === 'fail' ? 'fail' : 'untested';
   }
   const passed = Object.values(verification).filter((v) => v === 'pass').length;
   const failed = Object.values(verification).filter((v) => v === 'fail').length;

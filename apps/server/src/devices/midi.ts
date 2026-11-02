@@ -65,8 +65,8 @@ export function portMatches(port: Pick<Port, 'id' | 'name'>, hint: string): bool
 export function pickMidiOutput(ports: Port[] | undefined, hint: string | undefined): Port | undefined {
   const outs = (ports ?? []).filter((p) => p.kind === 'midi-out' && p.state !== 'disconnected');
   if (hint) {
-    const hit = outs.find((p) => portMatches(p, hint));
-    if (hit) return hit;
+    const hits = outs.filter((p) => portMatches(p, hint));
+    if (hits.length) return hits.length === 1 ? hits[0] : undefined;
   }
   return outs.length === 1 ? outs[0] : undefined;
 }

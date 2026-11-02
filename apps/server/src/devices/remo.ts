@@ -1,8 +1,8 @@
 /**
  * Nature Remo bridge. A Nature Remo on the LAN (Remo-XXXXXX, mDNS `_remo._tcp`, local API on port 80) becomes a
  * paired "remo" device of this server with the IR capability: an IR LEARNER (GET /messages returns the last
- * signal the Remo received) and an IR BLASTER (POST /messages sends one). The bridge pairs over loopback like
- * any client and speaks the same exec.command / sense.request protocol, so LINK, LEARN, VERIFY and CONTROL
+ * signal the Remo received) and an IR BLASTER (POST /messages sends one). The server registers its configured
+ * bridge, which speaks the same exec.command / sense.request protocol, so LINK, LEARN, VERIFY and CONTROL
  * treat it exactly like the Cardputer's IR unit (pickExecutor prefers it for IR when both are online; the
  * Cardputer stays the alternative and the pairing story).
  *
@@ -134,8 +134,10 @@ export class RemoClient {
 // --- the bridge: a loopback hub client ------------------------------------------------------------
 
 export interface RemoBridgeOptions {
-  /** this server's plain-HTTP base, for pairing and the websocket (loopback is auto-approved) */
+  /** This server's plain-HTTP base, for pairing and the websocket. */
   serverBase: string;
+  /** Only the hosting server supplies this for an explicitly configured local bridge. */
+  register?: (name: string) => { device: { deviceId: string }; token: string };
   remo: RemoClient;
   name?: string;
   /** POST /messages allowed (REMO_SEND=1 after the user said yes); default false: sends are acknowledged `refused` */
@@ -160,6 +162,7 @@ export class RemoBridge {
   private backoff = 500;
   private lastSendAt = 0;
   private timer?: ReturnType<typeof setTimeout>;
+  private work = new AbortController();
   private readonly log: (line: string) => void;
 
   constructor(private readonly o: RemoBridgeOptions) {
@@ -188,8 +191,14 @@ export class RemoBridge {
 
   stop(): void {
     this.stopped = true;
+    this.panic();
     if (this.timer) clearTimeout(this.timer);
     this.ws?.close();
+  }
+
+  private panic(): void {
+    this.work.abort();
+    this.work = new AbortController();
   }
 
   private async pair(): Promise<void> {
@@ -206,21 +215,28 @@ export class RemoBridge {
         // re-pair below
       }
     }
-    const fetchImpl = this.o.fetchImpl ?? fetch;
-    const res = await fetchImpl(`${this.o.serverBase}/api/pair/start`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: this.name.slice(0, 120), kind: 'remo', capabilities: ['ir'] }),
-    });
-    const j = (await res.json()) as { status?: string; deviceId?: string; deviceToken?: string; message?: string };
-    if (!res.ok || j.status !== 'approved' || !j.deviceToken || !j.deviceId) {
-      throw new Error(`loopback pairing was not approved (${j.status ?? res.status}); the bridge needs CE_TRUST_LOOPBACK (default on)`);
+    let identity: { deviceId: string; deviceToken: string };
+    if (this.o.register) {
+      const { device, token } = this.o.register(this.name.slice(0, 120));
+      identity = { deviceId: device.deviceId, deviceToken: token };
+    } else {
+      const fetchImpl = this.o.fetchImpl ?? fetch;
+      const res = await fetchImpl(`${this.o.serverBase}/api/pair/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: this.name.slice(0, 120), kind: 'remo', capabilities: ['ir'] }),
+      });
+      const j = (await res.json()) as { status?: string; deviceId?: string; deviceToken?: string };
+      if (!res.ok || j.status !== 'approved' || !j.deviceToken || !j.deviceId) {
+        throw new Error(`Remo pairing requires approval (${j.status ?? res.status}); use the server-configured bridge or a previously paired token file`);
+      }
+      identity = { deviceId: j.deviceId, deviceToken: j.deviceToken };
     }
-    this.deviceId = j.deviceId;
-    this.token = j.deviceToken;
+    this.deviceId = identity.deviceId;
+    this.token = identity.deviceToken;
     if (f) {
       mkdirSync(dirname(f), { recursive: true });
-      writeFileSync(f, `${JSON.stringify({ deviceId: j.deviceId, deviceToken: j.deviceToken, name: this.name }, null, 2)}\n`, { mode: 0o600 });
+      writeFileSync(f, `${JSON.stringify({ ...identity, name: this.name }, null, 2)}\n`, { mode: 0o600 });
     }
   }
 
@@ -257,6 +273,7 @@ export class RemoBridge {
         this.lastError = e.message;
       });
       ws.on('close', (code) => {
+        this.panic();
         if (code === 4401) {
           // revoked: forget the token and pair again next time
           this.token = undefined;
@@ -284,11 +301,14 @@ export class RemoBridge {
   }
 
   private onMessage(m: AnyMessage): void {
+    if (this.stopped) return;
     if (m.type === 'exec.command') void this.onExec(m.payload as ExecCommandPayload);
     else if (m.type === 'sense.request') void this.onSense(m.payload as SenseRequestPayload);
+    else if (m.type === 'panic') this.panic();
   }
 
   private async onExec(p: ExecCommandPayload): Promise<void> {
+    const signal = this.work.signal;
     const ack = (a: Partial<ExecAckPayload>) => this.send('exec.ack', { execId: p.execId, ok: false, sentAt: Date.now(), ...a }, { to: 'server' });
     const op = p.op;
     if (op.kind !== 'ir') return ack({ error: 'unsupported', detail: `the Nature Remo only sends IR (${op.kind} asked)` });
@@ -302,9 +322,10 @@ export class RemoBridge {
     if (!this.allowSend) return ack({ error: 'refused', detail: 'sending IR through the Nature Remo is not approved yet (REMO_SEND=1 once the user says yes)' });
     const wait = this.lastSendAt + (this.o.minSendGapMs ?? REMO_MIN_SEND_GAP_MS) - Date.now();
     if (wait > 0) await sleep(wait);
+    if (signal.aborted || this.stopped) return ack({ error: 'refused', detail: 'Remo send cancelled by Stop or disconnect' });
     const t0 = Date.now();
     try {
-      await this.o.remo.postMessage(frame);
+      await this.o.remo.postMessage(frame, signal);
       this.lastSendAt = Date.now();
       this.sends++;
       ack({ ok: true, sentAt: this.lastSendAt, latencyMs: this.lastSendAt - t0, detail: `Remo sent ${frame.data.length} timings at ${frame.freq} kHz${op.ref ? ` [${op.ref}]` : ''}` });
@@ -316,27 +337,30 @@ export class RemoBridge {
 
   /** LEARN: poll GET /messages for the window; every signal that differs from the previous one is a capture. */
   private async onSense(p: SenseRequestPayload): Promise<void> {
+    const signal = this.work.signal;
     const result = (r: Partial<SenseResultPayload>) => this.send('sense.result', { senseId: p.senseId, kind: p.kind, at: Date.now(), ...r }, { to: 'server' });
     if (p.kind !== 'ir-capture') return result({ ok: false, error: `the Nature Remo cannot sense ${p.kind}; it only receives IR` });
     const windowMs = Math.min(60_000, Math.max(1000, p.durationMs ?? 8000));
     const until = Date.now() + windowMs;
     let baseline: number[] | undefined;
     try {
-      baseline = (await this.o.remo.getMessages())?.data;
+      baseline = (await this.o.remo.getMessages(signal))?.data;
     } catch (e) {
       this.lastError = (e as Error).message;
       return result({ ok: false, error: `the Remo is unreachable: ${this.lastError}`.slice(0, 300) });
     }
     let seen = 0;
-    while (Date.now() < until && !this.stopped) {
+    while (Date.now() < until && !this.stopped && !signal.aborted) {
       await sleep(this.o.pollMs ?? REMO_POLL_MS);
+      if (signal.aborted || this.stopped) break;
       let f: RemoFrame | undefined;
       try {
-        f = await this.o.remo.getMessages();
+        f = await this.o.remo.getMessages(signal);
       } catch (e) {
         this.lastError = (e as Error).message;
         continue;
       }
+      if (signal.aborted || this.stopped) break;
       if (!f || sameFrame(f.data, baseline)) continue;
       baseline = f.data;
       const ir = frameToCapture(f);
@@ -520,7 +544,7 @@ export function resolveRemoConfig(env: NodeJS.ProcessEnv): RemoConfig {
  * Start the bridge when configured. Returns undefined (and touches no network) when neither REMO_HOST nor
  * CE_REMO=1 is set, or when discovery finds nothing.
  */
-export async function startRemoBridge(o: { config: RemoConfig; serverBase: string; dataDir: string; log?: (line: string) => void; fetchImpl?: typeof fetch; discover?: typeof discoverRemo }): Promise<RemoBridge | undefined> {
+export async function startRemoBridge(o: { config: RemoConfig; serverBase: string; dataDir: string; register?: RemoBridgeOptions['register']; log?: (line: string) => void; fetchImpl?: typeof fetch; discover?: typeof discoverRemo }): Promise<RemoBridge | undefined> {
   const log = o.log ?? (() => {});
   let host = o.config.host;
   let name = 'Nature Remo';
@@ -535,7 +559,7 @@ export async function startRemoBridge(o: { config: RemoConfig; serverBase: strin
   }
   if (!host) return undefined;
   const base = /^https?:\/\//.test(host) ? host : `http://${host}`;
-  const bridge = new RemoBridge({ serverBase: o.serverBase, remo: new RemoClient(base, { fetchImpl: o.fetchImpl }), name, allowSend: o.config.send, tokenFile: join(o.dataDir, 'remo-bridge.json'), fetchImpl: o.fetchImpl, log });
+  const bridge = new RemoBridge({ serverBase: o.serverBase, register: o.register, remo: new RemoClient(base, { fetchImpl: o.fetchImpl }), name, allowSend: o.config.send, tokenFile: join(o.dataDir, 'remo-bridge.json'), fetchImpl: o.fetchImpl, log });
   await bridge.start();
   return bridge;
 }

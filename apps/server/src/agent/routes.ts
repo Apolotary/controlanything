@@ -137,7 +137,7 @@ export function agentRouter(ctx: ServerContext): express.Router {
       return;
     }
     const body = PanicPayload.safeParse(req.body ?? {});
-    res.json(agent.control.panic(body.success ? (body.data.reason ?? 'http panic') : 'http panic', body.success ? body.data.cardId : undefined));
+    res.json(agent.panic(body.success ? (body.data.reason ?? 'http panic') : 'http panic', body.success ? body.data.cardId : undefined));
   });
   return r;
 }

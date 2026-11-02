@@ -221,3 +221,16 @@ describe('explicit annotation and control', () => {
     expect(ws.send).not.toHaveBeenCalled();
   });
 });
+
+
+it('does not aim at an annotation the HUD could not allocate', () => {
+  const { app, target, hud, receive } = shell();
+  Object.assign(app, { hudKind: 'v2', drawTarget: vi.fn(), eraseTarget: vi.fn() });
+  Object.assign(hud, { isTargetVisible: vi.fn(() => false) });
+  receive('observeTarget', { id: target.id, label: 'Laptop', score: 0.9,
+    position: target.position.toArray(), confirmed: true, status: 'scanned' });
+  expect(Reflect.get(app, 'aimList').call(app)).toEqual([]);
+  Object.assign(hud, { isTargetVisible: vi.fn((id: string) => id === target.id) });
+  receive('refreshAnnotations', true);
+  expect(Reflect.get(app, 'aimList').call(app).map((entry: { id: string }) => entry.id)).toEqual([target.id]);
+});

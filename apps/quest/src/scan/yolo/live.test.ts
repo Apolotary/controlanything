@@ -22,7 +22,7 @@ class FakeWorker {
 
 afterEach(() => vi.unstubAllGlobals());
 
-function setup(field?: BoxField) {
+function setup(field?: BoxField, handJoints: Vector3[] = []) {
   const targets: Target[] = [];
   const root = new Group();
   if (field) root.add(field);
@@ -37,7 +37,7 @@ function setup(field?: BoxField) {
       views.set(t.id, t);
       field?.set(t.id, new Vector3(...t.position), t.sizeM?.[0] ?? 0.3, t.sizeM?.[1] ?? 0.2, '#ffffff');
     }, removeTarget: (id: string) => { views.delete(id); field?.remove(id); } } as unknown as Hud),
-    samTargets: () => targets, depth: () => [], handJoints: () => [], log: vi.fn(), modelUrl: '/models/yolox_nano.onnx', onPickClaimed,
+    samTargets: () => targets, depth: () => [], handJoints: () => handJoints, log: vi.fn(), modelUrl: '/models/yolox_nano.onnx', onPickClaimed,
     createWorker: () => { const worker = new FakeWorker(); workers.push(worker); return worker as unknown as Worker; },
   });
   const sam = (id = 'sam_device', size = 1): Target => {
@@ -65,15 +65,15 @@ describe('live selection and SAM handover', () => {
     field.dispose();
   });
 
-  it('rejects an edge-overlapping hand immediately instead of coasting its old box', () => {
+  it('keeps a selectable device while a fingertip overlaps its edge', () => {
     const { live, views } = setup();
     live.apply([detection], frame, 0);
     live.apply([detection], frame, 150);
     expect(views.size).toBe(1);
     const hand = new Vector3((108 - 208) / 416, -(106 - 156) / 416, -1);
     live.apply([detection], { ...frame, handJoints: [hand] }, 200);
-    expect(views.size).toBe(0);
-    expect(live.aimables()).toEqual([]);
+    expect(views.size).toBe(1);
+    expect(live.aimables()).toHaveLength(1);
   });
 
   it('reclaims a full outline slot for the SAM label and shape without a duplicate', () => {
@@ -339,4 +339,15 @@ describe('live worker scheduling and lifecycle', () => {
     expect(views.size).toBe(0);
     live.dispose();
   });
+});
+
+it('reuses projection scratch objects across render ticks with fifty hand joints', () => {
+  const joints = Array.from({ length: 50 }, () => new Vector3(2, 2, -1));
+  const { live } = setup(undefined, joints);
+  live.apply([detection], frame, 0); live.apply([detection], frame, 150); live.running = true;
+  live.tick(151, 11);
+  const vectors = vi.spyOn(Vector3.prototype, 'clone'), rotations = vi.spyOn(Quaternion.prototype, 'clone');
+  for (let i = 0; i < 100; i++) live.tick(152 + i, 11);
+  expect(vectors).not.toHaveBeenCalled(); expect(rotations).not.toHaveBeenCalled();
+  vectors.mockRestore(); rotations.mockRestore(); live.dispose();
 });

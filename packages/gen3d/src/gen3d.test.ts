@@ -71,6 +71,17 @@ describe('JSON Schema export', () => {
 });
 
 describe('archetype expansion', () => {
+  it('rejects authored ids that collide with generated knob parts, including a generated cycle', () => {
+    for (const parentId of [undefined, 'k1.cap']) {
+      const spec = structuredClone(op1Knobs);
+      spec.parts.push({ id: 'k1.cap', kind: 'group' });
+      spec.parts.find((part) => part.id === 'k1')!.parentId = parentId;
+      const result = validateSpec(spec);
+      expect(result.ok).toBe(false);
+      expect(result.errors).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'id.duplicate', path: expect.stringContaining('expanded.parts') })]));
+      if (parentId) expect(result.errors).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'part.cycle' })]));
+    }
+  });
   it('a knob expands into a rotating cap with an arc, a readout and a tick', () => {
     const ex = expandSpec(op1Knobs);
     const rotate = ex.behaviors.find((b) => b.id === 'k1.rotate');

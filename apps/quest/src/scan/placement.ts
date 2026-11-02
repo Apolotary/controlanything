@@ -109,7 +109,7 @@ const PERSON = /\b(person|people|human|man|woman|men|women|child|kid|face|head|b
 /**
  * Client-side guards before anything is drawn (BRIEF §4.1 rule 7, research/15 §4.2): never tag people or
  * hands; drop walls/floors (a box over 60 % of the frame); drop boxes that are really the user's hand
- * overlapping projected hand joints, including partially visible hands at a box edge.
+ * substantially covered by projected hand joints. Devices remain selectable under partial occlusion.
  */
 export function rejectReason(det: Det, rec: FrameRecord): string | null {
   if (PERSON.test(det.label) || (det.prompt && PERSON.test(det.prompt))) return 'person or body part';

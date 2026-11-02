@@ -61,6 +61,7 @@ import { categoryFromControl, CHIPS_SPEC_ID, chipsSpec } from '../scan/yolo/chip
 import { isLiveId, LiveDetector } from '../scan/yolo/live';
 import { LiveReadout } from '../scan/yolo/readout';
 import { Mic } from '../voice/mic';
+import { pairingApi } from '../io/api';
 import { PushToTalk } from '../voice/ptt';
 import { ControlSender } from './controls';
 import { ModeState } from './modes';
@@ -185,6 +186,7 @@ export class QuestApp {
   refSpace?: XRReferenceSpace;
   lastFrame?: ShellFrame;
   identity?: Identity;
+  private freshSocketIdentity = false;
   welcome?: PayloadOf<'welcome'>;
   cameraState: 'off' | 'starting' | 'on' | 'error' = 'off';
   cameraNote = '';
@@ -375,6 +377,8 @@ export class QuestApp {
     this.setupLive();
   }
 
+  private readonly liveHands: Vector3[] = [];
+
   private setupLive(): void {
     if (this.params.get('yolo') === '0') {
       this.page.log('live boxes off (?yolo=0): SAM 3.1 scan only');
@@ -388,7 +392,7 @@ export class QuestApp {
       samTargets: () => this.targets.list(),
       depth: () => this.depthProviders(),
       headPosition: () => this.lastFrame?.head.position ?? this.desktopCam.position,
-      handJoints: () => handJointPositions(this.lastFrame),
+      handJoints: () => handJointPositions(this.lastFrame, this.liveHands),
       log: (m, l) => this.page.log(m, l),
       modelUrl: `${import.meta.env.BASE_URL}models/yolox_nano.onnx`,
       ep: ep === 'wasm' || ep === 'webgpu' ? ep : 'auto',
@@ -520,10 +524,23 @@ export class QuestApp {
 
   private setupIo(): void {
     const name = this.emulator ? 'Quest (desktop emulator)' : /Quest 3S/i.test(navigator.userAgent) ? 'Quest 3S' : 'Quest 3';
-    this.pairing = new PairingFlow({ name, capabilities: ['camera', 'mic', 'hands', 'display'] });
+    const savedAllowed = WsClient.allowsSavedToken(this.ws.url);
+    const foreignIdentity = new Map<string, string>();
+    const destination = new URL(this.ws.url);
+    destination.protocol = destination.protocol === 'wss:' ? 'https:' : 'http:';
+    this.pairing = new PairingFlow({ name, capabilities: ['camera', 'mic', 'hands', 'display'], ...(!savedAllowed ? {
+      api: pairingApi(destination.origin),
+      store: { getItem: (key: string) => foreignIdentity.get(key) ?? null,
+        setItem: (key: string, value: string) => { foreignIdentity.set(key, value); },
+        removeItem: (key: string) => { foreignIdentity.delete(key); } },
+    } : {}) });
+    if (!savedAllowed) this.page.log('The socket destination differs from this page; pairing fresh without sending the saved device token.', 'warn');
     this.controls = new ControlSender((p) => { if (p.specId && this.canControl(this.cardOfSpec.get(p.specId))) this.ws.send('control.event', p); }, 30);
     this.approvals = new Approvals(this.ws);
-    this.ptt = new PushToTalk(this.mic, this.ws, () => this.identity?.deviceToken);
+    this.ptt = new PushToTalk(this.mic, this.ws, () => WsClient.allowsSavedToken(this.ws.url) ? this.identity?.deviceToken : undefined, () => {
+      const cardId = this.lockedId ? this.modes.tags.get(this.lockedId)?.cardId : undefined;
+      return { cardId, specId: cardId ? this.specByCard.get(cardId) : undefined };
+    });
     this.ws.tap('out', (m) => this.recorder.message('out', m));
     this.ws.tap('in', (m) => this.recorder.message('in', m));
     this.ws.onState = (s, info) => {
@@ -555,6 +572,7 @@ export class QuestApp {
       }
       if (s.kind === 'offline') this.page.log(s.message, 'warn');
       if (s.kind === 'denied') this.page.log(s.message, 'error');
+      if (s.kind === 'paired') this.freshSocketIdentity = !savedAllowed;
       if (s.kind === 'paired') this.page.log(`paired as ${s.identity.name} (${s.identity.deviceId.slice(0, 8)}…)${s.verified ? '' : ' · not verified (server offline)'}`, 'ok');
     });
     this.approvals.on('change', (list) => {
@@ -657,7 +675,7 @@ export class QuestApp {
     for (const id of this.visibleTargets) if (!show.has(id)) this.eraseTarget?.(id);
     for (const target of draw) this.drawTarget?.(target);
     this.visibleTargets.clear();
-    for (const id of show) this.visibleTargets.add(id);
+    for (const id of show) if (this.hudKind !== 'v2' || this.hud.isTargetVisible?.(id)) this.visibleTargets.add(id);
     for (const [id, observed] of this.observed) if (now - observed.at > 15_000 && !this.modes.tags.has(id)) {
       this.observed.delete(id); this.targets.remove(id);
     }
@@ -811,7 +829,7 @@ export class QuestApp {
   }
 
   private helloPayload(): PayloadOf<'hello'> {
-    return { deviceToken: this.identity?.deviceToken ?? '', role: 'hmd', capabilities: ['camera', 'mic', 'hands', 'display'], app: APP_VERSION };
+    return { deviceToken: WsClient.allowsSavedToken(this.ws.url) || this.freshSocketIdentity ? this.identity?.deviceToken ?? '' : '', role: 'hmd', capabilities: ['camera', 'mic', 'hands', 'display'], app: APP_VERSION };
   }
 
   private async connect(): Promise<void> {
@@ -1569,6 +1587,8 @@ export class QuestApp {
     }
     const base = typeof src === 'string' ? new URL(src, location.href).toString() : undefined;
     this.player?.stop();
+    this.controls.clear();
+    this.ws.setPlayback(mode === 'playback');
     const player = new TakePlayer(this.take, mode, base);
     this.player = player;
     player.on('pose', (h) => {

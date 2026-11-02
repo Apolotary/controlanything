@@ -21,10 +21,11 @@ function ok(msg: string) {
   console.log(`  ok  ${msg}`);
 }
 
-async function req<T>(method: string, url: string, body?: unknown, token?: string): Promise<T> {
+async function req<T>(method: string, url: string, body?: unknown, token?: string, origin?: string): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (token) headers.Authorization = `Bearer ${token}`;
+  if (origin) headers.Origin = origin;
   const res = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   const text = await res.text();
   if (!res.ok) throw new Error(`${method} ${url} -> HTTP ${res.status} ${text}`);
@@ -74,8 +75,8 @@ async function main() {
   const health = await req<{ mode: string; models: { chat: string }; clients: unknown }>('GET', `${base}/api/health`);
   ok(`health: mode=${health.mode} chat=${health.models.chat}`);
 
-  // 1. the owner
-  const mac = await req<{ status: string; deviceId: string; deviceToken: string }>('POST', `${base}/api/pair/start`, { name: 'smoke-mac', kind: 'mac', capabilities: ['midi'] });
+  // 1. Simulate the owner pairing from the server's companion page.
+  const mac = await req<{ status: string; deviceId: string; deviceToken: string }>('POST', `${base}/api/pair/start`, { name: 'smoke-mac', kind: 'mac', capabilities: ['midi'] }, undefined, new URL(base).origin);
   if (mac.status !== 'approved') throw new Error(`expected localhost to be approved instantly, got ${mac.status} (is CE_TRUST_LOOPBACK=0?)`);
   ok(`smoke-mac paired from localhost as ${mac.deviceId}`);
   const a = await Peer.open('mac', wsOf(base));

@@ -144,6 +144,7 @@ export interface Hud {
   // SCAN
   setScanning(on: boolean, info?: { prompts?: number; pending?: number; startedAt?: number; modelId?: string }): void;
   upsertTarget(t: HudTarget): void;
+  isTargetVisible?(id: string): boolean;
   removeTarget(id: string): void;
   clearTargets(): void;
   setCandidate(id: string | null): void;

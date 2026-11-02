@@ -1,5 +1,5 @@
 import { makeMessage, type MessageType } from '@ce/protocol';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AudioOracle } from './audio/oracle';
 import type { Connection } from './connection';
 import { Executor } from './executor';
@@ -45,6 +45,13 @@ function setup(leader = true) {
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 describe('Executor', () => {
+  it('does not route IR through an attached but unapproved Cardputer', async () => {
+    const bridge = { link: { ready: true }, online: false, exec: vi.fn() } as unknown as CardputerBridge;
+    const ex = new Executor(new MidiExecutor(io, { clock: new FakeClock() }), bridge, new AudioOracle());
+    const ack = await ex.exec({ execId: 'ir1', executorDeviceId: 'mac-1', op: { kind: 'ir', protocol: 'RAW', rawUs: [9000, 4500] } });
+    expect(ack).toMatchObject({ ok: false, error: 'no_ir' });
+    expect(bridge.exec).not.toHaveBeenCalled();
+  });
   it('runs a MIDI exec.command and acks it to the server', async () => {
     const { ex, conn } = setup();
     conn.emit('exec.command', { execId: 'x1', executorDeviceId: 'mac-1', op: { kind: 'midi', msg: 'cc', channel: 1, number: 46, value: 69 }, port: 'OP-1', actionId: 'a-cut' });

@@ -31,6 +31,9 @@
     "payload": {
       "type": "object",
       "properties": {
+        "executor": {
+          "type": "boolean"
+        },
         "deviceToken": {
           "type": "string",
           "minLength": 1,
