@@ -22,13 +22,13 @@ const ELECTRONICS = /\b(tv|television|screen|monitor|laptop|computer|macbook|mac
 const APPLIANCES = /\b(air conditioner|air conditioning|ac|fan|microwave|oven|toaster|fridge|refrigerator|clock|hair dryer|hair drier|printer|projector)s?\b/i;
 
 /** All devices still means devices: unrelated scenery and people are never annotation targets. */
-export function matchesAnnotationFilter(label: string, category: Category = 'electronics'): boolean {
+export function matchesAnnotationFilter(label: string, category: Category = 'everything'): boolean {
   if (PEOPLE.test(label)) return false;
   if (category === 'lights') return LIGHTS.test(label);
   if (category === 'instruments') return /\b(keyboard|synthesizer|synth)s?\b/i.test(label);
   if (category === 'remotes') return /\b(remote|phone|cardputer)s?\b/i.test(label);
-  if (ELECTRONICS.test(label) || LIGHTS.test(label)) return true;
-  return category === 'everything' && APPLIANCES.test(label);
+  if (category === 'electronics') return !LIGHTS.test(label) && ELECTRONICS.test(label);
+  return ELECTRONICS.test(label) || LIGHTS.test(label) || APPLIANCES.test(label);
 }
 
 /** Invalid query values use the nearby-device default. */

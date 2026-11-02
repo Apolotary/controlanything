@@ -8,7 +8,7 @@ import type { Channel, ControlEvent, Gen3dSpec, HackItem, HudStatus, LogRow, Mod
 export type AppMode = 'annotate' | 'control';
 export type ObjectFilter = 'electronics' | 'lights' | 'everything';
 export type DeviceConnection = 'ready' | 'setup' | 'offline' | 'unknown';
-export interface HomeState { mode: AppMode; filter: ObjectFilter; tagged: number; status: string }
+export interface HomeState { mode: AppMode; filter: ObjectFilter; tagged: number; status: string; canStop?: boolean }
 export interface DeviceState { targetId: string; connection: DeviceConnection; hint?: string; busy?: boolean; sentence?: string; handControl?: boolean }
 
 export interface JointState {
@@ -45,6 +45,8 @@ export interface HudTarget {
   id: string;
   label: string;
   tagged?: boolean;
+  identifying?: boolean;
+  busy?: boolean;
   connection?: DeviceConnection;
   subtitle?: string;
   status: HudStatus;
@@ -108,6 +110,7 @@ export interface EvidenceState {
 
 export interface ConfirmRequest {
   id: string;
+  kind?: 'arm';
   title: string;
   summary?: string;
   hold?: boolean;

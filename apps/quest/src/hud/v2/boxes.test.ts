@@ -45,7 +45,7 @@ describe('Calm Glass target outlines', () => {
     field.dispose();
   });
 
-  it('renders a real 1.5 px stroke and promotes the active outline to 2 px accent', () => {
+  it('keeps untagged outlines white at 1.5 px and 40%, and tagged outlines accented at 2.5 px', () => {
     const field = new BoxField();
     field.set('lamp', center, 0.4, 0.2, THEME.color.line, true);
     field.update(0, head);
@@ -53,15 +53,24 @@ describe('Calm Glass target outlines', () => {
     const width = () => new Vector3().fromBufferAttribute(positions, 0).distanceTo(new Vector3().fromBufferAttribute(positions, 1));
     expect(width()).toBeCloseTo(THEME.box.stroke, 6);
     const colors = field.geometry.getAttribute('color');
+    const opacity = () => field.geometry.getAttribute('boxOpacity').getX(0) * field.material.opacity;
     const color = () => new Color().fromArray(colors.array, 0);
-    expect(color().getHexString()).toBe(new Color(THEME.color.line).getHexString());
+    expect(color().getHexString()).toBe('ffffff');
+    expect(opacity()).toBeCloseTo(0.4);
     field.setActive('lamp'); field.update(0, head);
-    expect(width()).toBeCloseTo(THEME.box.activeStroke, 6);
-    expect(THEME.box.activeStroke / THEME.box.stroke).toBeCloseTo(2 / 1.5);
+    expect(width()).toBeCloseTo(THEME.box.stroke, 6);
+    expect(color().getHexString()).toBe('ffffff');
+    expect(opacity()).toBeCloseTo(0.4);
+    field.setTagged('lamp', true); field.update(0, head);
+    expect(width() / THEME.box.stroke).toBeCloseTo(2.5 / 1.5, 4);
     expect(color().getHexString()).toBe(new Color(THEME.color.accent).getHexString());
     field.setActive(null); field.update(0, head);
+    expect(width() / THEME.box.stroke).toBeCloseTo(2.5 / 1.5, 4);
+    expect(color().getHexString()).toBe(new Color(THEME.color.accent).getHexString());
+    field.setTagged('lamp', false); field.update(0, head);
     expect(width()).toBeCloseTo(THEME.box.stroke, 6);
-    expect(color().getHexString()).toBe(new Color(THEME.color.line).getHexString());
+    expect(color().getHexString()).toBe('ffffff');
+    expect(opacity()).toBeCloseTo(0.4);
     field.dispose();
   });
 

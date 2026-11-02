@@ -48,6 +48,21 @@ function setup(field?: BoxField, handJoints: Vector3[] = []) {
 }
 
 describe('live selection and SAM handover', () => {
+  it('defaults to all device classes, including appliances', () => {
+    const { live, views } = setup();
+    expect(live.category).toBe('everything');
+    const microwave = { ...detection, cls: 68 };
+    live.apply([microwave], frame, 0);
+    live.apply([microwave], frame, 150);
+    expect([...views.values()].map((view) => view.label)).toEqual(['Microwave']);
+    live.setCategory('electronics');
+    expect(views.size).toBe(0);
+    live.apply([microwave], frame, 300);
+    live.apply([microwave], frame, 450);
+    expect(views.size).toBe(0);
+    live.dispose();
+  });
+
   it('confirms after 150 ms, fades on render time, and expires with no further worker result', () => {
     const field = new BoxField();
     const { live, views } = setup(field);
@@ -187,7 +202,7 @@ describe('live selection and SAM handover', () => {
     live.appendAimables(out);
     expect(out[0]).toBe(aim);
     live.pick(aim.id);
-    live.setCategory('everything');
+    live.setCategory('electronics');
     expect(live.pickedId).toBeUndefined();
     expect(views.get(aim.id)?.status).toBe('scanned');
     live.pick(aim.id);

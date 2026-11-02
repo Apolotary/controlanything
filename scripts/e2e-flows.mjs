@@ -269,7 +269,7 @@ async function panelState() {
       for (let p = node; p; p = p.parent) if (!p.visible) return;
       nodes[node.uuid] = { name: node.name || node.type, position: node.getWorldPosition(head.position.clone()).toArray() };
     });
-    return { card: describe(app.hud.card, 0.4, 0.32), bar: describe(app.hud.deck, 0.48, 0.16), nodes };
+    return { card: describe(app.hud.card, 0.4, 0.32), bar: describe(app.hud.deck, 0.48, 0.22), nodes };
   });
 }
 
@@ -389,7 +389,7 @@ async function run() {
     await waitQuest((id) => !!window.__ce.hud.root.getObjectByName(`tag-remove:${id}`), synthId);
     assert(await quest.evaluate((id) => {
       let found = false;
-      window.__ce.hud.root.getObjectByName(`tag-remove:${id}`).traverse((n) => { found ||= n.text === 'Untag'; });
+      window.__ce.hud.root.getObjectByName(`tag-remove:${id}`).traverse((n) => { found ||= n.text === 'Pinch to untag'; });
       return found;
     }, synthId), 'Tagged outline must offer an Untag chip');
     const since = await quest.evaluate(() => window.__flowsEvents.length);

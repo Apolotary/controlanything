@@ -54,7 +54,7 @@ export function stateGuidance(t: Target, state: TargetState): AgentGuidance {
     case 'linked': return { sentence: 'Connected to your device' };
     case 'researching': return stepGuidance('research', 'running');
     case 'driving': return stepGuidance('drive', 'running');
-    case 'verifying': return { sentence: t.driver?.transport === 'ir' ? 'Keep the light in view: testing it now' : 'Testing the device now…', hint: 'Keep the device in view and its sensors connected; you can cancel', action: 'cancel' };
+    case 'verifying': return { sentence: t.driver?.transport === 'ir' ? 'Testing the light: keep it in view' : 'Testing the device now…', hint: 'Keep the device in view and its sensors connected; you can cancel', action: 'cancel' };
     case 'verified': return { sentence: 'Device checks complete' };
     case 'forging': return stepGuidance('forge', 'running');
     case 'forged': return { sentence: ready, hint: 'Tap once to enable the controls', action: 'cancel' };

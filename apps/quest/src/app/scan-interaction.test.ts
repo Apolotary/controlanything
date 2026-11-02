@@ -44,7 +44,7 @@ async function setup() {
   const recorder = { input: vi.fn(), pose: vi.fn() };
   const lock = vi.fn(), send = vi.fn<(type: string, payload: unknown, routing?: unknown) => void>();
   Object.assign(app, {
-    modes: new ModeState(), filter: 'electronics', observed: new Map(), visibleTargets: new Set(),
+    modes: new ModeState(), filter: 'electronics', observed: new Map(), visibleTargets: new Set(), armedCards: new Set(),
     lastAnnotationsAt: 0, controls: { clear: vi.fn() }, ws: { send },
     params: new URLSearchParams('hud=v2'), scene: new Scene(), desktopCam: camera,
     renderer: {

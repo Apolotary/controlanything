@@ -67,6 +67,18 @@ describe('explicit annotation and control', () => {
     expect(scanner.stop).not.toHaveBeenCalled();
   });
 
+  it('keeps the tag identifying until the server supplies its device name', () => {
+    const { app, target, receive } = shell();
+    const observed = () => Reflect.get(app, 'observed').get(target.id).target;
+    app.lock(target.id);
+    receive('observeTarget', toHudTarget(target));
+    expect(observed()).toMatchObject({ label: 'Laptop', tagged: true, identifying: true });
+    receive('onTagsState', { tags: [{ cardId: 'laptop', label: 'Laptop', connection: 'setup' }] });
+    expect(observed()).toMatchObject({ label: 'Laptop', identifying: true });
+    receive('onTagsState', { tags: [{ cardId: 'laptop', label: 'Laptop', name: 'MacBook Pro', connection: 'setup' }] });
+    expect(observed()).toMatchObject({ label: 'MacBook Pro', identifying: false });
+  });
+
   it('resolves an already claimed live box to the same tag', () => {
     const { app, target, live, modes } = shell();
     live.claimOf.mockReturnValue(target.id);
@@ -161,6 +173,15 @@ describe('explicit annotation and control', () => {
     app.answerConfirm('arm1', true);
     receive('onArmResult', { ...request, armed: true });
     expect(hud.setArmed).toHaveBeenLastCalledWith(spec.specId, true, undefined);
+  });
+
+  it('names the ready device in the control confirmation and preserves its hold requirement', () => {
+    const { app, target, connected, receive, hud, modes } = shell();
+    connected(); app.setupControl(target.id);
+    modes.tags.get(target.id)!.name = 'MacBook Pro';
+    const request = { armId: 'arm', cardId: 'laptop', title: 'MacBook Pro is ready', summary: 'All 2 commands worked on the real device.', irreversible: true, expiresAt: Date.now() + 5000 };
+    receive('onArmRequest', request);
+    expect(hud.showConfirm).toHaveBeenLastCalledWith({ id: 'arm', kind: 'arm', title: 'MacBook Pro is ready', summary: request.summary, hold: true, expiresAt: request.expiresAt, targetId: target.id });
   });
 
   it('losing the bridge during setup cancels pending ARM and keeps the device offline', () => {

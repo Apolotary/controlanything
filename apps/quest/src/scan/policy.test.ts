@@ -6,17 +6,26 @@ const head = { x: 0, y: 1.6, z: 0 };
 const target = { label: 'Ceiling light', score: 0.9, position: { x: 0, y: 1.6, z: -2 }, lastSeenAt: 1000 };
 
 describe('annotation policy', () => {
-  it('offers the three device filters and defaults to nearby electronics including lamps and synths', () => {
-    expect(CATEGORIES.map((category) => category.label)).toEqual(['Electronics', 'Lights', 'All devices']);
-    for (const label of ['TV', 'laptop', 'cell phone', 'remote', 'keyboard', 'synthesizer', 'mouse', 'speakers', 'ceiling light']) {
+  it('offers All, Lights and Electronics, with every device class included by default', () => {
+    expect(CATEGORIES.map((category) => category.label)).toEqual(['All', 'Lights', 'Electronics']);
+    for (const label of ['TV', 'laptop', 'cell phone', 'remote', 'keyboard', 'synthesizer', 'mouse', 'speakers', 'ceiling light', 'microwave']) {
       expect(matchesAnnotationFilter(label)).toBe(true);
     }
-    expect(matchesAnnotationFilter('microwave')).toBe(false);
-    expect(matchesAnnotationFilter('microwave', 'everything')).toBe(true);
+  });
+
+  it('keeps lights separate from electronics and appliances exclusive to All', () => {
+    for (const label of ['TV', 'computer', 'phone', 'remote', 'keyboard', 'synthesizer', 'speaker']) {
+      expect(matchesAnnotationFilter(label, 'electronics')).toBe(true);
+      expect(matchesAnnotationFilter(label, 'lights')).toBe(false);
+    }
+    for (const label of ['ceiling light', 'smart lamp', 'electronic light']) {
+      expect(matchesAnnotationFilter(label, 'lights')).toBe(true);
+      expect(matchesAnnotationFilter(label, 'electronics')).toBe(false);
+    }
+    expect(matchesAnnotationFilter('microwave', 'electronics')).toBe(false);
+    expect(matchesAnnotationFilter('microwave', 'lights')).toBe(false);
     expect(allowedClasses('electronics').has(68)).toBe(false);
     expect(allowedClasses('everything').has(68)).toBe(true);
-    expect(matchesAnnotationFilter('Ceiling light', 'lights')).toBe(true);
-    expect(matchesAnnotationFilter('Laptop', 'lights')).toBe(false);
   });
 
   it('excludes people, body parts, and scenery from every filter', () => {
@@ -35,10 +44,11 @@ describe('annotation policy', () => {
   });
 
   it('expires transient detections at 400 ms but keeps an explicitly tagged anchor', () => {
-    expect(annotationVisible(target, head, 'electronics', 1399)).toBe(true);
-    expect(annotationVisible(target, head, 'electronics', 1400)).toBe(false);
-    expect(annotationVisible({ ...target, score: 0.49 }, head, 'electronics', 1000)).toBe(false);
-    expect(annotationVisible({ ...target, score: 0.5 }, head, 'electronics', 1000)).toBe(true);
+    expect(annotationVisible(target, head, 'everything', 1399)).toBe(true);
+    expect(annotationVisible(target, head, 'everything', 1400)).toBe(false);
+    expect(annotationVisible({ ...target, score: 0.49 }, head, 'everything', 1000)).toBe(false);
+    expect(annotationVisible({ ...target, score: 0.5 }, head, 'everything', 1000)).toBe(true);
+    expect(annotationVisible(target, head, 'electronics', 1000)).toBe(false);
     expect(annotationVisible(target, head, 'electronics', 10_000, 3, true)).toBe(true);
   });
 

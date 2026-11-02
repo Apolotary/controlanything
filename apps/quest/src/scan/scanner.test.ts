@@ -37,13 +37,17 @@ function setup(hit: DepthProvider['hit'] = async () => ({ point: new Vector3(0, 
 describe('automatic annotation scanning', () => {
   it('accepts only the active device filter at confidence 0.5 or higher', async () => {
     const { scanner, targets, result } = setup();
+    expect(scanner.category).toBe('everything');
     scanner.start();
     await scanner.onResult(result(['laptop'], 0.49));
     await scanner.onResult(result(['person holding a phone', 'chair', 'microwave', 'ceiling light', 'synthesizer']));
-    expect(targets.list().map((target) => target.label)).toEqual(['ceiling light', 'synthesizer']);
+    expect(targets.list().map((target) => target.label)).toEqual(['microwave', 'ceiling light', 'synthesizer']);
     scanner.setCategory('lights');
     await scanner.onResult(result(['phone', 'lamp'], 0.5));
-    expect(targets.list().map((target) => target.label)).toEqual(['ceiling light', 'synthesizer', 'lamp']);
+    expect(targets.list().map((target) => target.label)).toEqual(['microwave', 'ceiling light', 'synthesizer', 'lamp']);
+    scanner.setCategory('electronics');
+    await scanner.onResult(result(['electronic light', 'screen'], 0.5));
+    expect(targets.list().map((target) => target.label)).toEqual(['microwave', 'ceiling light', 'synthesizer', 'lamp', 'screen']);
   });
 
   it('rejects objects beyond the configured range and caps each batch at six devices', async () => {

@@ -338,6 +338,7 @@ describe('Calm Glass HUD controls and details', () => {
 
   it('restores queued approvals and pairing after a confirmation, and releases a held deck key when rebuilding', () => {
     const { hud, frame } = setup();
+    hud.setHome?.({ mode: 'control', filter: 'everything', tagged: 1, status: '', canStop: true });
     hud.showPairing({ display: '123456', qr: '' });
     hud.showConfirm({ id: 'arm', title: 'Allow control?' });
     hud.showApprovals([{ pairingId: 'new', name: 'Mac', kind: 'companion', display: '789123' }]);
@@ -392,6 +393,7 @@ describe('HUD button interaction feedback', () => {
 
   it('accepts a fresh pinch after tracking loss without replaying a held pinch', () => {
     const { hud, camera, frame } = setup();
+    hud.setHome?.({ mode: 'control', filter: 'everything', tagged: 1, status: '', canStop: true });
     hud.update(frame(undefined, 200));
     const point = hud.root.getObjectByName('deck:panic')!.getWorldPosition(new Vector3());
     const ray = { origin: camera.position.clone(), dir: point.sub(camera.position).normalize() };
@@ -409,6 +411,7 @@ describe('HUD button interaction feedback', () => {
 
   it('uses the index tip for hover and crossing, requires withdrawal before another poke, and never pokes with missing joints', () => {
     const { hud, frame } = setup();
+    hud.setHome?.({ mode: 'control', filter: 'everything', tagged: 1, status: '', canStop: true });
     hud.update(frame(undefined, 200));
     const button = hud.root.getObjectByName('deck:panic')!;
     const phases: string[] = [];
@@ -438,7 +441,7 @@ describe('HUD button interaction feedback', () => {
     expect(phases).toEqual(['press', 'release', 'press', 'release']);
     expect(button.userData.hovered).toBe(false);
     expect(button.scale.x).toBe(1);
-    expect(material().uniforms.edgeAlpha!.value).toBe(THEME.opacity.stroke);
+    expect(material().uniforms.edgeAlpha!.value).toBe(0.18);
     hud.dispose();
   });
 
@@ -447,7 +450,7 @@ describe('HUD button interaction feedback', () => {
     hud.upsertTarget(target); hud.setLocked(target.id);
     let name = 'mode-annotate';
     if (kind === 'details') name = 'details-toggle';
-    if (kind === 'deck') { hud.setDeck({ open: true }); name = 'deck:panic'; }
+    if (kind === 'deck') { hud.setHome?.({ mode: 'control', filter: 'everything', tagged: 1, status: '', canStop: true }); hud.setDeck({ open: true }); name = 'deck:panic'; }
     if (kind === 'confirm') { hud.showConfirm({ id: 'ok', title: 'Allow?' }); name = 'confirm-yes'; }
     if (kind === 'approval') { hud.showApprovals([{ pairingId: 'mac', name: 'Mac', kind: 'companion', display: '123' }]); name = 'approval-yes'; }
     if (kind === 'control' || kind === 'hack') {
@@ -491,7 +494,7 @@ describe('explicit annotation and control modes', () => {
     expect(hud.root.getObjectByName('device-card')!.visible).toBe(false);
     expect(hud.root.getObjectByName('home-bar')!.visible).toBe(true);
     expect(hud.root.getObjectByName('tag-remove:device')).toBeTruthy();
-    expect(hud.root.getObjectByName('filter:electronics')!.userData.selected).toBe(true);
+    expect(hud.root.getObjectByName('filter:everything')!.userData.selected).toBe(true);
     for (const name of ['scan-toggle', 'deck:panic', 'deck:mic', 'deck:ping', 'control:action0']) expect(hud.root.getObjectByName(name)).toBeUndefined();
     hud.dispose();
   });
@@ -568,11 +571,145 @@ describe('explicit annotation and control modes', () => {
 });
 
 describe('bounded card wording and stable home updates', () => {
+  it('updates the next-step hint and count without moving the home bar or mode buttons', () => {
+    const { hud, frame } = setup('annotate');
+    hud.update(frame());
+    const bar = hud.root.getObjectByName('home-bar')!;
+    const hint = hud.root.getObjectByName('home-hint') as Object3D & { text: string };
+    const dimensions = () => bar.children.find((node) => node instanceof Mesh)!.scale.toArray();
+    const top = () => bar.position.y + dimensions()[1]! / 2;
+    const originalTop = top(), originalSize = dimensions();
+    const toggle = hud.root.getObjectByName('mode-control')!;
+    const buttonY = toggle.position.y;
+    expect(hint.text).toBe('Pinch a device to tag it');
+    hud.setHome?.({ mode: 'annotate', filter: 'electronics', tagged: 2, status: 'stale hint' });
+    expect(hint.text).toBe("Switch to Control when you're ready");
+    expect(hud.root.getObjectByName('mode-control')).toBe(toggle);
+    expect(toggle.children.some((child) => 'text' in child && child.text === 'Control · 2')).toBe(true);
+    hud.setHome?.({ mode: 'control', filter: 'electronics', tagged: 2, status: 'stale hint' });
+    hud.update(frame());
+    expect(dimensions()).toEqual(originalSize);
+    expect(top()).toBe(originalTop);
+    expect(hud.root.getObjectByName('mode-control')!.position.y).toBe(buttonY);
+    expect(hud.root.getObjectByName('filter:electronics')).toBeUndefined();
+    expect(hint.text).toBe('Pinch a tagged device to open it');
+    hud.upsertTarget(target); hud.setLocked(target.id);
+    expect(hint.visible).toBe(false);
+    hud.setLocked(null);
+    expect(hint.visible).toBe(true);
+    hud.dispose();
+  });
+
+  it('shows Stop only during setup or while a device is armed, and only in Control', () => {
+    const { hud } = setup();
+    const stop = () => hud.root.getObjectByName('deck:panic');
+    expect(stop()).toBeUndefined();
+    hud.upsertTarget({ ...target, connection: 'setup' }); hud.setLocked(target.id);
+    hud.setDeviceState?.({ targetId: target.id, connection: 'setup', busy: true });
+    expect(stop()).toBeTruthy();
+    hud.setDeviceState?.({ targetId: target.id, connection: 'setup', busy: false });
+    expect(stop()).toBeUndefined();
+    hud.renderSpec(spec(false), { targetId: target.id });
+    hud.setArmed('device_controls', true); hud.setLocked(null);
+    expect(stop()).toBeTruthy();
+    hud.setArmed('device_controls', false);
+    expect(stop()).toBeUndefined();
+    hud.setHome?.({ mode: 'control', filter: 'everything', tagged: 1, status: '', canStop: true });
+    expect(stop()).toBeTruthy();
+    hud.setHome?.({ mode: 'annotate', filter: 'everything', tagged: 1, status: '', canStop: true });
+    expect(stop()).toBeUndefined();
+    hud.setHome?.({ mode: 'control', filter: 'everything', tagged: 1, status: '', canStop: false });
+    expect(stop()).toBeUndefined();
+    hud.dispose();
+  });
+
+  it('renders the tag check, identification, untag hover and live setup status on the chip', () => {
+    const { hud } = setup('annotate');
+    const label = () => hud.root.getObjectByName('target-label:device')!;
+    const text = () => label().getObjectByName('sdf') as Object3D & { text: string };
+    hud.upsertTarget({ ...target, label: 'Ceiling light', tagged: false });
+    expect(text().text).toBe('Ceiling light');
+    expect(label().getObjectByName('tagged-check')).toBeUndefined();
+    hud.upsertTarget({ ...target, label: 'Ceiling light', identifying: true });
+    expect(text().text).toBe('Ceiling light · Identifying…');
+    expect(label().getObjectByName('tagged-check')).toBeTruthy();
+    hud.upsertTarget({ ...target, label: 'KOIZUMI ceiling light', identifying: false, connection: 'setup' });
+    expect(text().text).toBe('KOIZUMI ceiling light');
+    hud.setCandidate(target.id);
+    expect(text().text).toBe('Pinch to untag');
+    hud.setCandidate(null);
+    expect(text().text).toBe('KOIZUMI ceiling light');
+    hud.setHome?.({ mode: 'control', filter: 'everything', tagged: 1, status: '' });
+    expect(text().text).toBe('KOIZUMI ceiling light · Needs setup');
+    hud.setLocked(target.id);
+    hud.setDeviceState?.({ targetId: target.id, connection: 'setup', busy: true });
+    expect(text().text).toBe('KOIZUMI ceiling light · Setting up…');
+    hud.setLocked(null); hud.setDeviceState?.(null);
+    expect(text().text).toBe('KOIZUMI ceiling light · Setting up…');
+    hud.dispose();
+  });
+
+  it('keeps equal action pills and shows Off until brightness changes or an on action runs', () => {
+    const { hud, frame, pinch } = setup();
+    const light: Gen3dSpec = { ...spec(), controls: [spec().controls[0]!,
+      { id: 'full', label: 'Turn full on', kind: 'trigger', binding: { action: 'ir.fullOn' } },
+      { id: 'off', label: 'Turn off', kind: 'trigger', binding: { action: 'ir.off' } },
+      { id: 'night', label: 'Night', kind: 'trigger', binding: { action: 'ir.nightLight' } },
+      { id: 'warm', label: 'Warmth', kind: 'continuous', binding: { action: 'ir.warmer' } },
+    ] };
+    hud.upsertTarget({ ...target, status: 'verified' }); hud.setLocked(target.id);
+    hud.renderSpec(light, { targetId: target.id }); hud.update(frame(undefined, 200));
+    const buttons = ['full', 'off', 'night'].map((id) => hud.root.getObjectByName(`control:${id}`)!);
+    expect(buttons[0]!.getObjectByName('sdf')).toMatchObject({ text: 'Full on' });
+    for (const button of buttons) {
+      const plate = button.getObjectByName('button-plate') as Mesh;
+      expect(button.position.y).toBe(THEME.card.buttonsY);
+      expect(plate.scale.toArray()).toEqual([THEME.control.buttonWidth, THEME.control.buttonHeight, 1]);
+      expect((plate.material as ShaderMaterial).uniforms.fillAlpha!.value).toBe(0.06);
+      expect((plate.material as ShaderMaterial).uniforms.edgeAlpha!.value).toBe(0.18);
+      expect(button.getObjectByName('sdf')!.position.y).toBe(0);
+    }
+    expect(hud.root.getObjectByName('device-status')!.visible).toBe(false);
+    hud.setControlValue(light.specId, 'level', 80);
+    const value = () => hud.root.getObjectByName('control-value') as Object3D & { text: string; color: string };
+    pinch(buttons[1]!);
+    expect(value()).toMatchObject({ text: 'Off', color: '#94A3B8' });
+    expect(hud.root.getObjectByName('slider-fill')!.visible).toBe(false);
+    hud.setControlValue(light.specId, 'level', 80);
+    hud.setControlValue(light.specId, 'warm', 30);
+    hud.setLocked(null); hud.setLocked(target.id);
+    expect(value().text).toBe('Off');
+    hud.setControlValue(light.specId, 'level', 70);
+    expect(value()).toMatchObject({ text: '70%', color: THEME.color.accent });
+    pinch(hud.root.getObjectByName('control:off')!);
+    expect(value().text).toBe('Off');
+    pinch(hud.root.getObjectByName('control:full')!);
+    expect(value().text).toBe('70%');
+    hud.dispose();
+  });
+
+  it('keeps the ARM primary accent and requires two seconds for a risky device', () => {
+    const { hud, frame, pinch } = setup();
+    const approvals: boolean[] = []; hud.on('confirm', ({ approve }) => approvals.push(approve));
+    hud.showConfirm({ id: 'arm', kind: 'arm', title: 'Device is ready', hold: true });
+    const primary = hud.root.getObjectByName('confirm-yes')!;
+    hud.update(frame());
+    const material = (primary.getObjectByName('button-plate') as Mesh).material as ShaderMaterial;
+    expect(material.uniforms.fillAlpha!.value).toBe(0.28);
+    expect(material.uniforms.stroke!.value).toBe(THEME.surface.stroke * 1.5);
+    pinch(primary, 650); pinch(primary, 1900);
+    expect(approvals).toEqual([]);
+    pinch(primary, 2050);
+    expect(approvals).toEqual([true]);
+    hud.dispose();
+  });
+
   it.each([false, true])('names the arm action explicitly with hold=%s', (hold) => {
     const { hud } = setup();
-    hud.showConfirm({ id: 'arm', title: 'Arm controls', hold, summary: 'W'.repeat(200) });
+    hud.showConfirm({ id: 'arm', kind: 'arm', title: 'Ceiling light is ready', hold, summary: 'W'.repeat(200) });
     const button = hud.root.getObjectByName('confirm-yes')!;
-    expect(button.children.some((child) => 'text' in child && child.text === (hold ? 'Hold to arm' : 'Arm'))).toBe(true);
+    expect(button.children.some((child) => 'text' in child && child.text === 'Enable controls')).toBe(true);
+    expect(hud.root.getObjectByName('confirm-no')!.children.some((child) => 'text' in child && child.text === 'Not now')).toBe(true);
     const summary = hud.root.getObjectByName('confirmation-summary') as Object3D & { text: string };
     expect(summary.text).toHaveLength(200);
     expect(summary.userData.fitHeight).toBe(0.11);

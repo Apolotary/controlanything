@@ -23,9 +23,9 @@ export const PERSON_CLASS = 0;
 /** The category chips of the design (research/06 §"Category chips"). */
 export type Category = 'everything' | 'electronics' | 'instruments' | 'lights' | 'remotes';
 export const CATEGORIES: { id: Category; label: string }[] = [
-  { id: 'electronics', label: 'Electronics' },
+  { id: 'everything', label: 'All' },
   { id: 'lights', label: 'Lights' },
-  { id: 'everything', label: 'All devices' },
+  { id: 'electronics', label: 'Electronics' },
 ];
 
 export interface DeviceClass {

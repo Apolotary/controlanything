@@ -42,23 +42,24 @@ describe('scan box interaction', () => {
     field.dispose();
   });
 
-  it('keeps a selected outline accented after hover leaves and independently fades each outline', () => {
+  it('keeps tagged outlines accented after hover leaves and independently fades each outline', () => {
     const field = new BoxField();
     field.set('lamp', center, 0.4, 0.2, THEME.color.line, true);
     field.set('laptop', new Vector3(1, 1.4, -1), 0.4, 0.2, THEME.color.line, true);
     field.setHovered('lamp'); field.update(0, head);
     const colors = field.geometry.getAttribute('color');
-    expect(new Color().fromArray(colors.array, 0).getHexString()).toBe(new Color(THEME.color.accent).getHexString());
+    expect(new Color().fromArray(colors.array, 0).getHexString()).toBe('ffffff');
+    field.setTagged('lamp', true);
     field.setSelected('lamp'); field.setHovered(null);
     field.setOpacity('lamp', 0.25); field.update(0, head);
     expect(new Color().fromArray(colors.array, 0).getHexString()).toBe(new Color(THEME.color.accent).getHexString());
     const alpha = field.geometry.getAttribute('boxOpacity');
     expect(alpha.getX(0)).toBe(0.25);
-    expect(alpha.getX(alpha.count / THEME.box.max)).toBe(1);
+    expect(alpha.getX(alpha.count / THEME.box.max) * field.material.opacity).toBeCloseTo(0.4);
     field.setSelected(null); field.update(0, head);
-    expect(new Color().fromArray(colors.array, 0).getHexString()).toBe(new Color(THEME.color.line).getHexString());
+    expect(new Color().fromArray(colors.array, 0).getHexString()).toBe(new Color(THEME.color.accent).getHexString());
     field.remove('lamp'); field.update(0, head);
-    expect(alpha.getX(0)).toBe(1);
+    expect(alpha.getX(0) * field.material.opacity).toBeCloseTo(0.4);
     expect([...alpha.array.slice(alpha.count / THEME.box.max)].every((value) => value === 0)).toBe(true);
     expect(field.children).toHaveLength(0);
     field.dispose();
