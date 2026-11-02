@@ -38,8 +38,7 @@ import {
   Pose,
   PxBox,
   Role,
-  TargetState,
-} from './primitives';
+  TargetState, Vec3 } from './primitives';
 
 // --- connection -----------------------------------------------------------------------------
 
@@ -897,3 +896,60 @@ export const LogPayload = z.object({
   issues: z.array(z.string().max(500)).max(20).optional(),
 });
 export type LogPayload = z.infer<typeof LogPayload>;
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Two modes (research/20-two-modes.md): ANNOTATE first (tag devices), CONTROL only when the user switches.
+
+export const Mode = z.enum(['annotate', 'control']);
+export type Mode = z.infer<typeof Mode>;
+
+/** C->S. The user switched modes. The server never switches by itself. */
+export const ModeSetPayload = z.object({ mode: Mode });
+export type ModeSetPayload = z.infer<typeof ModeSetPayload>;
+
+/** S->C. The current mode (also sent on connect). */
+export const ModeStatePayload = z.object({ mode: Mode });
+export type ModeStatePayload = z.infer<typeof ModeStatePayload>;
+
+/** C->S. Tag a device in ANNOTATE mode: identify it and remember it. Never starts linking or control. */
+export const TagAddPayload = z.object({
+  targetId: Id.optional(),
+  frameId: Id.optional(),
+  detId: Id.optional(),
+  label: z.string().min(1).max(80),
+  position: Vec3.optional(),
+});
+export type TagAddPayload = z.infer<typeof TagAddPayload>;
+
+/** C->S. Forget a tagged device. */
+export const TagRemovePayload = z.object({ cardId: Id });
+export type TagRemovePayload = z.infer<typeof TagRemovePayload>;
+
+/** How a tagged device can be reached right now. */
+export const TagConnection = z.enum(['ready', 'setup', 'offline']);
+export type TagConnection = z.infer<typeof TagConnection>;
+
+export const TaggedDevice = z.object({
+  cardId: Id,
+  label: z.string().max(80),
+  name: z.string().max(120).optional(),
+  category: z.string().max(60).optional(),
+  position: Vec3.optional(),
+  connection: TagConnection,
+  /** one plain sentence: what to connect, or what happens next */
+  hint: z.string().max(200).optional(),
+  specId: Id.optional(),
+});
+export type TaggedDevice = z.infer<typeof TaggedDevice>;
+
+/** S->C. Full snapshot of tagged devices, sent on every change and on connect. */
+export const TagsStatePayload = z.object({ tags: z.array(TaggedDevice).max(64) });
+export type TagsStatePayload = z.infer<typeof TagsStatePayload>;
+
+/** C->S. CONTROL mode only: set up control for a tagged device (LINK -> LEARN -> DRIVE -> VERIFY -> FORGE -> ARM). */
+export const ControlSetupPayload = z.object({ cardId: Id });
+export type ControlSetupPayload = z.infer<typeof ControlSetupPayload>;
+
+/** C->S. Stop a running control setup. */
+export const ControlCancelPayload = z.object({ cardId: Id });
+export type ControlCancelPayload = z.infer<typeof ControlCancelPayload>;

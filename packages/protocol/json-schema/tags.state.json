@@ -1,0 +1,119 @@
+{
+  "title": "tags.state",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "tags.state"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "tags": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "cardId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "category": {
+                "type": "string",
+                "maxLength": 60
+              },
+              "position": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "z": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "x",
+                  "y",
+                  "z"
+                ],
+                "additionalProperties": false
+              },
+              "connection": {
+                "type": "string",
+                "enum": [
+                  "ready",
+                  "setup",
+                  "offline"
+                ]
+              },
+              "hint": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "specId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "cardId",
+              "label",
+              "connection"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "tags"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}
