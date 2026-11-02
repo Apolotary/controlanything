@@ -340,6 +340,10 @@ export class QuestApp {
         const g = (await import('../gen3d/index')) as unknown as { MouseCursor?: new (el: HTMLElement, cam: PerspectiveCamera) => { cursor: unknown; setTargets(o: unknown[]): void; update(): unknown } };
         if (g.MouseCursor) {
           this.mouseCursor = new g.MouseCursor(this.renderer.domElement, this.desktopCam);
+          // three.js raycasts lines and points with a 1 m threshold by default: any nearby rail would steal the cursor
+          const rc = (this.mouseCursor as unknown as { raycaster?: { params: { Line?: { threshold: number }; Points?: { threshold: number } } } }).raycaster;
+          if (rc?.params.Line) rc.params.Line.threshold = 0.004;
+          if (rc?.params.Points) rc.params.Points.threshold = 0.004;
           this.mouseCursor.setTargets([hud.root]);
           devHud.setDevCursors([this.mouseCursor.cursor]);
           this.page.log('desktop: the mouse drives gen3d widgets (dev cursor)');
@@ -727,7 +731,14 @@ export class QuestApp {
     this.scanner.toggle();
   }
 
+  private lastHack = { key: '', at: 0 };
+
   private onHack(e: { targetId: string; itemId: string; controlId?: string; index: number; hold?: boolean }): void {
+    // one pinch = one action on a real device: drop a repeat of the same hack within 400 ms
+    const key = `${e.targetId}:${e.itemId}`;
+    const now = performance.now();
+    if (key === this.lastHack.key && now - this.lastHack.at < 400) return;
+    this.lastHack = { key, at: now };
     // the pinch IS the human confirmation: an action hack fires as {widgetId: hackId, value: true, phase: 'end'}
     const t = this.targets.get(e.targetId);
     const specId = this.menuSpec.get(e.targetId) ?? (t?.cardId ? this.specByCard.get(t.cardId) : undefined);
@@ -749,7 +760,9 @@ export class QuestApp {
   }
 
   private onControl(e: ControlEvent): void {
-    const ui = this.uiSpecOfGen3d.get(e.specId) ?? e.specId;
+    // only controls of specs the server sent drive devices; HUD-internal objects (hack menus, deck) never do
+    const ui = this.uiSpecOfGen3d.get(e.specId);
+    if (!ui) return;
     this.controls.push({ ...e, specId: ui });
   }
 
