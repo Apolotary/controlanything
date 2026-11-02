@@ -30,6 +30,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { SERVER_NAME, SERVER_VERSION } from './config';
 import type { ServerContext } from './context';
 import { agentRouter } from './agent/routes';
+import { libraryRouter } from './agent/libraryRoutes';
 import { gen3dRouter, skinsRouter } from './gen3d';
 import { MAX_AUDIO_BYTES, requestCancellation, RequestCancelledError, TranscribeInputError, TranscribeUpstreamError } from './muse';
 import { type Approver, PairingError } from './pairing/manager';
@@ -155,6 +156,8 @@ export function createApp(ctx: ServerContext): express.Express {
     res.json({ spaceId: ctx.registry.spaceId, devices: ctx.hub.devices() });
   });
 
+  api.use('/library', libraryRouter(ctx));
+
   api.delete('/devices/:id', (req, res) => {
     requireApprover(req);
     const id = String(req.params.id);
@@ -254,14 +257,14 @@ export function createApp(ctx: ServerContext): express.Express {
 
   // static client apps
   app.use((req, res, next) => {
-    const m = /^\/(companion|quest|sim)$/.exec(req.path);
+    const m = /^\/(companion|quest|sim|vsynth)$/.exec(req.path);
     if (m) {
       res.redirect(301, `/${m[1]}/${req.originalUrl.slice(req.path.length)}`);
       return;
     }
     next();
   });
-  for (const [name, dir] of Object.entries(ctx.config.staticDirs)) {
+  for (const [name, dir] of Object.entries({ ...ctx.config.staticDirs, vsynth: join(ctx.config.staticDirs.companion, 'vsynth') })) {
     app.use(
       `/${name}`,
       express.static(dir, {

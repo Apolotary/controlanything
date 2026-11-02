@@ -40,7 +40,7 @@ export function secs(ms: number): string {
 
 export function untilText(expiresAt: number): string {
   const s = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
-  return s ? `expires in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : 'expired';
+  return s ? `Expires in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : 'Expired';
 }
 
 /** Append a line to a monitor, keep it bounded, stick to the bottom if the user hasn't scrolled up. */

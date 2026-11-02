@@ -8,6 +8,7 @@ import type { ShellFrame } from './hud-contract';
 import { PinchTargetHistory } from './precision';
 import { GestureMap } from '@ce/protocol';
 import { makeGestureFrame, moveHand, setPosture } from '../gestures/fixtures.test-support';
+import { RoomAnchors } from '../anchors/room';
 
 function shell() {
   const app = Object.create(QuestApp.prototype) as QuestApp;
@@ -23,11 +24,12 @@ function shell() {
     appendAimables: (out: typeof liveBox[]) => out.push(liveBox), hoverTarget: vi.fn(),
   };
   const hud = { setCandidate: vi.fn(), setLocked: vi.fn(), upsertTarget: vi.fn(), removeTarget: vi.fn(),
-    setHome: vi.fn(), setDeviceState: vi.fn(), setArmed: vi.fn(), showConfirm: vi.fn(), hideHackMenu: vi.fn(), renderSpec: vi.fn(), showHackMenu: vi.fn() };
+    setHome: vi.fn(), setDeviceState: vi.fn(), setArmed: vi.fn(), showConfirm: vi.fn(), hideHackMenu: vi.fn(), renderSpec: vi.fn(), removeSpec: vi.fn(), showHackMenu: vi.fn() };
   const scanner = { active: true, stop: vi.fn(), start: vi.fn() };
   const ws = { send: vi.fn<(...args: [string, unknown, unknown?]) => string | null>(() => 'sent') };
   const modes = new ModeState();
   Object.assign(app, {
+    roomAnchors: new RoomAnchors({ save: vi.fn(), locate: vi.fn() }),
     targets, live, hud, scanner, ws, modes, lockedId: null, filter: 'electronics', params: new URLSearchParams(), cameraState: 'on',
     desktopCam: { position: new Vector3(0, 1.6, 0), quaternion: new Quaternion() }, controls: { clear: vi.fn(), push: vi.fn() },
     handFeedback: { setHover: vi.fn() }, recorder: { input: vi.fn() }, page: { log: vi.fn() },
@@ -47,6 +49,70 @@ function shell() {
   };
   return { app, target, live, hud, scanner, ws, modes, receive, connected };
 }
+
+describe('saved device placement', () => {
+  const saved = (cardId: string) => ({ cardId, displayName: 'Saved laptop', identity: { label: 'Laptop' }, hidden: false,
+    enabled: true, versions: [], createdAt: 1, updatedAt: 1, connection: 'ready',
+    placement: { headsetId: 'quest', origin: 'https://room.test', panelOffset: { x: 0, y: 0, z: 0 }, fallback: { label: 'Laptop' }, updatedAt: 1 } });
+
+  it('ignores stored XYZ and reattaches the identical interface to a fresh detection without setup', () => {
+    const { app, target, receive, hud, ws, modes } = shell();
+    app.roomAnchors.begin({}, 'quest', 'https://room.test');
+    receive('onLibraryState', { devices: [saved('saved-card')] });
+    receive('onTagsState', { tags: [{ cardId: 'saved-card', label: 'Laptop', connection: 'ready', position: { x: 100, y: 100, z: 100 } }] });
+    expect(app.targets.byCard('saved-card')).toBeUndefined();
+    const spec = { ...EXAMPLES.light, specId: 'saved-interface' };
+    receive('onUiSpec', { cardId: 'saved-card', specId: 'saved-ui', gen3d: spec });
+    expect(hud.renderSpec).not.toHaveBeenCalled();
+    receive('reassociateDetections', [target]);
+    const placed = app.targets.byCard('saved-card')!;
+    expect(placed.position).toEqual(new Vector3(0, 1.6, -1)); expect(placed.method).toBe('reassociated');
+    expect(modes.byCard('saved-card')?.connection).toBe('ready'); expect(app.roomAnchors.states.get('saved-card')).toBe('located');
+    expect(hud.renderSpec).toHaveBeenCalledWith(expect.objectContaining({ specId: 'saved-interface' }), { targetId: placed.id });
+    expect(ws.send).not.toHaveBeenCalled();
+  });
+
+  it('requires a saved-device choice and a placement pinch for ambiguous twins', () => {
+    const { app, target, receive, hud, ws, modes } = shell();
+    app.roomAnchors.begin({}, 'quest', 'https://room.test');
+    receive('onLibraryState', { devices: [saved('one'), saved('two')] });
+    receive('reassociateDetections', [target]); expect(target.cardId).toBeUndefined();
+    app.lock(target.id);
+    expect(hud.showConfirm).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'place', id: 'place:one', cancelLabel: 'Next' }));
+    app.answerConfirm('place:one', false); app.answerConfirm('place:two', true);
+    expect(app.targets.byCard('two')).toBe(target); expect(modes.byCard('two')).toBeDefined(); expect(ws.send).not.toHaveBeenCalled();
+  });
+
+  it('sends forget only after confirmation and removes the saved controls from this client', () => {
+    const { app, target, receive, hud, ws, modes } = shell();
+    receive('onLibraryState', { devices: [saved('saved-card')] });
+    receive('onTagsState', { tags: [{ cardId: 'saved-card', label: 'Laptop', connection: 'ready' }] });
+    receive('reassociateDetections', [target]);
+    app.requestForget(target.id); expect(ws.send).not.toHaveBeenCalled();
+    expect(hud.showConfirm).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'forget', primaryLabel: 'Forget' }));
+    app.answerConfirm('forget:saved-card', false); expect(ws.send).not.toHaveBeenCalled();
+    app.requestForget(target.id); app.answerConfirm('forget:saved-card', true);
+    expect(ws.send).toHaveBeenCalledExactlyOnceWith('library.forget', { cardId: 'saved-card' }, { to: 'server' });
+    expect(modes.byCard('saved-card')).toBeUndefined(); expect(app.targets.byCard('saved-card')).toBeUndefined();
+  });
+
+  it('never treats a failed anchor locating marker as a new physical placement', () => {
+    const { app, receive } = shell();
+    app.roomAnchors.begin({}, 'quest', 'https://room.test');
+    receive('onLibraryState', { devices: [saved('saved-card')] });
+    receive('onTagsState', { tags: [{ cardId: 'saved-card', label: 'Laptop', connection: 'ready' }] });
+    app.roomAnchors.states.set('saved-card', 'locating');
+    Reflect.get(app, 'locateSavedDevice').call(app, 'saved-card', null);
+    expect(app.targets.byCard('saved-card')?.locating).toBe(true);
+    app.roomAnchors.states.set('saved-card', 'unlocated');
+    const place = vi.spyOn(app.roomAnchors, 'place');
+    receive('onLibraryState', { devices: [saved('saved-card')] });
+    receive('onTagsState', { tags: [{ cardId: 'saved-card', label: 'Laptop', connection: 'ready' }] });
+    expect(place).not.toHaveBeenCalled();
+    Reflect.get(app, 'locateSavedDevice').call(app, 'saved-card', null);
+    expect(app.targets.byCard('saved-card')).toBeUndefined();
+  });
+});
 
 describe('explicit annotation and control', () => {
   it('requires Perform and a live selected connection before synthetic hand frames can send gesture controls', () => {
@@ -343,6 +409,14 @@ describe('explicit annotation and control', () => {
     for (const entry of observed.values()) entry.at -= 3500;
     receive('refreshAnnotations', true);
     expect(visible.size).toBe(0);
+  });
+
+  it('filters annotations on the raw label, not the shortened display label', () => {
+    const { app, receive } = shell();
+    Object.assign(app, { drawTarget: vi.fn(), eraseTarget: vi.fn() });
+    receive('observeTarget', { id: 'vsynth', label: 'Controlanything visua…', rawLabel: 'ControlAnything Visual Synth', score: 0.9,
+      position: [0, 1.4, -1.5], confirmed: true, status: 'scanned' });
+    expect((Reflect.get(app, 'visibleTargets') as Set<string>).has('vsynth')).toBe(true);
   });
 
   it('a HUD-consumed pinch never tags an object behind the panel', () => {

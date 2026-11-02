@@ -73,6 +73,7 @@ describe('camera oracle', () => {
     expect(obs.effect).toBe('warmer');
     expect(cameraMatches(obs, 'warmer')).toBe(true);
     expect(cameraEvidence(obs, 'warmer').metric).toBe('rb-ratio');
+    expect(cameraEvidence(obs, 'any').metric).toBe('rb-ratio');
     expect(observeCamera(warm, cool, poly).effect).toBe('cooler');
   });
 

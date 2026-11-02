@@ -183,27 +183,25 @@ export class ControlRouter {
     let fired = 0;
     const param = hack.params?.find((p) => p.id === hack.control?.param) ?? hack.params?.[0];
     const prev = param ? target.paramValues[param.id] : undefined;
-    const observed = !!from && !!this.d.onResult;
     const serial = ++this.commandSerial;
-    if (observed) this.latestCommand.set(key, serial);
-    const batch = observed ? new CommandBatch((ok, detail) => {
-      if (this.latestCommand.get(key) === serial) {
+    const runId = target.runId;
+    this.latestCommand.set(key, serial);
+    const batch = new CommandBatch((ok, detail) => {
+      if (this.latestCommand.get(key) === serial && target.runId === runId) {
         this.latestCommand.delete(key);
-        // A retry must not mistake a refused write for the device's new state.
-        if (!ok && param && !stepper) {
-          if (prev === undefined) delete target.paramValues[param.id];
-          else target.paramValues[param.id] = prev;
+        if (ok && param && !stepper) {
+          target.paramValues[param.id] = clamp(value, param.min, param.max);
+          this.d.targets.changed(target);
         }
       }
       this.report(ev, from, ok, detail, spec.specId);
-    }) : undefined;
-    if (param && !(stepper && observed)) target.paramValues[param.id] = clamp(value, param.min, param.max);
+    });
     if (stepper && param && hack.commands.length >= 2) {
-      fired += this.fireStepper(target, driver, hack, param.id, prev, value, batch?.next());
+      fired += this.fireStepper(target, driver, hack, param.id, prev, value, batch.next());
     } else {
-      for (const cmd of hack.commands) fired += this.fireCommand(target, driver, hack, cmd, value, cmd.delayMs ?? 0, batch?.next());
+      for (const cmd of hack.commands) fired += this.fireCommand(target, driver, hack, cmd, value, cmd.delayMs ?? 0, batch.next());
     }
-    batch?.seal();
+    batch.seal();
     this.lastRun.set(target.cardId, { hackId: hack.id, previousParam: param && prev !== undefined ? { paramId: param.id, value: prev } : undefined });
     if (target.state !== 'controlling') this.d.targets.setState(target, 'controlling', hack.name);
     return { ok: true, cardId: target.cardId, hackId: hack.id, fired, ms: performance.now() - t0 };
@@ -292,7 +290,10 @@ export class ControlRouter {
       const direction = plan.actionIds[i] === (a.encode as { upActionId: string }).upActionId ? 1 : -1;
       const result = batch?.next();
       const acknowledged: ExecResult | undefined = result ? (ok, detail) => {
-        if (ok && target.runId === runId) target.stepIndex[a.actionId] = (target.stepIndex[a.actionId] ?? current) + direction;
+        if (ok && target.runId === runId) {
+          target.stepIndex[a.actionId] = (target.stepIndex[a.actionId] ?? current) + direction;
+          this.d.targets.changed(target);
+        }
         result(ok, detail);
       } : undefined;
       const ok = this.d.dispatcher.fire(driver.executor.deviceId, resolveOp(t), { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: t.actionId, lightCap: driver.transport === 'ir', onResult: acknowledged, dropIfLimited: singleStep });
@@ -341,7 +342,10 @@ export class ControlRouter {
       if (!active() || target.verification[a.actionId] !== 'pass') { cancel(); return false; }
       const result = batch?.next();
       const acknowledged: ExecResult | undefined = result ? (ok, detail) => {
-        if (ok && target.runId === runId) target.paramValues[paramId] = clamp((target.paramValues[paramId] ?? from) + (presses > 0 ? step : -step), param.min, param.max);
+        if (ok && target.runId === runId) {
+          target.paramValues[paramId] = clamp((target.paramValues[paramId] ?? from) + (presses > 0 ? step : -step), param.min, param.max);
+          this.d.targets.changed(target);
+        }
         result(ok, detail);
       } : undefined;
       return this.d.dispatcher.fire(driver.executor.deviceId, op, { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: a.actionId, lightCap: driver.transport === 'ir', onResult: acknowledged });

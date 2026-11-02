@@ -242,6 +242,8 @@ export const DriverAction = z.object({
   description: z.string().max(300).optional(),
   /** "set" only: the control's value range; the server maps it onto the encode's domain */
   range: ActionRange.optional(),
+  /** Mapping from a normalized gesture to this action's range. */
+  curve: z.enum(['linear', 'exponential', 'step']).optional(),
   encode: ActionEncode,
   expect: Expectation.optional(),
   /** action that undoes this one (UNDO is never empty) */

@@ -37,6 +37,76 @@
           "items": {
             "type": "object",
             "properties": {
+              "placement": {
+                "type": "object",
+                "properties": {
+                  "headsetId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "origin": {
+                    "type": "string",
+                    "maxLength": 2048,
+                    "format": "uri"
+                  },
+                  "handle": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "panelOffset": {
+                    "type": "object",
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      },
+                      "z": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "x",
+                      "y",
+                      "z"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "fallback": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120
+                      },
+                      "appearance": {
+                        "type": "string",
+                        "maxLength": 2000
+                      }
+                    },
+                    "required": [
+                      "label"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "updatedAt": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "headsetId",
+                  "origin",
+                  "panelOffset",
+                  "fallback",
+                  "updatedAt"
+                ],
+                "additionalProperties": false
+              },
               "cardId": {
                 "type": "string",
                 "minLength": 1,

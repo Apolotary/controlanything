@@ -55,6 +55,24 @@
       309.57,
       772.6
      ]
+    ],
+    "laptop-screen": [
+     [
+      462.8,
+      755.49
+     ],
+     [
+      542.4,
+      748.95
+     ],
+     [
+      540.28,
+      698.28
+     ],
+     [
+      461.88,
+      703.39
+     ]
     ]
    },
    "devices": [
@@ -352,8 +370,8 @@
     },
     {
      "id": "laptop",
-     "kind": "computer",
-     "label": "laptop",
+     "kind": "synthesizer",
+     "label": "ControlAnything Visual Synth",
      "box": [
       0.357,
       0.7229,
@@ -588,6 +606,24 @@
      [
       498.39,
       448.2
+     ]
+    ],
+    "laptop-screen": [
+     [
+      934.4,
+      422.55
+     ],
+     [
+      1174.62,
+      418.99
+     ],
+     [
+      1213.71,
+      264.18
+     ],
+     [
+      955.56,
+      267.07
      ]
     ]
    },
@@ -826,8 +862,8 @@
     },
     {
      "id": "laptop",
-     "kind": "computer",
-     "label": "laptop",
+     "kind": "synthesizer",
+     "label": "ControlAnything Visual Synth",
      "box": [
       0.7172,
       0.2594,

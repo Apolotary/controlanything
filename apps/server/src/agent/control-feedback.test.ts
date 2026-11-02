@@ -50,13 +50,26 @@ function controls() {
   const onResult = vi.fn();
   const router = new ControlRouter({ hub: n.hub, dispatcher: n.dispatcher, targets, steps: new StepLog(n.hub), specs: { get: () => spec, list: () => [spec] }, onResult });
   const send = (widgetId: string, value: number | boolean = true, ts = 123, phase: ControlEventPayload['phase'] = 'end') => router.onControlEvent({ specId: 'spec', widgetId, value, ts, phase }, 'quest');
-  return { ...n, router, target, spec, onResult, send };
+  return { ...n, router, targets, target, spec, onResult, send };
 }
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 
 describe('dispatcher command feedback', () => {
+  it('cancels in-flight control acknowledgements for only the stopped target', () => {
+    const n = network(), stopped = vi.fn(), retained = vi.fn();
+    n.dispatcher.fire('first', midi, { cardId: 'first', onResult: stopped });
+    n.dispatcher.fire('second', midi, { cardId: 'second', onResult: retained });
+    n.dispatcher.flushQueued('first');
+    expect(stopped).toHaveBeenCalledExactlyOnceWith(false, 'Command cancelled');
+    expect(n.acknowledge(0)).toBe(false);
+    expect(retained).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1);
+    n.acknowledge(1);
+    expect(retained).toHaveBeenCalledExactlyOnceWith(true, 'Applied');
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it('waits for the executor ack and reports failure only once', async () => {
     const n = network(), result = vi.fn();
     expect(n.dispatcher.fire('mac', midi, { onResult: result })).toBe(true);
@@ -112,6 +125,26 @@ describe('dispatcher command feedback', () => {
 });
 
 describe('control event result correlation', () => {
+  it('notifies persistence for acknowledged values and partial steps, including commands without a client origin', async () => {
+    const c = controls();
+    c.target.state = 'controlling';
+    c.target.paramValues.p = 50;
+    const saved: { value?: number; step?: number }[] = [];
+    c.targets.onChange((target) => saved.push({ value: target.paramValues.p, step: target.stepIndex.level }));
+    c.router.runHack(c.target, 'level', 80);
+    expect(saved).toEqual([]);
+    expect(c.target.paramValues.p).toBe(50);
+    c.acknowledge(0);
+    expect(saved).toEqual([{ value: 50, step: 6 }]);
+    await vi.advanceTimersByTimeAsync(400);
+    c.acknowledge(1);
+    expect(saved.at(-1)).toEqual({ value: 80, step: 7 });
+    const count = saved.length;
+    c.router.runHack(c.target, 'level', 90);
+    c.acknowledge(2, false);
+    expect(saved).toHaveLength(count);
+    expect(c.target.paramValues.p).toBe(80);
+  });
   it('uses the real Hub envelope to send only to the originating device as server', () => {
     const hub = Object.create(Hub.prototype) as Hub;
     const wire: string[] = [];

@@ -24,6 +24,11 @@ describe('envelope', () => {
       makeMessage('tag.add', { label: 'Lamp' }), makeMessage('tag.remove', { cardId: 'lamp' }),
       makeMessage('tags.state', { tags: [] }), makeMessage('control.setup', { cardId: 'lamp' }),
       makeMessage('control.cancel', { cardId: 'lamp' }),
+      makeMessage('library.state', { devices: [] }),
+      makeMessage('library.forget', { cardId: 'lamp' }),
+      makeMessage('library.restore', { cardId: 'lamp', versionId: 'saved-version' }),
+      makeMessage('library.rename', { cardId: 'lamp', displayName: 'Reading lamp' }),
+      makeMessage('library.place', { cardId: 'lamp', placement: { headsetId: 'quest', origin: 'https://room.example', panelOffset: { x: 0, y: 0, z: 0 }, fallback: { label: 'Lamp' }, updatedAt: 1 } }),
     ]) {
       expect(Message.safeParse(message).success).toBe(true);
       expect(parseMessage(message).ok).toBe(true);

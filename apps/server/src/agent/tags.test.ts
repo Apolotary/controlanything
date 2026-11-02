@@ -53,7 +53,7 @@ describe('TagStore', () => {
     store.sync(t);
     const saved = new TagStore(file).get(t.cardId);
     expect(saved).toMatchObject({ label: 'Keyboard', position: { x: 1, y: 2, z: -1 }, card: t.card, driver: t.driver, verification: { cutoff: 'pass' }, specId: 'spec', uiSpec: { specId: 'spec', cardId: t.cardId, driverId: 'driver' }, armed: true });
-    expect(readFileSync(file, 'utf8')).not.toContain('abort');
+    expect(readFileSync(join(dir, 'library.json'), 'utf8')).not.toContain('abort');
     const restored = new TargetStore({ broadcast: () => 0 }).create(saved);
     expect(evaluateConnection(restored, { devices: () => [device()], macLocal: false }).connection).toBe('ready');
   });
@@ -100,6 +100,11 @@ describe('tag connection evaluation', () => {
     expect(evaluateConnection(target(), { devices: () => devices, macLocal: true })).toEqual({
       connection: 'offline', hint: 'Open ControlAnything on your Mac and plug in the synth', action: 'open-companion',
     });
+  });
+
+  it('never treats the virtual visual synth port as a path to a physical synth', () => {
+    const ports = [{ id: 'ce-visual-synth', name: 'ControlAnything Visual Synth', kind: 'midi-out' as const }];
+    expect(evaluateConnection(target(), { devices: () => [device({ ports })], macLocal: false })).toEqual({ connection: 'offline', hint: 'Plug the synth into your Mac' });
   });
 
   it('asks for the cable without a pairing action while the companion has no MIDI permission or is a standby', () => {

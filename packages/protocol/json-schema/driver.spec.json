@@ -154,6 +154,14 @@
                 ],
                 "additionalProperties": false
               },
+              "curve": {
+                "type": "string",
+                "enum": [
+                  "linear",
+                  "exponential",
+                  "step"
+                ]
+              },
               "encode": {
                 "oneOf": [
                   {

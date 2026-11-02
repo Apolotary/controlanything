@@ -17,6 +17,7 @@ import { z } from 'zod';
 import { Driver, Evidence, ExecOp, IrCapture, VerifyState } from './driver';
 import { GestureMap } from './gestures';
 import { Hack, HackSet } from './hackset';
+import { RoomPlacement } from './library';
 import {
   PairApproveRequest,
   PairDenyRequest,
@@ -929,6 +930,7 @@ export type ModeStatePayload = z.infer<typeof ModeStatePayload>;
 
 /** C->S. Tag a device in ANNOTATE mode: identify it and remember it. Never starts linking or control. */
 export const TagAddPayload = z.object({
+  cardId: Id.optional(),
   targetId: Id.optional(),
   frameId: Id.optional(),
   detId: Id.optional(),
@@ -937,7 +939,7 @@ export const TagAddPayload = z.object({
 });
 export type TagAddPayload = z.infer<typeof TagAddPayload>;
 
-/** C->S. Forget a tagged device. */
+/** C->S. Hide a tag while retaining its saved setup in the library. */
 export const TagRemovePayload = z.object({ cardId: Id });
 export type TagRemovePayload = z.infer<typeof TagRemovePayload>;
 
@@ -946,6 +948,7 @@ export const TagConnection = z.enum(['ready', 'setup', 'offline']);
 export type TagConnection = z.infer<typeof TagConnection>;
 
 export const TaggedDevice = z.object({
+  placement: RoomPlacement.optional(),
   cardId: Id,
   label: z.string().max(80),
   name: z.string().max(120).optional(),
@@ -965,7 +968,7 @@ export const TagsStatePayload = z.object({ tags: z.array(TaggedDevice).max(64) }
 export type TagsStatePayload = z.infer<typeof TagsStatePayload>;
 
 /** C->S. CONTROL mode only: set up control for a tagged device (LINK -> LEARN -> DRIVE -> VERIFY -> FORGE -> ARM). */
-export const ControlSetupPayload = z.object({ cardId: Id });
+export const ControlSetupPayload = z.object({ cardId: Id, rerun: z.boolean().optional() });
 export type ControlSetupPayload = z.infer<typeof ControlSetupPayload>;
 
 /** C->S. Stop a running control setup. */

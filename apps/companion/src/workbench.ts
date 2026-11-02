@@ -3,8 +3,8 @@
  * - pairs this browser (owner on localhost), approves other devices, shows the "add a device" QR;
  * - executes the agent's work: MIDI (Web MIDI), the Cardputer (Web Serial, paired on its behalf),
  *   the audio oracle (synth USB audio or mic);
- * - shows the work: agent steps with Meta model ids and latency, the generated driver, the evidence strip
- *   (GEN · CHECK · SEND · SEEN), IR captures, links with their proof, daemons.
+ * - shows agent steps with Meta model IDs and latency, the generated driver, physical checks,
+ *   IR captures, connections and automations.
  * Everything from the wire is rendered with textContent.
  */
 import {
@@ -33,6 +33,7 @@ import { Executor } from './executor';
 import { clearIdentity, defaultDevice, type Identity, isLocalPage, loadIdentity, saveIdentity } from './identity';
 import { MidiBridge } from './midi';
 import { describeMidi, isRealtimeNoise, toHex } from './midiDecode';
+import { VisualSynthExecutor, visualSynthPort } from './vsynthExecutor';
 import { MidiExecutor } from './midiExec';
 import { clearPendingPairing, loadPendingPairing, savePendingPairing } from './pairing';
 import { CardputerBridge } from './serial/bridge';
@@ -40,7 +41,9 @@ import { CardputerLink } from './serial/cardputer';
 import { $, ago, appendLine, button, clock, el, scheduler, secs, untilText } from './ui/dom';
 import { jsonView } from './ui/json';
 import { pulseTrain, sparkline } from './ui/spark';
-import { evidenceSentence, linkProof, opSummary } from './ui/words';
+import { agentPhaseName, companionText, evidenceSentence, linkProof, opSummary } from './ui/words';
+import { PRODUCT_NAME } from './ui/product';
+import { buildCheckSteps, type CheckProgress } from './ui/checks';
 import { createStatusPresenter, type CalmStatus } from './ui/status';
 import { companionPorts, companionView, setupActivity, type SetupActivity } from './ui/onboarding';
 import { replayArmResult, runReplay } from './replay';
@@ -83,6 +86,7 @@ let lastSpec: UiSpecPayload | undefined;
 let arm: ArmRequestPayload | undefined;
 let armNote: { text: string; ok: boolean; at: number } | undefined;
 let focusCardId: string | undefined;
+let focusPinned = false;
 let calls: CallsResponse | undefined;
 let mainTab: 'code' | 'tape' | 'spec' = 'code';
 let tabChosenByUser = false;
@@ -91,6 +95,8 @@ let qrShown = '';
 let headsetQrShown = '';
 const targets = new Map<string, TargetStatusPayload>();
 let currentSetup: SetupActivity | undefined;
+let currentView: 'home' | 'devices' | 'activity' | 'details' = 'home';
+let stopTarget: TargetStatusPayload | undefined;
 let serverDown = false;
 const presenter = createStatusPresenter();
 let activity: CalmStatus = { text: 'Idle', working: false };
@@ -106,7 +112,7 @@ const midiExec = new MidiExecutor(midi);
 const link = new CardputerLink(APP);
 const bridge = new CardputerBridge(link, APP);
 const oracle = new AudioOracle();
-const executor = new Executor(midiExec, bridge, oracle);
+const executor = new Executor(midiExec, bridge, oracle, new VisualSynthExecutor());
 
 /** /p/<id>#<code> redirects here as /companion/?approve=<id>#<code> */
 let intent = (() => {
@@ -119,7 +125,7 @@ let intent = (() => {
 
 type Level = 'debug' | 'info' | 'warn' | 'error';
 function log(level: Level, text: string): void {
-  appendLine($('log'), `${clock()} ${level.padEnd(5)} ${text}`, `lvl-${level}`);
+  appendLine($('log'), `${clock()} ${level.padEnd(5)} ${companionText(text)}`, `lvl-${level}`);
 }
 executor.log = log;
 bridge.log = log;
@@ -144,26 +150,31 @@ const renderAll = () => ['calm', 'top', 'banners', 'device', 'code', 'tape', 'sp
 
 // --- helpers --------------------------------------------------------------------------------
 
-const KIND_GLYPH: Record<string, string> = { quest: 'HMD', mac: 'MAC', iphone: 'PHN', devterm: 'TTY', cardputer: 'IR', web: 'WEB', sim: 'SIM' };
-const CHANNEL_GLYPH: Record<string, string> = { midi: 'USB', ir: 'IR', local: 'MAC', sim: 'SIM' };
+const KIND_GLYPH: Record<string, string> = { quest: '◉', mac: '▱', iphone: '▯', devterm: '⌨', cardputer: '⌁', web: '◇', sim: '▧' };
+const CHANNEL_GLYPH: Record<string, string> = { midi: '▥', ir: '⌁', local: '▱', sim: '▧' };
 
-function setFocus(cardId: string | undefined): void {
+function setFocus(cardId: string | undefined, byUser = false): void {
+  if (byUser) focusPinned = true;
+  else if (focusPinned) return;
   if (!cardId || cardId === focusCardId) return;
   focusCardId = cardId;
-  ['device', 'code', 'evidence', 'daemons'].forEach(render);
+  ['device', 'code', 'tape', 'spec', 'evidence', 'daemons'].forEach(render);
 }
 
 function focusDriver(): DriverSpecPayload | undefined {
   const all = [...drivers.values()];
-  return all.filter((d) => d.cardId === focusCardId).at(-1) ?? all.at(-1);
+  return focusCardId ? all.filter((d) => d.cardId === focusCardId).at(-1) : all.at(-1);
 }
 
 function deviceName(deviceId?: string): string | undefined {
   return devices.find((d) => d.deviceId === deviceId)?.name;
 }
 
-function hackNameFor(actionId: string): string | undefined {
-  for (const s of specs.values()) for (const h of s.hackset?.hacks ?? []) if (h.commands.some((c) => c.action === actionId)) return h.name;
+function controlNameFor(actionId: string): string | undefined {
+  for (const s of specs.values()) {
+    if (focusCardId && s.cardId !== focusCardId) continue;
+    for (const h of s.hackset?.hacks ?? []) if (h.commands.some((c) => c.action === actionId)) return h.name;
+  }
   return undefined;
 }
 
@@ -172,7 +183,7 @@ const perfAt = (epoch: number) => epoch - Date.now() + performance.now();
 
 async function renderQr(target: HTMLElement, text: string): Promise<void> {
   // qrcode returns SVG markup it generated itself from `text`; nothing untrusted is interpreted as HTML
-  target.innerHTML = await qrSvg(text, { type: 'svg', margin: 1, errorCorrectionLevel: 'M', color: { dark: '#0B0F17', light: '#F8FAFC' } });
+  target.innerHTML = await qrSvg(text, { type: 'svg', margin: 1, errorCorrectionLevel: 'M', color: { dark: '#1E1E1E', light: '#FFFFFF' } });
 }
 
 function chip(text: string, cls = ''): HTMLElement {
@@ -182,26 +193,45 @@ function chip(text: string, cls = ''): HTMLElement {
 // --- calm surface ---------------------------------------------------------------------------
 
 function openDialog(id: string): void {
+  if (id === 'drawer') { showView('details'); return; }
   const dialog = $<HTMLDialogElement>(id);
   clearTimeout(dialogTimers.get(dialog));
   dialogTimers.delete(dialog);
   dialog.classList.remove('closing');
   if (!dialog.open) dialog.showModal();
-  if (id === 'drawer') $('details-open').setAttribute('aria-expanded', 'true');
 }
 
 function closeDialog(id: string): void {
+  if (id === 'drawer') { showView('home'); return; }
   const dialog = $<HTMLDialogElement>(id);
   if (!dialog.open || dialogTimers.has(dialog)) return;
   const finish = () => {
     dialog.close();
     dialog.classList.remove('closing');
     dialogTimers.delete(dialog);
-    if (id === 'drawer') $('details-open').setAttribute('aria-expanded', 'false');
   };
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) { finish(); return; }
   dialog.classList.add('closing');
   dialogTimers.set(dialog, setTimeout(finish, 180));
+}
+
+function showView(view: typeof currentView, focus = true): void {
+  currentView = view;
+  $('workbench').dataset.view = view;
+  $('home-view').hidden = view === 'details' || view === 'activity';
+  $('drawer').hidden = view !== 'details';
+  $('activity-view').hidden = view !== 'activity';
+  for (const [id, target] of [['nav-home', 'home'], ['nav-devices', 'devices'], ['nav-activity', 'activity'], ['details-open', 'details']]) {
+    $(id).setAttribute('aria-current', view === target ? 'page' : 'false');
+    $(id).classList.toggle('active', view === target);
+  }
+  $('details-open').setAttribute('aria-expanded', String(view === 'details'));
+  if (focus) {
+    const heading = $(view === 'details' ? 'details-title' : view === 'activity' ? 'activity-title' : 'home-title');
+    heading.tabIndex = -1;
+    heading.focus();
+  }
+  render('calm');
 }
 
 function renderStatus(text: string): void {
@@ -252,6 +282,19 @@ function renderCalm(): void {
         : activity;
   $('status-dot').className = `dot on${status.working ? ' working' : ''}`;
   renderStatus(status.text);
+  const relevant = (target: TargetStatusPayload) => !target.executorDeviceId || target.executorDeviceId === identity?.deviceId || linkResults.get(target.cardId)?.channel === 'local';
+  const latestTarget = [...targets.values()].reverse().find(relevant);
+  const activeStates: Record<string, string> = { identifying: 'Identifying', linking: 'Connecting to', researching: 'Reading instructions for', driving: 'Writing controls for', verifying: 'Checking', forging: 'Making controls for' };
+  stopTarget = !serverDown && conn?.open ? [...targets.values()].reverse().find((target) => relevant(target) && target.state in activeStates) : undefined;
+  const working = Boolean(stopTarget || status.working && (!targets.size || learning));
+  $('setup-activity').hidden = currentView === 'devices' || $('workbench').classList.contains('pairing') || Boolean(targets.size && !latestTarget);
+  $('setup-activity-text').textContent = stopTarget
+    ? currentSetup?.cardId === stopTarget.cardId ? currentSetup.text : companionText(stopTarget.sentence ?? `${activeStates[stopTarget.state]} ${cards.get(stopTarget.cardId)?.name ?? 'your device'}…`)
+    : status.text;
+  $('setup-activity').classList.toggle('working', working);
+  $('setup-progress').hidden = !working;
+  $('setup-stop').hidden = !working || !(stopTarget || learning) || !conn?.open;
+  $<HTMLButtonElement>('setup-stop').disabled = replaying;
   $('device-dots').replaceChildren(...devices.map((d) => {
     const row = el('li', { className: `device-dot-item${d.online ? ' online' : ''}`, title: `${d.name} · ${d.online ? 'online' : 'offline'}` }, el('span', { className: `dot${d.online ? ' on' : ''}` }), el('span', { text: d.name }));
     row.setAttribute('aria-label', `${d.name}, ${d.online ? 'online' : 'offline'}`);
@@ -291,8 +334,10 @@ function renderOnboarding(): void {
   });
   const pairOnly = pairNow && !identity;
   const paired = Boolean(identity && !selfPairing && (pairedWithQuest || devices.some((d) => d.kind === 'quest')));
-  $('app-header').hidden = pairOnly;
   $('workbench').classList.toggle('pair-only', pairOnly);
+  const pairing = !paired && !replaying && ['pairing', 'connecting', 'headset'].includes(view.stage);
+  $('app-header').hidden = pairing;
+  $('workbench').classList.toggle('pairing', pairing);
   $('onboarding').classList.toggle('has-paired', paired);
   $('paired-summary').hidden = !paired;
   $('onboarding').dataset.state = view.stage;
@@ -302,6 +347,13 @@ function renderOnboarding(): void {
   $('headset-status').classList.toggle('connected', devices.some((d) => d.kind === 'quest' && d.online));
   $('synth-status').textContent = view.synth;
   $('synth-status').classList.toggle('connected', ports.length > 0);
+  $('home-title').textContent = currentView === 'activity' ? 'Activity' : currentView === 'details' ? 'Device details' : view.headset;
+  const quest = devices.find((d) => d.kind === 'quest' && d.online);
+  $('home-chips').replaceChildren(
+    ...(ports.length ? [chip('USB MIDI ready')] : []),
+    ...(quest?.capabilities.includes('mic') ? [chip('Headset mic active')] : []),
+  );
+  $('devices-panel').hidden = pairing;
   $('connection-steps').hidden = view.stage === 'pairing' || view.stage === 'connecting';
   $('pairscreen').hidden = view.stage !== 'pairing';
   $('headset-open').hidden = view.stage !== 'headset';
@@ -315,11 +367,73 @@ function renderOnboarding(): void {
   $('approve-panel').hidden = !canApprove || view.stage !== 'headset';
   $('enable-midi').hidden = !view.enableMidi;
   $<HTMLButtonElement>('enable-midi').disabled = replaying || bridgeBusy.has('midi');
-  const showActivity = Boolean(currentSetup && ports.length && conn?.open);
-  $('setup-activity').hidden = !showActivity;
-  $('setup-activity-text').textContent = currentSetup?.text ?? '';
-  $('setup-stop').hidden = !showActivity || !currentSetup?.canStop;
-  $<HTMLButtonElement>('setup-stop').disabled = replaying;
+  renderHomeDevices(ports);
+}
+
+function renderHomeDevices(ports: Port[]): void {
+  const rows: HTMLElement[] = [];
+  const usedPorts = new Set<string>();
+  const addRow = (icon: string, name: string, transport: string, state: string, subtitle: string, tone: string, action?: HTMLButtonElement) => {
+    const dot = el('span', { className: `dot ${tone}` });
+    dot.setAttribute('aria-hidden', 'true');
+    const glyph = el('span', { className: 'device-icon' }, deviceIcon(icon));
+    glyph.setAttribute('aria-hidden', 'true');
+    rows.push(el('div', { className: 'device-row' }, glyph,
+      el('div', { className: 'device-info' }, el('div', { className: 'device-name', text: `${name} · ${transport} · ${state}` }), el('p', { className: 'device-subtitle', text: subtitle })),
+      el('span', { className: `status-word ${tone}` }, dot, state), action));
+  };
+  for (const card of cards.values()) {
+    const connection = linkResults.get(card.cardId);
+    const target = targets.get(card.cardId);
+    const driver = [...drivers.values()].filter((d) => d.cardId === card.cardId).at(-1);
+    const transport = connection?.channel ?? driver?.transport ?? card.protocols[0];
+    const port = ports.find((p) => p.id === connection?.port?.id || p.id === driver?.executor.port || p.name === connection?.port?.name);
+    if (port) usedPorts.add(port.id);
+    const connected = connection?.verdict === 'confirmed' || connection?.verdict === 'consistent' || Boolean(port);
+    const ready = target?.state === 'armed' || target?.state === 'controlling';
+    const failed = target?.state === 'failed' || connection?.verdict === 'mismatch';
+    const offline = target?.detail === 'offline' || transport === 'midi' && midi.enabled && !port;
+    const state = failed ? 'Needs attention' : offline ? 'Not connected' : ready ? 'Ready' : 'Needs setup';
+    const spec = specs.get(card.cardId);
+    const count = spec?.hackset?.hacks.length ?? spec?.gen3d?.controls.length;
+    const subtitle = companionText(target?.sentence ?? (count ? `${count} controls ready${ready ? ' · Enabled in your headset' : ' · Waiting for headset confirmation'}` : [card.maker, card.model, connected ? 'Connected to this Mac' : 'Select the device in your headset to set up controls'].filter(Boolean).join(' · ')));
+    addRow(transport === 'midi' ? '▥' : transport === 'local' ? '▱' : '⌁', card.name, transport === 'midi' ? 'USB MIDI' : transport === 'local' ? 'This Mac' : transport === 'ir' ? 'Infrared' : 'Device', state, subtitle, failed ? 'danger' : offline ? '' : ready ? 'on' : 'warn', button('Details', () => { setFocus(card.cardId, true); showView('details'); }));
+  }
+  for (const port of ports) {
+    if (usedPorts.has(port.id)) continue;
+    if (/visual[\s-]synth/i.test(port.name) || port.id === 'ce-visual-synth') {
+      addRow('▱', 'Visual synth', 'Virtual', 'Ready', 'Silent visuals on this Mac · open them, then select the screen in your headset.', 'on',
+        button('Open visuals', () => { window.open('/vsynth/', '_blank', 'noopener'); }));
+      continue;
+    }
+    addRow('▥', port.name, 'USB MIDI', 'Ready', 'USB connected · Select the synth in your headset to set up controls.', 'on', button('Details', () => showView('details')));
+  }
+  if (!ports.length && ![...cards.values()].some((c) => c.protocols.includes('midi'))) {
+    addRow('▥', 'USB MIDI', 'This Mac', midi.enabled ? 'Not connected' : 'Off', midi.enabled ? 'Plug in your synth with a USB cable.' : MidiBridge.supported ? 'Allow access to connect your synth over USB.' : 'Open this page in Chrome or Edge to connect USB devices.', '');
+  }
+  const serialAction = button(link.hasPort ? 'Details' : 'Connect', () => {
+    if (link.hasPort) showView('details');
+    else $<HTMLButtonElement>('bridge-serial').click();
+  });
+  serialAction.disabled = replaying || !executor.leader || !CardputerLink.supported || bridgeBusy.has('serial');
+  addRow('⌁', 'Cardputer', 'Serial', bridge.online ? 'Ready' : link.ready ? 'Needs setup' : 'Not connected', link.lastError ?? 'Plug in via USB-C to send and capture infrared remote controls.', bridge.online ? 'on' : link.ready ? 'warn' : '', serialAction);
+  for (const device of devices) {
+    if (device.deviceId === identity?.deviceId || device.kind === 'quest' || device.kind === 'cardputer') continue;
+    addRow('▱', device.name, device.kind === 'mac' ? 'Mac' : 'Network', device.online ? 'Connected' : 'Not connected', device.online ? 'Paired with your room' : 'Open the device app to reconnect.', device.online ? 'on' : '', button('Details', () => showView('details')));
+  }
+  $('home-devices').replaceChildren(...rows);
+}
+
+function deviceIcon(kind: string): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 20 20');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', kind === '▥' ? 'M2 4h16v12H2ZM6 5v7m4-7v7m4-7v7'
+    : kind === '⌁' ? 'M3 7a10 10 0 0 1 14 0M6 10a6 6 0 0 1 8 0m-5 3h2m-1 3h.01'
+      : 'M3 3h14v11H3ZM1 17h18');
+  svg.append(path);
+  return svg;
 }
 
 function removePending(pairingId: string): void {
@@ -353,10 +467,9 @@ function renderPairSheet(): void {
 }
 
 function setupCalm(): void {
+  for (const view of ['home', 'devices', 'activity'] as const) $('nav-' + view).addEventListener('click', () => showView(view));
   $('details-open').addEventListener('click', () => openDialog('drawer'));
   $('details-close').addEventListener('click', () => closeDialog('drawer'));
-  $('drawer').addEventListener('cancel', (e) => { e.preventDefault(); closeDialog('drawer'); });
-  $('drawer').addEventListener('click', (e) => { if (e.target === $('drawer')) closeDialog('drawer'); });
   $('pair-sheet').addEventListener('cancel', (e) => e.preventDefault());
   const bind = (id: string, action: () => void | Promise<void>) => {
     $(`bridge-${id}`).addEventListener('click', async () => {
@@ -383,15 +496,17 @@ function setupCalm(): void {
     finally { bridgeBusy.delete('midi'); render('calm'); }
   });
   $('setup-stop').addEventListener('click', () => {
-    if (replaying || !currentSetup?.canStop) return;
-    if (conn?.send('control.cancel', { cardId: currentSetup.cardId, ...(currentSetup.runId ? { runId: currentSetup.runId } : {}) }, { to: 'server' })) {
-      currentSetup = { ...currentSetup, text: 'Stopping setup and controls…', working: false, canStop: false };
-      $('setup-activity-text').textContent = currentSetup.text;
+    if (replaying) return;
+    if (bridge.learning && bridge.learning.until > Date.now()) { bridge.stopLearning(); return; }
+    if (!stopTarget) return;
+    if (conn?.send('control.cancel', { cardId: stopTarget.cardId, ...(stopTarget.runId ? { runId: stopTarget.runId } : {}) }, { to: 'server' })) {
+      $('setup-activity-text').textContent = 'Stopping setup and controls…';
       $<HTMLButtonElement>('setup-stop').disabled = true;
     }
   });
   bind('serial', () => link.hasPort ? link.close() : connectCardputer());
   bind('mic', () => oracle.state === 'on' ? oracle.stop() : startOracle());
+  showView('home', false);
 }
 
 // --- top bar and banners --------------------------------------------------------------------
@@ -404,19 +519,22 @@ function renderTop(): void {
     pill.className = 'pill';
   } else if (!executor.leader && health && !serverDown) {
     // one pill, one state: a second tab says so here instead of in a banner
-    $('pill-text').textContent = 'STANDBY · another tab runs the devices';
+    $('pill-text').textContent = 'Standby · another tab runs the devices';
     pill.className = 'pill standby';
   } else {
-    $('pill-text').textContent = serverDown ? 'server unreachable' : !health ? 'connecting' : live ? 'LIVE · ' : 'FIXTURE · recorded answers';
-    if (live && health) $('pill-text').append(el('span', { className: 'mono', text: health.models.chat }));
+    $('pill-text').textContent = serverDown ? 'Server unreachable' : !health ? 'Connecting' : live ? 'Live' : 'Recorded answers';
+
     pill.className = `pill ${health && !live ? 'fixture' : ''}`;
   }
+  const model = [...steps.values()].filter((step) => step.model).at(-1)?.model ?? health?.models.chat;
+  $('model-in-use').textContent = model ?? (replaying ? 'Demo' : 'Waiting for model');
+  $('model-in-use').title = `Model in use: ${model ?? 'waiting for connection'}`;
   $('conn-dot').className = `dot ${conn?.open ? 'on' : ''}`;
   $('conn-dot').title = conn?.open ? 'connected to the server' : 'offline';
   const space = welcome?.spaceId ?? health?.space?.spaceId;
-  $('session').textContent = space ? `space ${space.slice(-6).toUpperCase()}${welcome ? ` · ${welcome.name}` : ''}` : 'space —';
+  $('session').textContent = space ? `Space ${space.slice(-6).toUpperCase()}${welcome ? ` · ${welcome.name}` : ''}` : 'Space —';
   const role = $('exec-role');
-  role.textContent = replaying ? 'replay' : executor.leader ? 'executor' : 'standby';
+  role.textContent = replaying ? 'Display only' : executor.leader ? 'Runs local bridges' : 'standby';
   role.className = `chip ${executor.leader ? '' : 'muted'}`;
   role.title = replaying ? 'A local demonstration. No device commands or server connection.' : executor.leader ? 'This tab runs MIDI, the Cardputer and the audio oracle.' : 'Another companion tab is the executor; this one only watches.';
 }
@@ -432,17 +550,17 @@ function renderBanners(): void {
     const row = el(
       'div',
       { className: 'banner' },
-      el('span', { className: 'title', text: `Arm · ${a.title}` }),
-      el('span', { className: 'grow small', text: a.summary }),
+      el('span', { className: 'title', text: `Enable · ${a.title}` }),
+      el('span', { className: 'grow small', text: companionText(a.summary) }),
       el('span', { className: 'tiny dim mono', text: untilText(a.expiresAt), data: { expires: String(a.expiresAt) } }),
       actions,
     );
-    if (a.irreversible) row.append(holdButton('Hold to arm', () => confirmArm(a, true, true)));
-    else row.append(button('Arm', () => confirmArm(a, true, false), 'primary'));
+    if (a.irreversible) row.append(holdButton('Hold to enable', () => confirmArm(a, true, true)));
+    else row.append(button('Enable', () => confirmArm(a, true, false), 'primary'));
     row.append(button('Cancel', () => confirmArm(a, false, false)));
     box.append(row);
   } else if (armNote && Date.now() - armNote.at < 8000) {
-    box.append(el('div', { className: 'banner info' }, el('span', { className: `title ${armNote.ok ? 'ok-text' : ''}`, text: armNote.ok ? 'Armed' : 'Not armed' }), el('span', { className: 'small', text: armNote.text })));
+    box.append(el('div', { className: 'banner info' }, el('span', { className: `title ${armNote.ok ? 'ok-text' : ''}`, text: armNote.ok ? 'Enabled' : 'Not enabled' }), el('span', { className: 'small', text: companionText(armNote.text) })));
   }
 
   for (const r of linkRequests.values()) {
@@ -452,12 +570,12 @@ function renderBanners(): void {
     const row = el(
       'div',
       { className: 'banner link' },
-      el('span', { className: 'title', text: `Link · ${card?.name ?? 'device'}` }),
+      el('span', { className: 'title', text: `Connect · ${card?.name ?? 'device'}` }),
       el('span', { className: 'grow small', text: r.reason }),
       el('span', { className: 'row' }, ...r.needs.map((n) => chip(`needs ${n}`, 'accent')), ...r.suggestedClients.map((k) => chip(k, 'muted'))),
     );
-    if (r.needs.includes('ir') && !link.ready && CardputerLink.supported && executor.leader) row.append(button('Connect Cardputer', () => void connectCardputer(), 'primary'));
-    if (r.needs.includes('midi') && !midi.enabled && MidiBridge.supported && executor.leader) row.append(button('Enable MIDI', () => void enableMidi(), 'primary'));
+    if (r.needs.includes('ir') && !link.ready && CardputerLink.supported && executor.leader) row.append(button('Connect', () => void connectCardputer(), 'primary'));
+    if (r.needs.includes('midi') && !midi.enabled && MidiBridge.supported && executor.leader) row.append(button('Allow USB MIDI', () => void enableMidi(), 'primary'));
     if (r.needs.includes('mic') && oracle.state !== 'on' && executor.leader) row.append(button('Listen', () => void startOracle(), 'primary'));
     box.append(row);
   }
@@ -499,10 +617,10 @@ function confirmArm(a: ArmRequestPayload, approve: boolean, hold: boolean): void
     return;
   }
   if (!conn?.send('arm.confirm', { armId: a.armId, approve, ...(hold ? { hold } : {}) }, { to: 'server' })) {
-    log('error', 'not connected: could not answer the arm request');
+    log('error', 'Not connected: could not answer the approval request');
     return;
   }
-  log('info', `${approve ? 'armed' : 'cancelled'} ${a.title}`);
+  log('info', `${approve ? 'enabled' : 'cancelled'} ${a.title}`);
   arm = undefined;
   render('banners');
 }
@@ -515,19 +633,19 @@ function renderDevice(): void {
   const card = focusCardId ? cards.get(focusCardId) : undefined;
   const drv = focusDriver();
   const lr = focusCardId ? linkResults.get(focusCardId) : undefined;
-  const hs = lastSpec?.cardId === focusCardId ? lastSpec?.hackset : undefined;
+  const hs = focusCardId ? specs.get(focusCardId)?.hackset : lastSpec?.hackset;
   const name = card?.name ?? drv?.name ?? hs?.device.name;
   if (!name) {
     const outs = midi.outputs();
     box.append(
       el('div', { className: 'name', text: 'No target yet' }),
-      el('span', { className: 'chip muted', text: 'scan from the headset' }),
+      el('span', { className: 'chip muted', text: 'Scan from your headset' }),
       el(
         'div',
         { className: 'facts' },
-        el('span', { text: outs.length ? `USB MIDI: ${outs.map((o) => o.name ?? o.id).join(', ')}` : midi.enabled ? 'waiting for USB… plug in a synth' : 'MIDI off' }),
+        el('span', { text: outs.length ? `USB MIDI: ${outs.map((o) => o.name ?? o.id).join(', ')}` : midi.enabled ? 'waiting for USB… plug in a synth' : 'USB MIDI · Off' }),
         el('span', { text: link.ready ? `Cardputer: ${link.info?.board ?? 'ready'}` : 'Cardputer: not connected' }),
-        el('span', { text: oracle.state === 'on' ? `listening: ${oracle.input?.label ?? 'input'}` : 'oracle: off' }),
+        el('span', { text: oracle.state === 'on' ? `listening: ${oracle.input?.label ?? 'input'}` : 'Microphone · Off' }),
       ),
     );
     return;
@@ -541,27 +659,27 @@ function renderDevice(): void {
   fact('maker', card?.maker);
   fact('model', card?.model || undefined);
   fact('kind', card?.category ?? hs?.device.kind);
-  fact('channel', channel ? channel.toUpperCase() : undefined);
+  fact('channel', channel === 'local' ? 'Local' : channel?.toUpperCase());
   fact('port', port ? `"${port}"` : undefined);
   fact('via', deviceName(lr?.executorDeviceId ?? drv?.executor.deviceId));
   // opinion (the camera's reading) and proof (what the wire says): never a numeric model confidence
   const chips = el('span', { className: 'row' });
-  if (card) chips.append(chip(`camera says ${card.name}`, 'opinion'));
+  if (card) chips.append(chip('Seen by camera', 'opinion'));
   chips.append(proofChip(lr));
   box.append(el('div', { className: 'name', text: name }), chips, facts);
 }
 
 /** The wire's verdict as words: "USB says OP-1 ✓", "wrong device · refused", or still a hypothesis. */
 function proofChip(lr: LinkResultPayload | undefined): HTMLElement {
-  if (!lr || lr.verdict === 'none' || lr.verdict === 'unknown') return chip('link: hypothesis', 'muted');
-  if (lr.verdict === 'mismatch') return chip('wrong device · refused', 'fail');
+  if (!lr || lr.verdict === 'none' || lr.verdict === 'unknown') return chip('Not connected', 'muted');
+  if (lr.verdict === 'mismatch') return chip('Wrong device · Not connected', 'fail');
   const ok = lr.evidence.filter((e) => e.ok);
   const id = ok.find((e) => e.kind === 'midi-identity' && !/no reply/i.test(e.detail));
   if (id) return chip(`MIDI identity says ${cards.get(lr.cardId)?.name ?? 'match'} ✓`, 'ok');
   if (ok.some((e) => e.kind === 'port-name') && lr.port) return chip(`USB says ${lr.port.name} ✓`, 'ok');
   if (ok.some((e) => e.kind === 'ir-reply')) return chip('IR seen ✓', 'ok');
   if (ok.some((e) => e.kind === 'sim')) return chip('sim linked ✓', 'ok');
-  return chip(`${(lr.channel ?? 'link').toUpperCase()} linked ✓`, 'ok');
+  return chip(`${lr.channel === 'local' ? 'Local' : lr.channel === 'midi' ? 'USB MIDI' : 'Device'} connected ✓`, 'ok');
 }
 
 
@@ -577,7 +695,7 @@ function setTab(t: typeof mainTab, byUser = false): void {
 }
 
 function runningGen(): (AgentStepPayload & { seenAt: number }) | undefined {
-  return [...steps.values()].filter((s) => ['drive', 'codegen', 'forge'].includes(s.phase)).at(-1);
+  return [...steps.values()].filter((s) => (!focusCardId || s.cardId === focusCardId) && ['drive', 'codegen', 'forge'].includes(s.phase)).at(-1);
 }
 
 function renderCode(): void {
@@ -589,26 +707,27 @@ function renderCode(): void {
   if (gen?.model) {
     const running = gen.status === 'running' || gen.status === 'pending';
     const since = gen.startedAt ?? gen.seenAt;
-    const c = chip(`${running ? 'GEN · ' : ''}${gen.model}${gen.effort ? ` · ${gen.effort}` : ''} · ${running ? secs(Date.now() - since) : secs(gen.latencyMs ?? (gen.endedAt && gen.startedAt ? gen.endedAt - gen.startedAt : 0))}`, 'model');
+    const c = chip(`${running ? 'Writing · ' : ''}${gen.model}${gen.effort ? ` · ${gen.effort}` : ''} · ${running ? secs(Date.now() - since) : secs(gen.latencyMs ?? (gen.endedAt && gen.startedAt ? gen.endedAt - gen.startedAt : 0))}`, 'model');
     if (running) c.dataset.since = String(since);
-    if (running) c.dataset.prefix = `GEN · ${gen.model}${gen.effort ? ` · ${gen.effort}` : ''} · `;
+    if (running) c.dataset.prefix = `Writing · ${gen.model}${gen.effort ? ` · ${gen.effort}` : ''} · `;
     genChip.append(c);
   } else if (drv?.modelId) genChip.append(chip(drv.modelId, 'model'));
   $('filetab').textContent = drv ? `driver · ${drv.cardId}.json${drv.version ? ` · v${drv.version}` : ''}` : '';
   box.replaceChildren();
   if (!drv) {
     const waiting = gen && (gen.status === 'running' || gen.status === 'pending');
-    box.append(jsonView(undefined, waiting ? `waiting for ${gen.model ?? 'the model'} to write the driver…` : 'No driver yet. SCAN a device from the headset (or run the sim room):\nthe agent identifies it, links a channel, writes a declarative driver, and proves each action.'));
+    box.append(jsonView(undefined, waiting ? `waiting for ${gen.model ?? 'the model'} to write the driver…` : 'No driver yet. Select a device in your headset to make controls.\nThe agent checks each action before enabling it.'));
     return;
   }
   const prov = drv.provenance.map((p) => `${p.source}: ${p.ref}`).join('\n');
-  box.append(jsonView(drv, `driver.spec · ${drv.transport.toUpperCase()} · written by ${drv.modelId ?? 'the agent'}${drv.source === 'fixture' ? ' (FIXTURE replay)' : ''}${prov ? `\n${prov}` : ''}`));
+  box.append(jsonView(drv, `driver.spec · ${drv.transport.toUpperCase()} · written by ${drv.modelId ?? 'the agent'}${drv.source === 'fixture' ? ' (recorded example)' : ''}${prov ? `\n${prov}` : ''}`));
 }
 
 function renderTape(): void {
   const box = $('tape');
   box.replaceChildren();
-  const rows = executor.tape.slice(-120);
+  const driver = focusDriver();
+  const rows = executor.tape.filter((row) => !focusCardId || row.cardId === focusCardId || Boolean(driver && row.driverId === driver.driverId)).slice(-120);
   if (!rows.length) {
     box.append(el('div', { className: 'empty', text: 'Nothing sent yet. Every command this Mac sends to a device appears here with its ack and verdict.' }));
     return;
@@ -616,8 +735,8 @@ function renderTape(): void {
   for (const r of rows) {
     const status = r.ack ? (r.ack.ok ? `sent · ${r.ack.latencyMs ?? 0} ms` : `${r.ack.error ?? 'failed'}`) : 'sending';
     const right = el('span', { className: 'row' }, el('span', { className: r.ack && !r.ack.ok ? 'fail-text' : 'dim', text: status }));
-    if (r.verdict) right.append(chip(r.verdict.text, r.verdict.pass ? 'ok' : 'fail'));
-    box.append(el('div', { className: 'r', title: r.ack?.detail ?? '' }, el('span', { className: 'dim', text: clock(r.at) }), el('span', { text: r.what }), el('span', { className: 'dim target', text: r.target }), right));
+    if (r.verdict) right.append(chip(companionText(r.verdict.text), r.verdict.pass ? 'ok' : 'fail'));
+    box.append(el('div', { className: 'r', title: r.ack?.detail ?? '' }, el('span', { className: 'dim', text: clock(r.at) }), el('span', { text: companionText(r.what) }), el('span', { className: 'dim target', text: r.target }), right));
   }
   box.scrollTop = box.scrollHeight;
 }
@@ -625,41 +744,54 @@ function renderTape(): void {
 function renderSpec(): void {
   const box = $('spec');
   box.replaceChildren();
-  if (!lastSpec) {
-    box.append(jsonView(undefined, 'No hack set yet. After verification the agent forges hacks (ce.hackset/1) and 3D controls (ce.gen3d/1).'));
+  const selectedSpec = focusCardId ? specs.get(focusCardId) : lastSpec;
+  if (!selectedSpec) {
+    box.append(jsonView(undefined, 'No controls yet. Checked controls and their interface specification appear here.'));
     return;
   }
-  const { gen3d, ...rest } = lastSpec;
-  box.append(jsonView({ ...rest, gen3d: gen3d ? { spec: gen3d.spec, title: gen3d.title, controls: gen3d.controls.map((c) => c.id), parts: gen3d.parts.length, modelId: gen3d.modelId } : undefined }, `ui.spec rev ${lastSpec.rev ?? 1} · ${lastSpec.modelId ?? ''}${lastSpec.check ? ` · checks ${lastSpec.check.ok ? 'passed' : 'failed'} after ${lastSpec.check.attempts} attempt(s)` : ''}`));
+  const { gen3d, ...rest } = selectedSpec;
+  box.append(jsonView({ ...rest, gen3d: gen3d ? { spec: gen3d.spec, title: gen3d.title, controls: gen3d.controls.map((c) => c.id), parts: gen3d.parts.length, modelId: gen3d.modelId } : undefined }, `ui.spec rev ${selectedSpec.rev ?? 1} · ${selectedSpec.modelId ?? ''}${selectedSpec.check ? ` · checks ${selectedSpec.check.ok ? 'passed' : 'failed'} after ${selectedSpec.check.attempts} attempt(s)` : ''}`));
 }
 
 // --- agent log and model calls --------------------------------------------------------------
 
 function renderAgent(): void {
   const box = $('worklog');
-  box.replaceChildren();
   const list = [...steps.values()].sort((a, b) => (a.startedAt ?? a.seenAt) - (b.startedAt ?? b.seenAt)).slice(-80);
   if (!list.length) {
-    box.append(el('div', { className: 'empty', text: 'The agent’s steps appear here with the Meta model that did each one (muse-spark-1.3, muse-wonder-1.0, sam-3.1…) and how long it took.' }));
+    box.replaceChildren(el('p', { className: 'empty', text: 'Agent steps, models, and timings will appear here.' }));
     return;
   }
+  const table = el('table', { className: 'agent-table' });
+  table.setAttribute('aria-label', 'Agent steps and model latency');
+  const headings = ['Time', 'Step', 'Message', 'Model'].map((text) => {
+    const heading = el('th', { text });
+    heading.setAttribute('scope', 'col');
+    return heading;
+  });
+  const body = el('tbody');
+  table.append(el('thead', {}, el('tr', {}, ...headings)), body);
   for (const s of list) {
     const running = s.status === 'running' || s.status === 'pending';
     const since = s.startedAt ?? s.seenAt;
-    const lat = s.latencyMs ?? (s.endedAt && s.startedAt ? s.endedAt - s.startedAt : undefined);
-    const right = el('span', { className: 'row' });
-    if (s.source === 'fixture') right.append(chip(s.recordedFrom ? `FIXTURE · ${s.recordedFrom}` : 'FIXTURE', 'muted'));
-    if (s.model) right.append(chip(`${s.model}${s.effort ? ` · ${s.effort}` : ''}`, 'model'));
-    const t = el('span', { className: running ? 'status-running' : s.status === 'fail' ? 'status-fail' : 'dim', text: running ? secs(Date.now() - since) : s.status === 'fail' ? 'failed' : lat !== undefined ? secs(lat) : 'ok' });
-    if (running) t.dataset.since = String(since);
-    right.append(t);
-    const title = el('div', {}, el('div', { className: 'title', text: s.title }));
-    const sub = [s.evidence, s.kind, s.detail].filter(Boolean).join(' · ');
-    if (sub) title.append(el('div', { className: 'detail', text: sub.slice(0, 300) }));
-    box.append(el('div', { className: 'r' }, el('span', { className: 'dim', text: clock(s.startedAt ?? s.seenAt) }), el('span', { className: 'phase', text: s.phase }), title, right));
+    const latency = s.latencyMs ?? (s.endedAt && s.startedAt ? s.endedAt - s.startedAt : undefined);
+    const prefix = [s.model, s.effort].filter(Boolean).join(' · ');
+    const duration = running ? secs(Date.now() - since) : latency !== undefined ? secs(latency) : '';
+    const model = chip([prefix, duration].filter(Boolean).join(' · ') || 'Local check', s.model ? 'model' : 'muted');
+    if (running) {
+      model.dataset.since = String(since);
+      model.dataset.prefix = prefix ? `${prefix} · ` : '';
+    }
+    const message = el('td', {}, el('div', { className: 'title', text: companionText(s.title) }));
+    const detail = [s.evidence, s.detail].filter(Boolean).join(' · ');
+    if (detail) message.append(el('div', { className: 'detail', text: companionText(detail.slice(0, 300)) }));
+    if (s.source === 'fixture') message.append(chip('Recorded example', 'muted'));
+    body.append(el('tr', {},
+      el('td', { className: 'mono dim', text: clock(s.startedAt ?? s.seenAt) }),
+      el('td', { className: `phase status-${s.status}`, text: agentPhaseName(s.phase) }),
+      message, el('td', {}, model)));
   }
-  const body = box.parentElement!;
-  body.scrollTop = body.scrollHeight;
+  box.replaceChildren(table);
 }
 
 function renderCalls(): void {
@@ -693,83 +825,85 @@ async function pollCalls(): Promise<void> {
 
 // --- evidence -------------------------------------------------------------------------------
 
-function segs(gen: boolean, check: boolean, send: boolean, seen: 'yes' | 'no' | 'none', word = 'SEEN'): HTMLElement {
-  return el(
-    'div',
-    { className: 'segs' },
-    el('span', { className: `seg ${gen ? 'lit' : ''}`, text: 'GEN' }),
-    el('span', { className: `seg ${check ? 'lit' : ''}`, text: 'CHECK' }),
-    el('span', { className: `seg ${send ? 'lit' : ''}`, text: 'SEND' }),
-    el('span', { className: `seg ${seen === 'yes' ? 'seen' : seen === 'no' ? 'miss' : ''}`, text: seen === 'no' ? `${word} ✗` : word }),
-  );
+function checkPills(progress: CheckProgress): HTMLElement {
+  return el('div', { className: 'step-pills' }, ...buildCheckSteps(progress).map(({ label, state }) => {
+    const pill = el('span', { className: `step-pill ${state}`, text: label });
+    pill.setAttribute('aria-label', `${label}: ${state}`);
+    pill.title = `${label}: ${state}`;
+    return pill;
+  }));
 }
 
 function evidenceSpark(e: VerifyResultPayload): SVGSVGElement | undefined {
   if (e.observed.sense === 'audio' && oracle.levels.length) {
     const t0 = perfAt(e.sent.at);
     const vals = oracle.levels.filter((l) => l.at >= t0 - 1000 && l.at <= t0 + 2000).map((l) => l.db);
-    if (vals.length > 4) return sparkline(vals, { mark: 1 / 3, minSpan: 12 });
+    if (vals.length > 4) return sparkline(vals, { w: 76, h: 26, mark: 1 / 3, minSpan: 12 });
   }
   const o = e.observed;
-  return sparkline([o.before, o.before, o.after, o.after], { mark: 0.5, minSpan: Math.max(Math.abs(o.before) * 0.5, Math.abs(o.threshold)) });
+  return sparkline([o.before, o.before, o.after, o.after], { w: 76, h: 26, mark: 0.5, minSpan: Math.max(Math.abs(o.before) * 0.5, Math.abs(o.threshold)) });
 }
 
-function evidenceRow(title: string, e: VerifyResultPayload | undefined, lit: { gen: boolean; check: boolean; send: boolean }, waitingText: string): HTMLElement {
+function evidenceRow(title: string, e: VerifyResultPayload | undefined, progress: CheckProgress, waitingText: string, key: string): HTMLElement {
   const row = el('div', { className: 'ev' });
-  row.append(el('span', { className: 'hack', text: title }));
-  const word = e ? (e.observed.sense === 'audio' ? 'HEARD' : e.observed.sense === 'camera' ? 'SEEN' : 'WIRED') : 'SEEN';
-  if (e) {
-    const s = evidenceSentence(e);
-    row.append(el('span', { className: `chip ${s.pass ? 'ok' : 'fail'}`, text: s.verdict }));
-    row.append(segs(lit.gen, lit.check, true, s.pass ? 'yes' : 'no', word));
-    const extra = [e.attempt > 1 ? `try ${e.attempt} ${s.pass ? 'passed' : 'failed'}` : '', e.note ?? ''].filter(Boolean).join(' · ');
-    const sentence = el('div', { className: 'sentence' }, el('span', { className: 'text', text: `${s.text}${extra ? ` · ${extra}` : ''}` }));
-    const sp = evidenceSpark(e);
-    if (sp) sentence.append(sp);
-    row.append(sentence);
-    row.title = `${e.observed.metric}: before ${e.observed.before.toFixed(3)} → after ${e.observed.after.toFixed(3)} (Δ ${e.observed.delta.toFixed(3)}, threshold ${e.observed.threshold})`;
-  } else {
-    row.append(el('span', { className: 'chip muted', text: waitingText }));
-    row.append(segs(lit.gen, lit.check, lit.send, 'none'));
-  }
+  row.append(el('span', { className: 'control-name', text: title }));
+  const sentence = e ? evidenceSentence(e) : undefined;
+  row.append(chip(sentence?.verdict ?? waitingText, sentence ? sentence.pass ? 'ok' : 'fail' : 'muted'));
+  row.append(checkPills({ ...progress, ...(e ? { sent: true, observation: { sense: e.observed.sense, pass: e.pass } } : {}) }));
+  const drawer = el('details', { className: 'evidence-drawer', data: { check: key } });
+  drawer.append(el('summary', { text: 'View check details' }));
+  const content = el('div', { className: 'sentence' });
+  if (e && sentence) {
+    const extra = [e.attempt > 1 ? `Attempt ${e.attempt}` : '', e.note ?? ''].filter(Boolean).join(' · ');
+    content.append(el('span', { className: 'text', text: companionText(`${sentence.text}${extra ? ` · ${extra}` : ''}`) }));
+    const spark = evidenceSpark(e);
+    if (spark) content.append(spark);
+    content.title = `${e.observed.metric}: before ${e.observed.before.toFixed(3)} → after ${e.observed.after.toFixed(3)} (Δ ${e.observed.delta.toFixed(3)}, threshold ${e.observed.threshold})`;
+  } else content.append(el('span', { className: 'text', text: waitingText }));
+  drawer.append(content);
+  row.append(drawer);
   return row;
 }
 
 function renderEvidence(): void {
   const box = $('evidence');
-  box.replaceChildren();
+  const expanded = new Set([...box.querySelectorAll<HTMLDetailsElement>('details')].filter((d) => d.open).map((d) => d.dataset.check));
   const rows: HTMLElement[] = [];
-  for (const r of refusals) {
-    const card = cards.get(r.cardId);
-    rows.push(
-      el(
-        'div',
-        { className: 'ev refused' },
-        el('span', { className: 'hack', text: card?.name ?? 'link' }),
-        el('span', { className: 'chip fail', text: 'wrong device · refused' }),
-        el('div', { className: 'sentence' }, el('span', { className: 'text', text: r.reason ?? r.evidence.map((x) => `${x.ok ? '✓' : '✗'} ${x.detail}`).join(' · ') })),
-      ),
-    );
-  }
   const drv = focusDriver();
+  const selectedEvidence = evidence.filter((e) => {
+    if (focusCardId && e.cardId && e.cardId !== focusCardId) return false;
+    if (e.driverId && drv && e.driverId !== drv.driverId) return false;
+    return !focusCardId || e.cardId === focusCardId || Boolean(drv && e.driverId === drv.driverId);
+  });
+  for (const r of refusals.filter((r) => !focusCardId || r.cardId === focusCardId)) {
+    rows.push(el('div', { className: 'ev refused' },
+      el('span', { className: 'control-name', text: cards.get(r.cardId)?.name ?? 'Connection' }),
+      chip('Wrong device · Not connected', 'fail'),
+      el('div', { className: 'sentence', text: r.reason ?? r.evidence.map((x) => `${x.ok ? '✓' : '✗'} ${x.detail}`).join(' · ') })));
+  }
   const known = new Set<string>();
   if (drv) {
     const st = driverStatus.get(drv.driverId);
-    const checked = Boolean(st?.phase && !['drafting', 'validating', 'failed'].includes(st.phase));
-    for (const a of drv.actions) {
-      known.add(a.actionId);
-      const ev = evidence.filter((e) => e.actionId === a.actionId).at(-1);
-      const sent = executor.tape.some((t) => t.actionId === a.actionId && t.ack?.ok);
-      const verified = st?.actions?.find((x) => x.actionId === a.actionId)?.verified ?? a.verified;
-      const waiting = sent ? 'awaiting evidence' : verified === 'pending' ? 'requested' : checked ? 'checked' : 'generated';
-      rows.push(evidenceRow(hackNameFor(a.actionId) ?? a.label, ev, { gen: true, check: checked || verified === 'pass' || verified === 'fail', send: sent }, waiting));
+    for (const action of drv.actions) {
+      known.add(action.actionId);
+      let result = selectedEvidence.filter((e) => e.actionId === action.actionId).at(-1);
+      // A driver is published only after validation; failed verification does not undo that check.
+      const verified = st?.actions?.find((a) => a.actionId === action.actionId)?.verified ?? action.verified;
+      const sent = executor.tape.filter((t) => t.actionId === action.actionId && (t.driverId === drv.driverId || !t.driverId && t.cardId === drv.cardId)).at(-1);
+      if (result && sent && sent.execId !== result.execId && sent.at >= result.sent.at) result = undefined;
+      const summary = !result && !sent && (verified === 'pass' || verified === 'fail')
+        ? { sense: action.expect?.sense ?? 'none' as const, pass: verified === 'pass' } : undefined;
+      const waiting = sent?.ack?.ok === false ? 'Send failed' : sent ? sent.ack ? 'Waiting for a physical check' : 'Sending' : verified === 'fail' ? 'Check failed' : verified === 'pass' ? 'Checked' : 'Waiting for a physical check';
+      rows.push(evidenceRow(controlNameFor(action.actionId) ?? action.label, result,
+        { generated: true, checked: true, sent: Boolean(result || sent?.ack?.ok), sense: action.expect?.sense, sendFailed: sent?.ack?.ok === false || result?.observed.metric === 'ack' && result.observed.after < 1, ...(summary ? { observation: summary } : {}) }, waiting, `${drv.driverId}:${action.actionId}`));
     }
   }
-  for (const e of evidence.filter((x) => !known.has(x.actionId)).slice(-6)) {
-    rows.push(evidenceRow(e.expected.effect === 'none' ? 'Negative control' : opSummary(e.sent.op), e, { gen: true, check: true, send: true }, ''));
+  for (const result of selectedEvidence.filter((e) => !known.has(e.actionId)).slice(-6)) {
+    rows.push(evidenceRow(result.expected.effect === 'none' ? 'Negative control' : opSummary(result.sent.op), result,
+      { generated: true, checked: true, sent: true }, '', `${result.driverId ?? result.cardId}:${result.actionId}`));
   }
-  if (!rows.length) box.append(el('div', { className: 'empty', text: 'No evidence yet. Each hack gets GEN · CHECK · SEND · SEEN, and a segment lights only when that real step completes: “sent DIM → light got 38 % darker ✓”.' }));
-  box.append(...rows);
+  box.replaceChildren(...(rows.length ? rows : [el('p', { className: 'empty', text: 'Each action will show what was generated, checked, sent, and observed.' })]));
+  for (const drawer of box.querySelectorAll<HTMLDetailsElement>('details')) drawer.open = expanded.has(drawer.dataset.check);
 }
 
 // --- learn (IR captures) --------------------------------------------------------------------
@@ -793,13 +927,13 @@ function renderLearn(): void {
   const box = $('learn');
   box.replaceChildren();
   if (!bridge.learned.length) {
-    box.append(el('div', { className: 'empty', text: 'Point the remote at the Cardputer’s IR receiver and press a button. Each capture appears here; the LINK is proven only after a replay is seen.' }));
+    box.append(el('div', { className: 'empty', text: 'Point your remote at the Cardputer and press a button. Each capture appears here; replay it to check the connection.' }));
     return;
   }
   for (const r of bridge.learned.slice(-12).reverse()) {
     const v = captureVerdict(r.capture.rawUs);
     const row = el('div', { className: 'ev' });
-    row.append(el('span', { className: 'hack', text: `#${r.n}${r.prompt ? ` · ${r.prompt}` : ''}` }));
+    row.append(el('span', { className: 'control-name', text: `#${r.n}${r.prompt ? ` · ${r.prompt}` : ''}` }));
     row.append(v ? chip(evidenceSentence(v).pass ? `seen: ${evidenceSentence(v).text.split('→').pop()?.trim() ?? ''} ✓` : 'no change ✗', evidenceSentence(v).pass ? 'ok' : 'fail') : chip('not replayed', 'muted'));
     const line = el('div', { className: 'sentence' }, pulseTrain(r.capture.rawUs), el('span', { className: 'text', text: `${r.label} · ${r.capture.rawUs.length} timings · ${r.capture.frames ?? 1} frame${(r.capture.frames ?? 1) === 1 ? '' : 's'}` }));
     if (link.ready && executor.leader) {
@@ -818,7 +952,7 @@ function renderLearn(): void {
 // --- links ------------------------------------------------------------------------------------
 
 function linkRow(glyph: string, name: string | Node, state: Node | string, proof?: string | Node, proven = false, actions: Node[] = []): HTMLElement {
-  const head = el('span', { className: 'name' }, name, ' ', typeof state === 'string' ? el('span', { className: 'state', text: state }) : state);
+  const head = el('span', { className: 'name' }, name, ' · ', typeof state === 'string' ? el('span', { className: 'state', text: companionText(state) }) : state);
   const li = el('div', { className: 'li' }, el('span', { className: 'glyph', text: glyph }), head, el('span', { className: 'row acts' }, ...actions));
   if (proof) li.append(el('div', { className: `proof ${proven ? 'proven' : ''}` }, proof));
   return li;
@@ -830,19 +964,19 @@ function renderLinks(): void {
   const lead = executor.leader;
 
   // MIDI on this Mac
-  if (!MidiBridge.supported) box.append(linkRow('USB', 'MIDI', 'needs Chrome or Edge on localhost'));
-  else if (!midi.enabled) box.append(linkRow('USB', 'MIDI', 'off', 'Web MIDI is off on this Mac', false, lead ? [button('Enable MIDI', () => void enableMidi(), 'primary')] : []));
+  if (!MidiBridge.supported) box.append(linkRow('▥', 'USB MIDI', 'needs Chrome or Edge on localhost'));
+  else if (!midi.enabled) box.append(linkRow('▥', 'USB MIDI', 'off', 'Allow USB MIDI to connect devices to this Mac', false, lead ? [button('Allow USB MIDI', () => void enableMidi(), 'primary')] : []));
   else {
     const outs = midi.outputs();
     const lines = outs.length ? outs.map((o) => `${o.name ?? o.id}${o.manufacturer ? ` · ${o.manufacturer}` : ''} · out ${o.state === 'connected' ? '✓' : '✗'}`).join('\n') : 'waiting for USB… plug in a synth';
     const proof = el('span', { text: lines });
     proof.style.whiteSpace = 'pre-line';
-    box.append(linkRow('USB', `MIDI${midi.sysex ? ' + SysEx' : ''}`, `${outs.length} out · ${midi.inputs().length} in · ${midiExec.scheduler.rate()} msg/s`, proof, outs.length > 0));
+    box.append(linkRow('▥', `USB MIDI${midi.sysex ? ' + SysEx' : ''}`, `${outs.length} out · ${midi.inputs().length} in · ${midiExec.scheduler.rate()} msg/s`, proof, outs.length > 0));
   }
 
   // Cardputer over Web Serial
   const cpName = link.info ? `${link.info.board === 'cardputer-adv' ? 'Cardputer-Adv' : (link.info.name ?? 'Cardputer')}` : 'Cardputer';
-  if (!CardputerLink.supported) box.append(linkRow('SER', cpName, 'Web Serial needs Chrome or Edge'));
+  if (!CardputerLink.supported) box.append(linkRow('⌁', cpName, 'Web Serial needs Chrome or Edge'));
   else {
     const acts: Node[] = [];
     let state = '';
@@ -852,8 +986,8 @@ function renderLinks(): void {
       case 'disconnected':
       case 'error':
         state = link.state === 'idle' ? 'not connected' : link.state === 'error' ? 'error' : 'unplugged';
-        proof = link.lastError ?? 'USB-C to the Mac, then CONNECT (one click the first time)';
-        if (lead) acts.push(button('Connect Cardputer', () => void connectCardputer(), 'primary'));
+        proof = link.lastError ?? 'Plug in via USB-C, then choose Connect.';
+        if (lead) acts.push(button('Connect', () => void connectCardputer(), 'primary'));
         break;
       case 'connecting':
         state = 'opening…';
@@ -883,13 +1017,13 @@ function renderLinks(): void {
       default:
         state = link.state;
     }
-    box.append(linkRow('SER', cpName, state, proof, link.ready && bridge.online, acts));
+    box.append(linkRow('⌁', cpName, state, proof, link.ready && bridge.online, acts));
   }
 
   // audio oracle
-  if (!AudioOracle.supported) box.append(linkRow('MIC', 'Audio oracle', 'no microphone API here'));
+  if (!AudioOracle.supported) box.append(linkRow('◉', 'Microphone', 'no microphone API here'));
   else if (oracle.state !== 'on') {
-    box.append(linkRow('MIC', 'Audio oracle', oracle.state === 'starting' ? 'starting…' : oracle.state === 'error' ? 'error' : 'off', oracle.error ?? 'listens to the synth’s own USB audio (or the Mac mic) to prove CCs change the sound', false, lead ? [button('Listen', () => void startOracle(), 'primary')] : []));
+    box.append(linkRow('◉', 'Microphone', oracle.state === 'starting' ? 'starting…' : oracle.state === 'error' ? 'error' : 'off', oracle.error ?? 'listens to the synth’s own USB audio (or the Mac mic) to prove CCs change the sound', false, lead ? [button('Listen', () => void startOracle(), 'primary')] : []));
   } else {
     const meter = el('span', { className: 'meter' }, el('i', { data: { meter: '1' } }));
     const sel = el('select', { title: 'audio input' });
@@ -897,7 +1031,7 @@ function renderLinks(): void {
       for (const i of ins) sel.append(Object.assign(el('option', { text: `${i.label}${i.synth ? ' (synth)' : ''}` }), { value: i.deviceId, selected: i.deviceId === oracle.input?.deviceId }));
     });
     sel.addEventListener('change', () => void startOracle(sel.value));
-    box.append(linkRow('MIC', 'Audio oracle', meter, el('span', {}, `${oracle.input?.synth ? 'synth USB audio' : 'microphone'} · ${oracle.input?.label ?? ''} · ${oracle.sampleRate / 1000} kHz `, sel), true, [button('Stop', () => void oracle.stop(), 'ghost')]));
+    box.append(linkRow('◉', 'Microphone', meter, el('span', {}, `${oracle.input?.synth ? 'synth USB audio' : 'microphone'} · ${oracle.input?.label ?? ''} · ${oracle.sampleRate / 1000} kHz `, sel), true, [button('Stop', () => void oracle.stop(), 'ghost')]));
   }
 
   // link verdicts from the agent
@@ -1023,7 +1157,7 @@ function renderDaemons(): void {
       el(
         'div',
         { className: 'ev' },
-        el('span', { className: 'hack accent-text', text: d.name }),
+        el('span', { className: 'control-name accent-text', text: d.name }),
         chip(d.status ?? 'proposed', d.status === 'running' ? 'accent' : 'muted'),
         el('div', { className: 'sentence' }, el('span', { className: 'text', text: `${device} · ${d.trigger.source} → ${d.targets.map((t) => t.hack).join(', ')} · ≤ ${d.max_rate_hz} Hz${d.blurb ? ` · ${d.blurb}` : ''}` })),
       ),
@@ -1161,7 +1295,7 @@ async function takeDevices(): Promise<void> {
 
 function meterLoop(): void {
   const m = document.querySelector<HTMLElement>('[data-meter]');
-  if (m && $('drawer').hasAttribute('open') && oracle.state === 'on') {
+  if (m && !$('drawer').hidden && oracle.state === 'on') {
     const db = oracle.levelDb();
     m.style.width = `${Math.max(0, Math.min(100, ((db + 70) / 70) * 100))}%`;
   }
@@ -1173,6 +1307,7 @@ function meterLoop(): void {
 async function pairThisBrowser(): Promise<void> {
   if (selfPairing) return;
   selfPairing = true;
+  showView('home', false);
   selfPairingError = false;
   const generation = ++selfPairGeneration;
   clearTimeout(pollTimer);
@@ -1183,7 +1318,8 @@ async function pairThisBrowser(): Promise<void> {
   screen.hidden = false;
   $('workbench').hidden = false;
   $('self-retry').hidden = true;
-  $('self-msg').textContent = '';
+  $('self-msg').textContent = 'Waiting for Quest 3 on your local network';
+  $('self-msg').className = 'small waiting-status';
   $('self-qr').replaceChildren();
   $('self-code').textContent = 'Creating code…';
   $('self-expiry').textContent = '';
@@ -1286,12 +1422,12 @@ function hello(): PayloadOf<'hello'> {
   if (!identity || identity.kind === 'mac' || identity.kind === 'web') {
     p.role = 'companion';
     const caps: NonNullable<PayloadOf<'hello'>['capabilities']> = [];
-    if (MidiBridge.supported) caps.push('midi');
+    caps.push('midi');
     if (CardputerLink.supported) caps.push('serial');
     if (bridge.online) caps.push('ir');
     if (AudioOracle.supported) caps.push('mic');
     p.capabilities = caps;
-    const ports: Port[] = midi.enabled ? midi.ports() : [];
+    const ports: Port[] = [visualSynthPort, ...(midi.enabled ? midi.ports() : [])];
     if (bridge.online) ports.push({ id: `serial:${link.info?.chip ?? 'cardputer'}`, kind: 'serial', name: `Cardputer USB serial (${link.info?.board ?? 'cardputer'})`, state: 'connected' });
     p.ports = ports;
   }
@@ -1352,11 +1488,11 @@ function connect(): void {
     steps.set(m.payload.stepId, { ...m.payload, seenAt: prev?.seenAt ?? Date.now() });
     if (steps.size > 300) steps.delete(steps.keys().next().value!);
     setFocus(m.payload.cardId);
-    ['agent', 'code'].forEach(render);
+    ['agent', 'code', 'top'].forEach(render);
   });
   c.on('device.card', (m) => {
     cards.set(m.payload.cardId, m.payload);
-    focusCardId = m.payload.cardId;
+    setFocus(m.payload.cardId);
     ['calm', 'device', 'evidence', 'links', 'banners'].forEach(render);
   });
   c.on('target.status', (m) => {
@@ -1371,7 +1507,7 @@ function connect(): void {
   });
   c.on('driver.spec', (m) => {
     drivers.set(m.payload.driverId, m.payload);
-    focusCardId = m.payload.cardId;
+    setFocus(m.payload.cardId);
     if (!tabChosenByUser) setTab('code');
     ['code', 'device', 'evidence'].forEach(render);
   });
@@ -1405,7 +1541,7 @@ function connect(): void {
   });
   c.on('arm.result', (m) => {
     if (arm?.armId === m.payload.armId) arm = undefined;
-    armNote = { text: m.payload.armed ? `${cards.get(m.payload.cardId)?.name ?? 'device'} armed${m.payload.by ? ` by ${m.payload.by}` : ''}` : (m.payload.reason ?? 'cancelled'), ok: m.payload.armed, at: Date.now() };
+    armNote = { text: m.payload.armed ? `${cards.get(m.payload.cardId)?.name ?? 'Device'} enabled${m.payload.by ? ` by ${m.payload.by}` : ''}` : (m.payload.reason ?? 'cancelled'), ok: m.payload.armed, at: Date.now() };
     if (m.payload.armed) {
       armedOnce = true;
       if (!tabChosenByUser) setTab('tape');
@@ -1427,10 +1563,10 @@ function connect(): void {
   if (!replaying) c.start();
   if (replaying && !replayStarted) {
     replayStarted = true;
-    log('info', 'REPLAY: injecting a scripted OP-1 Field run (display only)');
+    log('info', 'Demo: showing a recorded OP-1 Field run (display only)');
     runReplay(
       (m) => c.inject(m),
-      () => log('info', 'Replay finished. Open Details to arm or cancel the example controls.'),
+      () => log('info', 'Replay finished. Open Details to enable or cancel the example controls.'),
     );
   }
 }
@@ -1455,7 +1591,7 @@ function setupForms(): void {
   $('panic').addEventListener('click', () => {
     if (replaying) return;
     void executor.panicLocal('button');
-    conn?.send('panic', { reason: 'PANIC button on the Mac' }, { to: 'server' });
+    conn?.send('panic', { reason: 'Stop all button on the Mac' }, { to: 'server' });
   });
   const tabs = ['code', 'tape', 'spec'] as const;
   for (const [i, t] of tabs.entries()) {
@@ -1506,6 +1642,9 @@ async function reachServer(retryMs = 1000): Promise<void> {
 
 export async function bootWorkbench(): Promise<void> {
   $('workbench').hidden = false;
+  document.title = `${PRODUCT_NAME} Companion`;
+  $('product-name').textContent = PRODUCT_NAME;
+  $('headset-qr').setAttribute('aria-label', `Open ${PRODUCT_NAME} in Quest Browser`);
   document.body.classList.toggle('stage', stage);
   if (replaying) {
     const tag = el('a', { className: 'cornertag', text: 'Demo · display only', title: 'A scripted run injected into this page; nothing is executed or sent. Click to leave.' });

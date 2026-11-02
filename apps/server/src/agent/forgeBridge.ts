@@ -1,4 +1,4 @@
-import type { Forge } from '../gen3d/forge';
+import type { Forge, ForgeSnapshot, UiSpec } from '../gen3d/forge';
 import { toAgentStep } from '../gen3d/routes';
 import type { Hub } from '../hub';
 import { stepGuidance } from './guidance';
@@ -6,21 +6,24 @@ import type { TargetStore } from './targets';
 
 /** Forward current controls and progress, including skins that finish after discovery. */
 export function subscribeForge(
-  forge: Pick<Forge, 'subscribe' | 'specIdFor'>,
+  forge: Pick<Forge, 'subscribe' | 'specIdFor' | 'snapshot'>,
   hub: Pick<Hub, 'broadcast'>,
   targets: Pick<TargetStore, 'get'>,
   allowed: (cardId: string) => boolean = () => true,
+  onSpec?: (spec: UiSpec, context: ForgeSnapshot | undefined) => void,
 ): () => void {
   return forge.subscribe((event) => {
-    if (!allowed(event.type === 'spec' ? event.uiSpec.cardId : event.progress.cardId)) return;
     if (event.type === 'spec') {
       const target = targets.get(event.uiSpec.cardId);
       if (target && (target.state === 'failed' || target.abort?.signal.aborted || target.driver?.driverId !== event.uiSpec.driverId)) return;
+      onSpec?.(event.uiSpec, forge.snapshot?.(event.uiSpec.specId));
+      if (!allowed(event.uiSpec.cardId)) return;
       hub.broadcast('ui.spec', event.uiSpec);
       return;
     }
 
     const progress = event.progress;
+    if (!allowed(progress.cardId)) return;
     const target = targets.get(progress.cardId);
     if (progress.runId.startsWith('run-') && target && (
       target.runId !== progress.runId || target.abort?.signal.aborted || target.state === 'failed'

@@ -13,8 +13,9 @@
  * Every model call is a Meta model (live) or a replay of a recorded Meta call (FIXTURE, recordedFrom), and
  * every progress event carries the model id, effort and latency.
  */
-import { museResponseFormat, newId, type UiSpecPayload } from '@ce/protocol';
-import type { Control, Gen3dSpec, HackItem, Part, Skin } from '@ce/gen3d';
+import { museResponseFormat, newId, UiSpecPayload } from '@ce/protocol';
+import { Skin, type Control, type Gen3dSpec, type HackItem, type Part } from '@ce/gen3d';
+import { z } from 'zod';
 import type { CallLog } from '../muse/callLog';
 import { RequestCancelledError } from '../muse/cancellation';
 import type { MuseConfig, ReasoningEffort } from '../muse/config';
@@ -30,6 +31,7 @@ import { TopLevelItemScanner } from './partial';
 import { LiveSkinPainter, ReplaySkinPainter, SKIN_MODEL, type SkinCrop, type SkinPainter, type SkinResult, SkinStore } from './skin';
 import { costUsd, type StreamMessage, StreamClient, type StreamUsage } from './stream';
 import { LiveTransport, loadRecordedRuns, type ModelTransport, ReplayTransport, type RunTarget, type TransportResult, type TransportSession } from './transport';
+import { isVisualSynth, VISUAL_SYNTH_FIXTURE, visualSynthFixtureSession } from './visualSynth';
 
 export const FORGE_KIT = 'ce.hackset/1+ce.gen3d/1';
 export const DEFAULT_FORGE_MODEL = 'muse-spark-1.3';
@@ -183,6 +185,12 @@ export interface Forge {
   readonly skins?: SkinStore;
   /** resolves when the skin of the latest generate for this spec is attached (undefined if none or it failed) */
   whenSkin?(specId: string): Promise<UiSpec | undefined>;
+  /** Detached editing context, including undo/redo history, for a durable setup version. */
+  snapshot?(specId: string): ForgeSnapshot | undefined;
+  /** Restore without publishing, model calls, skin painting or physical commands. */
+  restore?(snapshot: unknown): UiSpec;
+  /** Discard in-memory context after a device is explicitly forgotten. */
+  forget?(specId: string): boolean;
 }
 
 export interface ForgeDeps {
@@ -202,6 +210,8 @@ export interface ForgeDeps {
   skin?: boolean;
   /** override the skin painter (tests) */
   skinPainter?: SkinPainter;
+  /** Durable skin bytes; shared with the device library's content-addressed assets. */
+  skinStore?: SkinStore;
 }
 
 // --- helpers ----------------------------------------------------------------------------------------
@@ -416,20 +426,29 @@ function adaptEdit(set: EditSet, driver: ForgeDriver, recorded?: RecordedAction[
 
 // --- store ---------------------------------------------------------------------------------------
 
-interface Entry {
-  specId: string;
-  device: ForgeDevice;
-  driver: ForgeDriver;
-  room: { device: ForgeDevice; driver: ForgeDriver }[];
-  verification: Record<string, VerifyState>;
-  revs: UiSpec[];
-  cursor: number;
-  crop?: SkinCrop;
-  /** the device's painted skin, reused when the hack set is regenerated */
-  skin?: Skin;
-}
-
 const MAX_REVS = 30;
+
+const SavedUiSpec = UiSpecPayload.required({ cardId: true, driverId: true, title: true, rev: true, gen3d: true, hackset: true, source: true, modelId: true, check: true });
+
+export const ForgeSnapshot = z.object({
+  version: z.literal(1),
+  specId: z.string().min(1).max(64),
+  device: ForgeDevice,
+  driver: ForgeDriver,
+  room: z.array(z.object({ device: ForgeDevice, driver: ForgeDriver })).max(12),
+  verification: z.record(z.string(), VerifyState),
+  revs: z.array(SavedUiSpec).min(1).max(MAX_REVS),
+  cursor: z.number().int().min(0),
+  crop: z.object({ jpegBase64: z.string().min(1).max(12_000_000), width: z.number().int().positive().optional(), height: z.number().int().positive().optional() }).optional(),
+  skin: Skin.optional(),
+}).superRefine((s, ctx) => {
+  if (s.cursor >= s.revs.length) ctx.addIssue({ code: 'custom', path: ['cursor'], message: 'History cursor is out of bounds' });
+  if (s.driver.cardId !== s.device.cardId || s.revs.some((r) => r.specId !== s.specId || r.cardId !== s.device.cardId || r.driverId !== s.driver.driverId)) {
+    ctx.addIssue({ code: 'custom', path: ['revs'], message: 'Setup context and interface identities must match' });
+  }
+});
+export type ForgeSnapshot = z.infer<typeof ForgeSnapshot>;
+type Entry = Omit<ForgeSnapshot, 'version'>;
 
 // --- the forge -------------------------------------------------------------------------------------
 
@@ -443,7 +462,7 @@ export function createForge(deps: ForgeDeps): Forge {
   const defaultModel = deps.model ?? DEFAULT_FORGE_MODEL;
   const store = new Map<string, Entry>();
   const listeners = new Set<(e: ForgeEvent) => void>();
-  const skins = new SkinStore();
+  const skins = deps.skinStore ?? new SkinStore();
   const skinWaits = new Map<string, Promise<UiSpec | undefined>>();
   const painter: SkinPainter | undefined =
     deps.skinPainter ??
@@ -558,22 +577,24 @@ export function createForge(deps: ForgeDeps): Forge {
     }
     const device = dev.data;
     const driver = drv.data;
+    const template = transport.source === 'fixture' && isVisualSynth(driver);
     const runId = req.runId ?? newId('forge_');
-    const model = req.model ?? defaultModel;
+    const model = template ? VISUAL_SYNTH_FIXTURE : req.model ?? defaultModel;
     const firstEffort = req.effort ?? DEFAULT_EFFORT;
     const verification = verificationOf(driver, req.verification);
     const request = req.request?.trim() || `generate a hack set for the ${device.name}`;
     const specId = specIdFor(device.cardId);
     const existing = store.get(specId);
     const step = stepper(runId, device.cardId, req.onProgress);
-    const session = transport.session({ kit: FORGE_KIT, task: 'generate', cardId: device.cardId, request, mode: 'json', ...runContext(device, driver) });
+    const session = template ? visualSynthFixtureSession(driver)
+      : transport.session({ kit: FORGE_KIT, task: 'generate', cardId: device.cardId, request, mode: 'json', ...runContext(device, driver) });
     const fallback = session.match === 'category' || session.match === 'transport';
     // the panel skin: painted in parallel, attached as a later revision; it never gates the controls
     const crop = req.crop ?? existing?.crop;
     const reuseSkin = !req.repaintSkin && existing?.skin && existing.device.name === device.name ? existing.skin : undefined;
     const skinStep = `${runId}.skin`;
     let skinJob: Promise<SkinResult> | undefined;
-    if (painter && !reuseSkin) {
+    if (painter && !reuseSkin && !isVisualSynth(driver)) {
       step({ stepId: skinStep, phase: 'forge', status: 'running', title: `Painting a panel skin for ${device.name}`, detail: crop ? 'from the scan crop (images/edits)' : 'from a prompt (images/generations)', model: SKIN_MODEL, effort: 'low', source: painter.source });
       skinJob = painter.paint({ device, transport: driver.transport, crop, signal: req.signal }).catch((e) => ({ ok: false, mode: crop ? 'edit' : 'generate', model: SKIN_MODEL, source: painter.source, latencyMs: 0, error: (e as Error).message }) as SkinResult);
     }
@@ -627,7 +648,7 @@ export function createForge(deps: ForgeDeps): Forge {
         last = res;
         modelUsed = res.recordedFrom ?? res.model ?? model;
         usage = addUsage(usage, res.usage);
-        step({ stepId: gen.stepId, startedAt: gen.startedAt, endedAt: Date.now(), phase: 'forge', status: res.degenerate ? 'fail' : 'ok', title: res.degenerate ? 'Muse looped on whitespace; retrying' : `Muse answered in ${(res.latencyMs / 1000).toFixed(1)} s`, detail: res.usage ? `in ${res.usage.promptTokens} (cached ${res.usage.cachedTokens}) · out ${res.usage.completionTokens} (reasoning ${res.usage.reasoningTokens})` : undefined, model: modelUsed, effort, latencyMs: res.latencyMs, source: res.source, recordedFrom: res.recordedFrom });
+        step({ stepId: gen.stepId, startedAt: gen.startedAt, endedAt: Date.now(), phase: 'forge', status: res.degenerate ? 'fail' : 'ok', title: template ? 'Visual synth fixture template assembled' : res.degenerate ? 'Muse looped on whitespace; retrying' : `Muse answered in ${(res.latencyMs / 1000).toFixed(1)} s`, detail: res.usage ? `in ${res.usage.promptTokens} (cached ${res.usage.cachedTokens}) · out ${res.usage.completionTokens} (reasoning ${res.usage.reasoningTokens})` : undefined, model: modelUsed, effort, latencyMs: res.latencyMs, source: res.source, recordedFrom: res.recordedFrom });
 
         // 1. schema
         let draft: ForgeDraft | undefined;
@@ -709,8 +730,10 @@ export function createForge(deps: ForgeDeps): Forge {
       ...(base.recordedFrom ? { recordedFrom: base.recordedFrom } : {}),
       check: { ok: true, attempts: rep.attempts, errors: 0, warnings: rep.warnings.length },
     };
-    const entry: Entry = existing ?? { specId, device, driver, room: req.room ?? [], verification, revs: [], cursor: -1 };
-    Object.assign(entry, { device, driver, room: req.room ?? entry.room, verification, ...(crop ? { crop } : {}) });
+    const entry: Entry = existing?.driver.driverId === driver.driverId
+      ? structuredClone(existing)
+      : { specId, device, driver, room: req.room ?? [], verification, revs: [], cursor: -1 };
+    Object.assign(entry, { device, driver, room: req.room ?? entry.room, verification, ...(crop ? { crop } : {}), ...(reuseSkin ? { skin: reuseSkin } : {}) });
     commit(entry, ui);
     if (skinJob) {
       const wait = skinJob.then((r) => attachSkin(entry, r, runId, skinStep));
@@ -723,6 +746,7 @@ export function createForge(deps: ForgeDeps): Forge {
 
   /** Log the skin call, then publish it on the current revision (and keep it on every stored one). */
   function attachSkin(entry: Entry, r: SkinResult, runId: string, stepId: string): UiSpec | undefined {
+    if (store.get(entry.specId) !== entry) return undefined;
     deps.callLog?.add({ at: Date.now() - r.latencyMs, label: 'gen3d.skin', model: r.source === 'fixture' ? 'fixture' : SKIN_MODEL, source: r.source, ok: r.ok, latencyMs: r.latencyMs, format: 'image/webp', recordedFrom: r.recordedFrom, error: r.error });
     const emit = (status: 'ok' | 'fail', title: string, detail?: string) => {
       const p: ForgeProgress = { stepId, runId, cardId: entry.device.cardId, phase: 'forge', status, title, ...(detail ? { detail } : {}), kind: 'opinion', model: r.recordedFrom ?? SKIN_MODEL, effort: 'low', latencyMs: r.latencyMs, source: r.source, ...(r.recordedFrom ? { recordedFrom: r.recordedFrom } : {}), startedAt: Date.now() - r.latencyMs, endedAt: Date.now() };
@@ -909,5 +933,21 @@ export function createForge(deps: ForgeDeps): Forge {
     },
     skins,
     whenSkin: (specId) => skinWaits.get(specId) ?? Promise.resolve(undefined),
+    snapshot: (specId) => {
+      const entry = store.get(specId);
+      return entry ? structuredClone({ version: 1 as const, ...entry }) : undefined;
+    },
+    restore: (snapshot) => {
+      const parsed = ForgeSnapshot.safeParse(snapshot);
+      if (!parsed.success) throw new ForgeInputError('Invalid saved interface context', parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).slice(0, 20));
+      const { version: _version, ...entry } = parsed.data;
+      store.set(entry.specId, entry);
+      skinWaits.delete(entry.specId);
+      return structuredClone(entry.revs[entry.cursor]);
+    },
+    forget: (specId) => {
+      skinWaits.delete(specId);
+      return store.delete(specId);
+    },
   };
 }

@@ -7,6 +7,7 @@ import type { Gen3dSpec } from '@ce/gen3d';
 import type { ForgeDevice, ForgeDriver, VerifyState } from './forgeTypes';
 import type { ForgeDraft, HackSet } from './hackset';
 import type { StreamMessage } from './stream';
+import { isVisualSynth } from './visualSynth';
 
 /** the few-shot example (exported so a test proves it passes every check) */
 export const EXAMPLE_DRIVER: ForgeDriver = {
@@ -168,6 +169,7 @@ export function forgeMessages(p: ForgePromptInput): StreamMessage[] {
     p.current ? JSON.stringify(p.current.hacks) : 'none',
     'REQUEST',
     JSON.stringify(p.request),
+    ...(isVisualSynth(p.driver) ? ['VISUAL SYNTH CARD', 'Override the general composition rule: exactly one main control called Warp, bound only to cc71, and at most three buttons bound individually to pattern0, pattern1, pattern2. Use the driver range and integer steps. Every oracle is camera:screen_changed. This instrument is silent.'] : []),
     ...repairLines(p.repair),
   ];
   return [

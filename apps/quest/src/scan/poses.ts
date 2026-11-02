@@ -38,6 +38,9 @@ export class PoseRing {
     return this.count;
   }
 
+  /** A new XR session has a new origin; never interpolate its pose against an earlier session. */
+  clear(): void { this.head = 0; this.count = 0; this.prevT = -1; }
+
   /** Store the viewer pose at time t (performance.now() ms). Angular speed is derived from the previous sample. */
   push(t: number, position: { x: number; y: number; z: number }, q: { x: number; y: number; z: number; w: number }): void {
     let speed = 0;

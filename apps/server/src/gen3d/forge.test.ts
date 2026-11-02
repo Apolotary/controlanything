@@ -131,6 +131,17 @@ describe('forge: edit, undo, redo, rearm', () => {
     return { forge, f, g };
   }
 
+  it('rejects invalid saved history without replacing a good interface', async () => {
+    const { forge, g } = await forged();
+    const id = g.uiSpec!.specId;
+    const snapshot = forge.snapshot!(id)!;
+    expect(() => forge.restore!({ ...snapshot, cursor: snapshot.revs.length })).toThrow('Invalid saved interface context');
+    expect(() => forge.restore!({ ...snapshot, driver: { ...snapshot.driver, cardId: 'other' } })).toThrow('Invalid saved interface context');
+    expect(forge.get(id)).toEqual(g.uiSpec);
+    snapshot.revs[0].title = 'External mutation';
+    expect(forge.get(id)!.title).not.toBe('External mutation');
+  });
+
   it('applies a spoken edit by id, proves untouched items are byte-identical, and keeps the hack set in line', async () => {
     const { forge, f, g } = await forged();
     const e = await forge.edit({ specId: g.uiSpec!.specId, instruction: 'make the dimmer a big red lever' });

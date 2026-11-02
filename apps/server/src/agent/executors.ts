@@ -4,7 +4,7 @@
  * and the real room (Mac companion + Cardputer + Quest) go through the same code.
  */
 import type { Capability, DeviceInfo, DeviceKind, Port } from '@ce/protocol';
-import { pickMidiOutput, portMatches } from '../devices/midi';
+import { midiOutputCandidates, pickMidiOutput, portMatches } from '../devices/midi';
 import { MAC_LOCAL_CAPABILITIES, MAC_LOCAL_ID, MAC_LOCAL_NAME } from './maclocal';
 
 export interface ExecutorPick {
@@ -74,7 +74,7 @@ export function pickExecutor(r: Roster, cap: 'midi' | 'ir' | 'local', opts: { po
     if (cap === 'local') return undefined;
   }
   if (cap === 'midi') {
-    const outputs = cands.flatMap((d) => (d.ports ?? []).filter((p) => p.kind === 'midi-out' && p.state !== 'disconnected').map((port) => toPick(d, port)));
+    const outputs = cands.flatMap((d) => midiOutputCandidates(d.ports, opts.portHint).map((port) => toPick(d, port)));
     const matches = opts.portHint ? outputs.filter((p) => portMatches(p.port!, opts.portHint!)) : outputs;
     if (matches.length === 1) return matches[0];
     if (!matches.length && outputs.length === 1) return outputs[0];

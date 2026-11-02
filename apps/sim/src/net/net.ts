@@ -15,11 +15,13 @@ import {
   type PayloadOf,
   type Port,
 } from '@ce/protocol';
+import { VISUAL_SYNTH_PORT, VISUAL_SYNTH_PORT_ID } from '@ce/vsynth';
 
 export const SIM_APP = 'sim@0.1.0';
 export const SIM_CAPABILITIES: Capability[] = ['ir', 'midi', 'camera', 'mic', 'speaker', 'display'];
 export const SIM_PORTS: Port[] = [
   { id: 'sim-midi', kind: 'midi-out', name: 'CE Sim Synth (OP-1 Field CC map)', manufacturer: 'ControlEverything sim', state: 'connected' },
+  { id: VISUAL_SYNTH_PORT_ID, kind: 'midi-out', name: VISUAL_SYNTH_PORT, manufacturer: 'ControlAnything', state: 'connected' },
   { id: 'sim-ir', kind: 'ir', name: 'CE Sim IR (virtual ceiling light)', manufacturer: 'ControlEverything sim', state: 'connected' },
 ];
 

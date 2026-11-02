@@ -103,6 +103,7 @@ interface FireOptions {
 
 export class Dispatcher {
   private readonly acks = new Map<string, Pending<ExecAckPayload>>();
+  private readonly controlAcks = new Map<string, string | undefined>();
   private readonly senses = new Map<string, SenseCollector>();
   /** sensor device id -> when its last sense.request timed out (cleared by the next good reply) */
   private readonly senseTimeouts = new Map<string, number>();
@@ -259,11 +260,13 @@ export class Dispatcher {
     if (opts.onResult) {
       const done = (ok: boolean, detail?: string) => {
         if (!this.acks.delete(execId)) return;
+        this.controlAcks.delete(execId);
         clearTimeout(timer);
         opts.onResult!(ok, detail);
       };
       const timer = setTimeout(() => done(false, 'Executor did not respond'), this.o.ackTimeoutMs ?? 3000);
       this.acks.set(execId, { resolve: (ack) => done(ack.ok, ack.detail ?? ack.error), reject: (error) => done(false, error.message) });
+      this.controlAcks.set(execId, opts.cardId);
     }
     if (executorDeviceId === MAC_LOCAL_ID) {
       if (!this.o.macLocal) { this.acks.get(execId)?.reject(new ExecError('Mac executor is offline', 'offline')); return false; }
@@ -369,7 +372,7 @@ export class Dispatcher {
     return [...this.senses.keys()];
   }
 
-  /** Drop queued operations for one target, or all targets on panic. */
+  /** Drop queued operations and control acknowledgement waits for one target, or all on panic. */
   flushQueued(cardId?: string): number {
     let n = 0;
     for (const [key, queued] of this.trailing) {
@@ -377,6 +380,11 @@ export class Dispatcher {
       clearTimeout(queued.timer);
       this.trailing.delete(key);
       queued.opts.onResult?.(false, 'Command cancelled');
+      n++;
+    }
+    for (const [execId, owner] of this.controlAcks) {
+      if (cardId !== undefined && owner !== cardId) continue;
+      this.acks.get(execId)?.reject(new ExecError('Command cancelled', 'refused'));
       n++;
     }
     return n;

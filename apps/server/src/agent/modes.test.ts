@@ -11,10 +11,12 @@ import { createAgent } from './index';
 import { tryLink } from './link';
 import { TagStore } from './tags';
 import type { TargetDetection } from './types';
+import type { Forge } from '../gen3d/forge';
 
 vi.mock('./link', async (original) => ({ ...await original<typeof import('./link')>(), tryLink: vi.fn() }));
 
 const owner = { deviceId: 'quest', name: 'Quest' };
+const widgets: NonNullable<PayloadOf<'ui.spec'>['widgets']> = [{ id: 'off', kind: 'button', label: 'Off', binding: { action: 'off' } }];
 const lightCard: DeviceCardPayload = {
   cardId: 'light', name: 'Ceiling light', maker: 'Example', model: 'Lamp', category: 'lighting',
   confidence: 0.9, protocols: ['ir'], requires: ['ir'], evidence: ['A visible label'],
@@ -40,7 +42,9 @@ function setup(options: { dataDir?: string; devices?: DeviceInfo[] } = {}) {
   const sent = vi.spyOn(ctx.hub, 'sendToDevice');
   const messages = vi.spyOn(ctx.hub, 'onMessage');
   const presence = vi.spyOn(ctx.hub, 'onPresence');
-  const agent = createAgent(ctx, { macLocal: false, forge: () => undefined, ...(options.dataDir ? {} : { tagsFile: null }) });
+  const specs = new Map<string, PayloadOf<'ui.spec'>>();
+  const forge = { get: (id: string) => specs.get(id), list: () => [...specs.values()] } as Forge;
+  const agent = createAgent(ctx, { macLocal: false, forge: () => forge, ...(options.dataDir ? {} : { tagsFile: null }) });
   const dispatch = vi.spyOn(agent.dispatcher, 'exec');
   let closed = false;
   const close = () => {
@@ -69,7 +73,7 @@ function setup(options: { dataDir?: string; devices?: DeviceInfo[] } = {}) {
     expect(agent.addTag({ targetId: target.cardId, label: card.name, position: { x: 1, y: 0.5, z: -2 } }, owner)).toBe(target);
     return target;
   };
-  return { ctx, agent, dispatch, sent, emit, changePresence, of, addKnown, close };
+  return { ctx, agent, dispatch, sent, emit, changePresence, of, addKnown, close, specs };
 }
 
 beforeEach(() => {
@@ -285,7 +289,7 @@ describe('annotation and control mode boundary', () => {
     const first = setup({ dataDir, devices: [remo] });
     const target = first.addKnown();
     Object.assign(target, { driver: lightDriver, specId: 'light-spec', verification: { off: 'pass' }, armed: true });
-    const spec = { specId: 'light-spec', cardId: target.cardId, driverId: lightDriver.driverId, title: 'Light controls' };
+    const spec = { specId: 'light-spec', cardId: target.cardId, driverId: lightDriver.driverId, title: 'Light controls', widgets };
     new TagStore(join(dataDir, 'tags.json')).sync(target, spec);
     first.close();
     const restored = setup({ dataDir, devices: [remo] });
@@ -301,6 +305,61 @@ describe('annotation and control mode boundary', () => {
     expect(restored.sent).toHaveBeenCalledWith(owner.deviceId, 'target.status', expect.objectContaining({ state: 'armed', executorDeviceId: 'remo' }));
     expect(tryLink).not.toHaveBeenCalled();
     expect(restored.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('keeps a hidden device in the library and reattaches its stable identity without identifying again', () => {
+    const s = setup({ devices: [remo] });
+    const target = s.addKnown();
+    s.emit('tag.remove', { cardId: target.cardId });
+    expect(s.agent.libraryState().devices).toEqual([expect.objectContaining({ cardId: target.cardId, hidden: true, enabled: false })]);
+    s.emit('tag.add', { cardId: target.cardId, targetId: 'new-observation', label: 'Ceiling light' });
+    expect(s.agent.tagsState().tags).toHaveLength(1);
+    expect(s.agent.targets.get(target.cardId)?.card).toEqual(lightCard);
+    expect(s.agent.targets.get('new-observation')).toBeUndefined();
+    s.emit('library.forget', { cardId: target.cardId }, false);
+    expect(s.agent.libraryState().devices).toHaveLength(1);
+    s.emit('library.forget', { cardId: target.cardId });
+    expect(s.agent.libraryState().devices).toEqual([]);
+    expect(tryLink).not.toHaveBeenCalled();
+    expect(s.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('accepts placement only from its owning headset and preserves it on restart', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'ce-placement-'));
+    cleanups.push(() => rmSync(dataDir, { recursive: true, force: true }));
+    const s = setup({ dataDir });
+    const target = s.addKnown();
+    const placement = { headsetId: 'another-headset', origin: 'https://room.example', handle: 'saved-anchor', panelOffset: { x: 0, y: 0.1, z: 0 }, fallback: { label: 'Ceiling light' }, updatedAt: 1 };
+    s.emit('library.place', { cardId: target.cardId, placement });
+    expect(s.agent.libraryState().devices[0].placement).toBeUndefined();
+    placement.headsetId = owner.deviceId;
+    s.emit('library.place', { cardId: target.cardId, placement });
+    s.close();
+    expect(setup({ dataDir }).agent.libraryState().devices[0].placement).toEqual(placement);
+  });
+
+  it('keeps the completed version Ready when an explicitly requested rerun fails', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'ce-rerun-'));
+    cleanups.push(() => rmSync(dataDir, { recursive: true, force: true }));
+    const initial = setup({ dataDir, devices: [remo] });
+    const target = initial.addKnown();
+    Object.assign(target, { driver: lightDriver, specId: 'light-spec', verification: { off: 'pass' }, armed: true });
+    const spec = { specId: 'light-spec', cardId: target.cardId, driverId: lightDriver.driverId, title: 'Saved light controls', widgets };
+    new TagStore(join(dataDir, 'library.json')).sync(target, spec);
+    initial.close();
+    const s = setup({ dataDir, devices: [remo] });
+    const active = s.agent.libraryState().devices[0].activeVersionId;
+    s.agent.setMode('control');
+    vi.mocked(tryLink).mockRejectedValueOnce(new Error('Bridge failed during rerun'));
+    s.emit('control.setup', { cardId: target.cardId, rerun: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.agent.libraryState().devices[0]).toMatchObject({ activeVersionId: active, enabled: true, connection: 'ready' });
+    expect(s.agent.targets.get(target.cardId)?.driver).toEqual(lightDriver);
+    expect(s.dispatch).not.toHaveBeenCalled();
+    s.agent.panic();
+    s.emit('library.restore', { cardId: target.cardId, versionId: active! });
+    expect(s.agent.libraryState().devices[0]).toMatchObject({ activeVersionId: active, enabled: false, connection: 'setup' });
+    expect(s.agent.targets.get(target.cardId)?.armed).toBe(false);
   });
 
   it('replays the current setup and pending confirmation on reload without extending approval', async () => {
@@ -329,6 +388,9 @@ describe('annotation and control mode boundary', () => {
     Object.assign(target, { driver: lightDriver, specId: 'light-spec', verification: { off: 'pass' } });
     expect(s.agent.tagsState().tags[0].connection).toBe('setup');
     target.armed = true;
+    s.changePresence([remo]);
+    expect(s.of('tags.state').at(-1)?.tags[0].connection).toBe('setup');
+    s.specs.set('light-spec', { specId: 'light-spec', cardId: target.cardId, driverId: lightDriver.driverId, title: 'Light controls', widgets });
     s.changePresence([remo]);
     expect(s.of('tags.state').at(-1)?.tags[0]).toMatchObject({ connection: 'ready', specId: 'light-spec' });
     s.changePresence([{ ...remo, online: false, connections: 0 }], 'leave', remo.deviceId);

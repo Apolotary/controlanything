@@ -4,6 +4,7 @@
  * (SPEC §3.1 link.request "port-name and MIDI-identity cross-check evidence").
  */
 import type { Port } from '@ce/protocol';
+import { isVisualSynthPort } from './visualSynth';
 
 /** F0 7E <device> 06 01 F7 */
 export const IDENTITY_REQUEST = [0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7];
@@ -61,9 +62,16 @@ export function portMatches(port: Pick<Port, 'id' | 'name'>, hint: string): bool
   return port.name.toLowerCase().includes(h) || port.id.toLowerCase().includes(h);
 }
 
-/** The first MIDI output whose name matches the hint; else the only MIDI output; else undefined. */
+/** The virtual display is selectable only when the requested instrument names it explicitly. */
+export function midiOutputCandidates(ports: Port[] | undefined, hint: string | undefined): Port[] {
+  return (ports ?? []).filter((port) => port.kind === 'midi-out' && port.state !== 'disconnected'
+    && (!(isVisualSynthPort(port.id) || isVisualSynthPort(port.name))
+      || Boolean(hint && /visual[\s-]synth/i.test(hint) && portMatches(port, hint))));
+}
+
+/** The unique MIDI output matching the hint; else the only eligible physical output. */
 export function pickMidiOutput(ports: Port[] | undefined, hint: string | undefined): Port | undefined {
-  const outs = (ports ?? []).filter((p) => p.kind === 'midi-out' && p.state !== 'disconnected');
+  const outs = midiOutputCandidates(ports, hint);
   if (hint) {
     const hits = outs.filter((p) => portMatches(p, hint));
     if (hits.length) return hits.length === 1 ? hits[0] : undefined;

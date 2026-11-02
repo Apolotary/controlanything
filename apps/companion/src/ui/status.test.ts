@@ -25,8 +25,8 @@ describe('plain companion status', () => {
     ['identify', 'Identifying your device'],
     ['research', 'Learning how your device works'],
     ['drive', 'Writing your device driver'],
-    ['verify', 'Testing your device'],
-    ['forge', 'Creating your controls'],
+    ['verify', 'Checking your device'],
+    ['forge', 'Making controls'],
     ['control', 'Updating your device'],
   ] as const)('describes a running %s step without technical metadata', (phase, text) => {
     expect(statusForMessage(step(phase))).toEqual({ text, working: true });
@@ -49,13 +49,13 @@ describe('plain companion status', () => {
   });
 
   it('describes observed evidence and preserves a failed verdict', () => {
-    expect(statusForMessage(makeMessage('verify.result', evidence))).toEqual({ text: 'Test passed: the light changed', working: false });
-    expect(statusForMessage(makeMessage('verify.result', { ...evidence, pass: false }))?.text).toBe('Test did not pass: no expected change detected');
-    expect(statusForMessage(makeMessage('verify.result', { ...evidence, expected: { sense: 'camera', effect: 'none' } }))?.text).toBe('Test passed: no change, as expected');
+    expect(statusForMessage(makeMessage('verify.result', evidence))).toEqual({ text: 'Check passed: the light changed', working: false });
+    expect(statusForMessage(makeMessage('verify.result', { ...evidence, pass: false }))?.text).toBe('Check did not pass: no expected change detected');
+    expect(statusForMessage(makeMessage('verify.result', { ...evidence, expected: { sense: 'camera', effect: 'none' } }))?.text).toBe('Check passed: no change, as expected');
   });
 
-  it.each(['verified', 'forged', 'arming'] as const)('does not claim %s controls are armed', (state) => {
-    expect(statusForMessage(target(state))?.text).not.toMatch(/armed/);
+  it.each(['verified', 'forged', 'arming'] as const)('does not claim %s controls are enabled', (state) => {
+    expect(statusForMessage(target(state))?.text).not.toMatch(/enabled/);
     expect(statusForMessage(target(state))?.working).toBe(false);
   });
 
@@ -67,7 +67,7 @@ describe('plain companion status', () => {
     expect(statusForMessage(request)).toEqual({ text: 'Open Details to approve your controls', working: false });
     expect(statusForMessage(target('arming'))).toEqual(statusForMessage(request));
     expect(statusForMessage(step('arm'))).toEqual(statusForMessage(request));
-    expect(statusForMessage(spec())?.text).toBe('Controls created: open Details');
+    expect(statusForMessage(spec())?.text).toBe('Controls ready: open Details');
   });
 
   it('ignores unrelated and experimental messages', () => {
@@ -79,10 +79,10 @@ describe('plain companion status', () => {
 describe('status presenter', () => {
   it('counts generated controls only after explicit arming', () => {
     const presenter = createStatusPresenter();
-    expect(presenter.update(spec())).toEqual({ text: 'Controls created: open Details', working: false });
-    expect(presenter.update(arm(true))).toEqual({ text: 'Ready: 6 controls armed', working: false });
-    expect(presenter.update(step('arm', 'ok', 'armed by the owner'))?.text).toBe('Ready: 6 controls armed');
-    expect(presenter.update(target('controlling'))?.text).toBe('Ready: 6 controls armed');
+    expect(presenter.update(spec())).toEqual({ text: 'Controls ready: open Details', working: false });
+    expect(presenter.update(arm(true))).toEqual({ text: 'Ready: 6 controls enabled', working: false });
+    expect(presenter.update(step('arm', 'ok', 'armed by the owner'))?.text).toBe('Ready: 6 controls enabled');
+    expect(presenter.update(target('controlling'))?.text).toBe('Ready: 6 controls enabled');
   });
 
   it('uses verified actions from the approval request to exclude unavailable controls', () => {
@@ -92,16 +92,16 @@ describe('status presenter', () => {
       armId: 'arm-1', cardId: 'light', driverId: 'driver-1', title: 'Approve controls', summary: 'One control passed', expiresAt: 1000,
       actions: [{ actionId: 'action-0', label: 'Full on', verified: 'pass' }, { actionId: 'action-1', label: 'Off', verified: 'fail' }],
     }));
-    expect(presenter.update(arm(true))?.text).toBe('Ready: 1 control armed');
+    expect(presenter.update(arm(true))?.text).toBe('Ready: 1 control enabled');
   });
 
   it('keeps each device count separate, including unknown counts', () => {
     const presenter = createStatusPresenter();
     presenter.update(spec('light', 6));
     presenter.update(spec('synth', 4));
-    expect(presenter.update(target('armed', 'light'))?.text).toBe('Ready: 6 controls armed');
-    expect(presenter.update(arm(true, 'synth'))?.text).toBe('Ready: 4 controls armed');
-    expect(presenter.update(arm(true, 'laptop'))?.text).toBe('Ready: controls armed');
+    expect(presenter.update(target('armed', 'light'))?.text).toBe('Ready: 6 controls enabled');
+    expect(presenter.update(arm(true, 'synth'))?.text).toBe('Ready: 4 controls enabled');
+    expect(presenter.update(arm(true, 'laptop'))?.text).toBe('Ready: controls enabled');
   });
 
   it('counts verified generated actions and excludes locked ones', () => {
@@ -115,30 +115,30 @@ describe('status presenter', () => {
         ],
       },
     }));
-    expect(presenter.update(arm(true))?.text).toBe('Ready: 1 control armed');
+    expect(presenter.update(arm(true))?.text).toBe('Ready: 1 control enabled');
   });
 
   it('clears armed status after denial, a stopped driver, or an earlier target state', () => {
     const presenter = createStatusPresenter();
     presenter.update(spec());
     presenter.update(arm(true));
-    expect(presenter.update(arm(false))?.text).toBe('Controls are not armed');
-    expect(presenter.update(spec())?.text).toBe('Controls created: open Details');
+    expect(presenter.update(arm(false))?.text).toBe('Controls are not enabled');
+    expect(presenter.update(spec())?.text).toBe('Controls ready: open Details');
     presenter.update(arm(true));
-    expect(presenter.update(makeMessage('driver.status', { driverId: 'driver-1', cardId: 'light', phase: 'disarmed' }))?.text).toBe('Controls are not armed');
-    expect(presenter.update(spec())?.text).toBe('Controls created: open Details');
+    expect(presenter.update(makeMessage('driver.status', { driverId: 'driver-1', cardId: 'light', phase: 'disarmed' }))?.text).toBe('Controls are not enabled');
+    expect(presenter.update(spec())?.text).toBe('Controls ready: open Details');
     presenter.update(arm(true));
     presenter.update(target('driving'));
-    expect(presenter.update(spec())?.text).toBe('Controls created: open Details');
+    expect(presenter.update(spec())?.text).toBe('Controls ready: open Details');
   });
 
   it('clears armed state on panic and all remembered state on reset', () => {
     const presenter = createStatusPresenter();
     presenter.update(spec());
     presenter.update(arm(true));
-    expect(presenter.update(makeMessage('panic', { reason: 'stop' }))?.text).toBe('Stopped: controls are not armed');
-    expect(presenter.update(spec())?.text).toBe('Controls created: open Details');
+    expect(presenter.update(makeMessage('panic', { reason: 'stop' }))?.text).toBe('Stopped: controls are not enabled');
+    expect(presenter.update(spec())?.text).toBe('Controls ready: open Details');
     presenter.reset();
-    expect(presenter.update(arm(true))?.text).toBe('Ready: controls armed');
+    expect(presenter.update(arm(true))?.text).toBe('Ready: controls enabled');
   });
 });

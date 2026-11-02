@@ -401,7 +401,10 @@ export class LeanHud implements Hud {
       this.refreshDetails();
       this.refreshCard();
     });
-    if (this.detailsOpen) return;
+    if (this.detailsOpen) {
+      this.button(this.controls, 'device-forget', 'Forget device', 0, THEME.card.buttonsY, 0.18, 'handle', () => this.events.emit('forget', { targetId: target!.id }));
+      return;
+    }
     if (m) this.refreshCommandUi(m);
     let main: Control | undefined;
     const buttons: Control[] = [];
@@ -601,7 +604,7 @@ export class LeanHud implements Hud {
     if (!this.boxes.set(t.id, this.point, t.sizeM?.[0] ?? THEME.box.defaultWidth, t.sizeM?.[1] ?? THEME.box.defaultHeight, t.tagged ? THEME.color.accent : THEME.color.line)) return;
     this.boxes.setTagged(t.id, !!t.tagged, t.connection === 'ready');
     this.boxes.setFacing(t.id, t.facing);
-    if (!previous || previous.label !== t.label || previous.tagged !== t.tagged || previous.connection !== t.connection || previous.identifying !== t.identifying || previous.busy !== t.busy) this.refreshTargetLabel(t);
+    if (!previous || previous.label !== t.label || previous.tagged !== t.tagged || previous.connection !== t.connection || previous.identifying !== t.identifying || previous.busy !== t.busy || previous.locating !== t.locating) this.refreshTargetLabel(t);
     if (this.locked === t.id) {
       if (previous?.label !== t.label || previous?.connection !== t.connection || previous?.tagged !== t.tagged) this.refreshCard();
       else if (previous?.status !== t.status) this.refreshStatus();
@@ -617,7 +620,10 @@ export class LeanHud implements Hud {
     const state = this.deviceState?.targetId === t.id ? this.deviceState : null;
     const text = targetChipLabel({ ...t, ...(state ? { connection: state.connection, busy: state.busy } : {}) }, this.home.mode, !!removable);
     const width = Math.max(0.09, Math.ceil((text.length * THEME.font.label * 0.56 + THEME.box.labelPadding * 3) * 100) / 100);
-    if (removable) this.button(label, `tag-remove:${t.id}`, text, width / 2, 0, width, 'handle', () => this.events.emit('tagRemove', { targetId: t.id }));
+    if (removable) {
+      this.button(label, `tag-remove:${t.id}`, text, width / 2, 0, width, 'handle', () => this.events.emit('tagRemove', { targetId: t.id }));
+      this.button(label, `forget:${t.id}`, 'Forget', width + 0.055, 0, 0.09, 'handle', () => this.events.emit('forget', { targetId: t.id }));
+    }
     else {
       const pill = this.surfaces.create(width, THEME.box.labelHeight, t.tagged ? 'selected' : 'plate', true);
       pill.position.x = width / 2;
@@ -714,7 +720,7 @@ export class LeanHud implements Hud {
     }
   }
   showConfirm(confirm: ConfirmRequest | null): void {
-    if (confirm && this.home.mode !== 'control') return;
+    if (confirm && this.home.mode !== 'control' && confirm.kind !== 'forget' && confirm.kind !== 'place') return;
     if (!confirm && this.codeTarget === HELPER_PAIRING_TARGET) { this.confirm = null; return; }
     this.confirm = confirm; this.clear(this.modal); this.modal.visible = !!confirm; if (!confirm) {
       if (this.approvals.length) this.showApprovals(this.approvals);
@@ -727,7 +733,7 @@ export class LeanHud implements Hud {
     summary.name = 'confirmation-summary'; summary.position.set(0, 0.05, THEME.panel.depth); this.modal.add(summary);
     const arm = confirm.kind === 'arm';
     let startedAt = 0;
-    const primary = this.button(this.modal, 'confirm-yes', arm ? 'Enable controls' : confirm.hold ? 'Hold to allow' : 'Allow', 0.065, -0.1, arm ? 0.21 : THEME.control.buttonWidth * 1.5, 'confirm', () => { startedAt = this.time; }, () => {
+    const primary = this.button(this.modal, 'confirm-yes', confirm.primaryLabel ?? (arm ? 'Enable controls' : confirm.hold ? 'Hold to allow' : 'Allow'), 0.065, -0.1, arm ? 0.21 : THEME.control.buttonWidth * 1.5, 'confirm', () => { startedAt = this.time; }, () => {
       if ((!confirm.expiresAt || Date.now() < confirm.expiresAt) && (!confirm.hold || (this.time - startedAt) * 1000 >= (arm ? 2000 : THEME.control.holdMs))) this.events.emit('confirm', { id: confirm.id, approve: true, hold: !!confirm.hold });
     });
     if (arm) {
@@ -735,7 +741,7 @@ export class LeanHud implements Hud {
       (primary.group.getObjectByName('button-plate') as Mesh).material = this.surfaces.material(primary.w, primary.h, 'primary', true);
       if (confirm.hold) this.label(this.modal, 'Hold for 2 seconds to enable', -0.045, THEME.font.detail);
     }
-    this.button(this.modal, 'confirm-no', arm ? 'Not now' : 'Cancel', -0.11, -0.1, THEME.control.buttonWidth, 'confirm', () => this.events.emit('confirm', { id: confirm.id, approve: false }));
+    this.button(this.modal, 'confirm-no', confirm.cancelLabel ?? (arm ? 'Not now' : 'Cancel'), -0.11, -0.1, THEME.control.buttonWidth, 'confirm', () => this.events.emit('confirm', { id: confirm.id, approve: false }));
     this.place();
   }
   showPairing(pair: { display: string; qr: string; message?: string } | null): void {

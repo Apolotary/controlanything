@@ -7,7 +7,7 @@ import { ArmService } from './arm';
 import { ComboRunner } from './combos';
 import type { DaemonRunner } from './daemons';
 import { ControlRouter } from './control';
-import { Dispatcher, ExecError } from './dispatch';
+import { Dispatcher, ExecError, type ExecResult } from './dispatch';
 import { StepLog } from './steps';
 import { TargetStore } from './targets';
 import { verifyDriver, verifyOnce } from './verify';
@@ -29,7 +29,7 @@ function setup() {
   // The unit boundary represents a tagged, armed device in Control mode with a connected bridge.
   const target = targets.create({ cardId: 'device', driver: structuredClone(driver), specId: 'spec', armed: true, verification: { screen: 'pass', up: 'pass', down: 'pass', level: 'pass' } });
   const steps = new StepLog(hub);
-  const fire = vi.fn(() => true);
+  const fire = vi.fn((_device: string, _op: unknown, opts?: { onResult?: ExecResult }) => { opts?.onResult?.(true, 'Applied'); return true; });
   const exec = vi.fn(async () => ack);
   const dispatcher = { fire, exec, flushQueued: vi.fn() } as unknown as Dispatcher;
   const specs = { get: () => spec, list: () => [spec] };

@@ -6,3 +6,4 @@ export * from './hackset';
 export * from './payloads';
 export * from './messages';
 export * from './jsonSchema';
+export * from './library';

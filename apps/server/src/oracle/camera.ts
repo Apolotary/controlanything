@@ -131,7 +131,7 @@ export function cameraMatches(obs: CameraObservation, expected: Effect, th: Came
 
 /** The `observed` part of an Evidence record for a camera check. */
 export function cameraEvidence(obs: CameraObservation, expected: Effect, th: CameraThresholds = DEFAULT_CAMERA_THRESHOLDS): Evidence['observed'] {
-  const colour = expected === 'warmer' || expected === 'cooler';
+  const colour = expected === 'warmer' || expected === 'cooler' || (expected === 'any' && (obs.effect === 'warmer' || obs.effect === 'cooler'));
   const seen = obs.effect === 'none' ? 'no change' : obs.secondary ? `${obs.effect} + ${obs.secondary}` : obs.effect;
   if (colour) return { sense: 'camera', metric: 'rb-ratio', before: round(obs.rbBefore), after: round(obs.rbAfter), delta: round(obs.rbDelta), threshold: th.rb, note: `seen: ${seen}` };
   const onOff = expected === 'on' || expected === 'off';

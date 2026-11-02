@@ -650,6 +650,7 @@ def build_laptop(o, rot):
     scr.name = 'laptop_screen'
     scr.scale = (0.27, 0.17, 1)
     assign(scr, M['laptop_screen'])
+    SCREENS['laptop-screen'] = scr
     parts.append(scr)
     DEVICES['laptop'] = parts
 
