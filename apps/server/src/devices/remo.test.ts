@@ -8,9 +8,10 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { IrOp } from '@ce/protocol';
+import type { IrOp, PayloadOf } from '@ce/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getAgent } from '../agent';
+import { Dispatcher } from '../agent/dispatch';
 import { pickExecutor, pickSensor } from '../agent/executors';
 import { createApp } from '../app';
 import type { ServerConfig } from '../config';
@@ -69,12 +70,13 @@ function mockRemo(initial?: RemoFrame): Promise<MockRemo> {
     res.writeHead(405).end();
   });
   cleanups.push(() => new Promise<void>((r) => server.close(() => r())));
-  return new Promise((resolve) =>
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
     server.listen(0, '127.0.0.1', () => {
       m.base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
       resolve(m);
-    }),
-  );
+    });
+  });
 }
 
 // --- a real server on a free port -----------------------------------------------------------------
@@ -95,13 +97,21 @@ async function startServer() {
   };
   const ctx = createContext(config, { log: () => {}, registryFile: null });
   const agent = getAgent(ctx, { macLocal: false, settleMs: () => 10, companionWaitMs: 1000 });
+  // This harness exercises bridge transport approval independently of the app's tag/mode policy.
+  const dispatcher = new Dispatcher({ hub: ctx.hub });
+  const unsubscribe = ctx.hub.onMessage(({ message }) => {
+    if (message.type === 'exec.ack') dispatcher.onAck(message.payload as PayloadOf<'exec.ack'>);
+    if (message.type === 'sense.result') dispatcher.onSense(message.payload as PayloadOf<'sense.result'>);
+  });
   const servers: RunningServers = await startServers(ctx, createApp(ctx));
   cleanups.push(async () => {
+    unsubscribe();
+    dispatcher.close();
     agent.close();
     await servers.close();
     rmSync(tmp, { recursive: true, force: true });
   });
-  return { ctx, agent, tmp, base: `http://127.0.0.1:${ctx.bound.http}` };
+  return { ctx, agent, dispatcher, tmp, base: `http://127.0.0.1:${ctx.bound.http}` };
 }
 
 const OFF_OP: IrOp = { kind: 'ir', protocol: 'AEHA', bytes: OFF_BYTES, ref: 'lib:panasonic/ch1/off' };
@@ -204,7 +214,7 @@ describe('Remo discovery', () => {
 describe('Remo bridge through the hub', () => {
   it('pairs over loopback, learns by polling, refuses to send until approved, then sends >= 1 s apart', { timeout: 20_000 }, async () => {
     const remo = await mockRemo();
-    const { ctx, agent, tmp, base } = await startServer();
+    const { ctx, agent, dispatcher, tmp, base } = await startServer();
     const bridge = new RemoBridge({ serverBase: base, remo: new RemoClient(remo.base), name: 'Nature Remo (test)', tokenFile: join(tmp, 'remo.json'), pollMs: 30, minSendGapMs: 400 });
     cleanups.push(() => bridge.stop());
     await bridge.start();
@@ -217,7 +227,7 @@ describe('Remo bridge through the hub', () => {
     expect(pickSensor(agent.roster, 'ir', { preferDeviceId: bridge.deviceId })?.deviceId).toBe(bridge.deviceId);
 
     // LEARN: the window opens, the user presses the remote toward the Remo, the new frame is the capture
-    const learn = agent.dispatcher.sense(bridge.deviceId, 'ir-capture', { durationMs: 2500, prompt: 'Press 消灯 (off) once' });
+    const learn = dispatcher.sense(bridge.deviceId, 'ir-capture', { durationMs: 2500, prompt: 'Press 消灯 (off) once' });
     await new Promise((r) => setTimeout(r, 200));
     remo.receive(SAMPLE);
     const results = await learn;
@@ -230,14 +240,14 @@ describe('Remo bridge through the hub', () => {
     expect(remo.badHeader).toBe(0);
 
     // nothing new in the window: an honest "nothing received", not a stale capture
-    const nothing = await agent.dispatcher.sense(bridge.deviceId, 'ir-capture', { durationMs: 1000 });
+    const nothing = await dispatcher.sense(bridge.deviceId, 'ir-capture', { durationMs: 1000 });
     expect(nothing.some((r) => r.ir?.rawUs?.length)).toBe(false);
     expect(nothing.at(-1)?.error).toMatch(/no new IR signal/);
 
     // EXEC: refused until the user approves; dry runs never reach the Remo
     const postsBefore = remo.posts.length;
-    await expect(agent.dispatcher.exec(bridge.deviceId, OFF_OP, { lightCap: true, waitForSlot: true })).rejects.toThrow(/not approved/);
-    const dry = await agent.dispatcher.exec(bridge.deviceId, OFF_OP, { dryRun: true, lightCap: true, waitForSlot: true });
+    await expect(dispatcher.exec(bridge.deviceId, OFF_OP, { lightCap: true, waitForSlot: true })).rejects.toThrow(/not approved/);
+    const dry = await dispatcher.exec(bridge.deviceId, OFF_OP, { dryRun: true, lightCap: true, waitForSlot: true });
     expect(dry.ok).toBe(true);
     expect(dry.detail).toMatch(/dry run/);
     expect(remo.posts).toHaveLength(postsBefore);
@@ -245,17 +255,17 @@ describe('Remo bridge through the hub', () => {
     // approved: the frame goes out as the Remo expects, and a second send waits for the gap
     bridge.allowSend = true;
     const t0 = Date.now();
-    const ack1 = await agent.dispatcher.exec(bridge.deviceId, OFF_OP, { lightCap: true, waitForSlot: true });
+    const ack1 = await dispatcher.exec(bridge.deviceId, OFF_OP, { lightCap: true, waitForSlot: true });
     expect(ack1.ok).toBe(true);
     expect(remo.posts).toHaveLength(1);
     expect(remo.posts[0]).toEqual(opToFrame(OFF_OP));
-    const ack2 = await agent.dispatcher.exec(bridge.deviceId, { ...OFF_OP, repeats: 1 }, { lightCap: true, waitForSlot: true });
+    const ack2 = await dispatcher.exec(bridge.deviceId, { ...OFF_OP, repeats: 1 }, { lightCap: true, waitForSlot: true });
     expect(ack2.ok).toBe(true);
     expect(Date.now() - t0).toBeGreaterThanOrEqual(380);
     expect(remo.posts[1].data.length).toBe(opToFrame(OFF_OP).data.length * 2 + 1);
     expect(bridge.sends).toBe(2);
     // non-IR ops are refused as unsupported without touching the Remo
-    await expect(agent.dispatcher.exec(bridge.deviceId, { kind: 'midi', msg: 'panic' } as never, { waitForSlot: true })).rejects.toThrow(/unsupported/);
+    await expect(dispatcher.exec(bridge.deviceId, { kind: 'midi', msg: 'panic' } as never, { waitForSlot: true })).rejects.toThrow(/unsupported/);
     expect(remo.posts).toHaveLength(2);
 
     // the identity survives a restart: the stored token is reused, no second device appears
@@ -271,12 +281,12 @@ describe('Remo bridge through the hub', () => {
   });
 
   it('reports an unreachable Remo instead of stalling the learn window', { timeout: 10_000 }, async () => {
-    const { agent, tmp, base } = await startServer();
+    const { dispatcher, tmp, base } = await startServer();
     const bridge = new RemoBridge({ serverBase: base, remo: new RemoClient('http://127.0.0.1:9', { timeoutMs: 300 }), tokenFile: join(tmp, 'remo.json'), pollMs: 30 });
     cleanups.push(() => bridge.stop());
     await bridge.start();
     const t0 = Date.now();
-    const results = await agent.dispatcher.sense(bridge.deviceId, 'ir-capture', { durationMs: 5000 });
+    const results = await dispatcher.sense(bridge.deviceId, 'ir-capture', { durationMs: 5000 });
     expect(results.some((r) => r.ir)).toBe(false);
     expect(results.at(-1)?.error).toMatch(/unreachable/);
     expect(Date.now() - t0).toBeLessThan(4000);

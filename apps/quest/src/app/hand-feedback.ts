@@ -16,13 +16,13 @@ interface HoverTarget {
 export class HandFeedback {
   readonly root = new Group();
   private readonly geometry = new SphereGeometry(0.006, 8, 6);
-  private readonly idle = new MeshBasicMaterial({ color: 0x91b4a7, depthTest: false, depthWrite: false, toneMapped: false });
-  private readonly pressed = new MeshBasicMaterial({ color: 0xffffff, depthTest: false, depthWrite: false, toneMapped: false });
+  private readonly idle = new MeshBasicMaterial({ color: 0x91b4a7, depthTest: true, depthWrite: false, toneMapped: false });
+  private readonly pressed = new MeshBasicMaterial({ color: 0xffffff, depthTest: true, depthWrite: false, toneMapped: false });
   private readonly dots: Record<Handedness, Mesh<SphereGeometry, MeshBasicMaterial>>;
   private readonly hoverGeometry = new BufferGeometry().setAttribute('position', new Float32BufferAttribute([
     -0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0,
   ], 3));
-  private readonly hoverMaterial = new LineBasicMaterial({ color: 0xe1eee8, depthTest: false, depthWrite: false, toneMapped: false });
+  private readonly hoverMaterial = new LineBasicMaterial({ color: 0xe1eee8, depthTest: true, depthWrite: false, toneMapped: false });
   private readonly hovers: Record<Handedness, LineLoop<BufferGeometry, LineBasicMaterial>>;
   private readonly facing = new Vector3();
   private showHover = true;

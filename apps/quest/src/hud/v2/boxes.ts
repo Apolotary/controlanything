@@ -31,9 +31,9 @@ const worldUp = new Vector3(0, 1, 0);
 
 export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
   readonly boxes = new Map<string, BoxState>();
-  private readonly pos: Float32Array;
-  private readonly col: Float32Array;
-  private readonly alpha: Float32Array;
+  private pos: Float32Array;
+  private col: Float32Array;
+  private alpha: Float32Array;
   private readonly right = new Vector3(1, 0, 0);
   private readonly direction = new Vector3();
   private readonly faceUp = new Vector3();
@@ -54,9 +54,11 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
   private readonly fadedSurfaces = new WeakSet<Object3D>();
   private labelsDirty = true;
   private renderedBoxes = 0;
-  private limit: number;
+  private limit = Infinity;
+  private capacity: number;
+  private readonly placedLabels: LabelLayout[] = [];
 
-  constructor(private readonly max = THEME.box.max as number) {
+  constructor(max = THEME.box.max as number) {
     const geo = new BufferGeometry();
     const pos = new Float32Array(max * VERTICES * 3);
     const col = new Float32Array(max * VERTICES * 3);
@@ -75,7 +77,7 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
     this.pos = pos;
     this.col = col;
     this.alpha = alpha;
-    this.limit = max;
+    this.capacity = max;
     this.material.onBeforeCompile = (shader) => {
       shader.vertexShader = 'attribute float boxOpacity; varying float vBoxOpacity;\n' + shader.vertexShader.replace('#include <color_vertex>', '#include <color_vertex>\nvBoxOpacity = boxOpacity;');
       shader.fragmentShader = 'varying float vBoxOpacity;\n' + shader.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.a *= vBoxOpacity;');
@@ -93,6 +95,7 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
         for (const old of this.boxes.values()) if (old.removing) { this.remove(old.id); break; }
         if (this.boxes.size >= this.limit) return;
       }
+      if (this.boxes.size >= this.capacity) this.grow();
       b = { id, center: center.clone(), w, h, color: c.clone(), scale: 1, tCenter: center.clone(), tw: w, th: h, tColor: c.clone(), tScale: 1, pulse: 0, removing: false, opacity: 1 };
       this.boxes.set(id, b);
     }
@@ -104,6 +107,23 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
     this.labelsDirty = true;
     if (immediate) { b.center.copy(center); b.w = b.tw; b.h = b.th; b.color.copy(c); }
     return b;
+  }
+  private grow(): void {
+    this.capacity *= 2;
+    this.pos = new Float32Array(this.capacity * VERTICES * 3);
+    this.col = new Float32Array(this.capacity * VERTICES * 3);
+    this.alpha = new Float32Array(this.capacity * VERTICES);
+    const indices = new Uint32Array(this.capacity * INDICES);
+    for (let box = 0; box < this.capacity; box++) for (let segment = 0; segment < SEGMENTS; segment++) {
+      const a = box * VERTICES + segment * 2, b = box * VERTICES + (segment + 1) % SEGMENTS * 2;
+      indices.set([a, b, a + 1, b, b + 1, a + 1], box * INDICES + segment * 6);
+    }
+    // Release replaced GPU buffers while retaining the public geometry object.
+    this.geometry.dispose();
+    this.geometry.setAttribute('position', new BufferAttribute(this.pos, 3));
+    this.geometry.setAttribute('color', new BufferAttribute(this.col, 3));
+    this.geometry.setAttribute('boxOpacity', new BufferAttribute(this.alpha, 1));
+    this.geometry.setIndex(new BufferAttribute(indices, 1));
   }
   override remove(...objects: import('three').Object3D[]): this;
   override remove(id: string): this;
@@ -122,9 +142,9 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
     return this;
   }
   has(id: string): boolean { return this.boxes.has(id); }
-  /** Scanning uses eight slots; other HUD scenes can retain the allocated capacity. */
+  /** A scanning policy can explicitly cap observations without limiting persisted tags by default. */
   setLimit(limit: number): void {
-    this.limit = Math.max(1, Math.min(this.max, Math.floor(Number.isFinite(limit) ? limit : this.max)));
+    this.limit = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : Infinity;
     const overflow = this.boxes.size - this.limit;
     if (overflow <= 0) return;
     const priority = (box: BoxState) => Number(box.id === this.selected) * 4 + Number(box.id === this.active) * 2 + Number(box.id === this.hovered);
@@ -235,12 +255,14 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
     this.viewRight.crossVectors(this.viewDirection, worldUp).normalize();
     if (this.viewRight.lengthSq() < 1e-6) this.viewRight.set(1, 0, 0);
     this.viewUp.crossVectors(this.viewRight, this.viewDirection).normalize();
-    const placed: LabelLayout[] = [];
+    const placed = this.placedLabels; placed.length = 0;
     for (const b of this.boxes.values()) {
       let layout = this.labelLayouts.get(b.id);
       if (!layout) { layout = { anchor: new Vector3(), left: 0, right: 0, bottom: 0, top: 0, depth: 0 }; this.labelLayouts.set(b.id, layout); }
       const scale = this.labelScale(b, head);
-      const pill = this.labelGroup(b.id)?.children.find((child) => child instanceof Mesh && child.material instanceof ShaderMaterial);
+      let pill: Object3D | undefined;
+      const label = this.labelGroup(b.id);
+      if (label) for (const child of label.children) if (child instanceof Mesh && child.material instanceof ShaderMaterial) { pill = child; break; }
       const width = (pill?.scale.x ?? (22 * THEME.font.label * 0.56 + THEME.box.labelPadding * 3)) * scale;
       const height = (THEME.box.labelHeight + 0.006) * scale;
       this.basis(b.center, head, b.facing);
@@ -259,7 +281,8 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
   }
   private labelBounds(layout: LabelLayout, width: number, height: number, head: Vector3): void {
     layout.left = layout.bottom = Infinity; layout.right = layout.top = -Infinity; layout.depth = 0;
-    for (const x of [0, width]) for (const y of [-height / 2, height / 2]) {
+    for (let corner = 0; corner < 4; corner++) {
+      const x = corner < 2 ? 0 : width, y = corner % 2 ? height / 2 : -height / 2;
       this.relative.copy(layout.anchor).addScaledVector(this.right, x).addScaledVector(this.faceUp, y).sub(head);
       const depth = Math.max(0.05, this.relative.dot(this.viewDirection));
       const px = this.relative.dot(this.viewRight) / depth, py = this.relative.dot(this.viewUp) / depth;
@@ -294,7 +317,7 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
     this.basis(center, head, normal);
     return out.setFromRotationMatrix(this.frame.makeBasis(this.right, this.faceUp, this.direction));
   }
-  hitTest(ray: BoxRay, head: Vector3 = this.lastHead): BoxHit | null {
+  hitTest(ray: BoxRay, head: Vector3 = this.lastHead, out?: BoxHit): BoxHit | null {
     const direction = 'direction' in ray ? ray.direction : ray.dir;
     const rayLength = direction.length();
     if (!Number.isFinite(rayLength) || rayLength < 1e-6) return null;
@@ -309,9 +332,12 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
       this.relative.copy(ray.origin).addScaledVector(direction, t).sub(b.center);
       if (this.containsLocal(b)) { nearest = b; distance = t * rayLength; }
     }
-    return nearest ? { box: nearest, point: ray.origin.clone().addScaledVector(direction, distance / rayLength), distance } : null;
+    if (!nearest) return null;
+    const result = out ?? { box: nearest, point: new Vector3(), distance };
+    result.box = nearest; result.distance = distance; result.point.copy(ray.origin).addScaledVector(direction, distance / rayLength);
+    return result;
   }
-  intersectRay(ray: BoxRay, head: Vector3 = this.lastHead): BoxHit | null { return this.hitTest(ray, head); }
+  intersectRay(ray: BoxRay, head: Vector3 = this.lastHead, out?: BoxHit): BoxHit | null { return this.hitTest(ray, head, out); }
   hitTestPoint(point: Vector3, head: Vector3 = this.lastHead, tolerance: number = THEME.control.near): BoxHit | null {
     let nearest: BoxState | null = null, distance = Math.max(0, tolerance);
     const projected = new Vector3();

@@ -1,7 +1,11 @@
-import { type DeviceCardPayload, type DeviceInfo, type Driver, makeMessage, type MessageType, type PayloadOf } from '@ce/protocol';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { type DeviceCardPayload, type DeviceInfo, type Driver, makeMessage, type MessageType, type PayloadOf, type UiSpecPayload } from '@ce/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../config';
 import { createContext } from '../context';
+import type { Forge } from '../gen3d/forge';
 import type { HubMessageEvent } from '../hub';
 import { ARM_TIMEOUT_MS } from './arm';
 import { createAgent } from './index';
@@ -28,13 +32,19 @@ function deferred<T>() {
 const cleanups: (() => void)[] = [];
 
 function setup() {
-  const config = loadConfig({ MODEL_MODE: 'fixture', FIXTURE_DELAY_MS: '0', MUSE_REPLAY: '0', HTTP_PORT: '0', HTTPS_PORT: '0' });
+  const dataDir = mkdtempSync(join(tmpdir(), 'ce-selection-'));
+  const config = loadConfig({ CE_DATA_DIR: dataDir, MODEL_MODE: 'fixture', FIXTURE_DELAY_MS: '0', MUSE_REPLAY: '0', HTTP_PORT: '0', HTTPS_PORT: '0' });
   const ctx = createContext(config, { log: () => {}, registryFile: null });
+  vi.spyOn(ctx.hub, 'devices').mockReturnValue([
+    { deviceId: 'remo', name: 'Remo', kind: 'remo', role: 'device', capabilities: ['ir'], canApprove: false, online: true, connections: 1, pairedAt: 1 },
+  ]);
   const broadcasts = vi.spyOn(ctx.hub, 'broadcast');
   const subscription = vi.spyOn(ctx.hub, 'onMessage');
-  const agent = createAgent(ctx, { macLocal: false, forge: () => undefined });
+  const specs = new Map<string, UiSpecPayload>();
+  const forge = { get: (id: string) => specs.get(id), list: () => [...specs.values()] } as unknown as Forge;
+  const agent = createAgent(ctx, { macLocal: false, forge: () => forge });
   const dispatch = vi.spyOn(agent.dispatcher, 'exec');
-  cleanups.push(() => { agent.close(); ctx.hub.close(); });
+  cleanups.push(() => { agent.close(); ctx.hub.close(); rmSync(dataDir, { recursive: true, force: true }); });
   const emit = <T extends MessageType>(type: T, payload: PayloadOf<T>) => {
     const event: HubMessageEvent = {
       message: makeMessage(type, payload, { from: owner.deviceId, to: 'server' }),
@@ -45,10 +55,15 @@ function setup() {
   };
   const of = <T extends MessageType>(type: T) => broadcasts.mock.calls
     .filter(([sentType]) => sentType === type).map(([, payload]) => payload as PayloadOf<T>);
-  const addTarget = (id: string, state: 'failed' | 'forged' = 'failed') => agent.targets.create({
-    cardId: id, card: { ...card, cardId: id }, state, selectedBy: owner.deviceId,
-    ...(state === 'forged' ? { driver: { ...driver, cardId: id }, specId: `spec-${id}`, verification: { off: 'pass' as const } } : {}),
-  });
+  const addTarget = (id: string, state: 'failed' | 'forged' = 'failed') => {
+    const target = agent.targets.create({
+      cardId: id, card: { ...card, cardId: id }, state, selectedBy: owner.deviceId,
+      ...(state === 'forged' ? { driver: { ...driver, cardId: id }, specId: `spec-${id}`, verification: { off: 'pass' as const } } : {}),
+    });
+    if (state === 'forged') specs.set(`spec-${id}`, { specId: `spec-${id}`, cardId: id, driverId: driver.driverId, rev: 1 });
+    agent.addTag({ targetId: id, label: 'Ceiling light' }, owner);
+    return target;
+  };
   return { ctx, agent, dispatch, emit, of, addTarget };
 }
 
@@ -69,7 +84,8 @@ describe('target selection and recovery without sockets', () => {
   it('handles cancel/retry messages and ignores actions carrying an old runId', async () => {
     const { agent, emit, of, addTarget, dispatch } = setup();
     const target = addTarget('light');
-    emit('target.select', { cardId: target.cardId });
+    emit('mode.set', { mode: 'control' });
+    emit('control.setup', { cardId: target.cardId });
     const firstRunId = target.runId;
     const firstAbort = target.abort!;
     expect(target.state).toBe('linking');
@@ -97,19 +113,22 @@ describe('target selection and recovery without sockets', () => {
     expect(agent.arm.pendingIds()).toEqual([]);
   });
 
-  it('switches paired devices immediately while keeping another client’s run active', () => {
+  it('switches setup between tagged paired devices while keeping another client’s run active', () => {
     const { ctx, agent, addTarget } = setup();
     const devices: DeviceInfo[] = ['mac-a', 'mac-b'].map((deviceId) => ({
       deviceId, name: deviceId, kind: 'mac', role: 'companion', capabilities: ['local'],
       canApprove: true, online: true, connections: 1, pairedAt: 1,
     }));
-    vi.spyOn(ctx.hub, 'devices').mockReturnValue(devices);
     const other = addTarget('other-light');
-    agent.select({ cardId: other.cardId }, { deviceId: 'other-quest' });
-    const otherAbort = other.abort!;
+    vi.mocked(ctx.hub.devices).mockReturnValue([...ctx.hub.devices(), ...devices]);
     const first = agent.select({ deviceId: 'mac-a' }, owner)!;
-    const firstAbort = first.abort!;
     const second = agent.select({ deviceId: 'mac-b' }, owner)!;
+    agent.setMode('control');
+    agent.setup(other.cardId, { deviceId: 'other-quest' });
+    const otherAbort = other.abort!;
+    agent.setup(first.cardId, owner);
+    const firstAbort = first.abort!;
+    agent.setup(second.cardId, owner);
     expect(firstAbort.signal.aborted).toBe(true);
     expect(first.state).toBe('failed');
     expect(second.abort?.signal.aborted).toBe(false);
@@ -121,7 +140,8 @@ describe('target selection and recovery without sockets', () => {
   it('leaves the current run active when a selection does not match a device', () => {
     const { agent, addTarget } = setup();
     const target = addTarget('light');
-    agent.select({ cardId: target.cardId }, owner);
+    agent.setMode('control');
+    agent.setup(target.cardId, owner);
     const abort = target.abort!;
     for (const selection of [{ cardId: 'missing' }, { deviceId: 'missing' }, { frameId: 'missing', detId: 'missing' }, {}]) {
       expect(agent.select(selection, owner)).toBeUndefined();
@@ -134,7 +154,8 @@ describe('target selection and recovery without sockets', () => {
   it('starts retry with a fresh runId and clears old controls, consent and verification', () => {
     const { agent, addTarget } = setup();
     const target = addTarget('light');
-    Object.assign(target, { armed: true, driver, specId: 'old-spec', controlCount: 3, verification: { off: 'pass' }, evidence: [], lastError: 'old failure' });
+    agent.setMode('control');
+    Object.assign(target, { armed: false, driver, specId: 'old-spec', controlCount: 3, verification: { off: 'pass' }, evidence: [], lastError: 'old failure' });
     const runId = target.runId;
     expect(agent.retry({ cardId: target.cardId, runId }, owner)).toBe(target);
     expect(target.runId).not.toBe(runId);
@@ -152,7 +173,8 @@ describe('target selection and recovery without sockets', () => {
     const pending = deferred<LinkOutcome>();
     vi.mocked(tryLink).mockReturnValueOnce(pending.promise);
     const target = addTarget('light');
-    agent.select({ cardId: target.cardId }, owner);
+    agent.setMode('control');
+    agent.setup(target.cardId, owner);
     const oldAbort = target.abort!;
     const runId = target.runId;
     agent.cancel({ cardId: target.cardId, runId });
@@ -172,16 +194,17 @@ describe('target selection and recovery without sockets', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it('cancels a pending ARM confirmation on a new selection and rejects a late tap', async () => {
+  it('cancels a pending ARM confirmation on another setup and rejects a late tap', async () => {
     const { agent, emit, of, addTarget, dispatch } = setup();
     const first = addTarget('light', 'forged');
     const second = addTarget('another-light');
-    agent.select({ cardId: first.cardId }, owner);
+    agent.setMode('control');
+    agent.setup(first.cardId, owner);
     const request = of('arm.request').at(-1)!;
     const abort = first.abort!;
     expect(first.armed).toBe(false);
     expect(agent.arm.pendingIds()).toEqual([request.armId]);
-    agent.select({ cardId: second.cardId }, owner);
+    agent.setup(second.cardId, owner);
     expect(abort.signal.aborted).toBe(true);
     expect(agent.arm.pendingIds()).toEqual([]);
     expect(first.state).toBe('failed');
@@ -197,7 +220,8 @@ describe('target selection and recovery without sockets', () => {
   it('retries an expired ARM confirmation without repeating physical discovery', async () => {
     const { agent, emit, of, addTarget, dispatch } = setup();
     const target = addTarget('light', 'forged');
-    agent.select({ cardId: target.cardId }, owner);
+    agent.setMode('control');
+    agent.setup(target.cardId, owner);
     const runId = target.runId;
     const firstRequest = of('arm.request').at(-1)!;
     await vi.advanceTimersByTimeAsync(ARM_TIMEOUT_MS);

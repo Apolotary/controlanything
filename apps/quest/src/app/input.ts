@@ -84,6 +84,8 @@ interface HandTrack {
   palmUpSince: number | null;
   selectDown: boolean;
   selectLatched: boolean;
+  selectDuplicate: boolean;
+  jointReleasedAt: number;
   jointCount: number;
   pinchDistanceCm: number | null;
   hand: ShellHand;
@@ -101,6 +103,7 @@ export interface HandDiagnostics {
 export type InputDiagnostics = Record<Handedness, HandDiagnostics>;
 
 const JOINT_LOSS_GRACE_MS = 150;
+const SELECT_DUPLICATE_MS = 120;
 const HANDEDNESSES: readonly Handedness[] = ['left', 'right'];
 
 function makeHand(): ShellHand {
@@ -117,7 +120,8 @@ function makeTrack(): HandTrack {
   return {
     pinch: new PinchDetector(), state: { pinching: false, justStarted: false, justEnded: false },
     jointPinching: false, pinching: false, lastJointTime: null, lastPinchPoint: new Vector3(), hasPinchPoint: false,
-    palmUpSince: null, selectDown: false, selectLatched: false, jointCount: 0, pinchDistanceCm: null,
+    palmUpSince: null, selectDown: false, selectLatched: false, selectDuplicate: false,
+    jointReleasedAt: -Infinity, jointCount: 0, pinchDistanceCm: null,
     hand: makeHand(), jointPool,
   };
 }
@@ -231,8 +235,12 @@ export class InputSampler {
     if (!this.hasSource(src)) return;
     const track = this.trackSource(src);
     track.selectDown = down;
+    // A delayed native event may describe the joint pinch that just finished. Keep it
+    // suppressed until selectend so one physical pinch cannot press two buttons.
+    if (down) track.selectDuplicate = !!src.hand && !track.pinching && this.lastTime - track.jointReleasedAt <= SELECT_DUPLICATE_MS;
+    else track.selectDuplicate = false;
     // A short system pinch can start and end between animation frames.
-    if (down) track.selectLatched = true;
+    if (down && !track.selectDuplicate) track.selectLatched = true;
     const diagnostic = this.diagnostics[src.handedness];
     diagnostic.selectEvents++;
     if (this.activeSources[src.handedness] === src) diagnostic.selectDown = down;
@@ -320,6 +328,7 @@ export class InputSampler {
     let palmUp = false;
     let hasSpatialPose = !!rayPose;
     let jointCount = 0;
+    let firstJoint: JointSample | undefined;
     if (src.hand && frame.getJointPose) {
       for (const name of JOINTS) {
         const space = src.hand.get(name);
@@ -336,11 +345,12 @@ export class InputSampler {
         joint.quaternion.set(o.x, o.y, o.z, o.w);
         joint.radius = jp.radius ?? 0.008;
         joints[name] = joint;
+        firstJoint ??= joint;
       }
       const thumb = joints['thumb-tip'];
       const index = joints['index-finger-tip'];
       if (!rayPose) {
-        const position = (index ?? thumb ?? joints.wrist ?? Object.values(joints)[0])?.position;
+        const position = (index ?? thumb ?? joints.wrist ?? firstJoint)?.position;
         if (position) pinchPoint.copy(position);
       }
       if (thumb && index) {
@@ -365,6 +375,7 @@ export class InputSampler {
       }
     }
     const controller = !src.hand;
+    const wasJointPinching = track.jointPinching;
     if (distance !== null) {
       track.lastJointTime = time;
       track.jointPinching = track.pinch.update(distance, undefined, track.state).pinching;
@@ -375,9 +386,10 @@ export class InputSampler {
       track.pinch.reset();
       track.jointPinching = false;
     }
+    if (wasJointPinching && !track.jointPinching && distance !== null) track.jointReleasedAt = time;
     // Keep these independent: a system select must not seed the distance detector's hysteresis.
     // Quest's system select is its pinch, including when joint poses are unavailable.
-    const pinching = track.jointPinching || track.selectDown || track.selectLatched;
+    const pinching = track.jointPinching || (track.selectDown && !track.selectDuplicate) || track.selectLatched;
     if (distance === null) {
       // Freeze an ongoing gesture through occlusion, including its release frame. A new system
       // pinch must not acquire a control at an old midpoint left over from a previous gesture.

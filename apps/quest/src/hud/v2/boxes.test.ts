@@ -111,3 +111,31 @@ describe('Calm Glass pinch reticles', () => {
     reticles.dispose(); field.dispose();
   });
 });
+
+describe('outline capacity and depth stability', () => {
+  it('grows beyond 24 persistent tags instead of silently discarding a new tag', () => {
+    const field = new BoxField();
+    const geometry = field.geometry;
+    for (let i = 0; i < 60; i++) expect(field.set(`device-${i}`, center, 0.2, 0.1, THEME.color.accent)).toBeTruthy();
+    field.update(0, head);
+    expect(field.boxes.size).toBe(60);
+    expect(field.geometry).toBe(geometry);
+    expect(field.geometry.drawRange.count).toBeLessThanOrEqual(field.geometry.index!.count);
+    field.dispose();
+  });
+
+  it('uses the actual widget depth and hides a missing or empty ray without moving to the origin', () => {
+    const field = new BoxField(), reticles = new PinchReticles(), cursor = newCursor('left', 'left');
+    cursor.tracked = true; cursor.canPoke = false; cursor.ray = { origin: head, dir: new Vector3(0, 0, -1) };
+    const hit = new Vector3(0, 1.4, -0.6);
+    reticles.update([cursor], head, 0, field, [hit]);
+    const mesh = reticles.getObjectByName('left-reticle') as import('three').Mesh;
+    expect(mesh.position.equals(hit)).toBe(true);
+    expect((mesh.material as import('three').MeshBasicMaterial).depthTest).toBe(true);
+    cursor.ray.dir.set(0, 0, 0); reticles.update([cursor], head, 0, field, [hit]);
+    expect(mesh.visible).toBe(false); expect(mesh.position.equals(hit)).toBe(true);
+    cursor.ray.dir.set(0, 0, -1); reticles.update([cursor], head, 0, field);
+    expect(mesh.visible).toBe(false); expect(mesh.position.equals(hit)).toBe(true);
+    field.dispose(); reticles.dispose();
+  });
+});

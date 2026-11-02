@@ -12,6 +12,7 @@ export interface SdfTextOptions {
   anchorX?: 'left' | 'center' | 'right';
   anchorY?: 'top' | 'middle' | 'bottom';
   maxWidth?: number;
+  maxHeight?: number;
   outline?: boolean;
   singleLine?: boolean;
   align?: 'left' | 'center' | 'right';
@@ -52,6 +53,7 @@ export function makeText(o: SdfTextOptions): SdfText {
   t.textAlign = o.align ?? (o.anchorX === 'center' ? 'center' : 'left');
   t.maxWidth = o.singleLine ? Infinity : o.maxWidth ?? Infinity;
   if (o.singleLine) { t.whiteSpace = 'nowrap'; t.userData.lineWidth = o.maxWidth; }
+  if (o.maxHeight) { t.userData.fitWidth = o.maxWidth; t.userData.fitHeight = o.maxHeight; }
   t.lineHeight = THEME.font.lineHeight;
   t.letterSpacing = o.tabular ? 0 : THEME.font.letterSpacing;
   t.depthOffset = -1;
@@ -70,10 +72,11 @@ export function setText(t: SdfText, text: string, color?: string): void {
   syncText(t);
 }
 function syncText(t: SdfText): void {
-  const width = t.userData.lineWidth as number | undefined;
-  t.sync(width ? () => {
+  const width = (t.userData.lineWidth ?? t.userData.fitWidth) as number | undefined;
+  const height = t.userData.fitHeight as number | undefined;
+  t.sync(width || height ? () => {
     const bounds = t.textRenderInfo?.blockBounds;
-    if (bounds) t.scale.setScalar(Math.min(1, width / Math.max(0.001, bounds[2] - bounds[0])));
+    if (bounds) t.scale.setScalar(Math.min(1, width ? width / Math.max(0.001, bounds[2] - bounds[0]) : 1, height ? height / Math.max(0.001, bounds[3] - bounds[1]) : 1));
   } : undefined);
 }
 export function sdfReady(): boolean { return true; }

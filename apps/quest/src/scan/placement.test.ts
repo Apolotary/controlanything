@@ -121,13 +121,17 @@ describe('TargetStore', () => {
     expect(toHudTarget(t).label).toBe('Synth');
   });
 
-  it('a pinch refines the position and detections no longer move it', async () => {
+  it('tagging preserves the object anchor and subsequent detections track it smoothly', async () => {
     const store = new TargetStore();
     const rec = record();
     const t = store.upsert(det(), await placeDetection(det(), rec, [wall]), 'f1').target;
+    const before = t.position.clone();
     store.refine(t.id, new Vector3(0.01, 1.2, -1.9));
-    store.upsert(det({ box: [570, 430, 160, 120] }), await placeDetection(det({ box: [570, 430, 160, 120] }), rec, [wall]), 'f2');
-    expect(t.position.y).toBeCloseTo(1.2, 9);
+    expect(t.position).toEqual(before);
+    const next = await placeDetection(det({ box: [570, 430, 160, 120] }), rec, [wall]);
+    store.upsert(det({ box: [570, 430, 160, 120] }), next, 'f2');
+    expect(t.position.distanceTo(before)).toBeGreaterThan(0);
+    expect(t.position.distanceTo(before)).toBeLessThan(next.position.distanceTo(before));
     expect(t.refined).toBe(true);
   });
 

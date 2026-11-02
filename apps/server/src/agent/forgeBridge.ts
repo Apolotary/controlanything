@@ -9,8 +9,10 @@ export function subscribeForge(
   forge: Pick<Forge, 'subscribe' | 'specIdFor'>,
   hub: Pick<Hub, 'broadcast'>,
   targets: Pick<TargetStore, 'get'>,
+  allowed: (cardId: string) => boolean = () => true,
 ): () => void {
   return forge.subscribe((event) => {
+    if (!allowed(event.type === 'spec' ? event.uiSpec.cardId : event.progress.cardId)) return;
     if (event.type === 'spec') {
       const target = targets.get(event.uiSpec.cardId);
       if (target && (target.state === 'failed' || target.abort?.signal.aborted || target.driver?.driverId !== event.uiSpec.driverId)) return;

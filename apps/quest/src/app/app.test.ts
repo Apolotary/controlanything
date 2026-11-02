@@ -24,6 +24,17 @@ describe('PinchDetector (hysteresis 2.0 / 3.5 cm, two frames)', () => {
 describe('ControlSender (≤ 30 Hz per control, latest wins)', () => {
   afterEach(() => vi.useRealTimers());
 
+  it('drops queued moves when controls are closed or cancelled', () => {
+    vi.useFakeTimers();
+    const sent: ControlEventPayload[] = [];
+    const sender = new ControlSender((event) => sent.push(event), 30, () => 0);
+    sender.push({ specId: 'light', controlId: 'level', value: 10, phase: 'start', ts: 0 });
+    sender.push({ specId: 'light', controlId: 'level', value: 80, phase: 'move', ts: 0 });
+    sender.clear();
+    vi.runAllTimers();
+    expect(sent.map((event) => event.value)).toEqual([10]);
+  });
+
   it('throttles moves, sends start/end at once, keeps the last value', () => {
     vi.useFakeTimers();
     let now = 0;

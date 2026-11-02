@@ -24,6 +24,8 @@ export interface ControlDeps {
   hub: Pick<Hub, 'broadcast'>;
   log?: (line: string) => void;
   now?: () => number;
+  /** Space mode, tag membership and connection policy, rechecked for scheduled operations. */
+  canControl?: (target: Target) => boolean;
   /** room hacks (combos, daemons) are not fired here: the owner of the hook runs them */
   onRoomHack?: (hack: Hack, spec: UiSpecPayload, value: number | boolean, from?: string) => RouteResult;
 }
@@ -79,6 +81,7 @@ export class ControlRouter {
     const r = this.resolve(ev);
     if ('reason' in r) return { ok: false, reason: r.reason, fired: 0, ms: performance.now() - t0 };
     const { target, spec, hack, driver } = r;
+    if (!this.allowed(target)) return { ok: false, reason: 'control is not authorized for this device', cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
     // combos and daemons: handed to their runner (they ask for their own tap)
     if (hack.kind === 'daemon' || hack.commands.some((c) => c.cardId && c.cardId !== target.cardId)) {
       if (!this.d.onRoomHack) return { ok: false, reason: 'no room hack runner', cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
@@ -132,6 +135,10 @@ export class ControlRouter {
     return driver.actions.find((a) => a.actionId === id);
   }
 
+  private allowed(target: Target): boolean {
+    return this.d.canControl?.(target) ?? true;
+  }
+
   /** One hack command -> op(s). Returns the number of ops fired now (steps may schedule more). */
   private fireCommand(target0: Target, driver0: Driver, hack: Hack, cmd: HackCommand, value: number, delayMs: number): number {
     // a command may name another device (room combos); it must be armed and verified there
@@ -152,7 +159,7 @@ export class ControlRouter {
       return p ? clamp(value, p.min, p.max) : value;
     })() : cmd.value;
     const send = () => {
-      if (!target.armed || target.runId !== runId || !target0.armed || target0.runId !== sourceRunId) return 0;
+      if (!target.armed || target.runId !== runId || !target0.armed || target0.runId !== sourceRunId || !this.allowed(target) || !this.allowed(target0)) return 0;
       if (a.encode.kind === 'step') return this.fireSteps(target, driver, a, v ?? 0);
       try {
         const op = resolveOp(a, a.kind === 'set' ? (v ?? 0) : undefined);
@@ -183,7 +190,7 @@ export class ControlRouter {
     this.stepTimers.delete(key);
     if (!plan.actionIds.length) return 0;
     const runId = target.runId;
-    const active = () => target.armed && target.runId === runId;
+    const active = () => target.armed && target.runId === runId && this.allowed(target);
     let i = 0;
     let fired = 0;
     const fireOne = (): boolean => {
@@ -222,7 +229,7 @@ export class ControlRouter {
     if (!a || a.encode.kind === 'step') return 0;
     const op = resolveOp(a);
     const runId = target.runId;
-    const active = () => target.armed && target.runId === runId;
+    const active = () => target.armed && target.runId === runId && this.allowed(target);
     const fire = () => active() && this.d.dispatcher.fire(driver.executor.deviceId, op, { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: a.actionId, lightCap: driver.transport === 'ir' });
     let fired = fire() ? 1 : 0;
     const key = `${target.cardId}:${hack.id}:stepper`;
@@ -250,6 +257,7 @@ export class ControlRouter {
 
   /** Run a hack by id (voice, 2D menus). */
   runHack(target: Target, hackId: string, value?: number): RouteResult {
+    if (!this.allowed(target)) return { ok: false, reason: 'control is not authorized for this device', cardId: target.cardId, fired: 0, ms: 0 };
     const spec = target.specId ? this.d.specs.get(target.specId) : undefined;
     const hack = spec?.hackset?.hacks.find((h) => h.id === hackId || h.name.toLowerCase() === hackId.toLowerCase());
     if (!spec || !hack) return { ok: false, reason: `no hack "${hackId}"`, cardId: target.cardId, fired: 0, ms: 0 };
@@ -260,6 +268,7 @@ export class ControlRouter {
 
   /** UNDO: the inverse of the last hack run on a target. */
   undo(target: Target): RouteResult {
+    if (!this.allowed(target)) return { ok: false, reason: 'control is not authorized for this device', cardId: target.cardId, fired: 0, ms: 0 };
     if (!target.armed) return { ok: false, reason: 'not armed', cardId: target.cardId, fired: 0, ms: 0 };
     const last = this.lastRun.get(target.cardId);
     const spec = target.specId ? this.d.specs.get(target.specId) : undefined;
@@ -284,9 +293,9 @@ export class ControlRouter {
     return { ok: fired > 0, reason: fired ? undefined : 'no inverse available', cardId: target.cardId, hackId: hack.id, fired, ms: 0 };
   }
 
-  /** Stop this target's scheduled work and disarm it without sending device commands. */
-  cancel(target: Target): void {
-    target.armed = false;
+  /** Stop scheduled work; mode and connection changes can retain the owner's arm approval. */
+  cancel(target: Target, opts: { preserveArmed?: boolean } = {}): void {
+    if (!opts.preserveArmed) target.armed = false;
     for (const [key, pending] of this.stepTimers) {
       if (pending.cardId !== target.cardId) continue;
       clearTimeout(pending.timer);
@@ -310,15 +319,15 @@ export class ControlRouter {
     for (const t of this.d.targets.list()) {
       if (cardId && t.cardId !== cardId) continue;
       const armed = t.armed;
+      const d = t.driver;
+      if (this.allowed(t) && d?.transport === 'midi' && !executorsDone.has(d.executor.deviceId)) {
+        executorsDone.add(d.executor.deviceId);
+        if (this.d.dispatcher.fire(d.executor.deviceId, { kind: 'midi', msg: 'panic', channel: 1 }, { port: d.executor.port, cardId: t.cardId, driverId: d.driverId })) sent++;
+      }
       this.cancel(t);
       if (armed) {
         disarmed.push(t.cardId);
         this.d.targets.setState(t, t.specId ? 'forged' : 'verified', `disarmed: ${reason}`);
-      }
-      const d = t.driver;
-      if (d?.transport === 'midi' && !executorsDone.has(d.executor.deviceId)) {
-        executorsDone.add(d.executor.deviceId);
-        if (this.d.dispatcher.fire(d.executor.deviceId, { kind: 'midi', msg: 'panic', channel: 1 }, { port: d.executor.port, cardId: t.cardId, driverId: d.driverId })) sent++;
       }
     }
     this.d.steps.note('control', 'panic: everything stopped and disarmed', { kind: 'proof', evidence: `${disarmed.length} target(s), ${sent} MIDI panic op(s)`, status: 'ok' });

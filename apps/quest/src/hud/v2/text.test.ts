@@ -76,3 +76,17 @@ describe('local Inter SDF text', () => {
     text.dispose();
   });
 });
+
+it('fits a long wrapped sentence inside both its width and height and restores the scale for short text', () => {
+  const text = makeText({ text: 'Connect a companion.', maxWidth: 0.36, maxHeight: 0.105, anchorY: 'top' });
+  text.textRenderInfo = { blockBounds: [0, -0.21, 0.4, 0] };
+  const sentence = 'Connect the synthesizer to your Mac with USB-C, open the companion app, and make sure its MIDI port is available before setting up the controls. The headset will confirm when the companion is connected.';
+  setText(text, sentence);
+  expect(text.text).toBe(sentence);
+  expect(text.scale.y * 0.21).toBeCloseTo(0.105);
+  expect(text.scale.x * 0.4).toBeLessThanOrEqual(0.36);
+  text.textRenderInfo = { blockBounds: [0, -0.02, 0.1, 0] };
+  setText(text, 'Connected.');
+  expect(text.scale.x).toBe(1);
+  text.dispose();
+});

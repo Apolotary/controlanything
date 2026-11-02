@@ -17,7 +17,7 @@ const item = {
   control: { id: 'off' }, part: { id: 'off-part' }, hackItem: { id: 'off-item' },
 } as NonNullable<ForgeProgress['item']>;
 
-function setup(withTarget = true) {
+function setup(withTarget = true, allowed?: (cardId: string) => boolean) {
   const listeners = new Set<(event: ForgeEvent) => void>();
   const forge = {
     subscribe(listener: (event: ForgeEvent) => void) {
@@ -29,9 +29,9 @@ function setup(withTarget = true) {
   const hub = { broadcast: vi.fn(() => 1) };
   const targets = new TargetStore(hub);
   const target = withTarget ? targets.create({ cardId: 'light', runId: 'run-light', state: 'forging', driver, abort: new AbortController() }) : undefined;
-  const unsubscribe = subscribeForge(forge, hub, targets);
+  const unsubscribe = subscribeForge(forge, hub, targets, allowed);
   const emit = (event: ForgeEvent) => { for (const listener of listeners) listener(event); };
-  return { hub, target, listeners, unsubscribe, emit };
+  return { hub, target, targets, listeners, unsubscribe, emit };
 }
 
 describe('guided forge publishing', () => {
@@ -104,6 +104,32 @@ describe('guided forge publishing', () => {
     emit({ type: 'spec', uiSpec: spec });
     expect(hub.broadcast).toHaveBeenCalledTimes(3);
     expect(hub.broadcast).toHaveBeenLastCalledWith('ui.spec', spec);
+  });
+
+  it('drops progress, streamed controls and finished specs when the mode stops allowing them', () => {
+    let controlMode = true;
+    const { hub, emit } = setup(true, () => controlMode);
+    emit({ type: 'spec', uiSpec: spec });
+    expect(hub.broadcast).toHaveBeenCalledExactlyOnceWith('ui.spec', spec);
+    hub.broadcast.mockClear();
+    controlMode = false;
+    emit({ type: 'progress', progress: { ...progress, item } });
+    emit({ type: 'progress', progress: { ...progress, runId: 'edit-owner-request', item } });
+    emit({ type: 'spec', uiSpec: spec });
+    expect(hub.broadcast).not.toHaveBeenCalled();
+    controlMode = true;
+    emit({ type: 'spec', uiSpec: spec });
+    expect(hub.broadcast).toHaveBeenCalledExactlyOnceWith('ui.spec', spec);
+  });
+
+  it('drops late generation after a tag and its discovery target are removed', () => {
+    const tagged = new Set(['light']);
+    const { hub, targets, emit } = setup(true, (cardId) => tagged.has(cardId));
+    tagged.delete('light');
+    targets.remove('light');
+    emit({ type: 'progress', progress: { ...progress, item } });
+    emit({ type: 'spec', uiSpec: spec });
+    expect(hub.broadcast).not.toHaveBeenCalled();
   });
 
   it('removes the forge listener when the agent closes', () => {

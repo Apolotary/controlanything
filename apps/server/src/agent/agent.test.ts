@@ -1,7 +1,7 @@
 /**
  * End-to-end discovery loop in sim mode, no hardware and no key (FIXTURE): a "sim room" client plays the
  * headset camera, the IR executor, the IR receiver and the lamp; a "quest" client selects, arms and controls.
- * scan.frame -> scan.result -> target.select -> identify -> link -> learn -> research -> drive -> verify
+ * scan.frame -> scan.result -> tag.add -> identify -> mode.set -> control.setup -> link -> learn -> research -> drive -> verify
  * (camera oracle on the sim's frames) -> forge (fake) -> arm (pinch) -> control.event -> exec.command < 50 ms
  * -> panic.
  */
@@ -10,11 +10,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { emptySpec } from '@ce/gen3d';
 import { type AnyMessage, type Driver, type HackSet, makeMessage, type MessageType, type PayloadOf, type UiSpecPayload } from '@ce/protocol';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { createApp } from '../app';
-import type { ServerConfig } from '../config';
+import { loadConfig, type ServerConfig } from '../config';
 import { createContext, type RunningServers, type ServerContext, startServers } from '../context';
+import type { HubMessageEvent } from '../hub';
 import { decodeFrame, encodeFrame } from '../devices/ir';
 import type { Forge, ForgeRequest, ForgeResult } from '../gen3d/forge';
 import { resolveMuseConfig } from '../muse';
@@ -266,12 +267,106 @@ function attachSim(c: Client, room: SimRoom): void {
 }
 
 describe('discovery loop end to end (sim mode, FIXTURE models)', () => {
+  it('completes tag, setup, verification, arm and guarded control through an in-process sim', async () => {
+    vi.useFakeTimers();
+    const dataDir = mkdtempSync(join(tmpdir(), 'ce-agent-in-process-'));
+    const config = loadConfig({ CE_DATA_DIR: dataDir, MODEL_MODE: 'fixture', FIXTURE_DELAY_MS: '0', MUSE_REPLAY: '0', HTTP_PORT: '0', HTTPS_PORT: '0' });
+    const ctx = createContext(config, { log: () => {}, registryFile: null });
+    const broadcasts = vi.spyOn(ctx.hub, 'broadcast');
+    const subscription = vi.spyOn(ctx.hub, 'onMessage');
+    vi.spyOn(ctx.hub, 'devices').mockReturnValue([
+      { deviceId: 'sim', name: 'Sim room', kind: 'sim', role: 'device', capabilities: ['ir', 'camera'], canApprove: false, online: true, connections: 1, pairedAt: 1 },
+      { deviceId: 'quest', name: 'Quest', kind: 'quest', role: 'hmd', capabilities: ['camera'], canApprove: true, online: true, connections: 1, pairedAt: 1 },
+    ]);
+    const room = new SimRoom();
+    const forge = fakeForge(ctx);
+    const agent = getAgent(ctx, { macLocal: false, settleMs: () => 10, forge: () => forge });
+    const emit = <T extends MessageType>(type: T, payload: PayloadOf<T>) => {
+      const event: HubMessageEvent = {
+        message: makeMessage(type, payload, { from: 'quest', to: 'server' }),
+        device: { deviceId: 'quest', name: 'Quest', canApprove: true, kind: 'quest', capabilities: ['camera'], tokenHash: 'test-token', pairedAt: 1 },
+        connection: { local: false } as HubMessageEvent['connection'],
+      };
+      subscription.mock.calls[0]![0](event);
+    };
+    const of = <T extends MessageType>(type: T) => broadcasts.mock.calls
+      .filter(([sentType]) => sentType === type).map(([, payload]) => payload as PayloadOf<T>);
+    vi.spyOn(ctx.hub, 'sendToDevice').mockImplementation((_deviceId, type, payload) => {
+      if (type === 'exec.command') {
+        const request = payload as PayloadOf<'exec.command'>;
+        const reacted = room.apply(request.op);
+        agent.dispatcher.onAck({ execId: request.execId, ok: true, sentAt: Date.now(), detail: reacted ? 'lamp reacted' : 'unknown code' });
+      } else if (type === 'sense.request') {
+        const request = payload as PayloadOf<'sense.request'>;
+        if (request.kind === 'frame') {
+          agent.dispatcher.onSense({ senseId: request.senseId, kind: 'frame', at: Date.now(), frame: {
+            frameId: `verify-${request.senseId}`, jpeg: room.frame(), width: 320, height: 240, capturedAt: Date.now(),
+            purpose: 'verify', senseId: request.senseId, cardId: request.cardId, camera: { width: 320, height: 240, source: 'synthetic' },
+          } });
+        } else if (request.kind === 'ir-capture') {
+          const rawUs = room.capture(request.prompt ?? '');
+          if (rawUs) agent.dispatcher.onSense({ senseId: request.senseId, kind: 'ir-capture', at: Date.now(), ir: { rawUs, khz: 38, frames: 1 } });
+        }
+      }
+      return 1;
+    });
+    try {
+      const scan = await agent.scan.onFrame({ frameId: 'in-process', jpeg: room.frame(), width: 320, height: 240, capturedAt: Date.now(), purpose: 'scan' }, { deviceId: 'sim', canApprove: false });
+      const light = scan!.detections.find((d) => d.label === 'ceiling light')!;
+      emit('tag.add', { frameId: scan!.frameId, detId: light.detId, label: light.label });
+      await vi.advanceTimersByTimeAsync(0);
+      const target = agent.targets.list()[0];
+      expect(target.card?.category).toBe('lighting');
+      expect(room.execs).toEqual([]);
+      expect(of('link.result')).toEqual([]);
+      emit('mode.set', { mode: 'control' });
+      emit('control.setup', { cardId: target.cardId });
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(target.state, target.detail).toBe('arming');
+      expect(target.verification).toMatchObject({ off: 'pass', full: 'pass', dimmer: 'pass', brighter: 'pass', level: 'pass' });
+      expect(of('link.result')[0]).toMatchObject({ executorDeviceId: 'sim', channel: 'sim' });
+      expect(of('driver.spec')[0].provenance.some((entry) => entry.source === 'learned')).toBe(true);
+      const request = of('arm.request').at(-1)!;
+      const spec = of('ui.spec').find((candidate) => candidate.cardId === target.cardId)!;
+      const beforeArm = room.execs.length;
+      emit('control.event', { widgetId: 'h_off', value: true, ts: Date.now(), specId: spec.specId, phase: 'end' });
+      expect(room.execs).toHaveLength(beforeArm);
+      emit('arm.confirm', { armId: request.armId, approve: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(agent.tagsState().tags[0].connection).toBe('ready');
+      room.on = true;
+      emit('control.event', { widgetId: 'h_off', value: true, ts: Date.now(), specId: spec.specId, phase: 'end' });
+      expect(room.on).toBe(false);
+      expect(room.execs).toHaveLength(beforeArm + 1);
+      emit('mode.set', { mode: 'annotate' });
+      emit('control.event', { widgetId: 'h_full', value: true, ts: Date.now(), specId: spec.specId, phase: 'end' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(room.execs).toHaveLength(beforeArm + 1);
+      expect(target.armed).toBe(true);
+      emit('tag.remove', { cardId: target.cardId });
+      emit('mode.set', { mode: 'control' });
+      emit('control.event', { widgetId: 'h_full', value: true, ts: Date.now(), specId: spec.specId, phase: 'end' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(room.execs).toHaveLength(beforeArm + 1);
+      expect(agent.tagsState()).toEqual({ tags: [] });
+    } finally {
+      agent.close();
+      ctx.hub.close();
+      await vi.advanceTimersByTimeAsync(0);
+      rmSync(dataDir, { recursive: true, force: true });
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
   it('scans, identifies, links, learns the remote, drives, verifies by camera, forges, arms and controls the sim lamp', { timeout: 30_000 }, async () => {
     const h = await start();
     const room = new SimRoom();
     const sim = await Client.pairAndOpen(h, 'sim', 'Sim room', ['ir', 'camera', 'speaker', 'display'], { role: 'device', ports: [{ id: 'sim-ir', kind: 'ir', name: 'CE Sim IR' }] });
     attachSim(sim, room);
     const quest = await Client.pairAndOpen(h, 'quest', 'Quest', ['camera', 'hands', 'display'], { role: 'hmd' });
+    expect(await quest.next('mode.state')).toEqual({ mode: 'annotate' });
+    expect(await quest.next('tags.state')).toEqual({ tags: [] });
 
     // SCAN: the sim plays the headset camera; the FIXTURE SAM finds a ceiling light at the top centre
     const frameId = 'f1';
@@ -283,12 +378,22 @@ describe('discovery loop end to end (sim mode, FIXTURE models)', () => {
     expect(scan.source).toBe('fixture');
     await quest.next('scan.result', 2000, (p) => p.frameId === frameId); // HUD clients get it too
 
-    // SELECT: the user pinches the light
-    quest.send('target.select', { frameId, detId: light!.detId, text: 'control this light' }, { to: 'server' });
+    // TAG: pinching a box only identifies it while annotation remains active.
+    quest.send('tag.add', { frameId, detId: light!.detId, label: light!.label, position: { x: 0, y: 1, z: -2 } }, { to: 'server' });
     const identified = await quest.next('device.card', 6000);
     expect(identified.category).toBe('lighting');
     expect(identified.requires).toContain('ir');
     const cardId = identified.cardId;
+    const tagged = await quest.next('tags.state', 4000, (p) => p.tags.some((tag) => tag.cardId === cardId && tag.name === identified.name));
+    expect(tagged.tags).toEqual([expect.objectContaining({ cardId, connection: 'setup', position: { x: 0, y: 1, z: -2 } })]);
+    expect(room.execs).toEqual([]);
+    expect(quest.seen.filter((m) => ['link.request', 'link.result', 'driver.spec', 'verify.result', 'ui.spec', 'arm.request'].includes(m.type))).toEqual([]);
+
+    // CONTROL: changing modes still does nothing until the user requests setup.
+    quest.send('mode.set', { mode: 'control' }, { to: 'server' });
+    expect(await quest.next('mode.state')).toEqual({ mode: 'control' });
+    expect(room.execs).toEqual([]);
+    quest.send('control.setup', { cardId }, { to: 'server' });
 
     // LINK: the sim room has "ir", so it becomes the executor; the receiver learns the remote
     const link = await quest.next('link.result', 6000, (p) => p.cardId === cardId);
@@ -341,6 +446,7 @@ describe('discovery loop end to end (sim mode, FIXTURE models)', () => {
     const armed = await quest.next('arm.result', 6000, (p) => p.armId === armReq.armId);
     expect(armed.armed).toBe(true);
     await quest.next('target.status', 4000, (p) => p.cardId === cardId && p.state === 'armed');
+    await quest.next('tags.state', 4000, (p) => p.tags.some((tag) => tag.cardId === cardId && tag.connection === 'ready'));
 
     // CONTROL: pinch "Lights off" -> exec.command at the sim within 50 ms server time
     room.on = true;
@@ -354,6 +460,17 @@ describe('discovery loop end to end (sim mode, FIXTURE models)', () => {
     expect(cmd.op.kind === 'ir' && cmd.op.rawUs?.length).toBeTruthy();
     await new Promise((r) => setTimeout(r, 50));
     expect(room.on).toBe(false);
+
+    // Returning to annotation preserves the setup but prevents controls from executing.
+    quest.send('mode.set', { mode: 'annotate' }, { to: 'server' });
+    expect(await quest.next('mode.state')).toEqual({ mode: 'annotate' });
+    const beforeAnnotationControl = room.execs.length;
+    quest.send('control.event', { widgetId: 'h_full', value: true, ts: Date.now(), specId: spec.specId, phase: 'end' }, { to: 'server' });
+    await new Promise((r) => setTimeout(r, 400));
+    expect(room.execs).toHaveLength(beforeAnnotationControl);
+    expect(getAgent(h.ctx).targets.get(cardId)?.armed).toBe(true);
+    quest.send('mode.set', { mode: 'control' }, { to: 'server' });
+    expect(await quest.next('mode.state')).toEqual({ mode: 'control' });
 
     // PANIC disarms; a control afterwards is ignored
     quest.send('panic', { reason: 'test' }, { to: 'server' });
@@ -373,23 +490,37 @@ describe('discovery loop end to end (sim mode, FIXTURE models)', () => {
     expect(exec.sent.length).toBeGreaterThan(5);
   });
 
-  it('asks for a companion when nothing online can reach the device, then links when one appears', { timeout: 20_000 }, async () => {
+  it('requires a connected bridge and explicit setup after tagging through the legacy selection message', { timeout: 20_000 }, async () => {
     const h = await start();
     const room = new SimRoom();
     const quest = await Client.pairAndOpen(h, 'quest', 'Quest', ['camera', 'hands', 'display'], { role: 'hmd' });
+    await quest.next('mode.state');
+    await quest.next('tags.state');
     const frameId = 'f2';
     quest.send('scan.frame', { frameId, jpeg: room.frame(), width: 320, height: 240, capturedAt: Date.now(), purpose: 'scan' }, { to: 'server' });
     const scan = await quest.next('scan.result', 6000, (p) => p.frameId === frameId);
     const light = scan.detections.find((d) => d.label === 'ceiling light')!;
     quest.send('target.select', { frameId, detId: light.detId }, { to: 'server' });
-    const req = await quest.next('link.request', 8000);
-    expect(req.needs).toEqual(['ir']);
-    expect(req.suggestedClients).toContain('cardputer');
-    expect(req.status).toBe('needs-companion');
-    await quest.next('target.status', 4000, (p) => p.state === 'needs-companion');
+    const card = await quest.next('device.card', 6000);
+    const snapshot = await quest.next('tags.state', 4000, (p) => p.tags.some((tag) => tag.cardId === card.cardId && tag.name === card.name));
+    expect(snapshot.tags).toEqual([expect.objectContaining({ cardId: card.cardId, connection: 'offline', hint: expect.stringMatching(/Cardputer|IR/i) })]);
+    expect(quest.seen.some((m) => m.type === 'link.request')).toBe(false);
+    quest.send('mode.set', { mode: 'control' }, { to: 'server' });
+    await quest.next('mode.state', 4000, (p) => p.mode === 'control');
+    quest.send('control.setup', { cardId: card.cardId }, { to: 'server' });
+    await quest.next('agent.step', 4000, (p) => p.cardId === card.cardId && Boolean(p.sentence?.match(/connect|pair/i)));
+    expect(room.execs).toEqual([]);
+    expect(quest.seen.some((m) => m.type === 'link.request')).toBe(false);
     // a Cardputer-like executor joins
     const sim = await Client.pairAndOpen(h, 'sim', 'Sim IR node', ['ir', 'camera'], { role: 'device' });
     attachSim(sim, room);
+    const restored = await sim.next('tags.state', 4000, (p) => p.tags.some((tag) => tag.cardId === card.cardId));
+    expect(restored.tags[0].cardId).toBe(card.cardId);
+    expect(await sim.next('mode.state')).toEqual({ mode: 'control' });
+    await quest.next('tags.state', 4000, (p) => p.tags.some((tag) => tag.cardId === card.cardId && tag.connection === 'setup'));
+    expect(room.execs).toEqual([]);
+    expect(quest.seen.some((m) => m.type === 'link.result')).toBe(false);
+    quest.send('control.setup', { cardId: card.cardId }, { to: 'server' });
     const link = await quest.next('link.result', 8000);
     expect(link.executorDeviceId).toBe(sim.deviceId);
   });

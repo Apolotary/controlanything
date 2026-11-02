@@ -31,7 +31,7 @@ export class ArmService {
   private readonly pending = new Map<string, PendingArm>();
 
   constructor(
-    private readonly d: { hub: Pick<Hub, 'broadcast'>; targets: TargetStore; steps: StepLog; log?: (line: string) => void; timeoutMs?: number },
+    private readonly d: { hub: Pick<Hub, 'broadcast'>; targets: TargetStore; steps: StepLog; log?: (line: string) => void; timeoutMs?: number; canArm?: (target: Target) => boolean },
   ) {}
 
   /** Build and send the request; resolves with the result (approved, declined or expired). */
@@ -53,6 +53,10 @@ export class ArmService {
     const armId = newId('arm');
     const driverId = q.driverId ?? target.driver?.driverId ?? 'room';
     if (signal?.aborted) return Promise.resolve({ armId, cardId: target.cardId, driverId, armed: false, reason: 'cancelled' });
+    if (this.d.canArm && !this.d.canArm(target)) {
+      this.cancel(target, 'control is not authorized for this device');
+      return Promise.resolve({ armId, cardId: target.cardId, driverId, armed: false, reason: 'control is not authorized for this device' });
+    }
     this.cancel(target, 'replaced by a new confirmation');
     const payload: ArmRequestPayload = {
       armId,
@@ -102,9 +106,10 @@ export class ArmService {
     const { driverId } = pend;
     let r: ArmResultPayload;
     if (!p.approve) r = { armId: p.armId, cardId: target.cardId, driverId, armed: false, by: by.name ?? by.deviceId, reason: 'declined' };
+    else if (this.d.canArm && !this.d.canArm(target)) r = { armId: p.armId, cardId: target.cardId, driverId, armed: false, by: by.name ?? by.deviceId, reason: 'control is not authorized for this device' };
     else if (pend.irreversible && !p.hold) r = { armId: p.armId, cardId: target.cardId, driverId, armed: false, by: by.name ?? by.deviceId, reason: 'this driver has an irreversible action: pinch and hold to arm' };
     else r = { armId: p.armId, cardId: target.cardId, driverId, armed: true, by: by.name ?? by.deviceId };
-    if (!r.armed && pend.irreversible && p.approve && !p.hold) {
+    if (r.reason === 'this driver has an irreversible action: pinch and hold to arm') {
       // keep waiting for the hold
       this.d.hub.broadcast('arm.result', r);
       return true;

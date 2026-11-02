@@ -6,7 +6,7 @@ import { createHud } from './index';
 
 const UP = new Vector3(0, 1, 0);
 const target: HudTarget = {
-  id: 'lamp', label: 'Ceiling light', status: 'scanned', position: [0.4, 2.4, -3],
+  id: 'lamp', tagged: true, connection: 'ready', label: 'Ceiling light', status: 'scanned', position: [0.4, 2.4, -3],
   confirmed: true, facing: [0, 0, 1], sizeM: [0.3, 0.2, 0.05],
 };
 const instances: Hud[] = [];
@@ -15,10 +15,11 @@ function setup(kind: 'idle' | 'dock' | 'modal' = 'idle') {
   const camera = new PerspectiveCamera();
   const hud = createHud({ scene: new Scene(), camera, renderer: {} as WebGLRenderer });
   instances.push(hud);
+  hud.setHome?.({ mode: 'control', filter: 'electronics', tagged: 1, status: 'Choose a device' });
   const head = { position: new Vector3(0, 1.6, 0), quaternion: new Quaternion() };
   if (kind === 'dock') { hud.upsertTarget(target); hud.setLocked(target.id); }
   if (kind === 'modal') hud.showConfirm({ id: 'allow', title: 'Allow device control' });
-  const panel = hud.root.getObjectByName(kind === 'modal' ? 'confirmation-panel' : 'device-card')!;
+  const panel = hud.root.getObjectByName(kind === 'modal' ? 'confirmation-panel' : kind === 'idle' ? 'home-bar' : 'device-card')!;
   const update = (time: number) => hud.update({ time, dt: 1 / 72, head, hands: {} });
   return { hud, head, panel, update };
 }
@@ -31,7 +32,7 @@ describe('HUD world placement', () => {
     head.position.set(2, 1.75, 3);
     head.quaternion.setFromAxisAngle(UP, Math.PI / 4);
     update(0);
-    const expected = new Vector3(0, -0.14, -0.6).applyQuaternion(head.quaternion).add(head.position);
+    const expected = new Vector3(0, -0.4, -0.6).applyQuaternion(head.quaternion).add(head.position);
     expect(panel.position.distanceTo(expected)).toBeLessThan(1e-6);
     expect(panel.quaternion.angleTo(head.quaternion)).toBeLessThan(1e-6);
   });

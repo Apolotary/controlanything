@@ -5,6 +5,12 @@
 import type { Object3D, Quaternion, Vector3 } from 'three';
 import type { Channel, ControlEvent, Gen3dSpec, HackItem, HudStatus, LogRow, ModelChip, Patch } from '@ce/gen3d';
 
+export type AppMode = 'annotate' | 'control';
+export type ObjectFilter = 'electronics' | 'lights' | 'everything';
+export type DeviceConnection = 'ready' | 'setup' | 'offline' | 'unknown';
+export interface HomeState { mode: AppMode; filter: ObjectFilter; tagged: number; status: string }
+export interface DeviceState { targetId: string; connection: DeviceConnection; hint?: string; busy?: boolean; sentence?: string; handControl?: boolean }
+
 export interface JointState {
   position: Vector3;
   quaternion: Quaternion;
@@ -38,6 +44,8 @@ export interface HudFrame {
 export interface HudTarget {
   id: string;
   label: string;
+  tagged?: boolean;
+  connection?: DeviceConnection;
   subtitle?: string;
   status: HudStatus;
   channel?: Channel;
@@ -110,6 +118,13 @@ export interface ConfirmRequest {
 export type DeckKey = 'scan' | 'ping' | 'hacks' | 'daemons' | 'undo' | 'mic' | 'panic';
 
 export interface HudEvents {
+  mode: { mode: AppMode };
+  filter: { filter: ObjectFilter };
+  tagRemove: { targetId: string };
+  setup: { targetId: string };
+  cancel: { targetId: string };
+  pair: { targetId: string };
+  handControl: { targetId: string; enabled: boolean };
   deck: { key: DeckKey; phase: 'press' | 'release' };
   hack: { targetId: string; itemId: string; controlId?: string; index: number; hold?: boolean };
   control: ControlEvent;
@@ -123,6 +138,8 @@ export interface HudEvents {
 export interface Hud {
   readonly root: Object3D;
   update(f: HudFrame): void;
+  setHome?(state: HomeState): void;
+  setDeviceState?(state: DeviceState | null): void;
 
   // SCAN
   setScanning(on: boolean, info?: { prompts?: number; pending?: number; startedAt?: number; modelId?: string }): void;

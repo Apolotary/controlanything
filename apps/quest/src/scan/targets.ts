@@ -18,7 +18,7 @@ export interface Target {
   normal?: Vector3;
   facing: Vector3;
   confirmed: boolean;
-  /** placed by the user's pinch: no longer moved by detections */
+  /** The user confirmed this device's anchor; matching detections may continue tracking it. */
   refined: boolean;
   method: string;
   sizeM: [number, number, number];
@@ -28,7 +28,7 @@ export interface Target {
   channel?: Channel;
   deviceId?: string;
   cardId?: string;
-  /** the latest detection that produced or updated it (what target.select refers to) */
+  /** The latest detection that produced or updated it (included in tag.add). */
   frameId: string;
   detId: string;
   seen: number;
@@ -86,19 +86,17 @@ export class TargetStore {
         t.prompt = det.prompt ?? det.label;
       }
       t.score = Math.max(t.score * 0.9, det.score);
-      if (!t.refined) {
-        if (pl.confirmed && !t.confirmed) {
-          t.position.copy(pl.position);
-          t.confirmed = true;
-          t.method = pl.method;
-        } else if (pl.confirmed === t.confirmed) {
-          t.position.lerp(pl.position, EMA);
-        }
-        t.facing.lerp(pl.facing, EMA).normalize();
-        if (pl.normal) t.normal = pl.normal.clone();
-        t.sizeM = pl.sizeM;
-        if (pl.contour) t.contour = pl.contour;
+      if (pl.confirmed && !t.confirmed && !t.refined) {
+        t.position.copy(pl.position);
+        t.confirmed = true;
+        t.method = pl.method;
+      } else if (pl.confirmed === t.confirmed || t.refined) {
+        t.position.lerp(pl.position, EMA);
       }
+      t.facing.lerp(pl.facing, EMA).normalize();
+      if (pl.normal) t.normal = pl.normal.clone();
+      t.sizeM = pl.sizeM;
+      if (pl.contour) t.contour = pl.contour;
       if (det.deviceId) t.deviceId = det.deviceId;
       if (det.cardId) t.cardId = det.cardId;
       if (modelId) t.modelId = modelId;
@@ -136,11 +134,10 @@ export class TargetStore {
     return { target: t, created: true };
   }
 
-  /** The user pinched on the device: pin it there. */
-  refine(id: string, point: Vector3): Target | undefined {
+  /** Confirm the existing device anchor; a hand ray point must not move it toward the user. */
+  refine(id: string, _point: Vector3): Target | undefined {
     const t = this.targets.get(id);
     if (!t) return undefined;
-    t.position.copy(point);
     t.confirmed = true;
     t.refined = true;
     t.method = 'pinch';

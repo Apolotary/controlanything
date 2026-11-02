@@ -55,6 +55,13 @@ export class ControlSender {
     this.pending.set(key, { e, timer });
   }
 
+  /** Drop delayed moves as soon as the user leaves Control, cancels, or loses connectivity. */
+  clear(): void {
+    for (const { timer } of this.pending.values()) clearTimeout(timer);
+    this.pending.clear();
+    this.last.clear();
+  }
+
   private fire(key: string, e: ControlEvent): void {
     this.last.set(key, this.now());
     this.sent++;

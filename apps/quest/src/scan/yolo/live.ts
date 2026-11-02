@@ -5,8 +5,8 @@
  * targets: one clean box and a short class tag. SAM 3.1 (server, ~1 Hz) stays the source of truth: the moment a
  * SAM target covers the same object, it takes over from the live box.
  *
- * A live box can be pinched immediately. Selection waits for SAM to identify the object before starting the
- * agent loop. People are excluded; boxes that are really a tracked hand are dropped here.
+ * A live box can be tagged immediately. SAM later refines the identity while the live track follows its
+ * position. People are excluded; boxes that are really a tracked hand are dropped here.
  *
  * Cadence is adaptive: one frame in flight, at most ~15 Hz, and the interval backs off when the render loop's
  * frame time rises above its baseline (the XR frame rate always wins over detection).
@@ -18,6 +18,7 @@ import type { Intrinsics } from '../../io/v1';
 import type { CameraSource } from '../camera';
 import type { DepthProvider } from '../placement';
 import type { PoseRing } from '../poses';
+import { ANNOTATION_MIN_SCORE, ANNOTATION_RANGE_M, inAnnotationRange } from '../policy';
 import { cameraPoseFromHead, pixelToRay, type PoseLike, questIntrinsics, scaleIntrinsics, worldToPixel } from '../projection';
 import { toHudTarget, type Target } from '../targets';
 import { allowedClasses, type Category, CATEGORIES, deviceClass } from './classes';
@@ -37,6 +38,7 @@ export interface LiveDetectorDeps {
   /** SAM 3.1 targets the shell has placed (they take over from live boxes) */
   samTargets: () => Target[];
   depth: () => DepthProvider[];
+  headPosition?: () => Vector3;
   /** world positions of tracked hand joints right now */
   handJoints: () => Vector3[];
   log: (msg: string, level?: 'info' | 'ok' | 'warn' | 'error') => void;
@@ -44,6 +46,8 @@ export interface LiveDetectorDeps {
   ep?: YoloEp | 'auto';
   /** the box the user pinched is now covered by this SAM target (the shell locks it) */
   onPickClaimed?: (samTargetId: string) => void;
+  /** A tagged/SAM outline followed its matching live object. */
+  onTargetTracked?: (target: Target) => void;
   /** worker factory (tests inject a fake) */
   createWorker?: () => Worker;
 }
@@ -95,7 +99,7 @@ interface Anchor {
   claimedBy?: string;
   shown: boolean;
   aimable: { id: string; position: Vector3; size: number };
-  sent?: { position: Vector3; sizeM: [number, number, number]; label: string; score: number; picked: boolean };
+  sent?: { position: Vector3; sizeM: [number, number, number]; label: string; score: number; picked: boolean; seenAt: number };
 }
 
 export const MIN_INTERVAL = 1000 / 15;
@@ -106,8 +110,9 @@ export class LiveDetector {
   readonly stats: LiveStats = { state: 'off', inferMs: 0, latencyMs: 0, fps: 0, intervalMs: 100, frameMs: 0, baselineMs: 0, tracks: 0, shown: 0, handedOver: 0, frames: 0, skipped: 0, errors: 0 };
   readonly tracker = new BoxTracker();
   readonly telemetry = new YoloTelemetry();
-  category: Category = 'everything';
-  scoreThreshold = 0.3;
+  category: Category = 'electronics';
+  scoreThreshold = ANNOTATION_MIN_SCORE;
+  rangeM = ANNOTATION_RANGE_M;
   running = false;
   private worker?: Worker;
   private readyPromise?: Promise<void>;
@@ -124,9 +129,12 @@ export class LiveDetector {
   /** the track the user pinched, waiting for SAM 3.1 to cover it */
   private picked?: number;
   private generation = 0;
+  private readonly projectedHands: ProjectedJoint[] = [];
+  private readonly jointPool: ProjectedJoint[] = [];
+  private readonly projectPoint = new Vector3();
+  private readonly projectInverse = new Quaternion();
 
   constructor(private readonly d: LiveDetectorDeps) {
-    this.boxField()?.setLimit(8);
     this.publishStats();
   }
 
@@ -235,6 +243,14 @@ export class LiveDetector {
     const n = trackIdOf(id);
     const anchor = n === undefined ? undefined : this.anchors.get(n);
     return anchor?.shown ? anchor : undefined;
+  }
+
+  /** Snapshot a visible box immediately so tagging never waits for a server segmentation result. */
+  targetSnapshot(id: string): HudTarget | undefined {
+    const n = trackIdOf(id);
+    const anchor = n === undefined ? undefined : this.anchors.get(n);
+    const track = n === undefined ? undefined : this.tracker.get(n);
+    return anchor?.shown && track ? this.toTarget(track, anchor) : undefined;
   }
 
   /** The SAM target that has taken over this live box, if any. */
@@ -398,8 +414,9 @@ export class LiveDetector {
   /** Tracker update + 3D placement + SAM handover + HUD calls for one detector result. Public for tests. */
   apply(dets: WorkerDet[], fr: Pick<PendingFrame, 'cam' | 'k' | 'handJoints'>, now: number): void {
     const allowed = allowedClasses(this.category);
-    const hands = this.projectHands(fr);
-    const kept = dets.filter((d) => allowed.has(d.cls) && !overlapsHand(d.box, hands));
+    const hands = this.projectHands(fr, fr.handJoints);
+    const kept = dets.filter((d) => allowed.has(d.cls) && d.score >= Math.max(ANNOTATION_MIN_SCORE, this.scoreThreshold)
+      && this.candidateInRange(d, fr) && !overlapsHand(d.box, hands));
     this.lastFrame = { cam: fr.cam, k: fr.k };
     const upd = this.tracker.update(kept, now, (t) => this.predict(t, fr), this.picked, this.retentionMs());
     // a picked box that drops out of view keeps its anchor: SAM may still find it there
@@ -410,12 +427,14 @@ export class LiveDetector {
       // A coasted box keeps its world anchor, including when head motion takes it out of view.
       const previous = this.anchors.get(t.id);
       const a = t.misses && previous ? previous : this.place(t, fr, now);
-      if (t.opacity <= 0 || overlapsHand(t.box, hands)) { this.hide(t.id); continue; }
+      if (t.opacity <= 0 || !inAnnotationRange(a.position, this.d.headPosition?.() ?? fr.cam.position, this.rangeM)
+        || overlapsHand(t.box, hands)) { this.hide(t.id); continue; }
       const claim = this.claimedBy(t.box, fr, sam, a);
       if (claim) {
         if (!a.claimedBy) this.stats.handedOver++;
         a.claimedBy = claim;
         this.hide(t.id);
+        this.trackSam(claim, sam, a, t.misses === 0);
         this.showSam(claim, sam);
         if (t.id === this.picked) {
           this.picked = undefined;
@@ -428,7 +447,7 @@ export class LiveDetector {
       this.show(t, a);
     }
     this.stats.tracks = this.tracker.list().length;
-    this.stats.shown = [...this.anchors.values()].filter((a) => a.shown).length;
+    this.countShown();
     this.publishStats();
   }
 
@@ -471,16 +490,26 @@ export class LiveDetector {
       this.picked = undefined;
       this.d.onPickClaimed?.(pickedBy);
     }
-    this.stats.shown = [...this.anchors.values()].filter((a) => a.shown).length;
+    this.countShown();
     this.publishStats();
     return pickedBy;
   }
 
-  private projectHands(fr: Pick<PendingFrame, 'cam' | 'k' | 'handJoints'>): ProjectedJoint[] {
-    return fr.handJoints.flatMap((joint) => {
-      const px = worldToPixel(joint, fr.k, fr.cam);
-      return px ? [{ ...px, radius: Math.max(2, fr.k.fx * 0.018 / px.depth) }] : [];
-    });
+  private projectHands(fr: Pick<PendingFrame, 'cam' | 'k'>, joints: Vector3[]): ProjectedJoint[] {
+    const out = this.projectedHands;
+    this.projectInverse.copy(fr.cam.quaternion).invert();
+    let count = 0;
+    for (const joint of joints) {
+      const p = this.projectPoint.copy(joint).sub(fr.cam.position).applyQuaternion(this.projectInverse);
+      if (p.z >= -0.05) continue;
+      const projected = this.jointPool[count] ?? (this.jointPool[count] = { u: 0, v: 0, radius: 0 });
+      projected.u = fr.k.cx + fr.k.fx * p.x / -p.z;
+      projected.v = fr.k.cy - fr.k.fy * p.y / -p.z;
+      projected.radius = Math.max(2, fr.k.fx * 0.018 / -p.z);
+      out[count++] = projected;
+    }
+    out.length = count;
+    return out;
   }
 
   private retentionMs(): number {
@@ -494,18 +523,47 @@ export class LiveDetector {
     const field = this.boxField();
     const fr = this.lastFrame;
     // Project each joint once per render frame, shared by every candidate box.
-    const hands = fr && this.anchors.size ? this.projectHands({ ...fr, handJoints: this.d.handJoints() }) : [];
-    for (const t of this.tracker.list()) {
+    const hands = fr && this.anchors.size ? this.projectHands(fr, this.d.handJoints()) : undefined;
+    for (const t of this.tracker.values()) {
       const a = this.anchors.get(t.id);
       if (!a?.shown) continue;
-      if (t.opacity <= 0 || fr && hands.length && overlapsHand(this.predict(t, fr) ?? t.box, hands)) {
+      if (t.opacity <= 0 || fr && hands?.length && overlapsHand(this.predict(t, fr) ?? t.box, hands)) {
         this.hide(t.id);
         continue;
       }
       field?.setOpacity(hudId(t.id), t.opacity);
     }
-    this.stats.tracks = this.tracker.list().length;
-    this.stats.shown = [...this.anchors.values()].filter((a) => a.shown).length;
+    this.countShown();
+  }
+
+  private countShown(): void {
+    let shown = 0, tracks = 0;
+    for (const a of this.anchors.values()) if (a.shown) shown++;
+    for (const _ of this.tracker.values()) tracks++;
+    this.stats.shown = shown;
+    this.stats.tracks = tracks;
+  }
+
+  private trackSam(id: string, targets: Target[], anchor: Anchor, observed: boolean): void {
+    if (!observed) return;
+    const target = targets.find((t) => t.id === id);
+    if (!target) return;
+    target.position.lerp(anchor.position, 0.35);
+    target.facing.lerp(anchor.facing, 0.35).normalize();
+    target.sizeM = anchor.sizeM;
+    target.lastSeenAt = Date.now();
+    this.d.onTargetTracked?.(target);
+  }
+
+  private candidateInRange(det: WorkerDet, fr: Pick<PendingFrame, 'cam' | 'k'>): boolean {
+    const [x, y, w, h] = det.box;
+    const ray = pixelToRay(x + w / 2, y + h / 2, fr.k, fr.cam);
+    const depth = this.priorDepth(det.cls, w, h, fr.k.fx);
+    return inAnnotationRange(ray.origin.addScaledVector(ray.dir, depth), this.d.headPosition?.() ?? fr.cam.position, this.rangeM);
+  }
+
+  private priorDepth(cls: number, w: number, h: number, fx: number): number {
+    return Math.max(0.3, (fx * (deviceClass(cls)?.sizeM ?? 0.3)) / Math.max(w, h, 1));
   }
 
   private showSam(id: string, targets: Target[]): void {
@@ -531,7 +589,7 @@ export class LiveDetector {
     const [x, y, w, h] = t.box;
     const ray = pixelToRay(x + w / 2, y + h / 2, k, fr.cam);
     let a = this.anchors.get(t.id);
-    const prior = Math.min(4.5, Math.max(0.3, (k.fx * (deviceClass(t.cls)?.sizeM ?? 0.3)) / Math.max(w, h, 1)));
+    const prior = this.priorDepth(t.cls, w, h, k.fx);
     let depth = prior;
     if (a?.hit) {
       const along = a.hit.clone().sub(ray.origin).dot(ray.dir);
@@ -545,9 +603,7 @@ export class LiveDetector {
       a = { position, sizeM, facing: ray.origin.clone().sub(position).normalize(), hitPending: false, lastHitAt: 0, shown: false, aimable: { id: hudId(t.id), position, size: Math.max(0.06, sizeM[0], sizeM[1]) } };
       this.anchors.set(t.id, a);
     } else {
-      // world-space smoothing on top of the image-space one; a big jump (new depth) snaps
-      if (a.position.distanceTo(position) > 0.4) a.position.copy(position);
-      else a.position.lerp(position, 0.5);
+      a.position.lerp(position, 0.35);
       a.sizeM = sizeM;
       a.facing.copy(ray.origin).sub(a.position).normalize();
     }
@@ -592,21 +648,9 @@ export class LiveDetector {
     const picked = t.id === this.picked;
     this.boxField()?.setOpacity(hudId(t.id), t.opacity);
     const s = a.sent;
-    if (a.shown && s && s.picked === picked && s.label === label && Math.abs(s.score - score) < 0.05 && s.position.distanceTo(a.position) < 0.008 && Math.abs(s.sizeM[0] - a.sizeM[0]) < 0.08 * s.sizeM[0] + 0.004 && Math.abs(s.sizeM[1] - a.sizeM[1]) < 0.08 * s.sizeM[1] + 0.004) return;
-    const v = (p: Vector3): [number, number, number] => [r3(p.x), r3(p.y), r3(p.z)];
-    const ht: HudTarget = {
-      id: hudId(t.id),
-      label,
-      subtitle: picked ? 'identifying…' : 'live',
-      status: picked ? 'locked' : 'scanned',
-      position: v(a.position),
-      facing: v(a.facing),
-      confirmed: Boolean(a.hit),
-      sizeM: a.sizeM,
-      score,
-      modelId: LIVE_MODEL_ID,
-      source: 'yolo',
-    };
+    // Keep the shell's observation timestamp fresh even when a device stays perfectly still.
+    if (a.shown && s && t.lastSeenAt - s.seenAt < 200 && s.picked === picked && s.label === label && Math.abs(s.score - score) < 0.05 && s.position.distanceTo(a.position) < 0.008 && Math.abs(s.sizeM[0] - a.sizeM[0]) < 0.08 * s.sizeM[0] + 0.004 && Math.abs(s.sizeM[1] - a.sizeM[1]) < 0.08 * s.sizeM[1] + 0.004) return;
+    const ht = this.toTarget(t, a);
     this.d.hud().upsertTarget(ht);
     const field = this.boxField();
     if (field && !field.has(ht.id)) {
@@ -615,7 +659,25 @@ export class LiveDetector {
     }
     field?.setOpacity(ht.id, t.opacity);
     a.shown = true;
-    a.sent = { position: a.position.clone(), sizeM: [...a.sizeM], label, score, picked };
+    a.sent = { position: a.position.clone(), sizeM: [...a.sizeM], label, score, picked, seenAt: t.lastSeenAt };
+  }
+
+  private toTarget(t: Track, a: Anchor): HudTarget {
+    const v = (p: Vector3): [number, number, number] => [r3(p.x), r3(p.y), r3(p.z)];
+    const picked = t.id === this.picked;
+    return {
+      id: hudId(t.id),
+      label: deviceClass(t.cls)?.label ?? 'Device',
+      subtitle: picked ? 'identifying…' : 'live',
+      status: picked ? 'locked' : 'scanned',
+      position: v(a.position),
+      facing: v(a.facing),
+      confirmed: Boolean(a.hit),
+      sizeM: a.sizeM,
+      score: Math.round(t.score * 100) / 100,
+      modelId: LIVE_MODEL_ID,
+      source: 'yolo',
+    };
   }
 
   private hide(trackId: number, forget = false): void {

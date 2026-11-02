@@ -9,6 +9,7 @@
 import { PERSON_CLASS } from './classes';
 import { iou, nms } from './post';
 import type { Box } from './prep';
+import { ANNOTATION_FADE_MS, ANNOTATION_MAX_BOXES } from '../policy';
 
 export interface TrackerInput {
   box: Box;
@@ -57,8 +58,8 @@ export const TRACKER_DEFAULTS: TrackerOptions = {
   alpha: 0.35,
   minHits: 2,
   minAgeMs: 150,
-  maxMissMs: 400,
-  maxTracks: 8,
+  maxMissMs: ANNOTATION_FADE_MS,
+  maxTracks: ANNOTATION_MAX_BOXES,
 };
 
 export interface TrackerUpdate {
@@ -85,6 +86,10 @@ export class BoxTracker {
 
   list(): Track[] {
     return [...this.tracks.values()];
+  }
+
+  values(): IterableIterator<Track> {
+    return this.tracks.values();
   }
 
   get(id: number): Track | undefined {

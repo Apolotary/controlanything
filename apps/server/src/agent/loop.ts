@@ -21,7 +21,7 @@ import { ArmService } from './arm';
 import type { Dispatcher } from './dispatch';
 import { drive, dryResolve, templateIrDraft, templateLocalDraft, templateMidiDraft } from './drive';
 import { candidatesFor, online, pickSensor, type Roster, suggestedClients } from './executors';
-import { cropForSkin, cropJpeg, identify, type SkinCropImage } from './identify';
+import { cropForSkin, cropJpeg, identify, type IdentifyResult, type SkinCropImage } from './identify';
 import { learnCodes } from './learn';
 import { type LinkCapability, neededCapability, tryLink } from './link';
 import { research as doResearch } from './research';
@@ -64,7 +64,7 @@ const LEARN_WINDOW_MS = 10_000;
 const LEARN_WINDOW_RETRY_MS = 15_000;
 
 /** Run the loop for a target that has a detection (from SCAN) or a card (a paired device the user pointed at). */
-export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string; preferDeviceId?: string } = {}): Promise<void> {
+export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string; preferDeviceId?: string; identifyOnly?: boolean; identified?: Omit<IdentifyResult, 'card'> } = {}): Promise<void> {
   const log = d.log ?? (() => {});
   t.abort?.abort();
   const abort = new AbortController();
@@ -96,8 +96,14 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       d.hub.broadcast('device.card', r.card);
       step.ok(`${r.card.name} (${r.card.maker} ${r.card.model}) confidence ${r.card.confidence.toFixed(2)}`, { model: r.model, effort: r.effort, latencyMs: r.latencyMs, source: r.source, recordedFrom: r.recordedFrom, evidence: (r.card.evidence[0] ?? '').slice(0, 64) });
       d.targets.setState(t, 'identified', `${r.card.name}: ${r.card.maker} ${r.card.model}`);
+    } else if (opts.identified) {
+      // Named quietly when it was tagged: the work log still shows which model identified it, once setup starts.
+      const c = t.card;
+      d.steps.begin('identify', `identified when tagged`, { ...base, kind: 'opinion', model: opts.identified.model })
+        .ok(`${c.name} (${c.maker} ${c.model}) confidence ${c.confidence.toFixed(2)}`, { ...opts.identified, evidence: (c.evidence[0] ?? '').slice(0, 64) });
     }
     flow.check();
+    if (opts.identifyOnly) return;
     const card = t.card;
 
     // ---------------------------------------------------------------- LINK
@@ -277,7 +283,6 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
         return;
       }
       vstep.ok(`${summary.passed} verified, ${summary.failed} missed${summary.irMatch ? ` · codes: ${summary.irMatch.brand} CH${summary.irMatch.channel}` : ''}`, { evidence: `${summary.passed} ✓ ${summary.failed} ✗` });
-      d.targets.setState(t, 'verified', `${summary.passed} of ${summary.driver.actions.length} actions verified`);
       verified = summary;
     }
     if (!verified) return;
@@ -296,6 +301,8 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
         }
       }
     }
+
+    d.targets.setState(t, 'verified', `${summary.passed} of ${summary.driver.actions.length} actions verified`);
 
     // ---------------------------------------------------------------- FORGE
     flow.enter('forge');

@@ -75,6 +75,18 @@ export interface DispatcherOptions {
   /** ack timeout per op kind */
   ackTimeoutMs?: number;
   now?: () => number;
+  /** Rechecked at the send boundary, including rate-limited and trailing operations. */
+  canExec?: (request: ExecRequest) => boolean;
+}
+
+export interface ExecRequest {
+  executorDeviceId: string;
+  op: ExecOp;
+  port?: string;
+  cardId?: string;
+  driverId?: string;
+  actionId?: string;
+  dryRun?: boolean;
 }
 
 export class Dispatcher {
@@ -119,12 +131,14 @@ export class Dispatcher {
     opts: { port?: string; dryRun?: boolean; cardId?: string; driverId?: string; actionId?: string; lightCap?: boolean; waitForSlot?: boolean; timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<ExecAckPayload> {
     this.checkSignal(opts.signal);
+    this.checkExec({ ...opts, executorDeviceId, op });
     const limiter = this.limiter(executorDeviceId, op, Boolean(opts.lightCap));
     while (!limiter.take()) {
       if (!opts.waitForSlot) throw new ExecError(`rate limit for ${executorDeviceId}:${op.kind}`, 'rate_limited');
       await this.waitForSlot(limiter.waitMs(), opts.signal);
     }
     this.checkSignal(opts.signal);
+    this.checkExec({ ...opts, executorDeviceId, op });
     const execId = newId('x');
     const at = Date.now();
     const record = { execId, executorDeviceId, op, at } as (typeof this.sent)[number];
@@ -174,6 +188,10 @@ export class Dispatcher {
     if (signal?.aborted) throw new ExecError('cancelled', 'refused');
   }
 
+  private checkExec(request: ExecRequest): void {
+    if (this.o.canExec && !this.o.canExec(request)) throw new ExecError('control is not authorized for this device', 'refused');
+  }
+
   private waitForSlot(ms: number, signal?: AbortSignal): Promise<void> {
     this.checkSignal(signal);
     return new Promise<void>((resolve, reject) => {
@@ -193,11 +211,13 @@ export class Dispatcher {
   /**
    * Fire without waiting for the ack (the control loop). Rate-limited ops are coalesced latest-wins per
    * executor and action and sent when the limiter allows (a trailing edge, so the last knob position always
-   * lands). Returns false only when the executor is offline.
+   * lands). Returns false when authorization is refused or the executor is offline.
    */
   fire(executorDeviceId: string, op: ExecOp, opts: { port?: string; cardId?: string; driverId?: string; actionId?: string; lightCap?: boolean } = {}): boolean {
+    if (this.o.canExec && !this.o.canExec({ ...opts, executorDeviceId, op })) return false;
     const limiter = this.limiter(executorDeviceId, op, Boolean(opts.lightCap));
-    if (!limiter.take()) {
+    // Stop must reach the executor before the caller disarms and clears queued work.
+    if (!(op.kind === 'midi' && op.msg === 'panic') && !limiter.take()) {
       const key = `${executorDeviceId}:${opts.cardId ?? ''}:${op.kind}:${opts.actionId ?? (op.kind === 'midi' ? `${op.msg}:${op.channel}:${op.number ?? ''}` : op.kind)}`;
       const existing = this.trailing.get(key);
       if (existing) {

@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { DoubleSide, Mesh, PerspectiveCamera, Scene, Vector3, Quaternion, type ShaderMaterial, type Object3D, type WebGLRenderer } from 'three';
+import { DoubleSide, Mesh, PerspectiveCamera, Scene, Vector3, Quaternion, type ShaderMaterial, Object3D, type WebGLRenderer } from 'three';
 import { EXAMPLES, type Gen3dSpec } from '@ce/gen3d';
 import type { HandState, HudFrame, HudTarget } from '../contract';
 import { HandFeedback } from '../../app/hand-feedback';
 import { createHud, THEME } from './index';
 import { BoxField } from './boxes';
 
-const target: HudTarget = { id: 'device', label: 'Laptop', source: 'yolo', status: 'scanned', position: [0, 1.4, -1], facing: [0, 0, 1], confirmed: false, sizeM: [0.3, 0.2, 0.05] };
+const target: HudTarget = { id: 'device', tagged: true, connection: 'ready', label: 'Laptop', source: 'yolo', status: 'scanned', position: [0, 1.4, -1], facing: [0, 0, 1], confirmed: false, sizeM: [0.3, 0.2, 0.05] };
 const spec = (armed = true): Gen3dSpec => ({
   ...EXAMPLES['ceiling-dimmer']!, specId: 'device_controls', state: { armed },
   controls: [
@@ -14,10 +14,13 @@ const spec = (armed = true): Gen3dSpec => ({
     ...Array.from({ length: 5 }, (_, i) => ({ id: `action${i}`, label: `Action ${i}`, kind: 'trigger' as const, binding: { action: 'sim.action' } })),
   ],
 });
-function setup() {
+function setup(mode: 'annotate' | 'control' = 'control') {
   const scene = new Scene(), camera = new PerspectiveCamera();
   camera.position.set(0, 1.4, 0); camera.updateMatrixWorld();
   const hud = createHud({ scene, camera, renderer: {} as WebGLRenderer });
+  hud.setHome?.({ mode, filter: 'electronics', tagged: 0, status: mode === 'annotate' ? 'Tag the devices you want to control' : 'Choose a tagged device' });
+  const renderSpec = hud.renderSpec.bind(hud);
+  hud.renderSpec = (spec, at) => { renderSpec(spec, at); if (spec.state?.armed) hud.setArmed(spec.specId, true); };
   let time = 0;
   function frame(hand?: Partial<HandState>, elapsedMs = 1000 / 72): HudFrame {
     time += elapsedMs;
@@ -58,13 +61,13 @@ function budget(root: Object3D) {
 }
 
 describe('Calm Glass HUD scene budget', () => {
-  it.each(['brightness', 'synth'] as const)('keeps ten labeled boxes, one armed %s card and both hands within the stereo budget', (kind) => {
+  it.each(['brightness', 'synth'] as const)('keeps six labeled boxes, one armed %s card and both hands within the stereo budget', (kind) => {
     const { hud, scene, frame } = setup();
     const feedback = new HandFeedback(false);
     feedback.setAppearance({ accent: THEME.color.accent, showHover: false });
     scene.add(feedback.root);
     const controls = kind === 'brightness' ? spec() : { ...EXAMPLES['op1-knobs']!, controls: [...EXAMPLES['op1-knobs']!.controls, ...spec().controls.slice(1)] };
-    for (let i = 0; i < 10; i++) hud.upsertTarget({ ...target, id: i ? `device${i}` : target.id, status: i ? 'scanned' : 'verified', position: [(i % 5 - 2) / 3, 1.1 + Math.floor(i / 5) / 3, -1] });
+    for (let i = 0; i < 6; i++) hud.upsertTarget({ ...target, id: i ? `device${i}` : target.id, status: i ? 'scanned' : 'verified', position: [(i % 5 - 2) / 3, 1.1 + Math.floor(i / 5) / 3, -1] });
     hud.setLocked(target.id); hud.renderSpec(controls, { targetId: target.id }); hud.update(frame(undefined, 200));
     const handsFrame = frame({ pinchPoint: new Vector3(0, 1, -0.3) });
     handsFrame.hands.left = handsFrame.hands.right;
@@ -73,8 +76,8 @@ describe('Calm Glass HUD scene budget', () => {
     const diagnostic = { tracked: true, jointCount: 1, pinchDistanceCm: null, selectEvents: 0, selectDown: false };
     feedback.update({ ...handsFrame, head: { ...handsFrame.head, ray: shellHand.ray }, hands: { left: shellHand, right: shellHand } }, { left: diagnostic, right: diagnostic }, 0);
     const counts = budget(scene);
-    for (let i = 0; i < 10; i++) expect(hud.root.getObjectByName(`target-label:${i ? `device${i}` : target.id}`)).toBeTruthy();
-    expect(counts.text).toBeGreaterThan(10);
+    for (let i = 0; i < 6; i++) expect(hud.root.getObjectByName(`target-label:${i ? `device${i}` : target.id}`)).toBeTruthy();
+    expect(counts.text).toBeGreaterThan(6);
     expect(counts.calls).toBeGreaterThan(counts.text);
     expect(counts.calls * 2).toBeLessThanOrEqual(THEME.limits.drawCalls); // conservative stereo estimate
     expect(counts.triangles * 2).toBeLessThanOrEqual(THEME.limits.triangles);
@@ -87,21 +90,26 @@ describe('Calm Glass HUD scene budget', () => {
     expect(hud.root.getObjectByName('right-reticle')?.visible).toBe(true);
     expect(feedback.root.getObjectByName('fingertip-left')?.visible).toBe(true);
     expect(feedback.root.getObjectByName('fingertip-right')?.visible).toBe(true);
-    for (const control of controls.controls.filter((control) => control.kind === 'continuous')) expect(hud.root.getObjectByName(`main-control:${control.id}`)).toBeTruthy();
+    expect(hud.root.getObjectByName(`main-control:${controls.controls.find((control) => control.kind === 'continuous')!.id}`)).toBeTruthy();
+    expect(hud.root.getObjectByName(`main-control:${controls.controls.filter((control) => control.kind === 'continuous')[1]?.id}`)).toBeUndefined();
     expect(hud.root.getObjectByName('control:action2')).toBeTruthy();
     expect(hud.root.getObjectByName('control:action3')).toBeUndefined();
     feedback.dispose(); hud.dispose();
   });
-  it('keeps Stop scan reachable while scanning and reveals picked device controls', () => {
-    const { hud, frame } = setup();
-    hud.upsertTarget(target); hud.setScanning(true); hud.update(frame());
+  it('keeps annotation focused on tags and only opens a selected card in Control', () => {
+    const { hud, frame } = setup('annotate');
+    hud.upsertTarget(target); hud.setScanning(true); hud.setLocked(target.id); hud.update(frame());
     const card = hud.root.getObjectByName('device-card')!;
-    expect(card.visible).toBe(true);
-    expect(hud.root.getObjectByName('target-label:device')?.visible).toBe(true);
-    hud.setLocked(target.id); hud.update(frame()); expect(card.visible).toBe(true);
+    expect(card.visible).toBe(false);
+    expect(hud.root.getObjectByName('filter:electronics')).toBeTruthy();
+    expect(hud.root.getObjectByName('tag-remove:device')).toBeTruthy();
     hud.renderSpec(spec(), { targetId: target.id });
-    hud.showHackMenu(target.id, { title: 'Laptop', items: [] });
-    hud.setLocked(null); hud.update(frame()); expect(card.visible).toBe(true);
+    expect(hud.root.getObjectByName('control:action0')).toBeUndefined();
+    hud.setHome?.({ mode: 'control', filter: 'electronics', tagged: 1, status: 'Choose a tagged device' });
+    hud.update(frame()); expect(card.visible).toBe(true);
+    expect(hud.root.getObjectByName('filter:electronics')).toBeUndefined();
+    hud.setScanning(true); expect(card.visible).toBe(true);
+    hud.setLocked(null); hud.update(frame()); expect(card.visible).toBe(false);
     hud.dispose();
   });
   it('reuses the same geometry and label on tracking updates, then removes the old outline immediately on handover', () => {
@@ -340,10 +348,10 @@ describe('Calm Glass HUD controls and details', () => {
     expect(hud.root.getObjectByName('confirmation-panel')!.children.some((o) => 'text' in o && o.text === '123456')).toBe(true);
     hud.showPairing(null);
     hud.setDeck({ open: true }); hud.update(frame());
-    const phases: string[] = []; hud.on('deck', (e) => { if (e.key === 'mic') phases.push(e.phase); });
-    const point = hud.root.getObjectByName('deck:mic')!.getWorldPosition(new Vector3());
+    const phases: string[] = []; hud.on('deck', (e) => { if (e.key === 'panic') phases.push(e.phase); });
+    const point = hud.root.getObjectByName('deck:panic')!.getWorldPosition(new Vector3());
     hud.update(frame({ pinchPoint: point, pinching: true, justPinched: true }));
-    hud.setDeck({ open: true });
+    hud.setHome?.({ mode: 'annotate', filter: 'electronics', tagged: 1, status: 'Tag devices' });
     expect(phases).toEqual(['press', 'release']); hud.dispose();
   });
   it('ignores evidence for another device while an overhead card is docked', () => {
@@ -351,7 +359,7 @@ describe('Calm Glass HUD controls and details', () => {
     hud.upsertTarget({ ...target, position: [0, 2.4, 0] }); hud.setLocked(target.id); hud.update(frame(undefined, 200));
     hud.showEvidence({ targetId: 'other', sent: 'on', expect: 'brighter', seen: 'no change', verdict: 'fail' });
     const card = hud.root.getObjectByName('device-card')!;
-    expect(card.children.some((o) => 'text' in o && o.text === 'Learning this device…')).toBe(true); hud.dispose();
+    expect(card.children.some((o) => 'text' in o && o.text === 'Confirm to enable controls')).toBe(true); hud.dispose();
   });
 
   it('caps continuous move events at 15 Hz and keeps toasts visible for seconds', () => {
@@ -368,30 +376,24 @@ describe('Calm Glass HUD controls and details', () => {
 });
 
 describe('HUD button interaction feedback', () => {
-  it('keeps an open deck above Scan and preserves its explicit anchor through state updates', () => {
-    const { hud, camera, frame } = setup();
+  it('opens the same home bar at the wrist once and restores its world anchor when closed', () => {
+    const { hud, frame } = setup();
     hud.update(frame(undefined, 200));
-    hud.setDeck({ open: true }); hud.update(frame(undefined, 200));
-    expect(hud.root.getObjectByName('device-card')!.visible).toBe(false);
-    const phases: string[] = [];
-    hud.on('deck', (e) => phases.push(`${e.key}:${e.phase}`));
-    const point = hud.root.getObjectByName('deck:mic')!.getWorldPosition(new Vector3());
-    const ray = { origin: camera.position.clone(), dir: point.sub(camera.position).normalize() };
-    hud.update(frame({ ray, pinching: true, justPinched: true }));
-    hud.update(frame({ ray, justReleased: true }));
-    expect(phases).toEqual(['mic:press', 'mic:release']);
-    hud.setDeck({ at: [0.4, 1, -0.4] }); hud.update(frame());
-    hud.setDeck({ scanning: true }); hud.update(frame());
-    expect(hud.root.getObjectByName('deck')!.position.toArray()).toEqual([0.4, 1, -0.4]);
+    const bar = hud.root.getObjectByName('home-bar')!, anchor = bar.position.clone();
+    hud.setDeck({ open: true, at: [0.4, 1, -0.4] }); hud.update(frame());
+    hud.setDeck({ open: true, at: [0.8, 1, -0.4] }); hud.update(frame());
+    expect(bar.position.toArray()).toEqual([0.4, 1, -0.4]);
     hud.setDeck({ open: false }); hud.update(frame());
-    expect(hud.root.getObjectByName('device-card')!.visible).toBe(true);
+    expect(bar.position.equals(anchor)).toBe(true);
+    expect(bar.visible).toBe(true);
+    expect(hud.root.getObjectByName('deck-close')).toBeUndefined();
     hud.dispose();
   });
 
   it('accepts a fresh pinch after tracking loss without replaying a held pinch', () => {
     const { hud, camera, frame } = setup();
     hud.update(frame(undefined, 200));
-    const point = hud.root.getObjectByName('scan-toggle')!.getWorldPosition(new Vector3());
+    const point = hud.root.getObjectByName('deck:panic')!.getWorldPosition(new Vector3());
     const ray = { origin: camera.position.clone(), dir: point.sub(camera.position).normalize() };
     const phases: string[] = [];
     hud.on('deck', (e) => phases.push(e.phase));
@@ -408,7 +410,7 @@ describe('HUD button interaction feedback', () => {
   it('uses the index tip for hover and crossing, requires withdrawal before another poke, and never pokes with missing joints', () => {
     const { hud, frame } = setup();
     hud.update(frame(undefined, 200));
-    const button = hud.root.getObjectByName('scan-toggle')!;
+    const button = hud.root.getObjectByName('deck:panic')!;
     const phases: string[] = [];
     hud.on('deck', (e) => phases.push(e.phase));
     const fingertip = (z: number, x = 0) => button.localToWorld(new Vector3(x, 0, z));
@@ -440,17 +442,18 @@ describe('HUD button interaction feedback', () => {
     hud.dispose();
   });
 
-  it.each(['scan', 'details', 'deck', 'confirm', 'approval', 'control', 'hack'] as const)('supports a 48 mm hit area, ray hover and open-finger poke on %s buttons', (kind) => {
+  it.each(['mode', 'details', 'deck', 'confirm', 'approval', 'control', 'hack'] as const)('supports a 48 mm hit area, ray hover and open-finger poke on %s buttons', (kind) => {
     const { hud, camera, frame } = setup();
-    let name = 'scan-toggle';
+    hud.upsertTarget(target); hud.setLocked(target.id);
+    let name = 'mode-annotate';
     if (kind === 'details') name = 'details-toggle';
-    if (kind === 'deck') { hud.setDeck({ open: true }); name = 'deck:ping'; }
+    if (kind === 'deck') { hud.setDeck({ open: true }); name = 'deck:panic'; }
     if (kind === 'confirm') { hud.showConfirm({ id: 'ok', title: 'Allow?' }); name = 'confirm-yes'; }
     if (kind === 'approval') { hud.showApprovals([{ pairingId: 'mac', name: 'Mac', kind: 'companion', display: '123' }]); name = 'approval-yes'; }
     if (kind === 'control' || kind === 'hack') {
       hud.upsertTarget({ ...target, status: 'verified' }); hud.setLocked(target.id);
       if (kind === 'control') { hud.renderSpec(spec(), { targetId: target.id }); name = 'control:action0'; }
-      else { hud.showHackMenu(target.id, { title: 'Actions', items: [{ id: 'on', label: 'On', controlId: 'on', kind: 'action', status: 'ready' }] }); name = 'action:on'; }
+      else { hud.renderSpec({ ...spec(), controls: [spec().controls[0]!] }, { targetId: target.id }); hud.showHackMenu(target.id, { title: 'Actions', items: [{ id: 'on', label: 'On', controlId: 'on', kind: 'action', status: 'ready' }] }); name = 'action:on'; }
     }
     hud.update(frame(undefined, 200));
     const button = hud.root.getObjectByName(name)!;
@@ -474,6 +477,125 @@ describe('HUD button interaction feedback', () => {
     poke(0.025); poke(-0.005);
     expect(consumed.length).toBeGreaterThan(0);
     expect(hud.root.getObjectByName(name)!.userData.pressed).toBe(true);
+    hud.dispose();
+  });
+});
+
+describe('explicit annotation and control modes', () => {
+  it('starts with only the home bar, automatically scans without adding a card, and offers tag removal', () => {
+    const scene = new Scene(), camera = new PerspectiveCamera();
+    const hud = createHud({ scene, camera, renderer: {} as WebGLRenderer });
+    hud.upsertTarget(target); hud.setLocked(target.id); hud.setScanning(true);
+    hud.renderSpec(spec(true), { targetId: target.id }); hud.setArmed('device_controls', true);
+    hud.update({ time: 0, dt: 0, head: { position: new Vector3(0, 1.4, 0), quaternion: new Quaternion() }, hands: {} });
+    expect(hud.root.getObjectByName('device-card')!.visible).toBe(false);
+    expect(hud.root.getObjectByName('home-bar')!.visible).toBe(true);
+    expect(hud.root.getObjectByName('tag-remove:device')).toBeTruthy();
+    expect(hud.root.getObjectByName('filter:electronics')!.userData.selected).toBe(true);
+    for (const name of ['scan-toggle', 'deck:panic', 'deck:mic', 'deck:ping', 'control:action0']) expect(hud.root.getObjectByName(name)).toBeUndefined();
+    hud.dispose();
+  });
+
+  it('shows one setup, cancel, pairing or unknown state card and sends only its explicit action', () => {
+    const { hud, frame, pinch } = setup();
+    hud.upsertTarget({ ...target, connection: 'setup' }); hud.setLocked(target.id);
+    const actions: string[] = [];
+    for (const event of ['setup', 'cancel', 'pair'] as const) hud.on(event, ({ targetId }) => actions.push(`${event}:${targetId}`));
+    hud.setDeviceState?.({ targetId: target.id, connection: 'setup' }); hud.update(frame());
+    pinch(hud.root.getObjectByName('control-setup')!);
+    expect(actions).toEqual(['setup:device']);
+    hud.setDeviceState?.({ targetId: target.id, connection: 'setup', busy: true, sentence: 'Checking the physical response.' });
+    expect((hud.root.getObjectByName('device-status') as Object3D & { text: string }).text).toBe('Checking the physical response.');
+    expect(hud.root.getObjectByName('control-setup')).toBeUndefined();
+    pinch(hud.root.getObjectByName('control-cancel')!);
+    hud.setDeviceState?.({ targetId: target.id, connection: 'offline', hint: 'Pair the Cardputer IR node.' });
+    expect((hud.root.getObjectByName('device-status') as Object3D & { text: string }).text).toBe('Pair the Cardputer IR node.');
+    pinch(hud.root.getObjectByName('control-pair')!);
+    expect(actions).toEqual(['setup:device', 'cancel:device', 'pair:device']);
+    hud.setDeviceState?.({ targetId: target.id, connection: 'unknown' });
+    expect(hud.root.getObjectByName('control-pair')).toBeUndefined();
+    expect(hud.root.getObjectByName('device-card')!.visible).toBe(true);
+    hud.setHome?.({ mode: 'annotate', filter: 'lights', tagged: 1, status: 'Tag the devices you want to control' });
+    expect(hud.root.getObjectByName('device-card')!.visible).toBe(false);
+    hud.dispose();
+  });
+
+  it('requires an explicit arm confirmation even when a generated spec claims it is armed', () => {
+    const hud = createHud({ scene: new Scene(), camera: new PerspectiveCamera(), renderer: {} as WebGLRenderer });
+    hud.setHome?.({ mode: 'control', filter: 'electronics', tagged: 1, status: 'Choose a device' });
+    hud.upsertTarget(target); hud.setLocked(target.id);
+    hud.renderSpec(spec(true), { targetId: target.id });
+    expect(hud.root.getObjectByName('control:action0')).toBeUndefined();
+    hud.setArmed('device_controls', true);
+    expect(hud.root.getObjectByName('control:action0')).toBeTruthy();
+    hud.setArmed('device_controls', false);
+    hud.renderSpec(spec(true), { targetId: target.id });
+    expect(hud.root.getObjectByName('control:action0')).toBeUndefined();
+    hud.dispose();
+  });
+
+  it('keeps unverified actions unavailable after global ARM and a disarm/rearm cycle', () => {
+    const { hud } = setup();
+    const controls = spec();
+    controls.controls.find((control) => control.id === 'action0')!.armed = false;
+    hud.upsertTarget(target); hud.setLocked(target.id); hud.renderSpec(controls, { targetId: target.id });
+    hud.setArmed(controls.specId, false); hud.setArmed(controls.specId, true);
+    expect(hud.root.getObjectByName('control:action0')).toBeUndefined();
+    expect(hud.root.getObjectByName('control:action1')).toBeTruthy();
+    hud.dispose();
+  });
+
+  it('consumes the card background and keeps a near slider drag on its captured plane', () => {
+    const { hud, frame, pinch } = setup();
+    hud.upsertTarget(target); hud.setLocked(target.id); hud.renderSpec(spec(), { targetId: target.id }); hud.update(frame(undefined, 200));
+    const consumed: string[] = [], values: number[] = [];
+    hud.on('consumed', ({ widget }) => consumed.push(widget));
+    hud.on('control', ({ value }) => values.push(Number(value)));
+    const card = hud.root.getObjectByName('device-card')!;
+    const background = new Object3D(); card.add(background); background.position.set(0.18, 0.13, 0);
+    pinch(background);
+    expect(consumed).toContain('handle'); expect(values).toEqual([]);
+    const slider = hud.root.getObjectByName('main-control:level')!;
+    const start = slider.localToWorld(new Vector3(0, 0, 0));
+    hud.update(frame({ pinchPoint: start, pinching: true, justPinched: true }));
+    const drift = slider.localToWorld(new Vector3(0.03, 0, 0.08));
+    const ray = { origin: new Vector3(), dir: new Vector3(0, 0, -1) };
+    hud.update(frame({ pinchPoint: drift, ray, pinching: true }, 100));
+    hud.update(frame({ pinchPoint: drift, ray, justReleased: true }));
+    expect(values.at(-1)).toBe(58);
+    hud.dispose();
+  });
+});
+
+describe('bounded card wording and stable home updates', () => {
+  it.each([false, true])('names the arm action explicitly with hold=%s', (hold) => {
+    const { hud } = setup();
+    hud.showConfirm({ id: 'arm', title: 'Arm controls', hold, summary: 'W'.repeat(200) });
+    const button = hud.root.getObjectByName('confirm-yes')!;
+    expect(button.children.some((child) => 'text' in child && child.text === (hold ? 'Hold to arm' : 'Arm'))).toBe(true);
+    const summary = hud.root.getObjectByName('confirmation-summary') as Object3D & { text: string };
+    expect(summary.text).toHaveLength(200);
+    expect(summary.userData.fitHeight).toBe(0.11);
+    hud.showConfirm({ id: 'approve', title: 'Allow pairing' });
+    expect(hud.root.getObjectByName('confirm-yes')!.children.some((child) => 'text' in child && child.text === 'Allow')).toBe(true);
+    hud.dispose();
+  });
+
+  it('keeps complete 200 character hints within a defined status area and reuses home widgets across unchanged snapshots', () => {
+    const { hud, frame } = setup();
+    hud.upsertTarget({ ...target, connection: 'offline' }); hud.setLocked(target.id);
+    const hint = 'Connect your companion and confirm that the device is attached. '.repeat(4).slice(0, 200);
+    hud.setDeviceState?.({ targetId: target.id, connection: 'offline', hint });
+    const text = hud.root.getObjectByName('device-status') as Object3D & { text: string };
+    expect(text.text).toBe(hint); expect(text.userData.fitHeight).toBe(0.105);
+    const toggle = hud.root.getObjectByName('mode-control'), pair = hud.root.getObjectByName('control-pair');
+    for (let i = 0; i < 100; i++) {
+      hud.setHome?.({ mode: 'control', filter: 'electronics', tagged: 1, status: 'Choose a tagged device' });
+      hud.setDeviceState?.({ targetId: target.id, connection: 'offline', hint });
+      hud.update(frame());
+    }
+    expect(hud.root.getObjectByName('mode-control')).toBe(toggle);
+    expect(hud.root.getObjectByName('control-pair')).toBe(pair);
     hud.dispose();
   });
 });

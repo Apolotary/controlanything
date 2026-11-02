@@ -23,11 +23,9 @@ export const PERSON_CLASS = 0;
 /** The category chips of the design (research/06 §"Category chips"). */
 export type Category = 'everything' | 'electronics' | 'instruments' | 'lights' | 'remotes';
 export const CATEGORIES: { id: Category; label: string }[] = [
-  { id: 'everything', label: 'Everything' },
   { id: 'electronics', label: 'Electronics' },
-  { id: 'instruments', label: 'Instruments' },
   { id: 'lights', label: 'Lights' },
-  { id: 'remotes', label: 'Remotes' },
+  { id: 'everything', label: 'All devices' },
 ];
 
 export interface DeviceClass {
@@ -52,12 +50,12 @@ export const DEVICE_CLASSES: DeviceClass[] = [
   { cls: 65, label: 'Remote', categories: ['electronics', 'remotes'], sizeM: 0.17 },
   { cls: 66, label: 'Keyboard', categories: ['electronics', 'instruments'], sizeM: 0.35 },
   { cls: 67, label: 'Phone', categories: ['electronics', 'remotes'], sizeM: 0.15 },
-  { cls: 68, label: 'Microwave', categories: ['electronics'], sizeM: 0.5 },
-  { cls: 69, label: 'Oven', categories: ['electronics'], sizeM: 0.6 },
-  { cls: 70, label: 'Toaster', categories: ['electronics'], sizeM: 0.3 },
-  { cls: 72, label: 'Fridge', categories: ['electronics'], sizeM: 1.7 },
-  { cls: 74, label: 'Clock', categories: ['electronics'], sizeM: 0.3 },
-  { cls: 78, label: 'Hair dryer', categories: ['electronics'], sizeM: 0.25 },
+  { cls: 68, label: 'Microwave', categories: [], sizeM: 0.5 },
+  { cls: 69, label: 'Oven', categories: [], sizeM: 0.6 },
+  { cls: 70, label: 'Toaster', categories: [], sizeM: 0.3 },
+  { cls: 72, label: 'Fridge', categories: [], sizeM: 1.7 },
+  { cls: 74, label: 'Clock', categories: [], sizeM: 0.3 },
+  { cls: 78, label: 'Hair dryer', categories: [], sizeM: 0.25 },
 ];
 
 const BY_CLASS = new Map(DEVICE_CLASSES.map((d) => [d.cls, d]));
