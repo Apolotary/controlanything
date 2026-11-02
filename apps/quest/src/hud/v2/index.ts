@@ -3,7 +3,7 @@ import { applyPatch, type Control, type ControlEvent, type Gen3dSpec, type HackI
 import { Emitter } from '../../gen3d/events';
 import { handCursor, newCursor, type Cursor } from '../../gen3d/interact';
 import type { AgentStepLike, ConfirmRequest, DeviceState, HomeState, EvidenceState, Hud, HudEvents, HudFrame, HudTarget, PingLine, UploadState } from '../contract';
-import { controlSegmentLabel, homeHint } from '../home';
+import { homeHint } from '../home';
 import { controlPower, isBrightness } from './control-state';
 import { PairCodeEntry, PAIR_CODE_KEYS } from './pair-code';
 import { targetChipLabel } from './target-chip';
@@ -15,6 +15,8 @@ import { PinchReticles } from './reticle';
 import { unfoldEase } from './motion';
 import { TargetTether } from './tether';
 import { PanelSeparation, WorldPanel } from './world-panel';
+import { DockIcons } from './dock-icons';
+import { HandDockAnchor } from './hand-dock';
 export { whenSdfReady } from './text';
 export { THEME } from './theme';
 
@@ -59,8 +61,8 @@ function visible(object: Object3D | null): boolean {
   return true;
 }
 
-export function createHud(ctx: { scene: Scene; camera: Camera; renderer: WebGLRenderer }): Hud {
-  return new LeanHud(ctx.scene, ctx.camera);
+export function createHud(ctx: { scene: Scene; camera: Camera; renderer: WebGLRenderer; nonDominant?: 'left' | 'right' }): Hud {
+  return new LeanHud(ctx.scene, ctx.camera, ctx.nonDominant);
 }
 
 /** One selected device, a short sentence, and only the controls that are ready to use. */
@@ -100,15 +102,16 @@ export class LeanHud implements Hud {
   private readonly controls = new Group();
   private readonly details = new Group();
   private readonly modal = new Group();
-  private readonly deck = new Group();
+  private readonly deck = new DockIcons();
+  private readonly handDock: HandDockAnchor;
   private home: HomeState = { mode: 'annotate', filter: 'everything', tagged: 0, status: 'Pinch a device to tag it' };
   private deviceState: DeviceState | null = null;
-  private wristOpen = false;
-  private readonly homePosition = new Vector3();
-  private readonly homeRotation = new Quaternion();
-  private homeHeight = 0.22;
-  private readonly homeCount = makeText({ text: '0 tagged', size: THEME.font.detail, anchorX: 'center', singleLine: true, maxWidth: 0.11 });
-  private readonly homeStatus = makeText({ text: '', size: THEME.font.detail, anchorX: 'center', singleLine: true, maxWidth: 0.44 });
+  private readonly dockHint = makeText({ text: '', size: 0.012, anchorX: 'center', maxWidth: 0.24 });
+  private hintUntil = 0;
+  private readonly coach = new Group();
+  private coached = false;
+  private coachUntil = 0;
+  private readonly coachPlacement = new WorldPanel({ distance: 0.65, height: -0.1 });
   private readonly notice = new Group();
   private readonly heading = makeText({ text: 'Look at a device', size: THEME.font.title, weight: 600, singleLine: true, maxWidth: THEME.card.width - THEME.card.padding * 2 - THEME.card.chipWidth - THEME.card.padding });
   private readonly status = makeText({ text: '', color: THEME.color.muted, maxWidth: THEME.control.width, maxHeight: 0.105, anchorY: 'top' });
@@ -147,24 +150,33 @@ export class LeanHud implements Hud {
   private readonly dockPlacement = new WorldPanel({ distance: THEME.card.dockDistance, height: THEME.panel.headY });
   private readonly modalPlacement = new WorldPanel({ height: -0.06 });
   private readonly panelSeparation = new PanelSeparation();
-  private readonly deckPlacement = new WorldPanel({ distance: 0.6, height: -0.4 });
+  private readonly deckPlacement = new WorldPanel({ distance: 0.6, height: -0.4, lateral: -0.24 });
   private readonly headPose = { position: this.head, quaternion: this.headQuaternion };
   private readonly noticePlacement = new WorldPanel({ height: THEME.panel.toastY });
   private placementKey = '';
   private docked = false;
   private openingBesideTarget = false;
   private hasFrame = false;
-  private deckAt?: [number, number, number];
-
-  constructor(scene: Scene, private readonly camera: Camera) {
+  constructor(scene: Scene, private readonly camera: Camera, nonDominant: 'left' | 'right' = 'left') {
+    this.handDock = new HandDockAnchor(nonDominant);
     this.root.name = 'hud-v2';
     this.card.name = 'device-card';
     this.controls.name = 'device-controls';
     this.details.name = 'details-panel';
     this.modal.name = 'confirmation-panel';
-    this.deck.name = 'home-bar';
+    this.deck.name = 'hand-dock';
+    this.deck.wrist.name = 'wrist-mode';
+    this.coach.name = 'hand-menu-coach';
     this.notice.name = 'notice';
-    this.root.add(this.boxes, this.card, this.modal, this.deck, this.notice, this.reticles, this.tether);
+    this.root.add(this.boxes, this.card, this.modal, this.deck, this.deck.wrist, this.coach, this.notice, this.reticles, this.tether);
+    this.dockHint.name = 'dock-hint';
+    this.dockHint.position.set(0, -0.048, THEME.panel.depth);
+    this.dockHint.visible = false;
+    this.deck.add(this.dockHint);
+    const coachText = makeText({ text: `Turn your ${nonDominant} palm toward you for the menu`, size: THEME.font.body, anchorX: 'center', maxWidth: 0.34 });
+    this.coach.add(this.plate(0.38, 0.075), coachText);
+    coachText.position.z = THEME.panel.depth;
+    this.coach.visible = false;
     this.card.add(this.plate(THEME.card.width, THEME.card.height), this.heading, this.status, this.controls, this.details, this.verdict, this.progress);
     this.heading.position.set(-THEME.card.width / 2 + THEME.card.padding, THEME.card.titleY, THEME.panel.depth);
     this.status.position.set(this.heading.position.x, THEME.card.statusY, THEME.panel.depth);
@@ -192,7 +204,6 @@ export class LeanHud implements Hud {
     check.name = 'verified-check'; check.position.set(-THEME.card.chipWidth / 2 + 0.013, 0, THEME.panel.depth);
     check.renderOrder = THEME.render.text;
     this.verdict.add(verified, check);
-    this.homeStatus.name = 'home-hint';
     this.progress.name = 'verification-progress';
     this.progress.position.set(0, THEME.card.progressY, THEME.panel.depth);
     const progressTrack = new Mesh(this.trackGeometry, this.materials.button);
@@ -629,7 +640,6 @@ export class LeanHud implements Hud {
     if (v.listening || v.final) this.toast(v.final ?? v.partial ?? 'Listening…');
   }
   setHome(state: HomeState): void {
-    const changed = this.home.mode !== state.mode || this.home.filter !== state.filter || this.home.canStop !== state.canStop;
     const modeChanged = this.home.mode !== state.mode;
     this.home = { ...state };
     if (modeChanged) {
@@ -640,9 +650,8 @@ export class LeanHud implements Hud {
       for (const target of this.targets.values()) this.refreshTargetLabel(target);
       this.refreshCard();
     }
-    if (changed) this.refreshHome();
-    setText(this.homeCount, `${state.tagged} tagged`);
-    this.refreshHomeHint();
+    this.refreshHome();
+    if (modeChanged) this.showDockHint();
     this.place();
   }
   setDeviceState(state: DeviceState | null): void {
@@ -697,54 +706,51 @@ export class LeanHud implements Hud {
   private canStop(): boolean {
     return this.home.mode === 'control' && (this.home.canStop ?? (!!this.deviceState?.busy || [...this.specs.values()].some((m) => m.armed && m.spec.controls.some((c) => c.armed !== false))));
   }
-  private syncHome(): void {
-    if (this.canStop() !== !!this.deck.getObjectByName('deck:panic')) this.refreshHome();
-    else this.refreshHomeHint();
-  }
+  private syncHome(): void { this.refreshHome(); }
   private refreshHomeHint(): void {
-    const hint = homeHint(this.home.mode, this.home.tagged, !!this.selected()?.tagged);
-    setText(this.homeStatus, hint);
-    this.homeStatus.visible = !!hint;
-    const control = this.deck.getObjectByName('mode-control')?.getObjectByName('sdf') as SdfText | undefined;
-    if (control) setText(control, controlSegmentLabel(this.home.tagged));
+    setText(this.dockHint, homeHint(this.home.mode, this.home.tagged, !!this.selected()?.tagged));
+    this.dockHint.visible = !!this.dockHint.text && this.time < this.hintUntil;
+  }
+  private showDockHint(): void {
+    this.hintUntil = this.time + 2.5;
+    this.refreshHomeHint();
+  }
+  private releaseDockCapture(capture: Capture): void {
+    const widget = capture.widget;
+    capture.widget = null; capture.mode = null; capture.pokeBlocked = false; capture.hasTip = false;
+    widget?.end?.();
   }
   private refreshHome(): void {
-    // These persistent labels are detached before clearing the buttons.
-    this.homeCount.removeFromParent(); this.homeStatus.removeFromParent();
-    this.clear(this.deck);
-    const annotate = this.home.mode === 'annotate';
-    // Annotate holds the filter row; Control is compact so the bar stays in view below an open card.
-    this.homeHeight = annotate ? 0.22 : 0.16;
-    this.deck.add(this.plate(0.48, this.homeHeight));
-    for (const [mode, text, x] of [['annotate', 'Annotate', -0.115], ['control', controlSegmentLabel(this.home.tagged), 0.115]] as const) {
-      const button = this.button(this.deck, `mode-${mode}`, text, x, annotate ? 0.066 : 0.036, 0.216, 'deck', () => this.events.emit('mode', { mode }));
-      this.selectButton(button.group, this.home.mode === mode, 0.216);
+    this.deck.setState(this.home, this.canStop());
+    this.deck.userData.width = this.deck.width;
+    this.deck.userData.height = this.deck.height;
+    // Keep captures across count/filter updates, releasing only icons that actually disappeared.
+    for (let i = this.widgets.length - 1; i >= 0; i--) {
+      const widget = this.widgets[i]!;
+      if (!widget.group.userData.dockIcon || this.deck.buttons.includes(widget.group)) continue;
+      for (const capture of this.captures.values()) if (capture.widget === widget) {
+        this.releaseDockCapture(capture);
+      }
+      this.widgets.splice(i, 1);
     }
-    this.homeCount.position.set(annotate && !this.wristOpen ? 0 : -0.145, annotate ? 0.015 : -0.022, THEME.panel.depth);
-    this.homeStatus.position.set(0, annotate ? -0.088 : -0.058, THEME.panel.depth);
-    this.deck.add(this.homeCount, this.homeStatus);
-    setText(this.homeCount, `${this.home.tagged} tagged`); this.refreshHomeHint();
-    if (annotate) for (const [filter, text, x] of [['everything', 'All', -0.152], ['lights', 'Lights', 0], ['electronics', 'Electronics', 0.152]] as const) {
-      const button = this.button(this.deck, `filter:${filter}`, text, x, -0.035, 0.14, 'deck', () => this.events.emit('filter', { filter }));
-      this.selectButton(button.group, this.home.filter === filter, 0.14);
+    for (const group of this.deck.buttons) {
+      if (this.widgets.some((widget) => widget.group === group)) continue;
+      const start = () => {
+        if (group.name === 'mode-annotate' || group.name === 'mode-control') {
+          this.events.emit('mode', { mode: group.name === 'mode-annotate' ? 'annotate' : 'control' });
+        } else if (group.name.startsWith('filter:')) {
+          this.events.emit('filter', { filter: group.name.slice(7) as HomeState['filter'] });
+        } else this.events.emit('deck', { key: 'panic', phase: 'press' });
+      };
+      this.widgets.push({ group, w: 0.032, h: 0.032, kind: 'deck', start,
+        end: group.name === 'deck:panic' ? () => this.events.emit('deck', { key: 'panic', phase: 'release' }) : undefined,
+        button: true, lastMove: 0 });
     }
-    else if (this.canStop()) this.button(this.deck, 'deck:panic', 'Stop', 0.15, -0.022, 0.12, 'deck', () => this.events.emit('deck', { key: 'panic', phase: 'press' }), () => this.events.emit('deck', { key: 'panic', phase: 'release' }));
-    if (this.wristOpen) this.button(this.deck, 'deck-close', 'Close', annotate ? 0.15 : 0, annotate ? 0.015 : -0.022, 0.11, 'deck', () => this.setDeck({ open: false }));
-    this.homeCount.visible = true;
+    this.refreshHomeHint();
+    this.deck.updateFeedback(this.handDock.opacity);
   }
-  setDeck(d: { open?: boolean; scanning?: boolean; daemons?: boolean; at?: [number, number, number] }): void {
-    if (d.open === true && !this.wristOpen) {
-      this.homePosition.copy(this.deck.position); this.homeRotation.copy(this.deck.quaternion);
-      this.wristOpen = true;
-      this.deckAt = d.at;
-      if (this.deckAt) { this.deck.position.fromArray(this.deckAt); this.face(this.deck); }
-      this.refreshHome();
-    } else if (d.open === false && this.wristOpen) {
-      this.wristOpen = false; this.deckAt = undefined;
-      this.deck.position.copy(this.homePosition); this.deck.quaternion.copy(this.homeRotation);
-      this.refreshHome();
-    }
-  }
+  // Kept for the shared HUD interface; v2 visibility comes entirely from the current hand frame.
+  setDeck(_d: { open?: boolean; scanning?: boolean; daemons?: boolean; at?: [number, number, number] }): void {}
   toast(text: string, _level?: 'info' | 'ok' | 'warn' | 'error'): void { setText(this.noticeText, text.slice(0, 72)); if (!this.notice.visible) this.noticePlacement.reset(); this.notice.visible = true; this.noticeUntil = this.time + 3; this.place(); }
   private face(object: Object3D): void {
     this.boxes.facingQuaternion(this.head, object.position, this.facing); object.quaternion.copy(this.facing);
@@ -804,13 +810,15 @@ export class LeanHud implements Hud {
     }
     if (this.modal.visible) this.follow(this.modal, this.modalPlacement);
     else this.modalPlacement.reset();
-    if (!this.wristOpen) {
+    if (!this.handDock.tracked) {
       this.follow(this.deck, this.deckPlacement);
-      if (this.card.visible) this.panelSeparation.update(this.card, this.deck, this.headPose, THEME.card.width, THEME.card.height, 0.48, this.homeHeight);
+      if (this.card.visible) this.panelSeparation.update(this.card, this.deck, this.headPose, THEME.card.width, THEME.card.height, this.deck.width, this.deck.height);
     }
+    if (this.coach.visible) this.follow(this.coach, this.coachPlacement);
     if (this.notice.visible) this.follow(this.notice, this.noticePlacement);
   }
   private inside(widget: Widget, point: Vector3): boolean {
+    if (widget.group.userData.dockIcon) return Math.hypot(point.x, point.y) <= widget.w / 2 + 0.002;
     return Math.abs(point.x) <= Math.max(THEME.control.minHitSize, widget.w) / 2 + THEME.control.hitPadding
       && Math.abs(point.y) <= Math.max(THEME.control.minHitSize, widget.h) / 2 + THEME.control.hitPadding;
   }
@@ -818,7 +826,7 @@ export class LeanHud implements Hud {
     this.inverse.copy(widget.group.matrixWorld).invert();
     this.local.copy(cursor.tip).applyMatrix4(this.inverse);
     let distance = Math.abs(this.local.z);
-    if (!cursor.canPoke || distance > THEME.control.near || !this.inside(widget, this.local)) {
+    if (!cursor.canPoke || distance > (widget.group.userData.dockIcon ? 0.03 : THEME.control.near) || !this.inside(widget, this.local)) {
       if (!cursor.ray) return Infinity;
       this.origin.copy(cursor.ray.origin).applyMatrix4(this.inverse);
       // Preserve world ray distance while the card unfolds with a nonuniform scale.
@@ -841,6 +849,11 @@ export class LeanHud implements Hud {
     this.local.lerpVectors(this.previousTip, this.local, fraction);
     return this.inside(widget, this.local);
   }
+  private interactive(widget: Widget, cursor: Cursor): boolean {
+    if (!visible(widget.group)) return false;
+    if (widget.group.userData.dockIcon && (!this.handDock.open || this.handDock.tracked && cursor.hand === this.handDock.nonDominant)) return false;
+    return !this.modal.visible || !!this.modal.getObjectById(widget.group.id) || !!this.deck.getObjectById(widget.group.id);
+  }
   private interact(cursor: Cursor): void {
     const capture = this.captures.get(cursor.id); if (!capture) return;
     if (!cursor.tracked) {
@@ -854,7 +867,7 @@ export class LeanHud implements Hud {
     }
     let hover: Widget | null = null, poke: Widget | null = null, distance = Infinity;
     for (const widget of this.widgets) {
-      if (!visible(widget.group) || this.modal.visible && !this.modal.getObjectById(widget.group.id) && !this.deck.getObjectById(widget.group.id)) continue;
+      if (!this.interactive(widget, cursor)) continue;
       const candidate = this.hit(widget, cursor);
       if (candidate !== Infinity && candidate <= distance) { distance = candidate; hover = widget; }
       if (!poke && this.crosses(widget, cursor, capture)) poke = widget;
@@ -922,6 +935,7 @@ export class LeanHud implements Hud {
       const hovered = Boolean(group.userData.hovered), selected = Boolean(group.userData.selected);
       group.userData.pressed = pressed;
       group.scale.setScalar(pressed ? 0.96 : 1);
+      if (group.userData.dockIcon) continue;
       const plate = group.getObjectByName('button-plate') as Mesh;
       const style = pressed ? 'pressed' : group.userData.primary ? 'primary' : hovered ? selected && !group.userData.action ? 'selected-hover' : 'hover' : selected && !group.userData.action ? 'selected' : 'button';
       plate.material = this.surfaces.material(widget.w, widget.h, style, true);
@@ -931,6 +945,23 @@ export class LeanHud implements Hud {
     this.time = frame.time / 1000;
     this.hasFrame = true;
     this.head.copy(frame.head.position); this.headQuaternion.copy(frame.head.quaternion);
+    const wasTracked = this.handDock.tracked;
+    this.handDock.update(frame, this.deck, this.deck.wrist, this.deck.width);
+    if (wasTracked && !this.handDock.tracked) this.deckPlacement.reset();
+    this.deck.visible = this.handDock.opacity > 0;
+    this.deck.userData.anchor = this.handDock.tracked ? this.handDock.nonDominant : 'fallback';
+    this.deck.userData.open = this.handDock.open;
+    if (this.handDock.justOpened) this.showDockHint();
+    if (!this.handDock.open) for (const capture of this.captures.values()) {
+      if (capture.widget?.group.userData.dockIcon) {
+        this.releaseDockCapture(capture);
+      }
+    }
+    if (frame.frame && !this.coached) {
+      this.coached = true; this.coach.visible = true; this.coachUntil = this.time + 4;
+      this.coachPlacement.reset();
+    }
+    if (this.time >= this.coachUntil) this.coach.visible = false;
     for (const target of this.targets.values()) {
       if (this.home.mode === 'control' && !target.tagged) this.boxes.setOpacity(target.id, 0);
       else if (this.home.mode === 'annotate' && this.boxes.boxes.get(target.id)?.opacity === 0) this.boxes.setOpacity(target.id, 1);
@@ -951,7 +982,7 @@ export class LeanHud implements Hud {
       const cursor = this.cursors[i]!; let distance = Infinity; this.reticleHits[i] = null;
       if (!cursor.tracked) continue;
       for (const widget of this.widgets) {
-        if (!visible(widget.group)) continue;
+        if (!this.interactive(widget, cursor)) continue;
         const hit = this.hit(widget, cursor);
         if (hit < distance) { distance = hit; this.reticleHits[i] = this.reticlePoints[i]!.copy(this.local).applyMatrix4(widget.group.matrixWorld); }
       }
@@ -961,10 +992,15 @@ export class LeanHud implements Hud {
     for (const cursor of this.cursors) this.interact(cursor);
     for (const cursor of this.devCursors) this.interact(cursor);
     this.buttonFeedback();
+    this.deck.updateFeedback(this.handDock.opacity);
+    this.deck.setWrist(this.home.mode, this.handDock.wristOpacity);
+    this.refreshHomeHint();
+    (this.dockHint as SdfText & { fillOpacity: number }).fillOpacity = this.handDock.opacity;
     if (this.notice.visible && this.time > this.noticeUntil) this.notice.visible = false;
   }
   dispose(): void {
     this.root.traverse((o) => { if ('sync' in o && 'dispose' in o) (o as SdfText).dispose(); });
+    this.deck.dispose();
     this.boxes.dispose();
     this.checkGeometry.dispose();
     this.surfaces.dispose();

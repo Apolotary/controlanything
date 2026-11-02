@@ -291,6 +291,29 @@ async function target() {
   return result;
 }
 
+async function assertDockIcons(mode, canStop = false) {
+  const state = await quest.evaluate(() => {
+    const { hud } = window.__ce;
+    const dock = hud.root.getObjectByName('hand-dock');
+    if (!dock) throw new Error('Hand dock is missing');
+    const icons = [];
+    dock.traverse((node) => {
+      if (!/^(mode-(annotate|control)|filter:(everything|lights|electronics)|deck:panic)$/.test(node.name)) return;
+      for (let current = node; current; current = current.parent) if (!current.visible) return;
+      icons.push(node.name);
+    });
+    return { icons: icons.sort(), anchor: dock.userData.anchor,
+      oldBar: !!hud.root.getObjectByName('home-bar'), oldHint: !!hud.root.getObjectByName('home-hint'),
+      close: !!hud.root.getObjectByName('deck-close') };
+  });
+  const expected = ['mode-annotate', 'mode-control'];
+  if (mode === 'annotate') expected.push('filter:everything', 'filter:lights', 'filter:electronics');
+  if (canStop) expected.push('deck:panic');
+  assert.deepEqual(state.icons, expected.sort(), `${mode} dock must expose only its available actions`);
+  assert.equal(state.anchor, 'fallback', 'Controller and mouse input must use the fallback dock');
+  assert.equal(state.oldBar || state.oldHint || state.close, false, 'The old bar, permanent hint, and Close button must be removed');
+}
+
 async function findTarget(pattern) {
   await waitQuest((pattern) => {
     const app = window.__ce;
@@ -343,12 +366,15 @@ async function panelState() {
       for (let p = node; p; p = p.parent) if (!p.visible) return;
       nodes[node.uuid] = { name: node.name || node.type, position: node.getWorldPosition(head.position.clone()).toArray() };
     });
-    return { card: describe(app.hud.card, 0.4, 0.32), bar: describe(app.hud.deck, 0.48, 0.22), nodes };
+    const dock = app.hud.deck;
+    const { width, height, anchor } = dock.userData;
+    if (!(width > 0) || height !== 0.032) throw new Error(`Invalid dock dimensions: ${width} x ${height}`);
+    return { card: describe(app.hud.card, 0.4, 0.32), dock: { ...describe(dock, width, height), anchor }, nodes };
   });
 }
 
 function assertLocked(before, after, description, allNodes = false) {
-  for (const key of ['card', 'bar']) {
+  for (const key of ['card', 'dock']) {
     assert(Math.hypot(...before[key].position.map((v, i) => v - after[key].position[i])) < 1e-5,
       `${description}: ${key} world position moved`);
     const dot = Math.abs(before[key].rotation.reduce((s, v, i) => s + v * after[key].rotation[i], 0));
@@ -362,18 +388,19 @@ function assertLocked(before, after, description, allNodes = false) {
 }
 
 function assertSeparated(state, comfortable = false) {
-  const { card, bar } = state;
-  if (comfortable) for (const [name, panel] of Object.entries({ card, bar })) {
+  const { card, dock } = state;
+  assert.equal(dock.anchor, 'fallback', 'Positioning checks must exercise the fallback dock');
+  if (comfortable) for (const [name, panel] of Object.entries({ card, dock })) {
     assert(panel.inView, `${name} did not return fully into view`);
     assert(panel.distance >= 0.5 && panel.distance <= 1, `${name} distance ${panel.distance} m`);
     assert(panel.upright > 0.999, `${name} is not upright`);
   }
   // Projection becomes singular as a panel crosses behind the eye. Compare visible panels.
-  if (!card.inView || !bar.inView) return;
-  const a = card.bounds, b = bar.bounds;
+  if (!card.inView || !dock.inView) return;
+  const a = card.bounds, b = dock.bounds;
   assert(a.right <= b.left || b.right <= a.left || a.top <= b.bottom || b.top <= a.bottom,
-    `Card overlaps home bar in screen space: ${JSON.stringify({ a, b })}`);
-  assert(Math.abs(card.depth - bar.depth) >= 0.01, `Panel depth gap is under 1 cm: ${card.depth} / ${bar.depth}`);
+    `Card overlaps fallback dock in screen space: ${JSON.stringify({ a, b })}`);
+  assert(Math.abs(card.depth - dock.depth) >= 0.01, `Panel depth gap is under 1 cm: ${card.depth} / ${dock.depth}`);
 }
 
 async function run() {
@@ -433,6 +460,7 @@ async function run() {
       && window.__ce.targets.list().some((t) => /ceiling (light|lamp)/i.test(t.label)));
     assert(await quest.evaluate(() => window.__flowsRequests.some((e) => e.type === 'mode.set' && e.payload.mode === 'annotate')),
       'Entering AR explicitly starts in Annotate');
+    await assertDockIcons('annotate');
     targetId = await quest.evaluate(() => window.__ce.targets.list().find((t) => /ceiling (light|lamp)/i.test(t.label)).id);
     // Where the head looks while tagging: the FIXTURE verify outline is the tag frame's box, so verify must see the same view.
     tagGaze = await quest.evaluate(() => {
@@ -493,6 +521,7 @@ async function run() {
     await pinch({ nodeName: 'mode-control', turn: true });
     await waitQuest(() => window.__ce.modes.mode === 'control' && !window.__ce.scanner.active);
     await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'setup', cardId);
+    await assertDockIcons('control');
     assert.equal(await quest.evaluate(() => window.__flowsRequests.some((e) => e.type === 'control.setup')), false,
       'Switching mode alone must not start setup');
   });
@@ -674,6 +703,7 @@ async function run() {
     await pinch({ nodeName: 'mode-annotate', turn: true });
     await waitQuest(() => window.__ce.modes.mode === 'annotate' && window.__ce.scanner.active
       && !window.__ce.hud.card.visible && !window.__ce.hud.modal.visible && !window.__ce.lockedId);
+    await assertDockIcons('annotate');
     assert.equal((await target()).armed, true, 'Leaving Control must preserve server arming');
     assert(await quest.evaluate((id) => window.__ce.armedCards.has(id), cardId));
     // Look back into the room and observe a NEW scan request, not only the scanner flag.
@@ -687,6 +717,7 @@ async function run() {
     await pinch({ nodeName: 'mode-control', turn: true });
     await waitQuest((id) => window.__ce.modes.mode === 'control' && !window.__ce.scanner.active
       && window.__ce.modes.byCard(id)?.connection === 'ready', cardId);
+    await assertDockIcons('control', true);
     assert(await quest.evaluate(() => [...window.__ce.visibleTargets].every((id) => window.__ce.modes.tags.has(id))),
       'Control must hide all untagged outlines');
     await pinch({ targetId, turn: true });
@@ -710,6 +741,8 @@ async function run() {
       await yaw(0); await elapsedFrames(2200);
       const initial = await panelState();
       assertSeparated(initial, true);
+      assert(initial.dock.bounds.left + initial.dock.bounds.right < 0
+        && initial.dock.bounds.bottom + initial.dock.bounds.top < 0, 'Fallback dock must sit in the lower-left view');
       for (let frame = 0; frame < 30; frame++) {
         await yaw(2 * Math.sin(frame / 29 * Math.PI));
         const state = await panelState();
@@ -734,7 +767,7 @@ async function run() {
         await renderedFrames();
       } while (true);
       assertSeparated(last, true);
-      for (const key of ['card', 'bar']) assert(Math.hypot(...initial[key].position.map((v, i) => v - last[key].position[i])) > 0.2,
+      for (const key of ['card', 'dock']) assert(Math.hypot(...initial[key].position.map((v, i) => v - last[key].position[i])) > 0.2,
         `${key} must recenter after a sustained 100 degree turn`);
       await writeFile(join(SCREENS, 'positioning.json'), JSON.stringify({ initial, smallTurn, followed: last }, null, 2));
     } finally {
@@ -753,6 +786,7 @@ async function run() {
       return !t.armed && ['forged', 'verified', 'failed'].includes(t.state);
     });
     await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'setup', cardId);
+    await assertDockIcons('control');
     await sim.waitForFunction(() => window.ceSimDebug.device.logLines.some((l) => l.text.includes('panic from the server'))
       && window.ceSimDebug.device.animator.settled);
     const before = await sim.evaluate(() => ({ lamp: window.ceSim.lamp(), lastIr: window.ceSimDebug.device.lastIr,
@@ -776,7 +810,7 @@ async function run() {
   if (!needed.every((method) => handMethods.includes(method))) {
     console.log(`SKIP 17-emulated-hand-pinch: IWER lacks hand input methods (${needed.filter((m) => !handMethods.includes(m)).join(', ')})`);
   } else await phase('17-emulated-hand-pinch', async () => {
-    // Bring the home bar into view with head input only; this phase never clicks the mouse.
+    // Bring the fallback dock into view, then hand tracking must take over without a mouse click.
     await quest.evaluate(() => {
       const app = window.__ce;
       const head = app.emulator.head();
@@ -790,11 +824,27 @@ async function run() {
     await elapsedFrames(2200);
     try {
       await quest.evaluate(async () => {
-        const app = window.__ce, remote = app.emulator.device.remote, device = 'hand-right';
+        const app = window.__ce, remote = app.emulator.device.remote;
         await remote.dispatch('set_input_mode', { mode: 'hand' });
-        await remote.dispatch('set_connected', { device, connected: true });
-        await remote.dispatch('set_hand_pose', { device, poseId: 'default' });
-        await remote.dispatch('set_select_value', { device, value: 0 });
+        for (const device of ['hand-left', 'hand-right']) {
+          await remote.dispatch('set_connected', { device, connected: true });
+          await remote.dispatch('set_hand_pose', { device, poseId: 'default' });
+          await remote.dispatch('set_select_value', { device, value: 0 });
+        }
+        const head = app.emulator.head();
+        const wrist = head.position.clone().add(head.position.clone().set(-0.18, -0.25, -0.4).applyQuaternion(head.quaternion));
+        const palm = head.position.clone().sub(wrist).normalize();
+        const fingers = head.position.clone().set(0, 1, 0).applyQuaternion(head.quaternion);
+        fingers.addScaledVector(palm, -fingers.dot(palm)).normalize();
+        const xyz = (vector) => ({ x: vector.x, y: vector.y, z: vector.z });
+        await remote.dispatch('set_transform', { device: 'hand-left', anchor: 'wrist', position: xyz(wrist),
+          orientation: { fingers: xyz(fingers), palm: xyz(palm) } });
+      });
+      await waitQuest(() => window.__ce.lastFrame.hands.left?.palmUpMs >= 300
+        && window.__ce.hud.deck.userData.anchor === 'left' && window.__ce.hud.deck.userData.open);
+      await elapsedFrames(250); // Let the 180 ms opening fade complete before targeting an icon.
+      await quest.evaluate(async () => {
+        const app = window.__ce, remote = app.emulator.device.remote, device = 'hand-right';
         const head = app.emulator.head();
         const position = head.position.clone().add(head.position.clone().set(0.15, -0.2, -0.2).applyQuaternion(head.quaternion));
         const button = app.hud.root.getObjectByName('mode-annotate').getWorldPosition(position.clone());
@@ -812,11 +862,28 @@ async function run() {
       const hand = await quest.evaluate(() => window.__ce.emulator.device.remote.dispatch('get_hand_state', { device: 'hand-right', joints: 'all' }));
       assert(hand.connected && hand.pressed && Object.keys(hand.joints ?? {}).length >= 25, 'Pinch must come from a tracked XR hand');
       await writeFile(join(SCREENS, 'hand-input.json'), JSON.stringify(hand, null, 2));
+      // Disconnect the interacting hand so it cannot hold the dock open while the left palm turns away.
+      await quest.evaluate(async () => {
+        const app = window.__ce, remote = app.emulator.device.remote;
+        await remote.dispatch('set_select_value', { device: 'hand-right', value: 0 });
+        await remote.dispatch('set_connected', { device: 'hand-right', connected: false });
+        const hand = await remote.dispatch('get_hand_state', { device: 'hand-left' });
+        await remote.dispatch('set_transform', { device: 'hand-left', anchor: 'wrist', position: hand.anchors.wrist,
+          orientation: { fingers: hand.axes.fingers,
+            palm: { x: -hand.axes.palm.x, y: -hand.axes.palm.y, z: -hand.axes.palm.z } } });
+      });
+      await waitQuest(() => !window.__ce.lastFrame.hands.left?.palmUp
+        && window.__ce.hud.deck.userData.anchor === 'left' && !window.__ce.hud.deck.userData.open);
+      await elapsedFrames(250);
+      assert.equal(await quest.evaluate(() => window.__ce.hud.deck.visible), false, 'Palm-away dock must finish hiding');
     } finally {
       await quest.evaluate(async () => {
         const app = window.__ce;
-        await app.emulator.device.remote.dispatch('set_select_value', { device: 'hand-right', value: 0 });
-        await app.emulator.device.remote.dispatch('set_connected', { device: 'hand-right', connected: false });
+        for (const device of ['hand-left', 'hand-right']) {
+          await app.emulator.device.remote.dispatch('set_select_value', { device, value: 0 });
+          await app.emulator.device.remote.dispatch('set_connected', { device, connected: false });
+        }
+        await app.emulator.device.remote.dispatch('set_input_mode', { mode: 'controller' });
         app.input.mouseAsHand = true;
       });
     }

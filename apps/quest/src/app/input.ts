@@ -151,6 +151,7 @@ export class InputSampler {
   private readonly raycaster = new Raycaster();
   private readonly rayQuaternion = new Quaternion();
   private readonly palm = new Vector3();
+  private readonly towardHead = new Vector3();
   private readonly output: ShellFrame = {
     time: 0, dt: 1 / 72,
     head: { position: new Vector3(), quaternion: new Quaternion(), ray: { origin: new Vector3(), dir: new Vector3(0, 0, -1) } },
@@ -364,7 +365,8 @@ export class InputSampler {
         // WebXR joint space: -Y points perpendicular out of the palm, -Z along the bone.
         // https://www.w3.org/TR/webxr-hand-input-1/#xrjointspace (same axes for both hands).
         this.palm.set(0, -1, 0).applyQuaternion(wrist.quaternion);
-        palmUp = this.palm.y > 0.75;
+        this.towardHead.subVectors(this.output.head.position, wrist.position).normalize();
+        palmUp = this.palm.dot(this.towardHead) > 0.65;
       }
     } else {
       for (const name of JOINTS) delete joints[name];

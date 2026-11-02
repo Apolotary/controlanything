@@ -377,17 +377,92 @@ describe('Calm Glass HUD controls and details', () => {
 });
 
 describe('HUD button interaction feedback', () => {
-  it('opens the same home bar at the wrist once and restores its world anchor when closed', () => {
+  it('hands take over the fallback dock immediately and restore a world anchor when tracking ends', () => {
     const { hud, frame } = setup();
     hud.update(frame(undefined, 200));
-    const bar = hud.root.getObjectByName('home-bar')!, anchor = bar.position.clone();
-    hud.setDeck({ open: true, at: [0.4, 1, -0.4] }); hud.update(frame());
-    hud.setDeck({ open: true, at: [0.8, 1, -0.4] }); hud.update(frame());
-    expect(bar.position.toArray()).toEqual([0.4, 1, -0.4]);
-    hud.setDeck({ open: false }); hud.update(frame());
-    expect(bar.position.equals(anchor)).toBe(true);
-    expect(bar.visible).toBe(true);
+    const dock = hud.root.getObjectByName('hand-dock')!, anchor = dock.position.clone();
+    const withPalm = frame();
+    withPalm.hands.left = { ...frame({}).hands.right!, palmUp: true, palmUpMs: 300,
+      joints: { wrist: { position: new Vector3(-0.3, 1, -0.3), quaternion: new Quaternion(), radius: 0.008 } } };
+    hud.update(withPalm);
+    expect(dock.userData.anchor).toBe('left');
+    expect(dock.position.equals(anchor)).toBe(false);
+    withPalm.time += 180; withPalm.dt = 0.18; hud.update(withPalm);
+    expect(dock.visible).toBe(true);
+    withPalm.hands = {}; withPalm.time += 16; hud.update(withPalm);
+    expect(dock.userData.anchor).toBe('fallback');
+    expect(dock.position.equals(anchor)).toBe(true);
+    expect(dock.visible).toBe(true);
     expect(hud.root.getObjectByName('deck-close')).toBeUndefined();
+    hud.dispose();
+  });
+
+  it('releases a removed icon after a poke so the next pinch can use the new dock', () => {
+    const { hud, camera, frame } = setup('annotate');
+    hud.update(frame(undefined, 200));
+    const modes: string[] = [];
+    hud.on('mode', ({ mode }) => {
+      modes.push(mode);
+      hud.setHome?.({ mode, filter: 'everything', tagged: 1, status: '' });
+    });
+    const button = hud.root.getObjectByName('mode-control')!;
+    const tip = (z: number) => hud.update(frame({
+      joints: { 'index-finger-tip': { position: button.localToWorld(new Vector3(0, 0, z)), quaternion: new Quaternion(), radius: 0.008 } },
+    }));
+    tip(0.025); tip(-0.003);
+    expect(modes).toEqual(['control']);
+    const point = hud.root.getObjectByName('mode-annotate')!.getWorldPosition(new Vector3());
+    const ray = { origin: camera.position.clone(), dir: point.clone().sub(camera.position).normalize() };
+    hud.update(frame({ ray, pinching: true, justPinched: true }));
+    expect(modes).toEqual(['control', 'annotate']);
+    hud.dispose();
+  });
+
+  it('lets the opposite hand ray-pinch and poke the attached dock while its fingertip keeps it open', () => {
+    const { hud, camera, frame } = setup('annotate');
+    const menuHand: HandState = { ...frame({}).hands.right!, palmUp: true, palmUpMs: 300,
+      joints: { wrist: { position: new Vector3(-0.2, 1.1, -0.4), quaternion: new Quaternion(), radius: 0.008 } } };
+    const update = (other?: Partial<HandState>, elapsed = 16) => {
+      const f = frame(other, elapsed); f.hands.left = menuHand; hud.update(f);
+    };
+    update(); update(undefined, 200);
+    const button = hud.root.getObjectByName('mode-control')!;
+    const point = button.getWorldPosition(new Vector3());
+    const ray = { origin: camera.position.clone(), dir: point.clone().sub(camera.position).normalize() };
+    const modes: string[] = []; hud.on('mode', ({ mode }) => modes.push(mode));
+    menuHand.ray = ray; menuHand.pinching = menuHand.justPinched = true;
+    update();
+    expect(modes).toEqual([]); // The hand carrying the menu cannot press its own icons.
+    menuHand.pinching = menuHand.justPinched = false;
+    update({ ray, pinching: true, justPinched: true });
+    expect(modes).toEqual(['control']);
+    expect(hud.root.getObjectByName('dock-label')).toMatchObject({ text: 'Control', visible: true });
+    update({ ray, justReleased: true });
+    menuHand.palmUp = false;
+    const finger = (z: number) => ({ joints: { 'index-finger-tip': {
+      position: button.localToWorld(new Vector3(0, 0, z)), quaternion: new Quaternion(), radius: 0.008,
+    } } });
+    update(finger(0.02), 600);
+    expect(hud.root.getObjectByName('hand-dock')!.userData.open).toBe(true);
+    update(finger(-0.003));
+    expect(modes).toEqual(['control', 'control']);
+    update(undefined); update(undefined, 300); update(undefined, 180);
+    expect(hud.root.getObjectByName('hand-dock')!.visible).toBe(false);
+    expect(hud.root.getObjectByName('wrist-mode')!.visible).toBe(true);
+    hud.dispose();
+  });
+
+  it('gives circular icons separate hit areas with no activation in the gap', () => {
+    const { hud, camera, frame } = setup('annotate');
+    hud.update(frame(undefined, 200));
+    const a = hud.root.getObjectByName('mode-annotate')!.getWorldPosition(new Vector3());
+    const b = hud.root.getObjectByName('mode-control')!.getWorldPosition(new Vector3());
+    const point = a.lerp(b, 0.5);
+    const modes: string[] = []; hud.on('mode', ({ mode }) => modes.push(mode));
+    const ray = { origin: camera.position.clone(), dir: point.sub(camera.position).normalize() };
+    hud.update(frame({ ray, pinching: true, justPinched: true }));
+    expect(modes).toEqual([]);
+    expect(hud.root.getObjectByName('dock-label')!.visible).toBe(false);
     hud.dispose();
   });
 
@@ -421,16 +496,16 @@ describe('HUD button interaction feedback', () => {
       joints: { 'index-finger-tip': { position: fingertip(z, x), quaternion: new Quaternion(), radius: 0.008 } },
       pinchPoint: new Vector3(20, 20, 20), ray: { origin: new Vector3(20, 20, 20), dir: new Vector3(0, 0, -1) },
     }));
-    const material = () => (button.getObjectByName('button-plate') as Mesh).material as ShaderMaterial;
+    const feedback = () => ((hud.root.getObjectByName('dock-discs') as Mesh).material as ShaderMaterial).uniforms.states!.value[2] as Vector3;
     update(-0.003); // Appearing behind the face is not a crossing.
     expect(phases).toEqual([]);
     update(0.02);
     expect(button.userData.hovered).toBe(true);
-    expect(material().uniforms.edgeAlpha!.value).toBe(1);
+    expect(feedback().y).toBe(1);
     update(-0.003);
     expect(phases).toEqual(['press']);
     expect(button.scale.x).toBe(0.96);
-    expect(material().uniforms.fillAlpha!.value).toBe(0.48);
+    expect(feedback().z).toBe(1);
     for (const z of [0.004, -0.002, 0.006, -0.004]) update(z);
     expect(phases).toEqual(['press']);
     update(0.02);
@@ -441,11 +516,11 @@ describe('HUD button interaction feedback', () => {
     expect(phases).toEqual(['press', 'release', 'press', 'release']);
     expect(button.userData.hovered).toBe(false);
     expect(button.scale.x).toBe(1);
-    expect(material().uniforms.edgeAlpha!.value).toBe(0.26);
+    expect(feedback().y).toBe(0);
     hud.dispose();
   });
 
-  it.each(['mode', 'details', 'deck', 'confirm', 'approval', 'control', 'hack'] as const)('supports a 48 mm hit area, ray hover and open-finger poke on %s buttons', (kind) => {
+  it.each(['mode', 'details', 'deck', 'confirm', 'approval', 'control', 'hack'] as const)('supports ray hover and open-finger poke at the visible edge of %s buttons', (kind) => {
     const { hud, camera, frame } = setup();
     hud.upsertTarget(target); hud.setLocked(target.id);
     let name = 'mode-annotate';
@@ -460,10 +535,14 @@ describe('HUD button interaction feedback', () => {
     }
     hud.update(frame(undefined, 200));
     const button = hud.root.getObjectByName(name)!;
-    const plate = button.getObjectByName('button-plate')!;
-    expect(plate.scale.x).toBeGreaterThanOrEqual(0.048);
-    expect(plate.scale.y).toBeGreaterThanOrEqual(0.048);
-    const point = button.localToWorld(new Vector3(0, 0.023, 0));
+    const icon = kind === 'mode' || kind === 'deck';
+    const edge = icon ? 0.015 : 0.023;
+    if (!icon) {
+      const plate = button.getObjectByName('button-plate')!;
+      expect(plate.scale.x).toBeGreaterThanOrEqual(0.048);
+      expect(plate.scale.y).toBeGreaterThanOrEqual(0.048);
+    }
+    const point = button.localToWorld(new Vector3(0, edge, 0));
     const ray = { origin: camera.position.clone(), dir: point.clone().sub(camera.position).normalize() };
     const consumed: string[] = [];
     hud.on('consumed', (event) => consumed.push(event.widget));
@@ -475,7 +554,7 @@ describe('HUD button interaction feedback', () => {
     hud.update(frame({ ray, justReleased: true }));
     hud.update(frame(undefined, 200));
     const current = hud.root.getObjectByName(name)!;
-    const poke = (z: number) => hud.update(frame({ joints: { 'index-finger-tip': { position: current.localToWorld(new Vector3(0, 0.023, z)), quaternion: new Quaternion(), radius: 0.008 } } }));
+    const poke = (z: number) => hud.update(frame({ joints: { 'index-finger-tip': { position: current.localToWorld(new Vector3(0, edge, z)), quaternion: new Quaternion(), radius: 0.008 } } }));
     consumed.length = 0;
     poke(0.025); poke(-0.005);
     expect(consumed.length).toBeGreaterThan(0);
@@ -539,14 +618,14 @@ describe('explicit annotation and control modes', () => {
     hud.dispose();
   });
 
-  it('starts with only the home bar, automatically scans without adding a card, and offers tag removal', () => {
+  it('starts with only the fallback dock, automatically scans without adding a card, and offers tag removal', () => {
     const scene = new Scene(), camera = new PerspectiveCamera();
     const hud = createHud({ scene, camera, renderer: {} as WebGLRenderer });
     hud.upsertTarget(target); hud.setLocked(target.id); hud.setScanning(true);
     hud.renderSpec(spec(true), { targetId: target.id }); hud.setArmed('device_controls', true);
     hud.update({ time: 0, dt: 0, head: { position: new Vector3(0, 1.4, 0), quaternion: new Quaternion() }, hands: {} });
     expect(hud.root.getObjectByName('device-card')!.visible).toBe(false);
-    expect(hud.root.getObjectByName('home-bar')!.visible).toBe(true);
+    expect(hud.root.getObjectByName('hand-dock')!.visible).toBe(true);
     expect(hud.root.getObjectByName('tag-remove:device')).toBeTruthy();
     expect(hud.root.getObjectByName('filter:everything')!.userData.selected).toBe(true);
     for (const name of ['scan-toggle', 'deck:panic', 'deck:mic', 'deck:ping', 'control:action0']) expect(hud.root.getObjectByName(name)).toBeUndefined();
@@ -625,33 +704,61 @@ describe('explicit annotation and control modes', () => {
 });
 
 describe('bounded card wording and stable home updates', () => {
-  it('updates the next-step hint and count, compact bar in Control', () => {
+  it.each(['left', 'right'] as const)('coaches the %s menu hand only on first entering AR for four seconds', (nonDominant) => {
+    const hud = createHud({ scene: new Scene(), camera: new PerspectiveCamera(), renderer: {} as WebGLRenderer, nonDominant });
+    const frame: HudFrame = { time: 0, dt: 0.016, head: { position: new Vector3(0, 1.6, 0), quaternion: new Quaternion() }, hands: {} };
+    const coach = hud.root.getObjectByName('hand-menu-coach')!;
+    hud.update(frame);
+    expect(coach.visible).toBe(false);
+    frame.frame = {} as XRFrame;
+    frame.time = 100; hud.update(frame);
+    expect(coach.visible).toBe(true);
+    expect(coach.getObjectByName('sdf')).toMatchObject({ text: `Turn your ${nonDominant} palm toward you for the menu` });
+    const position = coach.position.clone();
+    frame.head.quaternion.setFromAxisAngle(new Vector3(0, 1, 0), 0.2);
+    frame.time = 4000; hud.update(frame);
+    expect(coach.visible).toBe(true);
+    expect(coach.position).toEqual(position);
+    frame.time = 4100; hud.update(frame);
+    expect(coach.visible).toBe(false);
+    delete frame.frame; frame.time = 5000; hud.update(frame);
+    frame.frame = {} as XRFrame; frame.time = 6000; hud.update(frame);
+    expect(coach.visible).toBe(false);
+    hud.dispose();
+  });
+
+  it('shows reactive hints briefly, keeps the count badge, and hides filters in Control', () => {
     const { hud, frame } = setup('annotate');
     hud.update(frame());
-    const bar = hud.root.getObjectByName('home-bar')!;
-    const hint = hud.root.getObjectByName('home-hint') as Object3D & { text: string };
-    const dimensions = () => bar.children.find((node) => node instanceof Mesh)!.scale.toArray();
-    const top = () => bar.position.y + dimensions()[1]! / 2;
-    const originalTop = top(), originalSize = dimensions();
+    const dock = hud.root.getObjectByName('hand-dock')!;
+    const hint = hud.root.getObjectByName('dock-hint') as Object3D & { text: string };
+    const badge = hud.root.getObjectByName('dock-count') as Object3D & { text: string };
     const toggle = hud.root.getObjectByName('mode-control')!;
-    const buttonY = toggle.position.y;
     expect(hint.text).toBe('Pinch a device to tag it');
+    expect(hint.visible).toBe(true);
+    expect(badge.visible).toBe(false);
     hud.setHome?.({ mode: 'annotate', filter: 'electronics', tagged: 2, status: 'stale hint' });
     expect(hint.text).toBe("Switch to Control when you're ready");
     expect(hud.root.getObjectByName('mode-control')).toBe(toggle);
-    expect(toggle.children.some((child) => 'text' in child && child.text === 'Control · 2')).toBe(true);
+    expect(toggle.userData.label).toBe('Control · 2');
+    expect(badge.text).toBe('2');
+    expect(badge.visible).toBe(true);
+    hud.update(frame(undefined, 2600));
+    expect(hint.visible).toBe(false);
     hud.setHome?.({ mode: 'control', filter: 'electronics', tagged: 2, status: 'stale hint' });
     hud.update(frame());
-    // Control has no filter row: the bar is compact (0.16 m) so it stays in view below an open card
-    expect(dimensions()[1]).toBeCloseTo(originalSize[1]! * 0.16 / 0.22, 5);
-    expect(top()).toBeLessThanOrEqual(originalTop);
-    expect(hud.root.getObjectByName('mode-control')!.position.y).toBeLessThan(buttonY);
+    expect(dock.userData.height).toBe(0.032);
+    expect(dock.userData.width).toBeCloseTo(0.072);
     expect(hud.root.getObjectByName('filter:electronics')).toBeUndefined();
     expect(hint.text).toBe('Pinch a tagged device to open it');
-    hud.upsertTarget(target); hud.setLocked(target.id);
-    expect(hint.visible).toBe(false);
-    hud.setLocked(null);
     expect(hint.visible).toBe(true);
+    hud.upsertTarget(target); hud.setLocked(target.id);
+    hud.update(frame());
+    expect(hint.visible).toBe(false);
+    hud.setLocked(null); hud.update(frame());
+    expect(hint.visible).toBe(true);
+    hud.update(frame(undefined, 2600));
+    expect(hint.visible).toBe(false);
     hud.dispose();
   });
 

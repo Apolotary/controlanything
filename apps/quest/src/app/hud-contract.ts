@@ -55,6 +55,7 @@ export interface HudContext {
   scene: Scene;
   camera: Camera;
   renderer: WebGLRenderer;
+  nonDominant?: Handedness;
 }
 
 export type CreateHud = (ctx: HudContext) => Hud;
