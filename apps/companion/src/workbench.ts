@@ -84,6 +84,7 @@ let serverDown = false;
 const presenter = createStatusPresenter();
 let activity: CalmStatus = { text: 'Idle', working: false };
 let shownStatus = '';
+let statusAnimation: Animation | undefined;
 let pairingBusy = false;
 let shownPair = '';
 const bridgeBusy = new Set<string>();
@@ -192,6 +193,42 @@ function closeDialog(id: string): void {
   dialogTimers.set(dialog, setTimeout(finish, 180));
 }
 
+function renderStatus(text: string): void {
+  if (text === shownStatus) return;
+  const host = $('status-text');
+  const shouldAnimate = shownStatus !== '' && !statusAnimation && !matchMedia('(prefers-reduced-motion: reduce)').matches && typeof host.animate === 'function';
+  shownStatus = text;
+  if (statusAnimation) {
+    statusAnimation.onfinish = null;
+    statusAnimation.cancel();
+    statusAnimation = undefined;
+  }
+  if (!shouldAnimate) {
+    host.textContent = text;
+    return;
+  }
+  const motion = getComputedStyle(host);
+  const easing = motion.getPropertyValue('--ease').trim();
+  const outgoing = host.animate([
+    { opacity: 1, transform: 'translateY(0)' },
+    { opacity: 0, transform: 'translateY(-4px)' },
+  ], { duration: parseFloat(motion.getPropertyValue('--status-exit')), easing, fill: 'forwards' });
+  statusAnimation = outgoing;
+  outgoing.onfinish = () => {
+    if (statusAnimation !== outgoing) return;
+    host.textContent = text;
+    outgoing.cancel();
+    const incoming = host.animate([
+      { opacity: 0, transform: 'translateY(4px)' },
+      { opacity: 1, transform: 'translateY(0)' },
+    ], { duration: parseFloat(motion.getPropertyValue('--status-enter')), easing });
+    statusAnimation = incoming;
+    incoming.onfinish = () => {
+      if (statusAnimation === incoming) statusAnimation = undefined;
+    };
+  };
+}
+
 function renderCalm(): void {
   const learning = bridge.learning && bridge.learning.until > Date.now() ? bridge.learning : undefined;
   const status: CalmStatus = !replaying && serverDown
@@ -202,19 +239,7 @@ function renderCalm(): void {
         ? { text: `Learning your remote: ${learning.prompt ?? 'press each button once'}`, working: true }
         : activity;
   $('status-dot').className = `dot on${status.working ? ' working' : ''}`;
-  if (status.text !== shownStatus) {
-    const host = $('status-text');
-    const previous = el('span', { className: 'status-previous', text: shownStatus });
-    previous.setAttribute('aria-hidden', 'true');
-    const current = el('span', { className: 'status-current', text: status.text });
-    host.replaceChildren(current);
-    if (shownStatus && !matchMedia('(prefers-reduced-motion: reduce)').matches && current.animate) {
-      host.append(previous);
-      previous.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, fill: 'forwards' }).onfinish = () => previous.remove();
-      current.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200 });
-    }
-    shownStatus = status.text;
-  }
+  renderStatus(status.text);
   $('device-dots').replaceChildren(...devices.map((d) => {
     const row = el('li', { className: `device-dot-item${d.online ? ' online' : ''}`, title: `${d.name} · ${d.online ? 'online' : 'offline'}` }, el('span', { className: `dot${d.online ? ' on' : ''}` }), el('span', { text: d.name }));
     row.setAttribute('aria-label', `${d.name}, ${d.online ? 'online' : 'offline'}`);
