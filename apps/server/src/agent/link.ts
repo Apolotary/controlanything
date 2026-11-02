@@ -40,6 +40,7 @@ export async function tryLink(
   const pick = pickExecutor(deps.roster, cap, { portHint, preferDeviceId: opts.preferDeviceId });
   const base: LinkResultPayload = { linkId: opts.linkId, cardId: card.cardId, verdict: 'none', evidence: [] };
   if (!pick) return { result: { ...base, reason: `no online client with "${cap}"` } };
+  if (cap === 'midi' && !pick.port) return { result: { ...base, reason: 'connect the instrument and enable a MIDI output in the Mac app' } };
   const result: LinkResultPayload = { ...base, executorDeviceId: pick.deviceId, channel: pick.kind === 'sim' ? 'sim' : cap };
   if (pick.port) result.port = pick.port;
 

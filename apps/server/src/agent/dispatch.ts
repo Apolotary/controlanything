@@ -21,17 +21,14 @@ export class ExecError extends Error {
 interface Pending<T> {
   resolve: (v: T) => void;
   reject: (e: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
 }
 
 /** a sensor whose last request timed out is avoided for this long when another one is online */
 export const SENSE_UNHEALTHY_MS = 30_000;
 
-interface SenseCollector {
+interface SenseCollector extends Pending<SenseResultPayload[]> {
   sensorDeviceId: string;
   results: SenseResultPayload[];
-  resolve: (v: SenseResultPayload[]) => void;
-  timer: ReturnType<typeof setTimeout>;
   /** resolve on the first result (frame/audio) or collect until the timer (ir-capture) */
   collect: boolean;
   /** ir-capture: once a press arrived, wait only this long for a second frame before resolving */
@@ -86,6 +83,7 @@ export class Dispatcher {
   /** sensor device id -> when its last sense.request timed out (cleared by the next good reply) */
   private readonly senseTimeouts = new Map<string, number>();
   private readonly limiters = new Map<string, RateLimiter>();
+  private readonly slotWaits = new Set<() => void>();
   private readonly trailing = new Map<string, { op: ExecOp; opts: { port?: string; cardId?: string; driverId?: string; actionId?: string; lightCap?: boolean }; timer: ReturnType<typeof setTimeout> }>();
   private readonly log: (line: string) => void;
   /** every exec sent, for the black-box monitor */
@@ -120,12 +118,13 @@ export class Dispatcher {
     op: ExecOp,
     opts: { port?: string; dryRun?: boolean; cardId?: string; driverId?: string; actionId?: string; lightCap?: boolean; waitForSlot?: boolean; timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<ExecAckPayload> {
+    this.checkSignal(opts.signal);
     const limiter = this.limiter(executorDeviceId, op, Boolean(opts.lightCap));
-    if (!limiter.take()) {
+    while (!limiter.take()) {
       if (!opts.waitForSlot) throw new ExecError(`rate limit for ${executorDeviceId}:${op.kind}`, 'rate_limited');
-      await new Promise<void>((r) => setTimeout(r, limiter.waitMs()));
-      limiter.take();
+      await this.waitForSlot(limiter.waitMs(), opts.signal);
     }
+    this.checkSignal(opts.signal);
     const execId = newId('x');
     const at = Date.now();
     const record = { execId, executorDeviceId, op, at } as (typeof this.sent)[number];
@@ -135,6 +134,7 @@ export class Dispatcher {
     if (executorDeviceId === MAC_LOCAL_ID) {
       if (!this.o.macLocal) throw new ExecError('the Mac executor is not available', 'offline');
       const r = await this.o.macLocal.exec(op, opts.dryRun);
+      this.checkSignal(opts.signal);
       const ack: ExecAckPayload = { execId, ok: r.ok, sentAt: Date.now(), detail: r.detail, error: r.error, latencyMs: Date.now() - at };
       record.ack = ack;
       if (!ack.ok) throw new ExecError(ack.detail ?? 'local executor refused', 'device', ack);
@@ -142,23 +142,52 @@ export class Dispatcher {
     }
 
     const payload = { execId, executorDeviceId, op, port: opts.port, dryRun: opts.dryRun, cardId: opts.cardId, driverId: opts.driverId, actionId: opts.actionId };
-    const n = this.o.hub.sendToDevice(executorDeviceId, 'exec.command', payload);
-    if (!n) throw new ExecError(`executor ${executorDeviceId} is offline`, 'offline');
     const ack = await new Promise<ExecAckPayload>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.acks.delete(execId);
-        reject(new ExecError(`no exec.ack from ${executorDeviceId} within ${opts.timeoutMs ?? this.o.ackTimeoutMs ?? 3000} ms`, 'timeout'));
-      }, opts.timeoutMs ?? this.o.ackTimeoutMs ?? 3000);
-      this.acks.set(execId, { resolve, reject, timer });
-      opts.signal?.addEventListener('abort', () => {
+      const cleanup = () => {
         clearTimeout(timer);
-        this.acks.delete(execId);
-        reject(new ExecError('cancelled', 'refused'));
-      });
+        opts.signal?.removeEventListener('abort', onAbort);
+        return this.acks.delete(execId);
+      };
+      const pending: Pending<ExecAckPayload> = {
+        resolve: (value) => { if (cleanup()) resolve(value); },
+        reject: (error) => { if (cleanup()) reject(error); },
+      };
+      const onAbort = () => pending.reject(new ExecError('cancelled', 'refused'));
+      const timer = setTimeout(() => {
+        pending.reject(new ExecError(`no exec.ack from ${executorDeviceId} within ${opts.timeoutMs ?? this.o.ackTimeoutMs ?? 3000} ms`, 'timeout'));
+      }, opts.timeoutMs ?? this.o.ackTimeoutMs ?? 3000);
+      this.acks.set(execId, pending);
+      opts.signal?.addEventListener('abort', onAbort, { once: true });
+      if (opts.signal?.aborted) return onAbort();
+      try {
+        if (!this.o.hub.sendToDevice(executorDeviceId, 'exec.command', payload)) pending.reject(new ExecError(`executor ${executorDeviceId} is offline`, 'offline'));
+      } catch (error) {
+        pending.reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
     record.ack = ack;
     if (!ack.ok) throw new ExecError(`${executorDeviceId} refused: ${ack.error ?? ''} ${ack.detail ?? ''}`.trim(), 'device', ack);
     return ack;
+  }
+
+  private checkSignal(signal?: AbortSignal): void {
+    if (signal?.aborted) throw new ExecError('cancelled', 'refused');
+  }
+
+  private waitForSlot(ms: number, signal?: AbortSignal): Promise<void> {
+    this.checkSignal(signal);
+    return new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+        this.slotWaits.delete(onAbort);
+      };
+      const onAbort = () => { cleanup(); reject(new ExecError('cancelled', 'refused')); };
+      const timer = setTimeout(() => { cleanup(); resolve(); }, Math.max(1, ms));
+      this.slotWaits.add(onAbort);
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) onAbort();
+    });
   }
 
   /**
@@ -169,7 +198,7 @@ export class Dispatcher {
   fire(executorDeviceId: string, op: ExecOp, opts: { port?: string; cardId?: string; driverId?: string; actionId?: string; lightCap?: boolean } = {}): boolean {
     const limiter = this.limiter(executorDeviceId, op, Boolean(opts.lightCap));
     if (!limiter.take()) {
-      const key = `${executorDeviceId}:${op.kind}:${opts.actionId ?? (op.kind === 'midi' ? `${op.msg}:${op.channel}:${op.number ?? ''}` : op.kind)}`;
+      const key = `${executorDeviceId}:${opts.cardId ?? ''}:${op.kind}:${opts.actionId ?? (op.kind === 'midi' ? `${op.msg}:${op.channel}:${op.number ?? ''}` : op.kind)}`;
       const existing = this.trailing.get(key);
       if (existing) {
         existing.op = op;
@@ -201,8 +230,6 @@ export class Dispatcher {
     const rec = this.sent.find((s) => s.execId === ack.execId);
     if (rec) rec.ack = ack;
     if (!p) return false;
-    clearTimeout(p.timer);
-    this.acks.delete(ack.execId);
     p.resolve(ack);
     return true;
   }
@@ -212,6 +239,7 @@ export class Dispatcher {
    * result until `durationMs` (+ grace) has passed.
    */
   async sense(sensorDeviceId: string, kind: SenseKind, opts: { durationMs?: number; offsetMs?: number; cardId?: string; prompt?: string; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<SenseResultPayload[]> {
+    this.checkSignal(opts.signal);
     const senseId = newId('sn');
     const payload: SenseRequestPayload = { senseId, sensorDeviceId, kind };
     if (opts.durationMs !== undefined) payload.durationMs = opts.durationMs;
@@ -220,24 +248,34 @@ export class Dispatcher {
     if (opts.prompt) payload.prompt = opts.prompt;
     const collect = kind === 'ir-capture';
     const timeoutMs = opts.timeoutMs ?? (collect ? (opts.durationMs ?? 15_000) + 1500 : Math.max(4000, (opts.durationMs ?? 0) + 4000));
-    const n = this.o.hub.sendToDevice(sensorDeviceId, 'sense.request', payload);
-    if (!n) throw new ExecError(`sensor ${sensorDeviceId} is offline`, 'offline');
     return new Promise<SenseResultPayload[]>((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        if (collector.grace) clearTimeout(collector.grace);
+        opts.signal?.removeEventListener('abort', onAbort);
+        return this.senses.delete(senseId);
+      };
+      const collector: SenseCollector = {
+        sensorDeviceId, results: [], collect,
+        resolve: (value) => { if (cleanup()) resolve(value); },
+        reject: (error) => { if (cleanup()) reject(error); },
+      };
+      const onAbort = () => collector.reject(new ExecError('cancelled', 'refused'));
       const timer = setTimeout(() => {
-        const c = this.senses.get(senseId);
-        this.senses.delete(senseId);
-        if (collect) resolve(c?.results ?? []);
+        if (collect) collector.resolve(collector.results);
         else {
           this.senseTimeouts.set(sensorDeviceId, Date.now());
-          reject(new ExecError(`no sense.result (${kind}) from ${sensorDeviceId} within ${timeoutMs} ms`, 'timeout'));
+          collector.reject(new ExecError(`no sense.result (${kind}) from ${sensorDeviceId} within ${timeoutMs} ms`, 'timeout'));
         }
       }, timeoutMs);
-      this.senses.set(senseId, { sensorDeviceId, results: [], resolve, timer, collect });
-      opts.signal?.addEventListener('abort', () => {
-        clearTimeout(timer);
-        this.senses.delete(senseId);
-        reject(new ExecError('cancelled', 'refused'));
-      });
+      this.senses.set(senseId, collector);
+      opts.signal?.addEventListener('abort', onAbort, { once: true });
+      if (opts.signal?.aborted) return onAbort();
+      try {
+        if (!this.o.hub.sendToDevice(sensorDeviceId, 'sense.request', payload)) collector.reject(new ExecError(`sensor ${sensorDeviceId} is offline`, 'offline'));
+      } catch (error) {
+        collector.reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -253,21 +291,14 @@ export class Dispatcher {
     if (!c) return false;
     if (r.ok !== false) this.senseTimeouts.delete(c.sensorDeviceId);
     if (r.ok === false && !c.collect) {
-      clearTimeout(c.timer);
-      this.senses.delete(r.senseId);
       c.resolve([r]);
       return true;
     }
     c.results.push(r);
     if (!c.collect) {
-      clearTimeout(c.timer);
-      this.senses.delete(r.senseId);
       c.resolve(c.results);
     } else if (!c.grace) {
       c.grace = setTimeout(() => {
-        if (!this.senses.has(r.senseId)) return;
-        clearTimeout(c.timer);
-        this.senses.delete(r.senseId);
         c.resolve(c.results);
       }, IR_CAPTURE_GRACE_MS);
     }
@@ -278,24 +309,26 @@ export class Dispatcher {
     return [...this.senses.keys()];
   }
 
-  /** Drop every queued (trailing) op, e.g. on panic. */
-  flushQueued(): number {
-    const n = this.trailing.size;
-    for (const t of this.trailing.values()) clearTimeout(t.timer);
-    this.trailing.clear();
+  /** Drop queued operations for one target, or all targets on panic. */
+  flushQueued(cardId?: string): number {
+    let n = 0;
+    for (const [key, queued] of this.trailing) {
+      if (cardId !== undefined && queued.opts.cardId !== cardId) continue;
+      clearTimeout(queued.timer);
+      this.trailing.delete(key);
+      n++;
+    }
     return n;
   }
 
   close(): void {
     this.flushQueued();
+    for (const cancel of this.slotWaits) cancel();
     for (const p of this.acks.values()) {
-      clearTimeout(p.timer);
       p.reject(new ExecError('server closing', 'refused'));
     }
     this.acks.clear();
     for (const c of this.senses.values()) {
-      clearTimeout(c.timer);
-      if (c.grace) clearTimeout(c.grace);
       c.resolve(c.results);
     }
     this.senses.clear();

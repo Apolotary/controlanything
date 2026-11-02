@@ -2,7 +2,7 @@
  * Shared types of the discovery loop: one Target per identified physical device, walking
  * SCAN -> IDENTIFY -> LINK -> RESEARCH -> DRIVE -> VERIFY -> FORGE -> ARM -> CONTROL.
  */
-import type { DeviceCardPayload, Driver, Evidence, IrCapture, LinkResultPayload, Polygon, Provenance, PxBox, TargetState, VerifyState } from '@ce/protocol';
+import type { AgentGuidance, DeviceCardPayload, Driver, Evidence, IrCapture, LinkResultPayload, Polygon, Provenance, PxBox, TargetState, VerifyState } from '@ce/protocol';
 import type { DriverIssue } from '../devices/validate';
 import type { IrLibrary, MidiProfile } from '../devices/profiles';
 
@@ -44,7 +44,7 @@ export interface Research {
   modelId?: string;
 }
 
-export interface Target {
+export interface Target extends AgentGuidance {
   cardId: string;
   runId: string;
   state: TargetState;
@@ -53,6 +53,7 @@ export interface Target {
   detection?: TargetDetection;
   /** who selected it (the Quest, the companion...) */
   selectedBy?: string;
+  selection?: { userText?: string; preferDeviceId?: string };
   card?: DeviceCardPayload;
   link?: LinkResultPayload;
   research?: Research;
@@ -61,6 +62,7 @@ export interface Target {
   verification: Record<string, VerifyState>;
   evidence: Evidence[];
   specId?: string;
+  controlCount?: number;
   armed: boolean;
   armId?: string;
   /** tracked level index per step action */

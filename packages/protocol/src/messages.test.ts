@@ -118,15 +118,40 @@ describe('payloads', () => {
 describe('protocol v1: discovery loop', () => {
   it('has every SPEC §3.1 message type and marks the server-only ones', () => {
     for (const t of [
-      'scan.frame', 'scan.result', 'target.select', 'target.status', 'link.request', 'link.result', 'driver.spec', 'driver.status',
+      'scan.frame', 'scan.result', 'target.select', 'target.cancel', 'target.retry', 'target.status', 'link.request', 'link.result', 'driver.spec', 'driver.status',
       'exec.command', 'exec.ack', 'sense.request', 'sense.result', 'verify.result', 'arm.request', 'arm.confirm', 'arm.result',
       'panic', 'voice.audio', 'voice.text', 'ui.spec', 'ui.partial', 'gen3d.generate', 'gen3d.edit', 'device.signal', 'daemon.status',
     ]) {
       expect(MESSAGE_TYPES).toContain(t);
     }
     for (const t of ['exec.command', 'sense.request', 'verify.result', 'arm.request', 'scan.result', 'link.request', 'driver.spec']) expect(SERVER_ONLY_TYPES).toContain(t);
-    for (const t of ['exec.ack', 'sense.result', 'arm.confirm', 'scan.frame', 'control.event', 'panic']) expect(SERVER_ONLY_TYPES).not.toContain(t);
+    for (const t of ['exec.ack', 'sense.result', 'arm.confirm', 'scan.frame', 'control.event', 'panic', 'target.cancel', 'target.retry']) expect(SERVER_ONLY_TYPES).not.toContain(t);
     expect(DROPPABLE_TYPES).toContain('scan.frame');
+  });
+
+  it.each(['target.cancel', 'target.retry'] as const)('%s addresses a target and optionally one run', (type) => {
+    for (const payload of [{ cardId: 'c1' }, { cardId: 'c1', runId: 'r1' }]) {
+      const result = parseMessage(encodeMessage(type, payload, { to: 'server' }));
+      expect(result).toMatchObject({ ok: true, message: { type, payload } });
+    }
+    expect(PayloadSchemas[type].safeParse({}).success).toBe(false);
+    expect(PayloadSchemas[type].safeParse({ cardId: 'c1', runId: '' }).success).toBe(false);
+    expect(DROPPABLE_TYPES).not.toContain(type);
+  });
+
+  it('accepts plain guidance while keeping older step and target messages valid', () => {
+    const step = { stepId: 's1', phase: 'identify' as const, status: 'running' as const, title: 'Identify' };
+    const target = { cardId: 'c1', state: 'identifying' as const, since: 1 };
+    for (const [type, payload] of [['agent.step', step], ['target.status', target]] as const) {
+      expect(PayloadSchemas[type].safeParse(payload).success).toBe(true);
+      for (const action of ['retry', 'cancel', 'open-companion', 'pair-device'] as const) {
+        const guided = { ...payload, runId: 'r1', sentence: 'Working out what this is…', hint: 'Keep the device in view.', action };
+        expect(PayloadSchemas[type].parse(guided)).toEqual(guided);
+      }
+      expect(PayloadSchemas[type].safeParse({ ...payload, action: 'send-command' }).success).toBe(false);
+      expect(PayloadSchemas[type].safeParse({ ...payload, sentence: 'x'.repeat(201) }).success).toBe(false);
+      expect(PayloadSchemas[type].safeParse({ ...payload, hint: 'x'.repeat(301) }).success).toBe(false);
+    }
   });
 
   it('accepts a scan.frame without pose (handheld) and with full camera info (Quest)', () => {

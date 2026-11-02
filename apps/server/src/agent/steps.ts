@@ -2,8 +2,9 @@
  * The live work log: every step of the loop is an `agent.step` broadcast (with model id, effort and latency
  * when a model did the work) and kept in a ring buffer for GET /api/agent/steps.
  */
-import { type AgentPhase, type AgentStepPayload, newId } from '@ce/protocol';
+import { type AgentGuidance, type AgentPhase, type AgentStepPayload, newId } from '@ce/protocol';
 import type { Hub } from '../hub';
+import { stepGuidance } from './guidance';
 
 export interface StepHandle {
   readonly stepId: string;
@@ -13,7 +14,7 @@ export interface StepHandle {
   fail(detail?: string, patch?: Partial<AgentStepPayload>): AgentStepPayload;
 }
 
-export interface StepOptions {
+export interface StepOptions extends AgentGuidance {
   cardId?: string;
   runId?: string;
   detail?: string;
@@ -26,6 +27,7 @@ export interface StepOptions {
 export class StepLog {
   private readonly items: AgentStepPayload[] = [];
   private readonly listeners = new Set<(s: AgentStepPayload) => void>();
+  private readonly running = new Map<string, { runId?: string; fail: StepHandle['fail'] }>();
 
   constructor(
     private readonly hub: Pick<Hub, 'broadcast'>,
@@ -45,7 +47,8 @@ export class StepLog {
   /** Start a running step; finish it with ok()/fail(). */
   begin(phase: AgentPhase, title: string, o: StepOptions = {}): StepHandle {
     const startedAt = Date.now();
-    const step: AgentStepPayload = { stepId: newId('s'), phase, status: 'running', title: title.slice(0, 200), startedAt };
+    const step: AgentStepPayload = { stepId: newId('s'), phase, status: 'running', title: title.slice(0, 200), startedAt, ...stepGuidance(phase, 'running') };
+    if (o.sentence) Object.assign(step, { sentence: o.sentence, hint: o.hint, action: o.action });
     if (o.cardId) step.cardId = o.cardId;
     if (o.runId) step.runId = o.runId;
     if (o.detail) step.detail = o.detail.slice(0, 4000);
@@ -54,29 +57,42 @@ export class StepLog {
     if (o.effort) step.effort = o.effort;
     if (o.source) step.source = o.source;
     this.emit(step);
+    let finished = false;
     const finish = (status: 'ok' | 'fail', detail?: string, patch?: Partial<AgentStepPayload>): AgentStepPayload => {
+      if (finished) return { ...step };
+      finished = true;
+      this.running.delete(step.stepId);
       const endedAt = Date.now();
-      Object.assign(step, patch ?? {}, { status, endedAt });
+      Object.assign(step, { hint: undefined, action: undefined }, stepGuidance(phase, status), patch ?? {}, { status, endedAt });
       if (detail !== undefined) step.detail = detail.slice(0, 4000);
       if (step.latencyMs === undefined && (step.model || patch?.model)) step.latencyMs = endedAt - startedAt;
       this.emit(step);
       return { ...step };
     };
-    return {
+    const handle: StepHandle = {
       stepId: step.stepId,
       update: (patch) => {
+        if (finished) return;
         Object.assign(step, patch);
         this.emit(step);
       },
       ok: (detail, patch) => finish('ok', detail, patch),
       fail: (detail, patch) => finish('fail', detail, patch),
     };
+    this.running.set(step.stepId, { runId: o.runId, fail: handle.fail });
+    return handle;
+  }
+
+  /** Close every pending line when a run stops, including a model that never settled. */
+  failRun(runId: string, guidance: AgentGuidance): void {
+    for (const step of this.running.values()) if (step.runId === runId) step.fail(undefined, guidance);
   }
 
   /** A step that is already finished (one line). */
   note(phase: AgentPhase, title: string, o: StepOptions & { status?: 'ok' | 'fail'; evidence?: string; latencyMs?: number } = {}): AgentStepPayload {
     const now = Date.now();
-    const step: AgentStepPayload = { stepId: newId('s'), phase, status: o.status ?? 'ok', title: title.slice(0, 200), startedAt: now, endedAt: now };
+    const step: AgentStepPayload = { stepId: newId('s'), phase, status: o.status ?? 'ok', title: title.slice(0, 200), startedAt: now, endedAt: now, ...stepGuidance(phase, o.status ?? 'ok') };
+    if (o.sentence) Object.assign(step, { sentence: o.sentence, hint: o.hint, action: o.action });
     if (o.cardId) step.cardId = o.cardId;
     if (o.runId) step.runId = o.runId;
     if (o.detail) step.detail = o.detail.slice(0, 4000);

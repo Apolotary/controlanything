@@ -37,8 +37,11 @@ export function useForge(ctx: ServerContext, f: Forge): Forge {
   return f;
 }
 
+const routeBridges = new WeakMap<Forge, () => void>();
+
 function bridge(ctx: ServerContext, f: Forge): void {
-  f.subscribe((e) => {
+  if (routeBridges.has(f)) return;
+  const off = f.subscribe((e) => {
     try {
       if (e.type === 'spec') {
         ctx.hub.broadcast('ui.spec', e.uiSpec);
@@ -51,6 +54,13 @@ function bridge(ctx: ServerContext, f: Forge): void {
       ctx.log(`[gen3d] broadcast failed: ${(err as Error).message}`);
     }
   });
+  routeBridges.set(f, off);
+}
+
+/** The discovery agent owns broadcasting when it runs: drop the plain route bridge so nothing is sent twice. */
+export function detachRouteBridge(f: Forge): void {
+  routeBridges.get(f)?.();
+  routeBridges.delete(f);
 }
 
 /** The agent.step wire payload of a progress event (drops the streamed item). */

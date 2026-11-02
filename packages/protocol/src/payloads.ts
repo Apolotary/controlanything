@@ -256,9 +256,34 @@ export const TargetSelectPayload = z.object({
 });
 export type TargetSelectPayload = z.infer<typeof TargetSelectPayload>;
 
+/** C->S. Stop work on this target; runId ignores an action from an older run when supplied. */
+export const TargetCancelPayload = z.object({
+  cardId: Id,
+  runId: Id.optional(),
+});
+export type TargetCancelPayload = z.infer<typeof TargetCancelPayload>;
+
+/** C->S. Try this target again after a recoverable failure or cancellation. */
+export const TargetRetryPayload = TargetCancelPayload;
+export type TargetRetryPayload = z.infer<typeof TargetRetryPayload>;
+
+export const GuidanceAction = z.enum(['retry', 'cancel', 'open-companion', 'pair-device']);
+export type GuidanceAction = z.infer<typeof GuidanceAction>;
+
+/** Short, plain guidance for the HUD; every field is optional for older clients. */
+export const AgentGuidance = z.object({
+  sentence: z.string().min(1).max(200).optional(),
+  hint: z.string().min(1).max(300).optional(),
+  action: GuidanceAction.optional(),
+});
+export type AgentGuidance = z.infer<typeof AgentGuidance>;
+
 /** S->all. Where a target is in the loop (drives tag/outline status in the HUD). */
 export const TargetStatusPayload = z.object({
+  ...AgentGuidance.shape,
   cardId: Id,
+  /** identifies the current attempt so retry/cancel actions can ignore stale UI */
+  runId: Id.optional(),
   state: TargetState,
   since: z.number(),
   detail: z.string().max(300).optional(),
@@ -295,6 +320,7 @@ export type StepStatus = z.infer<typeof StepStatus>;
 
 /** S->C. One line of the live work log. Re-send with the same stepId to update its status. */
 export const AgentStepPayload = z.object({
+  ...AgentGuidance.shape,
   stepId: Id,
   runId: Id.optional(),
   parentId: Id.optional(),

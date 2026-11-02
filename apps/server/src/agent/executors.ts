@@ -67,7 +67,8 @@ export function pickExecutor(r: Roster, cap: 'midi' | 'ir' | 'local', opts: { po
   const toPick = (d: DeviceInfo, port?: Port): ExecutorPick => ({ deviceId: d.deviceId, name: d.name, kind: d.kind, port, internal: d.deviceId === MAC_LOCAL_ID });
   if (opts.preferDeviceId) {
     const d = cands.find((x) => x.deviceId === opts.preferDeviceId);
-    if (d) return toPick(d, cap === 'midi' ? pickMidiOutput(d.ports, opts.portHint) : undefined);
+    const port = d && cap === 'midi' ? pickMidiOutput(d.ports, opts.portHint) : undefined;
+    if (d && (cap !== 'midi' || port)) return toPick(d, port);
   }
   if (cap === 'midi') {
     for (const d of cands) {

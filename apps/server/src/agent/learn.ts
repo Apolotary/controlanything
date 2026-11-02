@@ -7,6 +7,7 @@ import { analyseCapture, sameCode } from '../devices/ir';
 import type { Dispatcher } from './dispatch';
 import type { StepLog } from './steps';
 import type { LearnedCode, Target } from './types';
+import { throwIfCancelled } from '../muse/cancellation';
 
 export const LEARN_BUTTONS: { button: string; hypothesis: LearnedCode['hypothesis']; prompt: string }[] = [
   { button: '全灯', hypothesis: 'fullOn', prompt: 'Press 全灯 (full on) once' },
@@ -35,13 +36,14 @@ export async function learnCodes(deps: { dispatcher: Dispatcher; steps: StepLog;
   const queue = [...(o.buttons ?? LEARN_BUTTONS)].map((b) => ({ ...b, retry: false }));
   while (queue.length) {
     const b = queue.shift()!;
-    if (o.signal?.aborted) break;
-    const step = deps.steps.begin('link', `learn: ${b.prompt}${b.retry ? ' (once more)' : ''}`, { cardId: t.cardId, runId: t.runId, kind: 'proof' });
+    throwIfCancelled(o.signal);
+    const step = deps.steps.begin('research', `learn: ${b.prompt}${b.retry ? ' (once more)' : ''}`, { cardId: t.cardId, runId: t.runId, kind: 'proof', sentence: b.prompt, hint: 'Keep the remote pointed at the receiver; you can cancel', action: 'cancel' });
     const results = await deps.dispatcher.sense(sensorDeviceId, 'ir-capture', { durationMs: o.durationMs ?? 8000, prompt: b.prompt, cardId: t.cardId, signal: o.signal });
+    throwIfCancelled(o.signal);
     const caps = results.filter((r) => r.ir?.rawUs?.length).map((r) => analyseCapture({ rawUs: r.ir!.rawUs, khz: r.ir!.khz }));
     if (!caps.length) {
       misses++;
-      step.fail('nothing received');
+      step.fail('nothing received', { sentence: 'I did not receive that button press', hint: 'Keep the remote pointed at the receiver and try the next prompt, or cancel', action: 'cancel' });
       if (!b.retry) missed.push(b);
       if (misses >= (o.maxMisses ?? 3)) break;
       if (!queue.length && missed.length) queue.push(...missed.splice(0).map((m) => ({ ...m, retry: true })));
@@ -52,12 +54,12 @@ export async function learnCodes(deps: { dispatcher: Dispatcher; steps: StepLog;
     const cap = caps[0];
     const dup = learned.find((l) => sameCode(l, cap));
     if (dup) {
-      step.ok(`same code as ${dup.button}; skipped`, { evidence: `${cap.protocol ?? 'UNKNOWN'} ${cap.bytes?.map((x) => x.toString(16).padStart(2, '0')).join(' ') ?? `${cap.rawUs.length} timings`}` });
+      step.ok(`same code as ${dup.button}; skipped`, { sentence: 'That button is already learned', evidence: `${cap.protocol ?? 'UNKNOWN'} ${cap.bytes?.map((x) => x.toString(16).padStart(2, '0')).join(' ') ?? `${cap.rawUs.length} timings`}` });
       continue;
     }
     const code: LearnedCode = { ...cap, learnId: `ir${learned.length + 1}`, button: b.button, hypothesis: b.hypothesis, capturedAt: Date.now() };
     learned.push(code);
-    step.ok(`captured ${b.button}`, { evidence: `${cap.protocol ?? 'UNKNOWN'} ${cap.bytes ? cap.bytes.map((x) => x.toString(16).padStart(2, '0')).join(' ') : `${cap.rawUs.length} timings`}${cap.frames && cap.frames > 1 ? ` x${cap.frames}` : ''}`.slice(0, 64) });
+    step.ok(`captured ${b.button}`, { sentence: `Learned ${b.button}`, evidence: `${cap.protocol ?? 'UNKNOWN'} ${cap.bytes ? cap.bytes.map((x) => x.toString(16).padStart(2, '0')).join(' ') : `${cap.rawUs.length} timings`}${cap.frames && cap.frames > 1 ? ` x${cap.frames}` : ''}`.slice(0, 64) });
   }
   return learned;
 }
