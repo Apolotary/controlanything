@@ -112,6 +112,9 @@ export class RoomView {
   cam: CameraParams = { exposure: 1, skyGain: 1, lampGain: 1, nightGain: 1 };
   /** the synth's screen canvas, pasted onto the synth in the desk photo */
   screenSource?: HTMLCanvasElement;
+  /** Silent instrument displayed by the laptop in both camera views. */
+  visualScreenSource?: HTMLCanvasElement;
+  beforePaintScreens?: () => void;
   private readonly layers = new Map<ViewId, RoomLayers>();
   private loading = new Map<ViewId, Promise<RoomLayers>>();
   private img?: ImageData;
@@ -171,9 +174,9 @@ export class RoomView {
     this.render();
   }
 
-  /** Mark the synth screen as changed (desk view repaints it). */
+  /** Mark a live screen as changed. */
   screenChanged(): void {
-    if (this.view === 'desk') this.screenDirty = true;
+    this.screenDirty = true;
   }
 
   start(): void {
@@ -183,10 +186,14 @@ export class RoomView {
       const dt = t - last;
       last = t;
       const changed = this.lamp.step(dt);
-      if ((changed || this.screenDirty) && t - this.lastFrame > 33) {
+      // The live laptop screen only needs a full repaint when something changed; its idle shader motion is sampled at
+      // ~4 fps so the room (rendered twice: sim page + the emulator's embed) doesn't saturate the CPU/GPU.
+      const visualIdle = !!this.visualScreenSource && t - this.lastFrame > 250;
+      if ((changed || this.screenDirty || visualIdle) && t - this.lastFrame > 33) {
         this.lastFrame = t;
         this.screenDirty = false;
-        this.render();
+        if (changed) this.render();
+        else this.repaintScreens();
       }
     };
     this.raf = requestAnimationFrame(loop);
@@ -208,12 +215,22 @@ export class RoomView {
     this.onFrame?.();
   }
 
-  private paintScreens(g: CanvasRenderingContext2D, alpha: number): void {
-    const quad = this.viewMeta?.screens['synth-screen'];
-    if (this.view !== 'desk' || !quad || !this.screenSource) return;
+  /** Reuse the developed room while only the live display animates. */
+  private repaintScreens(): void {
+    if (!this.img) return;
+    const g = this.canvas.getContext('2d')!;
+    g.putImageData(this.img, 0, 0);
+    this.paintScreens(g, 1);
+    this.onFrame?.();
+  }
+
+  private paintScreens(g: CanvasRenderingContext2D, alpha: number, view: ViewId = this.view): void {
+    this.beforePaintScreens?.();
     g.save();
     g.filter = 'blur(0.4px) brightness(0.85)';
-    drawQuad(g, this.screenSource, quad, alpha * 0.92);
+    const screens = this.meta?.views[view].screens;
+    if (view === 'desk' && screens?.['synth-screen'] && this.screenSource) drawQuad(g, this.screenSource, screens['synth-screen'], alpha * 0.92);
+    if (screens?.['laptop-screen'] && this.visualScreenSource) drawQuad(g, this.visualScreenSource, screens['laptop-screen'], alpha);
     g.restore();
   }
 
@@ -232,7 +249,7 @@ export class RoomView {
     const display = opts.at ? this.lamp.at(opts.at) : this.lamp.display;
     compose(layers, display, this.cam, img.data, { noise: opts.noise ?? 1, seed: (Date.now() & 0x7fffffff) | 1 });
     g.putImageData(img, 0, 0);
-    if (view === this.view) this.paintScreens(g, 1);
+    this.paintScreens(g, 1, view);
     const blob = await new Promise<Blob>((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/jpeg', opts.quality ?? 0.88));
     const buf = new Uint8Array(await blob.arrayBuffer());
     let s = '';

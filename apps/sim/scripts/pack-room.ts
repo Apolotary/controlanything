@@ -25,7 +25,7 @@ const DEVICE_INFO: Record<string, { kind: string; label: string }> = {
   'ceiling-light': { kind: 'lighting', label: 'ceiling light' },
   synth: { kind: 'synthesizer', label: 'synthesizer' },
   remote: { kind: 'remote-control', label: 'IR remote' },
-  laptop: { kind: 'computer', label: 'laptop' },
+  laptop: { kind: 'synthesizer', label: 'ControlAnything Visual Synth' },
   'air-conditioner': { kind: 'appliance', label: 'air conditioner' },
 };
 

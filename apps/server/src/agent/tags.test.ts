@@ -102,6 +102,11 @@ describe('tag connection evaluation', () => {
     });
   });
 
+  it('never treats the virtual visual synth port as a path to a physical synth', () => {
+    const ports = [{ id: 'ce-visual-synth', name: 'ControlAnything Visual Synth', kind: 'midi-out' as const }];
+    expect(evaluateConnection(target(), { devices: () => [device({ ports })], macLocal: false })).toEqual({ connection: 'offline', hint: 'Plug the synth into your Mac' });
+  });
+
   it('asks for the cable without a pairing action while the companion has no MIDI permission or is a standby', () => {
     expect(evaluateConnection(target(), { devices: () => [device({ capabilities: [], ports: [] })], macLocal: false })).toEqual({
       connection: 'offline', hint: 'Plug the synth into your Mac',

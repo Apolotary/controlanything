@@ -1,3 +1,4 @@
+import { isVisualSynthPort } from '../devices/visualSynth';
 import type { TaggedDevice } from '@ce/protocol';
 import { roster as devices, type Roster } from './executors';
 import { neededCapability, type LinkCapability } from './link';
@@ -68,10 +69,13 @@ export function evaluateConnection(t: Target, roster: Roster, label?: string): P
     const guidance = synthConnectionGuidance(companionOnline);
     offline = { connection: 'offline', hint: guidance.hint, ...(guidance.action ? { action: guidance.action } : {}) };
   }
+  const wantsVisual = isVisualSynthPort(portId) || /visual[\s-]synth/i.test(`${t.card?.name ?? ''} ${t.detection?.label ?? ''}`);
   const online = present.filter((d) => d.online && d.capabilities.includes(cap));
   const reachable = online.some((d) => {
     if (assigned && d.deviceId !== assigned) return false;
-    if (cap === 'midi') return d.ports?.some((p) => p.kind === 'midi-out' && p.state !== 'disconnected' && (!portId || p.id === portId));
+    // The virtual visual synth port reaches only the visual synth; it never makes a physical synth look connected.
+    if (cap === 'midi') return d.ports?.some((p) => p.kind === 'midi-out' && p.state !== 'disconnected' && (!portId || p.id === portId)
+      && (isVisualSynthPort(p.id) || isVisualSynthPort(p.name)) === wantsVisual);
     if (cap === 'local' && !assigned) return d.deviceId === MAC_LOCAL_ID || d.kind === 'mac' || d.kind === 'sim';
     return true;
   });

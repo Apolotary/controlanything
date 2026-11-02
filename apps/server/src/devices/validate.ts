@@ -5,6 +5,7 @@
  * and rate limits. Every finding carries a path so the model can repair the draft.
  */
 import { type ActionEncode, type Driver, type DriverAction, type DriverDraft, type IrCapture, type IrOp, RATE_LIMITS, VALUE_PLACEHOLDER } from '@ce/protocol';
+import { isVisualSynthPort, VISUAL_SYNTH_NAME } from './visualSynth';
 import { fillRaw, sameCode } from './ir';
 import type { IrLibrary } from './profiles';
 
@@ -94,6 +95,8 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
   const issues: DriverIssue[] = [];
   const err = (code: string, path: string, message: string) => issues.push({ severity: 'error', code, path, message });
   const warn = (code: string, path: string, message: string) => issues.push({ severity: 'warn', code, path, message });
+  const visual = isVisualSynthPort(ids.executor.port);
+  if (visual && input.transport !== 'midi') err('visual_transport', 'transport', 'The visual synth uses MIDI commands');
 
   const seen = new Set<string>();
   const byId = new Map<string, DriverAction>();
@@ -117,6 +120,24 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
       else if (!(a.range.max > a.range.min)) err('bad_range', `${path}.range`, `range max must be greater than min`);
       if (e.kind !== 'step' && !hasPlaceholder(e)) err('missing_placeholder', `${path}.encode`, `"set" action ${a.actionId} must put "${VALUE_PLACEHOLDER}" in its op (value or arg)`);
     } else if (hasPlaceholder(e)) err('unexpected_placeholder', `${path}.encode`, `"${a.kind}" action ${a.actionId} cannot use "${VALUE_PLACEHOLDER}"`);
+    if (visual) {
+      if (a.expect?.sense !== 'camera') err('physical_oracle_required', `${path}.expect`, 'Visual synth actions require camera evidence');
+      if (a.expect?.effect !== 'any') err('visual_effect', `${path}.expect.effect`, 'Visual synth actions verify a visible change with effect any');
+      if (a.actionId === 'cc71') {
+        if (a.kind !== 'set' || e.kind !== 'midi' || e.channel !== 1 || e.msg !== 'cc' || e.number !== 71 || e.value !== VALUE_PLACEHOLDER) {
+          err('visual_action', `${path}.encode`, 'cc71 must be a set action sending Warp CC71 with value $value on channel 1');
+        }
+        if (a.range?.min !== 0 || a.range.max !== 127 || a.range.step !== 1) {
+          err('visual_range', `${path}.range`, 'Warp uses range 0-127 with step 1');
+        }
+        a.curve = 'linear';
+      } else {
+        const pattern = /^pattern([0-2])$/.exec(a.actionId);
+        if (!pattern || a.kind !== 'trigger' || e.kind !== 'midi' || e.channel !== 1 || e.msg !== 'pc' || e.number !== Number(pattern[1])) {
+          err('visual_action', `${path}.encode`, 'Each pattern0, pattern1, pattern2 trigger must send its matching program change 0, 1, 2 on channel 1');
+        }
+      }
+    }
     // per-op allowlists
     if (e.kind === 'midi') {
       if (ctx.allowedChannels && !ctx.allowedChannels.has(e.channel)) err('channel_not_allowed', `${path}.encode.channel`, `channel ${e.channel} is not allowed for this device`);
@@ -164,6 +185,13 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
     actions.push(a);
   }
 
+  if (visual) {
+    const expected = ['cc71', 'pattern0', 'pattern1', 'pattern2'];
+    if (actions.length !== expected.length || expected.some((id) => !actions.some((a) => a.actionId === id))) {
+      err('visual_controls', 'actions', 'The visual demo uses exactly cc71 Warp and pattern0, pattern1, pattern2');
+    }
+  }
+
   // rate limits
   const cap = input.transport === 'midi' ? RATE_LIMITS.midiPerSec : input.transport === 'ir' ? RATE_LIMITS.irPerSec : RATE_LIMITS.lightChangesPerSec;
   const lightCap = ctx.emitsLight ? RATE_LIMITS.lightChangesPerSec : cap;
@@ -176,7 +204,7 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
   const driver: Driver = {
     driverId: ids.driverId,
     cardId: input.cardId,
-    name: input.name,
+    name: visual ? VISUAL_SYNTH_NAME : input.name,
     transport: input.transport,
     executor: ids.executor,
     provenance: input.provenance,
