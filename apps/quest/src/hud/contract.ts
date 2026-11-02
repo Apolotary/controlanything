@@ -10,7 +10,7 @@ export type AppMode = 'annotate' | 'control';
 export type ObjectFilter = 'electronics' | 'lights' | 'everything';
 export type DeviceConnection = 'ready' | 'setup' | 'offline' | 'unknown';
 export interface HomeState { mode: AppMode; filter: ObjectFilter; tagged: number; status: string; canStop?: boolean }
-export interface DeviceState { targetId: string; connection: DeviceConnection; hint?: string; action?: TaggedDevice['action']; busy?: boolean; sentence?: string; handControl?: boolean; pairingSeconds?: number }
+export interface DeviceState { targetId: string; connection: DeviceConnection; hint?: string; action?: TaggedDevice['action']; busy?: boolean; sentence?: string; handControl?: boolean; performAvailable?: boolean; performingLive?: boolean; performanceRoute?: string; pairingSeconds?: number }
 export interface HelperPairingView { urls: string[]; pairedName?: string }
 
 export interface JointState {

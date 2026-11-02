@@ -6,6 +6,8 @@ import { QuestApp } from './app';
 import { ModeState } from './modes';
 import type { ShellFrame } from './hud-contract';
 import { PinchTargetHistory } from './precision';
+import { GestureMap } from '@ce/protocol';
+import { makeGestureFrame, moveHand, setPosture } from '../gestures/fixtures.test-support';
 
 function shell() {
   const app = Object.create(QuestApp.prototype) as QuestApp;
@@ -33,7 +35,7 @@ function shell() {
     candidate: { id: null, shown: null, since: 0 }, consumed: { left: false, right: false },
     targetHistory: { left: new PinchTargetHistory<string>(), right: new PinchTargetHistory<string>() }, annotationForward: new Vector3(),
     aimTargets: new Map(), aimBuffer: [], observed: new Map(), visibleTargets: new Set([target.id, liveBox.id]),
-    armedCards: new Set(), cancelledCards: new Set(), generated: new Map(), deferredSpecs: new Map(), controlValues: new Map(), specByCard: new Map(), cardOfSpec: new Map(), uiSpecOfGen3d: new Map(), menuSpec: new Map(),
+    armedCards: new Set(), cancelledCards: new Set(), generated: new Map(), gestureSpecs: new Map(), deferredSpecs: new Map(), controlValues: new Map(), specByCard: new Map(), cardOfSpec: new Map(), uiSpecOfGen3d: new Map(), menuSpec: new Map(),
     gazeHit: { id: '', angleDeg: 0, distance: 0 }, handHit: { id: '', angleDeg: 0, distance: 0 }, touchHit: { id: '', angleDeg: 0, distance: 0 },
   });
   const receive = (method: string, payload: unknown) => Reflect.get(app, method).call(app, payload);
@@ -47,6 +49,38 @@ function shell() {
 }
 
 describe('explicit annotation and control', () => {
+  it('requires Perform and a live selected connection before synthetic hand frames can send gesture controls', () => {
+    const { app, target, connected, receive, ws, modes } = shell();
+    connected('ready');
+    const map = GestureMap.parse({ version: 1, clutchPosture: 'L_FIST', panicPosture: 'BOTH_PALMS_OUT', postures: [], axes: [{
+      axis: 'right_height', actionId: 'visual-warp', label: 'Warp', outMin: 0, outMax: 127, curve: 'linear', deadzone: 0.02,
+      smoothingMinCutoff: 1.2, smoothingBeta: 0.4, quantizeStep: 1, maxRateHz: 30,
+    }] });
+    receive('onUiSpec', { specId: 'ui', cardId: 'laptop', driverId: 'driver', gestureMap: map });
+    const frame = makeGestureFrame();
+    const update = (time: number) => Reflect.get(app, 'updateHandControl').call(app, frame, time);
+    const gestures = () => ws.send.mock.calls.filter(([type, payload]) => type === 'control.event' && (payload as { widgetId: string }).widgetId.startsWith('gesture:'));
+    update(0); update(50);
+    expect(gestures()).toHaveLength(0);
+    Reflect.get(app, 'setHandControl').call(app, target.id, true);
+    update(60); update(110);
+    moveHand(frame.hands.right!, 0.2, 1.5, -0.4);
+    update(150);
+    expect(gestures()).toHaveLength(1);
+    expect(gestures()[0]![1]).toMatchObject({ specId: 'ui', widgetId: 'gesture:right_height', phase: 'move' });
+    setPosture(frame.hands.left!, 'open_palm');
+    moveHand(frame.hands.right!, 0.2, 0.8, -0.4);
+    update(160); update(200);
+    expect(gestures()).toHaveLength(1);
+    setPosture(frame.hands.left!, 'fist');
+    update(210); update(260);
+    modes.tags.get(target.id)!.connection = 'offline';
+    moveHand(frame.hands.right!, 0.2, 1.6, -0.4);
+    update(300);
+    expect(gestures()).toHaveLength(1);
+    expect(Reflect.get(app, 'handMapping')).toBeUndefined();
+  });
+
   it('pinches a SAM box to tag once, keeps scanning, and never starts control', () => {
     const { app, target, scanner, ws, modes } = shell();
     app.lock(target.id); app.lock(target.id);

@@ -23,8 +23,13 @@ export const ForgeAction = z.object({
     .optional(),
   /** the action that undoes this one */
   inverseActionId: z.string().max(64).optional(),
-  /** only the identifying part of the encode is kept (MIDI message + number), to remap recorded runs */
-  encode: z.object({ kind: z.string().max(16), msg: z.string().max(24).optional(), number: z.number().optional() }).optional(),
+  /** Keep routing identity and step dependencies for recording remaps and gesture validation. */
+  encode: z.object({
+    kind: z.string().max(16), msg: z.string().max(24).optional(), number: z.number().optional(),
+    op: z.string().max(24).optional(),
+    upActionId: z.string().max(64).optional(), downActionId: z.string().max(64).optional(),
+    steps: z.number().optional(),
+  }).optional(),
   /** "hold" = irreversible on the device */
   confirm: z.enum(['tap', 'hold']).optional(),
   /** optional per-action verification (otherwise taken from ForgeRequest.verification) */
@@ -40,6 +45,7 @@ export const ForgeDriver = z.object({
   transport: z.enum(['midi', 'ir', 'local']),
   executor: z.object({ deviceId: z.string().max(64), port: z.string().max(120).optional() }).optional(),
   actions: z.array(ForgeAction).min(1).max(64),
+  maxRateHz: z.number().min(0.1).max(200).optional(),
   /** events the device emits (daemon triggers), e.g. {name: "clock_bpm"} */
   signals: z.array(z.object({ name: z.string().max(64), description: z.string().max(200).optional() })).max(16).optional(),
 });
@@ -59,6 +65,6 @@ export type ForgeDevice = z.infer<typeof ForgeDevice>;
 
 export function verificationOf(driver: ForgeDriver, verification?: Record<string, VerifyState>): Record<string, VerifyState> {
   const out: Record<string, VerifyState> = {};
-  for (const a of driver.actions) out[a.actionId] = verification?.[a.actionId] ?? a.verified ?? 'untested';
+  for (const a of driver.actions) out[a.actionId] = (verification ? verification[a.actionId] : a.verified) ?? 'untested';
   return out;
 }

@@ -332,6 +332,9 @@ export class LeanHud implements Hud {
         if (isBrightness(c) && typeof value === 'number') { current += ` · ${Math.round(value)} %`; break; }
       }
       subtitle = commandSubtitle(m.command?.phase, routeLabel(m.spec.device?.transport, target?.channel), current);
+      if (state?.handControl && state.performAvailable && m.command?.phase !== 'fail') {
+        subtitle = `${state.performingLive ? 'Live · ' : ''}${state.performanceRoute ?? routeLabel(m.spec.device?.transport, target?.channel)}`;
+      }
     }
     const routeLine = connection === 'ready' || !!state?.busy;
     this.status.whiteSpace = routeLine ? 'nowrap' : 'normal';
@@ -416,8 +419,9 @@ export class LeanHud implements Hud {
     buttons.sort((a, b) => presetOrder(a) - presetOrder(b));
     buttons.splice(3);
     if (m && main) this.mainControl(m, main);
-    if (m?.command?.phase !== 'fail' && m && main && /synth|keyboard/i.test(m.spec.device?.category ?? '')) {
-      this.button(this.controls, 'hand-control', state?.handControl ? 'Hand control on' : 'Hand control off', -0.075, THEME.card.detailsY, 0.19, 'handle', () => this.events.emit('handControl', { targetId: target!.id, enabled: !state?.handControl }));
+    if (m?.command?.phase !== 'fail' && m?.armed && state?.performAvailable) {
+      const perform = this.button(this.controls, 'hand-control', state.handControl ? 'Perform on' : 'Perform', -0.075, THEME.card.detailsY, 0.19, 'handle', () => this.events.emit('handControl', { targetId: target!.id, enabled: !state.handControl }));
+      this.selectButton(perform.group, !!state.handControl, 0.19);
       const details = this.controls.getObjectByName('details-toggle');
       if (details) { details.position.x = 0.13; details.scale.x = 0.6; }
     }
@@ -786,8 +790,8 @@ export class LeanHud implements Hud {
   setDeviceState(state: DeviceState | null): void {
     const previous = this.deviceState;
     if (previous === state) return;
-    const sameContent = previous && state && previous.targetId === state.targetId && previous.connection === state.connection && previous.hint === state.hint && previous.action === state.action && previous.busy === state.busy && previous.sentence === state.sentence && previous.handControl === state.handControl;
-    if (sameContent && previous.pairingSeconds === state.pairingSeconds) return;
+    const sameContent = previous && state && previous.targetId === state.targetId && previous.connection === state.connection && previous.hint === state.hint && previous.action === state.action && previous.busy === state.busy && previous.sentence === state.sentence && previous.handControl === state.handControl && previous.performAvailable === state.performAvailable;
+    if (sameContent && previous.pairingSeconds === state.pairingSeconds && previous.performingLive === state.performingLive && previous.performanceRoute === state.performanceRoute) return;
     this.deviceState = state;
     if (sameContent && !!previous.pairingSeconds === !!state.pairingSeconds) { this.refreshStatus(); return; }
     if (this.codeEntry && this.codeTarget !== HELPER_PAIRING_TARGET && (!state || state.targetId !== previous?.targetId || state.connection !== 'offline' || !state.action)) this.closePairCode();
@@ -1083,6 +1087,11 @@ export class LeanHud implements Hud {
   }
   private updateFingerMenu(frame: HudFrame): void {
     const side = this.handDock.nonDominant;
+    if (this.deviceState?.performingLive && !frame.hands[side]?.controller) {
+      this.fingerCapture = null;
+      this.fingerTouch.update(undefined, false, frame.time);
+      return;
+    }
     const open = this.handDock.source === 'hand' && this.handDock.open;
     // Consume the menu hand before the shell selects devices, including an index pinch held on close.
     if (open) this.suppressedHands.add(side);
@@ -1171,6 +1180,12 @@ export class LeanHud implements Hud {
     this.deck.updateFingers(frame, this.handDock.nonDominant, this.handDock.open);
     this.root.updateMatrixWorld(true);
     handCursor('left', frame.hands.left, this.cursors[0]!); handCursor('right', frame.hands.right, this.cursors[1]!);
+    if (this.deviceState?.performingLive) for (const cursor of this.cursors) {
+      if (frame.hands[cursor.hand as 'left' | 'right']?.controller) continue;
+      cursor.tracked = false;
+      const capture = this.captures.get(cursor.id);
+      if (capture) { capture.widget = null; capture.mode = null; capture.hasTip = false; capture.wasPinching = false; capture.history.reset(); }
+    }
     this.cursors[0]!.canPoke &&= !frame.hands.left?.controller;
     this.cursors[1]!.canPoke &&= !frame.hands.right?.controller;
     for (const cursor of this.cursors) if (this.suppressedHands.has(cursor.hand)) cursor.tracked = false;

@@ -1,6 +1,7 @@
 export * from './primitives';
 export * from './pairing';
 export * from './driver';
+export * from './gestures';
 export * from './hackset';
 export * from './payloads';
 export * from './messages';

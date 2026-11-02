@@ -10,6 +10,7 @@ import { Dispatcher, RateLimiter, type ExecResult } from './dispatch';
 import type { StepLog } from './steps';
 import type { TargetStore } from './targets';
 import type { Target } from './types';
+import { gestureHack } from './gesture-route';
 
 export interface SpecSource {
   get(specId: string): UiSpecPayload | undefined;
@@ -72,6 +73,7 @@ class CommandBatch {
 
 export class ControlRouter {
   private readonly hackLimiters = new Map<string, RateLimiter>();
+  private readonly gestureSentAt = new Map<string, number>();
   private readonly stepTimers = new Map<string, { cardId: string; timer: ReturnType<typeof setTimeout>; cancel?: () => void }>();
   private readonly commandTimers = new Map<ReturnType<typeof setTimeout>, { cardId: string; sourceCardId: string; cancel?: () => void }>();
   private readonly trailingControls = new Map<string, { cardId: string; timer: ReturnType<typeof setTimeout>; event: ControlEventPayload; from?: string }>();
@@ -87,9 +89,13 @@ export class ControlRouter {
 
   /** Find the target + spec + hack a control event refers to. */
   resolve(ev: Pick<ControlEventPayload, 'widgetId' | 'specId'>): { target: Target; spec: UiSpecPayload; hack: Hack; driver: Driver } | { reason: string } {
+    if (ev.widgetId.startsWith('gesture:') && !ev.specId) return { reason: 'gesture control requires a target spec' };
     const specs = ev.specId ? [this.d.specs.get(ev.specId)].filter(Boolean) : this.d.specs.list();
     for (const spec of specs as UiSpecPayload[]) {
-      const hack = spec.hackset?.hacks.find((h) => h.id === ev.widgetId) ?? spec.hackset?.hacks.find((h) => spec.gen3d?.controls.some((c) => c.id === ev.widgetId && (c.binding.args?.hack === h.id || c.id === h.id)));
+      const gestureTarget = ev.widgetId.startsWith('gesture:') && spec.cardId ? this.d.targets.get(spec.cardId) : undefined;
+      const hack = ev.widgetId.startsWith('gesture:')
+        ? gestureTarget?.driver && gestureHack(ev.widgetId, spec, gestureTarget.driver, gestureTarget.verification)
+        : spec.hackset?.hacks.find((h) => h.id === ev.widgetId) ?? spec.hackset?.hacks.find((h) => spec.gen3d?.controls.some((c) => c.id === ev.widgetId && (c.binding.args?.hack === h.id || c.id === h.id)));
       if (!hack) continue;
       const target = spec.cardId ? this.d.targets.get(spec.cardId) : this.d.targets.list().find((t) => t.specId === spec.specId);
       if (!target) return { reason: `no target for ${spec.cardId ?? spec.specId}` };
@@ -139,9 +145,14 @@ export class ControlRouter {
     const unverified = hack.commands.filter((c) => target.verification[c.action] !== 'pass').map((c) => c.action);
     if (unverified.length) return { ok: false, reason: `unverified actions: ${unverified.join(', ')}`, cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
     if (hack.kind === 'action' && ev.phase !== undefined && ev.phase !== 'end') return { ok: true, cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
-    const limiter = this.limiter(target.cardId, hack);
     const key = `${target.cardId}:${hack.id}`;
-    if (!limiter.take()) {
+    const gesture = ev.widgetId.startsWith('gesture:');
+    const limiter = gesture ? undefined : this.limiter(target.cardId, hack);
+    const now = (this.d.now ?? Date.now)();
+    const lastGesture = this.gestureSentAt.get(key) ?? -Infinity;
+    if (gesture ? now - lastGesture < 1000 / hack.max_rate_hz : !limiter!.take()) {
+      // A released performance clutch must never leave a delayed move waiting in this router.
+      if (ev.widgetId.startsWith('gesture:')) return { ok: false, reason: 'rate limited', cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
       if (hack.kind !== 'control') return { ok: false, reason: 'rate limited', cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
       const pending = this.trailingControls.get(key);
       if (pending) {
@@ -154,11 +165,12 @@ export class ControlRouter {
           this.trailingControls.delete(key);
           if (target.runId === runId) this.onControlEvent(entry.event, entry.from);
           else this.report(entry.event, entry.from, false, 'Command cancelled');
-        }, Math.max(1, limiter.waitMs())) };
+        }, Math.max(1, limiter!.waitMs())) };
         this.trailingControls.set(key, entry);
       }
       return { ok: true, cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
     }
+    if (gesture) this.gestureSentAt.set(key, now);
     const pending = this.trailingControls.get(key);
     if (pending) {
       clearTimeout(pending.timer);
@@ -236,10 +248,10 @@ export class ControlRouter {
     })() : cmd.value;
     const send = () => {
       if (!target.armed || target.runId !== runId || !target0.armed || target0.runId !== sourceRunId || !this.allowed(target) || !this.allowed(target0) || target.verification[a.actionId] !== 'pass') { onResult?.(false, 'Command cancelled'); return 0; }
-      if (a.encode.kind === 'step') return this.fireSteps(target, driver, a, v ?? 0, onResult);
+      if (a.encode.kind === 'step') return this.fireSteps(target, driver, a, v ?? 0, onResult, hack.id.startsWith('gesture:'));
       try {
         const op = resolveOp(a, a.kind === 'set' ? (v ?? 0) : undefined);
-        return this.d.dispatcher.fire(driver.executor.deviceId, op, { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: a.actionId, lightCap: driver.transport === 'ir', onResult }) ? 1 : 0;
+        return this.d.dispatcher.fire(driver.executor.deviceId, op, { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: a.actionId, lightCap: driver.transport === 'ir', onResult, dropIfLimited: hack.id.startsWith('gesture:') }) ? 1 : 0;
       } catch (e) {
         this.log(`[control] ${a.actionId}: ${(e as Error).message}`);
         onResult?.(false, (e as Error).message);
@@ -258,7 +270,7 @@ export class ControlRouter {
   }
 
   /** A step composite: fire the first trigger now, schedule the rest at the device's settle time. */
-  private fireSteps(target: Target, driver: Driver, a: DriverAction, value: number, onResult?: ExecResult): number {
+  private fireSteps(target: Target, driver: Driver, a: DriverAction, value: number, onResult?: ExecResult, singleStep = false): number {
     const current = target.stepIndex[a.actionId] ?? (a.encode.kind === 'step' ? Math.floor(a.encode.steps / 2) : 0);
     const plan = planSteps(driver, a, current, value);
     const key = `${target.cardId}:${a.actionId}`;
@@ -283,7 +295,7 @@ export class ControlRouter {
         if (ok && target.runId === runId) target.stepIndex[a.actionId] = (target.stepIndex[a.actionId] ?? current) + direction;
         result(ok, detail);
       } : undefined;
-      const ok = this.d.dispatcher.fire(driver.executor.deviceId, resolveOp(t), { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: t.actionId, lightCap: driver.transport === 'ir', onResult: acknowledged });
+      const ok = this.d.dispatcher.fire(driver.executor.deviceId, resolveOp(t), { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: t.actionId, lightCap: driver.transport === 'ir', onResult: acknowledged, dropIfLimited: singleStep });
       if (ok) {
         if (!onResult) target.stepIndex[a.actionId] = current + direction * (i + 1);
         i++;
@@ -293,6 +305,8 @@ export class ControlRouter {
     batch?.seal();
     if (!fireOne()) { cancel(); return 0; }
     fired++;
+    // A gesture sends one brightness step per movement event; release leaves no scheduled remainder.
+    if (singleStep) { scheduled?.(true); return fired; }
     const tick = () => {
       this.stepTimers.delete(key);
       if (!active()) { cancel(); return; }
