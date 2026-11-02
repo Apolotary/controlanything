@@ -28,6 +28,7 @@ import { fixtureDeviceCard } from './identify';
 import { runLoop } from './loop';
 import { CANCELLED_GUIDANCE, type TimedPhase } from './guidance';
 import { subscribeForge } from './forgeBridge';
+import { detachRouteBridge } from '../gen3d/routes';
 import { MacLocalExecutor } from './maclocal';
 import { loadRecordedSpeech } from './recordedSpeech';
 import { ScanService } from './scan';
@@ -109,6 +110,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   // Own the broadcast bridge so cancelled discovery runs cannot publish stale controls.
   const sharedForge = opts.forge ? undefined : getForge(ctx, { broadcast: false });
   const forge = opts.forge ?? (() => sharedForge);
+  if (sharedForge) detachRouteBridge(sharedForge);
   const unsubscribeForge = sharedForge ? subscribeForge(sharedForge, hub, targets) : () => {};
   let room: UiSpecPayload | undefined;
   let roomRev = 0;
