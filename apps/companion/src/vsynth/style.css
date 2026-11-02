@@ -1,0 +1,8 @@
+:root { color-scheme: dark; font: 12px/1.4 system-ui, sans-serif; background: #101317; color: #fff; }
+* { box-sizing: border-box; }
+body { margin: 0; overflow: hidden; }
+#visuals { display: block; width: 100vw; height: 100vh; }
+#caption { position: fixed; left: 18px; bottom: 16px; display: grid; gap: 3px; padding: 8px 11px; border-radius: 7px; background: rgb(12 16 20 / 58%); pointer-events: none; }
+#caption span { font-weight: 550; letter-spacing: 0.01em; }
+#last-change { color: rgb(255 255 255 / 72%); font-size: 11px; }
+.unavailable #caption { max-width: 420px; }

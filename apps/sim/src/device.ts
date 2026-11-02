@@ -27,6 +27,13 @@ import type { SynthEngine } from './synth/engine';
 import type { FeatureMeter } from './synth/features';
 import type { Connection } from './net/net';
 import { SIM_PORTS } from './net/net';
+import { VISUAL_SYNTH_IDENTITY_REPLY, VISUAL_SYNTH_PORT, VISUAL_SYNTH_PORT_ID } from '@ce/vsynth';
+
+/** A MIDI output with no audio engine; the rendered screen is its physical result. */
+export interface VisualSynthOutput {
+  receiveMidi(bytes: readonly number[]): boolean;
+  reset(): void;
+}
 
 export type LogKind = 'ir' | 'lamp' | 'midi' | 'sense' | 'scan' | 'agent' | 'net' | 'warn' | 'learn';
 export interface LogLine {
@@ -75,6 +82,7 @@ export class SimDevice {
     readonly meter: FeatureMeter,
     readonly room: RoomView,
     readonly animator: LampAnimator,
+    readonly visualSynth?: VisualSynthOutput,
   ) {}
 
   /** Mirror a state from the leader page (followers): no IR, no log. */
@@ -106,13 +114,14 @@ export class SimDevice {
   }
 
   /** Stop all device work already scheduled by the server or the automatic remote. */
-  panic(): void {
+  panic(options: { resetVisual?: boolean } = {}): void {
     this.irGeneration++;
     this.irQueue = Promise.resolve();
     clearTimeout(this.learnTimer);
     clearTimeout(this.autoPressTimer);
     this.learn = undefined;
     this.synth.panic();
+    if (options.resetVisual !== false) this.visualSynth?.reset();
     this.changed();
   }
 
@@ -190,9 +199,26 @@ export class SimDevice {
     const op = p.op;
     if (op.kind === 'local') return ack(false, { error: 'unsupported', detail: 'the sim has no local ops (volume, torch, print...)' });
     if (op.kind === 'midi') {
-      if (p.port && !portMatches(p.port, 'midi-out')) return ack(false, { error: 'no_port', detail: `no MIDI output "${p.port}" on the sim (have "${SIM_PORTS[0]!.name}")` });
+      const output = p.port ? matchingPort(p.port, 'midi-out') : undefined;
+      if (p.port && !output) return ack(false, { error: 'no_port', detail: `no MIDI output "${p.port}" on the sim (have "${SIM_PORTS[0]!.name}")` });
       if (op.value === '$value') return ack(false, { error: 'bad_args', detail: '"$value" was not substituted' });
       if (p.dryRun) return ack(true, { detail: 'dry run' });
+      if (output?.id === VISUAL_SYNTH_PORT_ID) {
+        if (!this.visualSynth) return ack(false, { error: 'no_port', detail: 'visual synth is unavailable' });
+        if (op.msg === 'sysex-identity') return ack(true, { reply: [...VISUAL_SYNTH_IDENTITY_REPLY], detail: VISUAL_SYNTH_PORT });
+        if (op.msg === 'panic') {
+          this.visualSynth.reset();
+          this.log('midi', 'visual synth reset');
+          return ack(true, { detail: 'visual synth reset' });
+        }
+        const status = op.msg === 'cc' ? 0xb0 : 0xc0;
+        const bytes = op.msg === 'cc' && op.number !== undefined && op.value !== undefined
+          ? [status + op.channel - 1, op.number, op.value]
+          : op.msg === 'pc' && op.number !== undefined ? [status + op.channel - 1, op.number] : undefined;
+        if (!bytes || !this.visualSynth.receiveMidi(bytes)) return ack(false, { error: 'bad_args', detail: 'visual synth accepts mapped CCs and programs 0–2' });
+        this.log('midi', `visual synth ${op.msg === 'cc' ? `CC${op.number}=${op.value}` : `pattern ${op.number}`} ch${op.channel}`);
+        return ack(true, { detail: hex(bytes) });
+      }
       switch (op.msg) {
         case 'cc': {
           if (op.number === undefined || op.value === undefined) return ack(false, { error: 'bad_args', detail: 'cc needs number and value' });
@@ -221,7 +247,7 @@ export class SimDevice {
       }
     }
     // IR
-    if (p.port && !portMatches(p.port, 'ir')) return ack(false, { error: 'no_port', detail: `no IR port "${p.port}" on the sim` });
+    if (p.port && !matchingPort(p.port, 'ir')) return ack(false, { error: 'no_port', detail: `no IR port "${p.port}" on the sim` });
     let us = op.rawUs;
     if (!us?.length) {
       const bytes = op.bytes ?? (op.address !== undefined && op.command !== undefined ? necBytes(op.address, op.command) : undefined);
@@ -418,9 +444,9 @@ function saveLamp(s: LampState): void {
   }
 }
 
-function portMatches(want: string, kind: 'midi-out' | 'ir'): boolean {
+function matchingPort(want: string, kind: 'midi-out' | 'ir') {
   const w = want.toLowerCase();
-  return SIM_PORTS.some((p) => p.kind === kind && (p.id.toLowerCase() === w || p.name.toLowerCase().includes(w)));
+  return SIM_PORTS.find((p) => p.kind === kind && (p.id.toLowerCase() === w || p.name.toLowerCase().includes(w)));
 }
 
 export function describeLamp(s: LampState): string {

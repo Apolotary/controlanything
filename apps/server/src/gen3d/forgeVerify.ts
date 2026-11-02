@@ -10,6 +10,7 @@
 import type { ForgeAction, ForgeDriver } from './forgeTypes';
 import type { ForgeDraft, HackDraft } from './hackset';
 import { issue, type Issue } from './issues';
+import { isVisualSynth } from './visualSynth';
 
 export const BANNED_NAME_WORDS = [
   'quickhack',
@@ -121,6 +122,7 @@ function commandIssues(h: HackDraft, c: DraftCommand, path: string, byId: Map<st
 
 export function draftIssues(draft: ForgeDraft, driver: ForgeDriver): Issue[] {
   const out: Issue[] = [];
+  const visual = isVisualSynth(driver);
   const byId = new Map(driver.actions.map((a) => [a.actionId, a]));
   const ids = new Set<string>();
   const names = new Set<string>();
@@ -128,6 +130,13 @@ export function draftIssues(draft: ForgeDraft, driver: ForgeDriver): Issue[] {
   const vocab = deviceVocabulary(driver);
   draft.hacks.forEach((h, i) => {
     const at = `hacks[${i}]`;
+    if (visual) {
+      const allowed = h.kind === 'control' ? ['cc71'] : ['pattern0', 'pattern1', 'pattern2'];
+      if (h.commands.length !== 1 || !allowed.includes(h.commands[0].action)) {
+        out.push(issue('bindings', 'visual_synth_binding', `${at}.commands`, 'Use cc71 for the main Warp control, or one pattern0/1/2 action per button'));
+      }
+      if (h.oracle.type !== 'camera') out.push(issue('safety', 'visual_synth_camera', `${at}.oracle`, 'This silent visual instrument requires the camera oracle'));
+    }
     if (ids.has(h.id)) out.push(issue('schema', 'duplicate_id', `${at}.id`, `hack id "${h.id}" is used twice`));
     ids.add(h.id);
     if (names.has(h.name.toLowerCase())) out.push(issue('safety', 'duplicate_name', `${at}.name`, `two hacks are called "${h.name}"`));
@@ -188,13 +197,14 @@ export function draftIssues(draft: ForgeDraft, driver: ForgeDriver): Issue[] {
   });
   // composition
   const n = draft.hacks.length;
-  if (n < 4) out.push(issue('composition', 'hack_count', 'hacks', `${n} hacks; generate 4-8`, n >= 2 ? 'warn' : 'error'));
+  if (!visual && n < 4) out.push(issue('composition', 'hack_count', 'hacks', `${n} hacks; generate 4-8`, n >= 2 ? 'warn' : 'error'));
   const controllable = driver.actions.filter((a) => a.kind !== 'trigger').length;
-  const wantControls = Math.min(2, controllable);
+  const wantControls = visual ? 1 : Math.min(2, controllable);
   const controls = draft.hacks.filter((h) => h.kind === 'control').length;
   if (controls < wantControls) out.push(issue('composition', 'control_count', 'hacks', `${controls} controls; make at least ${wantControls} (this driver has ${controllable} set/toggle actions)`));
-  const wantActions = Math.min(2, driver.actions.length);
+  const wantActions = visual ? 0 : Math.min(2, driver.actions.length);
   const actions = draft.hacks.filter((h) => h.kind === 'action').length;
+  if (visual && (controls !== 1 || actions > 3)) out.push(issue('composition', 'visual_synth_card', 'hacks', 'Use exactly one main Warp control and at most three pattern buttons'));
   if (actions < wantActions) out.push(issue('composition', 'action_count', 'hacks', `${actions} one-shot hacks; make at least ${wantActions}`));
   return out;
 }

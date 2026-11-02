@@ -18,6 +18,7 @@ export const IDENTIFY_SYSTEM =
   'You identify ONE physical device for an agent that will control it. The first image is a tight crop of the device; the second is the whole scene for context. ' +
   'Fill the DeviceCard: maker and model only when legible text or an unmistakable design supports them (quote the text in evidence), otherwise write "unknown" and keep confidence low. ' +
   'Never identify, describe or mention people. `requires` lists the client capabilities needed to control it: ["midi"] for a USB-MIDI instrument, ["ir"] for anything driven by an infrared remote (ceiling lights, air conditioners, TVs), ["local"] for a computer or phone. ' +
+  'A screen showing the legible label ControlAnything Visual Synth is the silent virtual MIDI instrument (maker ControlAnything, model Visual Synth, category synthesizer, protocols ["midi"], requires ["midi"]); identify that application when selected. ' +
   'alternatives: other plausible identifications. followUp: what to photograph to be sure (a label, the ports).';
 
 /** Crop with ~2% padding, as JPEG base64. */
@@ -183,6 +184,9 @@ export function fixtureDeviceCard(messages: ChatMessage[]): DeviceCardDraft {
   // when the label says nothing (a synth selected in FIXTURE mode used to come back as a ceiling light)
   const label = /label "([^"]+)"/.exec(text)?.[1] ?? '';
   const kindOf = (s: string) => (/ceiling light|lamp|\blight\b/.test(s) ? 'light' : /synth|keyboard|op-1|electronic device/.test(s) ? 'synth' : undefined);
+  if (/controlanything visual synth|visual synth/.test(label)) {
+    return { name: 'ControlAnything Visual Synth', maker: 'ControlAnything', model: 'Visual Synth', category: 'synthesizer', confidence: 0.9, protocols: ['midi'], requires: ['midi'], companion: 'computer_usb', evidence: ['FIXTURE: simulated laptop screen, no Meta model was called'], visibleText: ['ControlAnything Visual Synth'] };
+  }
   const kind = kindOf(label) ?? kindOf(text);
   if (kind === 'light') {
     return { name: 'FIXTURE ceiling light', maker: 'unknown', model: 'unknown', category: 'lighting', confidence: 0.55, protocols: ['ir'], evidence: ['FIXTURE: canned identification, no Meta model was called', 'round LED ceiling fixture'], companion: 'ir_blaster', requires: ['ir'], followUp: ['photograph the remote control'] };

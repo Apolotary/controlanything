@@ -4,6 +4,7 @@
  * against the maker Spark read. Verdicts: confirmed / consistent / mismatch ("wrong device, refused") / unknown.
  */
 import type { Capability, DeviceCardPayload, LinkResultPayload } from '@ce/protocol';
+import { VISUAL_SYNTH_ID } from '../devices/visualSynth';
 import { makerMatches, parseIdentityReply, portMatches } from '../devices/midi';
 import type { MidiProfile } from '../devices/profiles';
 import type { Dispatcher } from './dispatch';
@@ -37,7 +38,11 @@ export async function tryLink(
   opts: { linkId: string; profile?: MidiProfile; preferDeviceId?: string; signal?: AbortSignal; probeIdentity?: boolean } ,
 ): Promise<LinkOutcome> {
   const portHint = opts.profile?.usb?.portNameHint;
-  const pick = pickExecutor(deps.roster, cap, { portHint, preferDeviceId: opts.preferDeviceId });
+  const simulated = opts.profile?.id === VISUAL_SYNTH_ID && card.source === 'fixture'
+    ? deps.roster.devices().filter((device) => device.online && device.kind === 'sim' && device.ports?.some((port) => port.kind === 'midi-out' && portHint && portMatches(port, portHint))) : [];
+  const explicitlyLinked = deps.roster.devices().some((device) => device.deviceId === opts.preferDeviceId && device.online && device.ports?.some((port) => portHint && portMatches(port, portHint)));
+  const preferDeviceId = !explicitlyLinked && simulated.length === 1 ? simulated[0].deviceId : opts.preferDeviceId;
+  const pick = pickExecutor(deps.roster, cap, { portHint, preferDeviceId });
   const base: LinkResultPayload = { linkId: opts.linkId, cardId: card.cardId, verdict: 'none', evidence: [] };
   if (!pick) return { result: { ...base, reason: `no online client with "${cap}"` } };
   if (cap === 'midi' && !pick.port) return { result: { ...base, reason: 'connect the instrument and select a unique MIDI output in the Mac app' } };

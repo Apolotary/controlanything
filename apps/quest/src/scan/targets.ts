@@ -185,6 +185,7 @@ export function toHudTarget(t: Target): HudTarget {
   const out: HudTarget = {
     id: t.id,
     label: displayLabel(t.label),
+    rawLabel: t.label,
     status: t.status,
     position: v(t.position),
     confirmed: t.confirmed,

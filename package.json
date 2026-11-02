@@ -21,7 +21,8 @@
     "smoke": "npm run smoke -w @ce/server",
     "demo:sim": "tsx apps/sim/scripts/demo-sim.ts",
     "e2e:judge": "node scripts/e2e-judge.mjs",
-    "e2e:flows": "node scripts/e2e-flows.mjs"
+    "e2e:flows": "node scripts/e2e-flows.mjs",
+    "e2e:vsynth": "node scripts/e2e-vsynth.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

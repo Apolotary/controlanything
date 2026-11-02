@@ -442,11 +442,12 @@ describe('Calm companion behavior', () => {
     mocks.serialReady = true;
     const { Connection } = await import('./connection');
     const connection = (Connection as unknown as { instances: { hello(): { capabilities: string[]; ports: unknown[]; executor: boolean } }[] }).instances.at(-1)!;
-    expect(connection.hello()).toMatchObject({ executor: true, ports: [] });
+    expect(connection.hello()).toMatchObject({ executor: true, ports: [{ id: 'ce-visual-synth', kind: 'midi-out', name: 'ControlAnything Visual Synth' }] });
     expect(connection.hello().capabilities).not.toContain('ir');
     mocks.bridgeOnline = true;
     expect(connection.hello().capabilities).toContain('ir');
-    expect(connection.hello().ports).toHaveLength(1);
+    expect(connection.hello().ports).toHaveLength(2);
+    expect(connection.hello().ports).toContainEqual(expect.objectContaining({ kind: 'serial' }));
     mocks.bridgeOnline = false;
     expect(connection.hello().capabilities).not.toContain('ir');
   });

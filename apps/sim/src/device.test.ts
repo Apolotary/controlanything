@@ -4,6 +4,7 @@ import type { SynthEngine } from './synth/engine';
 import type { FeatureMeter } from './synth/features';
 import type { RoomView } from './room/view';
 import type { LampAnimator } from './room/lamp';
+import { VISUAL_SYNTH_IDENTITY_REPLY, VISUAL_SYNTH_PORT, VISUAL_SYNTH_PORT_ID } from '@ce/vsynth';
 
 afterEach(() => vi.useRealTimers());
 
@@ -31,6 +32,50 @@ describe('sim Stop', () => {
     expect(remote).not.toHaveBeenCalled();
     expect(synth.panic).toHaveBeenCalledOnce();
     expect(device.learn).toBeUndefined();
+  });
+});
+
+describe('silent visual MIDI output', () => {
+  function setup() {
+    const synth = { panic: vi.fn(), controlChange: vi.fn(), noteOn: vi.fn() } as unknown as SynthEngine;
+    const visual = { receiveMidi: vi.fn(() => true), reset: vi.fn() };
+    const device = new SimDevice(synth, {} as FeatureMeter, {} as RoomView, {} as LampAnimator, visual);
+    return { synth, visual, device };
+  }
+
+  it('routes mapped control and program bytes only to the requested visual port', async () => {
+    const { synth, visual, device } = setup();
+    const command = { execId: 'visual', executorDeviceId: 'sim', port: VISUAL_SYNTH_PORT_ID, op: { kind: 'midi' as const, msg: 'cc' as const, channel: 1, number: 71, value: 112 } };
+    expect(await device.handleExec(command)).toMatchObject({ ok: true });
+    expect(visual.receiveMidi).toHaveBeenCalledWith([0xb0, 71, 112]);
+    expect(await device.handleExec({ ...command, port: 'Visual Synth' })).toMatchObject({ ok: true });
+    expect(await device.handleExec({ ...command, port: VISUAL_SYNTH_PORT, op: { kind: 'midi', msg: 'pc', channel: 1, number: 2 } })).toMatchObject({ ok: true });
+    expect(visual.receiveMidi).toHaveBeenLastCalledWith([0xc0, 2]);
+    expect(await device.handleExec({ ...command, op: { kind: 'midi', msg: 'sysex-identity', channel: 1 } })).toMatchObject({ ok: true, reply: [...VISUAL_SYNTH_IDENTITY_REPLY] });
+    expect(synth.controlChange).not.toHaveBeenCalled();
+    expect(synth.noteOn).not.toHaveBeenCalled();
+  });
+
+  it('rejects unavailable outputs and unsupported messages without falling back to the audio synth', async () => {
+    const { synth, visual, device } = setup();
+    const command = { execId: 'visual', executorDeviceId: 'sim', port: VISUAL_SYNTH_PORT_ID, op: { kind: 'midi' as const, msg: 'note' as const, channel: 1, number: 60 } };
+    expect(await device.handleExec(command)).toMatchObject({ ok: false, error: 'bad_args' });
+    expect(await device.handleExec({ ...command, port: 'missing-visual-port' })).toMatchObject({ ok: false, error: 'no_port' });
+    expect(visual.receiveMidi).not.toHaveBeenCalled();
+    expect(synth.noteOn).not.toHaveBeenCalled();
+    const unavailable = new SimDevice(synth, {} as FeatureMeter, {} as RoomView, {} as LampAnimator);
+    expect(await unavailable.handleExec(command)).toMatchObject({ ok: false, error: 'no_port' });
+  });
+
+  it('keeps dry runs unchanged and resets the visual output on either Stop path', async () => {
+    const { visual, device } = setup();
+    const command = { execId: 'visual', executorDeviceId: 'sim', port: VISUAL_SYNTH_PORT_ID, op: { kind: 'midi' as const, msg: 'cc' as const, channel: 1, number: 71, value: 112 } };
+    expect(await device.handleExec({ ...command, dryRun: true })).toMatchObject({ ok: true });
+    expect(visual.receiveMidi).not.toHaveBeenCalled();
+    expect(await device.handleExec({ ...command, op: { kind: 'midi', msg: 'panic', channel: 1 } })).toMatchObject({ ok: true });
+    expect(visual.reset).toHaveBeenCalledOnce();
+    device.panic();
+    expect(visual.reset).toHaveBeenCalledTimes(2);
   });
 });
 

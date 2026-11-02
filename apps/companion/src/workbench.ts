@@ -33,6 +33,7 @@ import { Executor } from './executor';
 import { clearIdentity, defaultDevice, type Identity, isLocalPage, loadIdentity, saveIdentity } from './identity';
 import { MidiBridge } from './midi';
 import { describeMidi, isRealtimeNoise, toHex } from './midiDecode';
+import { VisualSynthExecutor, visualSynthPort } from './vsynthExecutor';
 import { MidiExecutor } from './midiExec';
 import { clearPendingPairing, loadPendingPairing, savePendingPairing } from './pairing';
 import { CardputerBridge } from './serial/bridge';
@@ -111,7 +112,7 @@ const midiExec = new MidiExecutor(midi);
 const link = new CardputerLink(APP);
 const bridge = new CardputerBridge(link, APP);
 const oracle = new AudioOracle();
-const executor = new Executor(midiExec, bridge, oracle);
+const executor = new Executor(midiExec, bridge, oracle, new VisualSynthExecutor());
 
 /** /p/<id>#<code> redirects here as /companion/?approve=<id>#<code> */
 let intent = (() => {
@@ -400,6 +401,11 @@ function renderHomeDevices(ports: Port[]): void {
   }
   for (const port of ports) {
     if (usedPorts.has(port.id)) continue;
+    if (/visual[\s-]synth/i.test(port.name) || port.id === 'ce-visual-synth') {
+      addRow('▱', 'Visual synth', 'Virtual', 'Ready', 'Silent visuals on this Mac · open them, then select the screen in your headset.', 'on',
+        button('Open visuals', () => { window.open('/vsynth/', '_blank', 'noopener'); }));
+      continue;
+    }
     addRow('▥', port.name, 'USB MIDI', 'Ready', 'USB connected · Select the synth in your headset to set up controls.', 'on', button('Details', () => showView('details')));
   }
   if (!ports.length && ![...cards.values()].some((c) => c.protocols.includes('midi'))) {
@@ -1416,12 +1422,12 @@ function hello(): PayloadOf<'hello'> {
   if (!identity || identity.kind === 'mac' || identity.kind === 'web') {
     p.role = 'companion';
     const caps: NonNullable<PayloadOf<'hello'>['capabilities']> = [];
-    if (MidiBridge.supported) caps.push('midi');
+    caps.push('midi');
     if (CardputerLink.supported) caps.push('serial');
     if (bridge.online) caps.push('ir');
     if (AudioOracle.supported) caps.push('mic');
     p.capabilities = caps;
-    const ports: Port[] = midi.enabled ? midi.ports() : [];
+    const ports: Port[] = [visualSynthPort, ...(midi.enabled ? midi.ports() : [])];
     if (bridge.online) ports.push({ id: `serial:${link.info?.chip ?? 'cardputer'}`, kind: 'serial', name: `Cardputer USB serial (${link.info?.board ?? 'cardputer'})`, state: 'connected' });
     p.ports = ports;
   }

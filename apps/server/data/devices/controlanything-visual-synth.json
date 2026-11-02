@@ -1,0 +1,22 @@
+{
+  "id": "controlanything-visual-synth",
+  "device": "ControlAnything Visual Synth",
+  "manufacturer": "ControlAnything",
+  "sense": "camera",
+  "firmwareNotes": "Silent original WebGL2 instrument. No audio or notes. Generate exactly one set action cc71 labelled Warp, range 0-127, step 1, curve linear, and three trigger actions pattern0/pattern1/pattern2 sending program change 0/1/2. Every action expects sense camera, effect any. Pattern names: Flow, Rings, Prism. Other CCs are documented for future bindings; keep the demo card to Warp and these three patterns.",
+  "sources": [{ "title": "this repo: original visual synth implementation", "url": "packages/vsynth/src/state.ts", "confidence": "implementation" }],
+  "usb": { "portNameHint": "ControlAnything Visual Synth", "notes": "Virtual MIDI-style output in the paired companion or simulated room; no USB permission required." },
+  "identity": { "respondsToUniversalInquiry": true, "manufacturerId": [125], "replyExample": "F0 7E 7F 06 02 7D 43 45 00 01 00 00 00 01 F7" },
+  "channels": { "receive": "Channel 1. CC values 0-127. Program change 0-2 selects Flow, Rings, Prism. CC120/121/123 or panic resets all parameters and animation phase." },
+  "parameters": [
+    { "name": "Warp", "cc": 71, "range": [0,127], "curve": "linear" },
+    { "name": "Zoom", "cc": 74, "range": [0,127], "curve": "linear" },
+    { "name": "Speed", "cc": 1, "range": [0,127], "curve": "linear" },
+    { "name": "Brightness", "cc": 7, "range": [0,127], "curve": "linear" },
+    { "name": "Hue", "cc": 10, "range": [0,127], "curve": "linear" },
+    { "name": "Saturation", "cc": 11, "range": [0,127], "curve": "linear" },
+    { "name": "Symmetry (1-8)", "cc": 20, "range": [0,127], "curve": "step" },
+    { "name": "Pattern (program change 0-2)", "cc": null, "range": [0,2], "curve": "step" }
+  ],
+  "demo": { "bestParameters": ["CC 71 Warp"], "visualFeedback": "Camera compares the laptop screen's luma and colour before and after commands.", "setup": ["Open /vsynth/ and keep the paired companion open, or use the sim laptop."] }
+}
