@@ -1,7 +1,7 @@
 import { Matrix4, Object3D, Quaternion, Vector3 } from 'three';
 
 interface HeadPose { position: Vector3; quaternion: Quaternion }
-interface PanelOffset { distance?: number; height?: number }
+interface PanelOffset { distance?: number; height?: number; lateral?: number }
 
 const UP = new Vector3(0, 1, 0);
 const CONE_COS = Math.cos(35 * Math.PI / 180);
@@ -25,10 +25,12 @@ export class WorldPanel {
   private readonly direction = new Vector3();
   private readonly distance: number;
   private readonly height: number;
+  private readonly lateral: number;
 
-  constructor({ distance = 0.6, height = -0.14 }: PanelOffset = {}) {
+  constructor({ distance = 0.6, height = -0.14, lateral = 0 }: PanelOffset = {}) {
     this.distance = distance;
     this.height = height;
+    this.lateral = lateral;
   }
 
   /** The next update anchors at its current head pose, for example when selecting another device. */
@@ -95,12 +97,15 @@ export class WorldPanel {
     this.direction.normalize();
     this.toPosition.copy(head.position).addScaledVector(this.direction, this.distance);
     this.lookPoint.copy(this.toPosition);
+    // Keep lazy follow centred on the gaze anchor, even for a menu placed off to the side.
+    this.toPosition.x -= this.direction.z * this.lateral;
+    this.toPosition.z += this.direction.x * this.lateral;
     this.toPosition.y += this.height;
     this.toRotation.setFromAxisAngle(UP, Math.atan2(-this.direction.x, -this.direction.z));
   }
 }
 
-/** Keep the home bar below the card in the user's view, moving it only when their rectangles collide. */
+/** Keep the fallback dock below the card, moving it only when their rectangles collide. */
 export class PanelSeparation {
   private readonly cardMatrix = new Matrix4();
   private readonly barMatrix = new Matrix4();

@@ -13,7 +13,7 @@
  *   record=1           start recording at load
  *   mic=0              never open the microphone (no AudioContext at all)
  *   hud=v2|v1|debug    compact HUD (default), original HUD, or shell debug HUD
- *   dominant=left      left-handed: the deck opens over the RIGHT palm
+ *   dominant=left      left-handed: the menu follows the RIGHT hand
  *   ws=<url>           WebSocket override
  *   yolo=0|1           live boxes from the on-device YOLOX-nano detector while scanning (default 1)
  *   yoloep=webgpu|wasm force the detector's execution provider (default: WebGPU when available)
@@ -157,7 +157,6 @@ export class QuestApp {
   private pairingUntil = 0;
   private lastPairFrame = 0;
   private pairCapturing = false;
-  private palmOpened = false;
   private handMapping?: { targetId: string; specId: string; controlId: string; originY?: number; value: number; current: number; lastAt: number };
   readonly xrHit = new XrHitTester();
   readonly handheld = new HandheldTracker();
@@ -469,7 +468,7 @@ export class QuestApp {
   }
 
   private async setupHud(): Promise<void> {
-    const { hud, kind, error } = await loadHud({ scene: this.scene, camera: this.desktopCam, renderer: this.renderer }, this.params.get('hud'));
+    const { hud, kind, error } = await loadHud({ scene: this.scene, camera: this.desktopCam, renderer: this.renderer, nonDominant: this.nonDominant }, this.params.get('hud'));
     this.hud = hud;
     this.hudKind = kind;
     this.drawTarget = hud.upsertTarget.bind(hud);
@@ -1425,7 +1424,6 @@ export class QuestApp {
     if (inXr && xrFrame) this.xrHit.onFrame(xrFrame);
     if (inXr && this.camera instanceof LiveCamera) this.camera.pollFromXr(time);
     this.room?.update(time);
-    this.deckGesture(f, time);
     this.refreshAnnotations();
     this.updateHandControl(f, time);
     if (this.pairingUntil) void this.capturePairing(time);
@@ -1468,16 +1466,6 @@ export class QuestApp {
       else delete out[h];
     }
     return out;
-  }
-
-  private deckGesture(f: ShellFrame, _time: number): void {
-    const hand = f.hands[this.nonDominant];
-    if (!hand?.palmUp) { if (this.palmOpened) this.hud.setDeck({ open: false }); this.palmOpened = false; return; }
-    if (this.palmOpened || hand.palmUpMs < 500) return;
-    const wrist = hand.joints.wrist?.position;
-    if (!wrist) return;
-    this.palmOpened = true;
-    this.hud.setDeck({ open: true, at: [wrist.x, wrist.y + 0.15, wrist.z] });
   }
 
   // --- camera, XR ------------------------------------------------------------------------------------

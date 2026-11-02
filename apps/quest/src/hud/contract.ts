@@ -24,7 +24,7 @@ export interface HandState {
   justReleased: boolean;
   pinchPoint: Vector3;
   ray: { origin: Vector3; dir: Vector3 };
-  /** non-dominant palm facing the user (spawns the deck) */
+  /** Palm facing the head; the HUD uses its dwell to reveal the hand menu. */
   palmUp?: boolean;
   palmUpMs?: number;
   /** true when this "hand" is really a controller */
