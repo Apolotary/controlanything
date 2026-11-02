@@ -46,8 +46,11 @@ const SHORT: [RegExp, string][] = [
 ];
 
 export function displayLabel(label: string): string {
+  label = label.trim().replace(/\s+/g, ' ').toLowerCase();
   for (const [re, s] of SHORT) if (re.test(label)) return s;
-  return label.charAt(0).toUpperCase() + label.slice(1);
+  if (!label) return 'Device';
+  const short = label.length <= 22 ? label : `${label.slice(0, 21).trimEnd()}…`;
+  return short.charAt(0).toUpperCase() + short.slice(1);
 }
 
 const norm = (s: string) => s.trim().toLowerCase();

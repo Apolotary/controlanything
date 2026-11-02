@@ -7,6 +7,7 @@ import { Vector3 } from 'three';
 import type { Det } from '../io/v1';
 import type { FrameRecord } from './capture';
 import { depthFromSize, pixelToRay, planeBasis, rayPlane, type WorldRay, worldToPixel } from './projection';
+import { overlapsHand } from './yolo/quality';
 
 export interface DepthHit {
   point: Vector3;
@@ -104,32 +105,21 @@ export function liftContour(poly: [number, number][], rec: FrameRecord, position
 }
 
 const PERSON = /\b(person|people|human|man|woman|men|women|child|kid|face|head|body|hand|arm|finger)s?\b/i;
-const HELD = /remote|phone|controller|cardputer|screen and keyboard|handheld/i;
 
 /**
  * Client-side guards before anything is drawn (BRIEF §4.1 rule 7, research/15 §4.2): never tag people or
  * hands; drop walls/floors (a box over 60 % of the frame); drop boxes that are really the user's hand
- * (most of one hand's joints inside the box), unless the label is a device people hold.
+ * overlapping projected hand joints, including partially visible hands at a box edge.
  */
 export function rejectReason(det: Det, rec: FrameRecord): string | null {
   if (PERSON.test(det.label) || (det.prompt && PERSON.test(det.prompt))) return 'person or body part';
   const area = (det.box[2] * det.box[3]) / (rec.width * rec.height);
   if (area > 0.6) return 'covers over 60 % of the frame';
-  if (rec.handJoints.length && !HELD.test(det.label)) {
-    const [x, y, w, h] = det.box;
-    const inset = 0.1;
-    const x0 = x + w * inset;
-    const x1 = x + w * (1 - inset);
-    const y0 = y + h * inset;
-    const y1 = y + h * (1 - inset);
-    let inside = 0;
-    for (const j of rec.handJoints) {
-      const px = worldToPixel(j, rec.intrinsics, rec.cam);
-      if (px && px.u >= x0 && px.u <= x1 && px.v >= y0 && px.v <= y1) inside++;
-    }
-    // 25 joints per hand: most of a hand inside the box means the box is the hand
-    if (inside >= 12) return 'overlaps a tracked hand';
-  }
+  const joints = rec.handJoints.flatMap((joint) => {
+    const px = worldToPixel(joint, rec.intrinsics, rec.cam);
+    return px ? [{ ...px, radius: Math.max(2, rec.intrinsics.fx * 0.018 / px.depth) }] : [];
+  });
+  if (overlapsHand(det.box, joints)) return 'overlaps a tracked hand';
   return null;
 }
 
