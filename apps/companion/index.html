@@ -4,139 +4,151 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <title>ControlEverything Workbench</title>
+    <title>ControlEverything Companion</title>
     <link rel="icon" href="data:," />
   </head>
   <body>
     <div id="workbench" class="app" hidden>
-      <header class="topbar">
-        <div class="wordmark">CONTROLEVERYTHING<span>WORKBENCH</span></div>
-        <div id="session" class="session">space —</div>
-        <div class="grow"></div>
-        <span id="pill" class="pill"><span id="conn-dot" class="dot"></span><span id="pill-text">connecting</span></span>
-        <button id="panic" class="panic" type="button" title="All notes off on every MIDI output, stop IR, and tell the server to disarm">Panic · all off</button>
+      <header class="app-header">
+        <div class="wordmark">ControlEverything</div>
+        <button id="details-open" class="ghost" type="button" aria-controls="drawer" aria-haspopup="dialog" aria-expanded="false">Details</button>
       </header>
 
-      <div id="banners" class="banners"></div>
+      <main class="calm-center">
+        <div id="agent-status" class="agent-status" role="status" aria-live="polite" aria-atomic="true">
+          <span id="status-dot" class="dot" aria-hidden="true"></span>
+          <span id="status-text">Idle</span>
+        </div>
+        <ul id="device-dots" class="device-dots" aria-label="Paired devices"></ul>
+      </main>
 
-      <div class="cols">
-        <div class="col left">
-          <section class="panel" id="device-panel">
-            <header>
-              <h2>HACKS<small>your devices</small></h2>
+      <footer class="app-footer">
+        <section id="approve-panel" class="pair-box" aria-label="Pair a device" hidden>
+          <form id="code-form" class="codeform" autocomplete="off">
+            <label for="code-input">Enter the code shown on your device</label>
+            <div class="row">
+              <input id="code-input" placeholder="K7Q-4M2" maxlength="9" spellcheck="false" autocapitalize="characters" aria-describedby="code-msg" />
+              <button class="primary" type="submit">Approve</button>
+            </div>
+          </form>
+          <p id="code-msg" class="small" role="status" aria-live="polite"></p>
+        </section>
+        <div class="bridge-corner">
+          <div class="bridge-pills" aria-label="Bridges">
+            <button id="bridge-midi" class="bridge-pill" type="button" aria-pressed="false" title="Enable MIDI">MIDI</button>
+            <button id="bridge-serial" class="bridge-pill" type="button" aria-pressed="false" title="Connect Cardputer">Cardputer</button>
+            <button id="bridge-mic" class="bridge-pill" type="button" aria-pressed="false" title="Enable microphone">Microphone</button>
+          </div>
+          <p id="bridge-msg" class="small dim" role="status" aria-live="polite"></p>
+        </div>
+      </footer>
+
+      <dialog id="drawer" class="drawer" aria-labelledby="details-title">
+        <header class="drawer-header">
+          <h1 id="details-title">Details</h1>
+          <button id="details-close" class="ghost" type="button" aria-label="Close details">Close</button>
+        </header>
+        <div class="drawer-content">
+          <div class="connection-details">
+            <div id="session" class="session">space —</div>
+            <div class="row">
+              <span id="pill" class="pill"><span id="conn-dot" class="dot"></span><span id="pill-text">connecting</span></span>
               <span id="exec-role" class="chip muted">…</span>
-            </header>
+            </div>
+            <button id="panic" class="panic" type="button" title="All notes off on every MIDI output, stop IR, and tell the server to disarm">Stop all controls</button>
+          </div>
+          <div id="banners" class="banners"></div>
+
+          <section class="panel" id="device-panel">
+            <header><h2>Device<small>Current target</small></h2></header>
             <div id="device-card" class="device-card"></div>
           </section>
 
-          <section class="panel fill" id="code-panel">
+          <section class="panel" id="code-panel">
             <header>
-              <div class="tabs" role="tablist">
-                <button id="tab-code" class="tab" role="tab" type="button" aria-selected="true">Driver</button>
-                <button id="tab-tape" class="tab" role="tab" type="button" aria-selected="false">Tape</button>
-                <button id="tab-spec" class="tab" role="tab" type="button" aria-selected="false">Spec</button>
+              <div class="tabs" role="tablist" aria-label="Generated controls">
+                <button id="tab-code" class="tab" role="tab" type="button" aria-controls="code" aria-selected="true">Driver</button>
+                <button id="tab-tape" class="tab" role="tab" type="button" aria-controls="tape" aria-selected="false">Commands</button>
+                <button id="tab-spec" class="tab" role="tab" type="button" aria-controls="spec" aria-selected="false">Spec</button>
               </div>
               <div class="row"><span id="filetab" class="filetab"></span><span id="gen-chip"></span></div>
             </header>
             <div class="body">
-              <div id="code" class="code"></div>
-              <div id="tape" class="tape" hidden></div>
-              <div id="spec" class="code" hidden></div>
+              <div id="code" class="code" role="tabpanel" aria-labelledby="tab-code" tabindex="0"></div>
+              <div id="tape" class="tape" role="tabpanel" aria-labelledby="tab-tape" tabindex="0" hidden></div>
+              <div id="spec" class="code" role="tabpanel" aria-labelledby="tab-spec" tabindex="0" hidden></div>
             </div>
           </section>
 
           <section class="panel agent">
-            <header>
-              <h2>AGENT<small>work log · Meta model ids</small></h2>
-              <span id="calls-total" class="tiny dim"></span>
-            </header>
+            <header><h2>Agent log<small>Meta models</small></h2><span id="calls-total" class="tiny dim"></span></header>
             <div class="body"><div id="worklog" class="worklog"></div></div>
             <div id="calls" class="calls"></div>
           </section>
-        </div>
 
-        <div class="col right">
           <section class="panel">
-            <header><h2>EVIDENCE<small>sent · expected · observed</small></h2></header>
+            <header><h2>Evidence<small>Sent, expected, observed</small></h2></header>
             <div id="evidence"></div>
           </section>
 
           <section class="panel" id="learn-panel" hidden>
-            <header>
-              <h2>LEARN<small>IR captures from the remote</small></h2>
-              <div id="learn-actions" class="row"></div>
-            </header>
+            <header><h2>Remote learning<small>Captured buttons</small></h2><div id="learn-actions" class="row"></div></header>
             <div id="learn"></div>
           </section>
 
           <section class="panel">
-            <header><h2>LINKS<small>channels and proof</small></h2></header>
+            <header><h2>Connections<small>Devices and bridges</small></h2></header>
             <div id="links" class="links"></div>
           </section>
 
-          <section class="panel" id="approve-panel" hidden>
-            <header><h2>LINK A DEVICE<small>owner approval</small></h2></header>
-            <form id="code-form" class="codeform" autocomplete="off">
-              <label for="code-input" class="small">Enter the code shown on your device</label>
-              <input id="code-input" placeholder="K7Q-4M2" maxlength="9" spellcheck="false" />
-              <button class="primary" type="submit">Approve</button>
-            </form>
-            <p id="code-msg" class="small"></p>
-            <div id="pending" class="pending"></div>
+          <section class="panel">
+            <header><h2>Add a device</h2></header>
             <div class="add">
               <div id="add-qr" class="qr small" aria-label="QR code with the server address"></div>
               <div class="stack small grow">
-                <div class="label tiny dim">Add a device</div>
                 <div id="add-tabs" class="tabs"></div>
-                <div id="add-url" class="mono small"></div>
+                <div id="add-url" class="small"></div>
                 <div id="add-hint" class="dim tiny"></div>
               </div>
             </div>
           </section>
 
           <section class="panel" id="daemons-panel" hidden>
-            <header><h2>DAEMONS<small>automations</small></h2></header>
+            <header><h2>Automations</h2></header>
             <div id="daemons"></div>
           </section>
-        </div>
-      </div>
 
-      <details id="drawer" class="drawer">
-        <summary>Monitors &amp; log</summary>
-        <div class="inner">
-          <div>
-            <div class="row between"><h3>System log</h3><button id="log-clear" class="ghost" type="button">clear</button></div>
+          <section class="panel">
+            <header><h2>System log</h2><button id="log-clear" class="ghost" type="button">Clear</button></header>
             <pre id="log" class="monitor"></pre>
-          </div>
-          <div>
-            <div class="row between">
-              <h3>MIDI in / out</h3>
-              <label class="tiny dim"><input id="midi-clock" type="checkbox" /> clock</label>
-            </div>
+          </section>
+          <section class="panel">
+            <header><h2>MIDI in / out</h2><label class="tiny dim"><input id="midi-clock" type="checkbox" /> Clock</label></header>
             <pre id="midi-monitor" class="monitor"></pre>
-            <div id="midi-test-row" class="row" style="margin-top: 6px"></div>
-          </div>
-          <div>
-            <div class="row between"><h3>Serial · Cardputer</h3><span id="serial-state" class="tiny dim"></span></div>
+            <div id="midi-test-row" class="row monitor-actions"></div>
+          </section>
+          <section class="panel">
+            <header><h2>Serial · Cardputer</h2><span id="serial-state" class="tiny dim"></span></header>
             <pre id="serial-monitor" class="monitor"></pre>
-          </div>
+          </section>
         </div>
-      </details>
+      </dialog>
+
+      <dialog id="pair-sheet" class="pair-sheet" aria-label="Pair device">
+        <div id="pending" class="pending"></div>
+      </dialog>
     </div>
 
     <div id="pairscreen" class="pairscreen" hidden>
       <div id="pairplate" class="pairplate">
-        <div class="qrwrap">
-          <div id="self-qr" class="qr" aria-label="Pairing QR code"></div>
-          <div class="reticle"></div>
-        </div>
+        <div class="qrwrap"><div id="self-qr" class="qr" aria-label="Pairing QR code"></div></div>
         <div class="side">
-          <div class="wordmark">CONTROLEVERYTHING</div>
+          <div class="wordmark">ControlEverything</div>
           <div class="look">Look at this code from the headset</div>
-          <div class="dim small">or type the code on a paired Mac or iPhone.</div>
+          <div class="dim small">Or enter the code on a paired Mac or iPhone.</div>
           <div id="self-code" class="code36">———-———</div>
-          <div id="self-expiry" class="dim mono small"></div>
-          <div id="self-msg" class="small"></div>
+          <div id="self-expiry" class="dim small"></div>
+          <div id="self-msg" class="small" role="status"></div>
           <button id="self-retry" type="button" hidden>Start again</button>
         </div>
       </div>
