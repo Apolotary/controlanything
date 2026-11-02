@@ -228,7 +228,7 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       const mic = pickSensor(d.roster, 'mic', { preferDeviceId: executor.deviceId });
       const vstep = d.steps.begin('verify', `verifying on the real ${card.name}`, { ...base, kind: 'proof' });
       const summary = await verifyDriver(
-        { dispatcher: d.dispatcher, sam: d.sam, heard: d.heard, readVolume: d.readVolume, silentSpeech: d.silentSpeech, log, settleMs: (tt, a) => d.settleMs?.(tt, a.encode.kind === 'ir' ? 'ir' : driver.transport) ?? (driver.transport === 'ir' ? 1500 : 350) },
+        { dispatcher: d.dispatcher, sam: d.sam, heard: d.heard, readVolume: d.readVolume, silentSpeech: d.silentSpeech, log, settleMs: (tt, a) => d.settleMs?.(tt, a.encode.kind === 'ir' ? 'ir' : driver.transport) ?? (driver.transport === 'ir' ? 2000 : 350) },
         t,
         driver,
         {

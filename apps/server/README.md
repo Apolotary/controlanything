@@ -61,10 +61,11 @@ GET  /api/agent/profiles[/:id]      curated device data
 POST /api/agent/select              {frameId, detId} | {cardId} | {deviceId}   (approver or localhost)
 POST /api/agent/arm                 {armId, approve, hold?}                      (approver or localhost)
 POST /api/agent/panic
+POST /api/takes/:take                 the headset app's Save take hands its zip here (localhost only) -> apps/quest/public/takes/<take>/
 ```
 
 ## Environment
 
 See `.env.example`. Brain-specific: `CE_SCAN_PROMPTS` (SAM prompts), `CE_IR_LEARN=1` (always learn the
-remote), `CE_MAC_LOCAL=0` (disable the in-process Mac executor), `CE_DATA_DIR` (registry location),
+remote), `CE_MAC_LOCAL=0` (disable the in-process Mac executor), `CE_MAC_SILENT=1` (the Mac stays silent: nothing audible runs, a recorded clip stands in for its voice), `CE_DATA_DIR` (registry location),
 `MUSE_RECORD=1` (record live answers for replay).
