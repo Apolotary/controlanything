@@ -1,11 +1,10 @@
 # ControlEverything server (the "malleable server")
 
-Node 22+ / TypeScript. One process on the Mac: the WebSocket hub every client pairs with, the Meta model
-adapters, and the **brain**: a discovery loop that turns a thing the headset looked at into verified,
-generated controls.
+Node 22.12+ / TypeScript (developed on Node 26). One process on the Mac: the WebSocket hub every client pairs with, the Meta model
+adapters, and the **brain**: an explicit setup loop that turns a tagged device into verified, generated controls when the user asks.
 
 ```
-npm run dev            # server + companion in watch mode (http://localhost:8787, https://<lan-ip>:8443)
+npm run dev            # server + companion + Quest in watch mode (http://localhost:8787, https://<lan-ip>:8443)
 npm run demo:sim       # the judge path: sim room + headset page, FIXTURE mode without a key
 npm test               # whole repo (vitest); apps/server alone: npx vitest run apps/server
 MUSE_RECORD=1 npx tsx apps/server/scripts/brain-live.ts [frame.jpg] [--pick synthesizer] [--card op-1-field]
@@ -13,22 +12,24 @@ MUSE_RECORD=1 npx tsx apps/server/scripts/brain-live.ts [frame.jpg] [--pick synt
 
 ## Principle
 
-**AI at compile time, deterministic runtime.** Meta models run only in the discovery loop; the control loop
-(hand or voice → `control.event` → driver action → `exec.command` → MIDI / IR / local op) is plain code,
-rate-limited, and under 1 ms of server time. Nothing reaches a device before VERIFY, and nothing is armed
-before a human taps.
+**Annotate by default.** `tag.add` identifies a selected device with Muse Spark and persists the tag. It does not link, learn or test anything. `mode.set` switches the space between Annotate and Control; `tags.state` reports Ready / Needs setup / Not connected from the current bridge presence.
+
+**Setup only by request.** `control.setup` requires Control mode, a tagged device and an online bridge. It starts the chain below; the setup request permits verification commands, then `arm.confirm` separately enables the generated controls. Dispatch also checks these gates. Stop cancels setup, queued commands and automations and disarms controls. Returning to Annotate cancels unfinished setup, while completed arming is retained for returning to Control.
+
+**Deterministic execution.** `control.event` → driver action → `exec.command` → MIDI / IR / local operation uses validated data and rate limits, without a model call. Voice transcription and edits still use models. The Quest's local YOLOX preview is separate from the server's SAM segmentation.
 
 ## The discovery loop (`src/agent/`)
 
 | Step | What happens | Model |
 |---|---|---|
-| SCAN (`scan.ts`) | every `scan.frame` gets the device prompts in parallel (`electronic device`, `ceiling light`, `synthesizer`; never people), masks become ≤ 64-point outlines, detections are deduplicated and matched to known targets; a pairing QR in view approves that pairing | `sam-3.1` |
+| SCAN (`scan.ts`) | in Annotate, scan frames get the device prompts in parallel (`electronic device`, `ceiling light`, `synthesizer`; never people), masks become ≤ 64-point outlines, detections are deduplicated and matched to known targets; a pairing QR in view approves that pairing | `sam-3.1` |
 | IDENTIFY (`identify.ts`) | the SAM crop (detail high) + the frame (detail low) → a DeviceCard with `json_schema`; maker/model stay "unknown" unless legible text supports them | `muse-spark-1.3`, effort low |
 | LINK (`link.ts`) | the executor is picked by capability (midi / ir / local) from presence; USB port name and the MIDI identity request cross-check the camera's guess: `confirmed` / `consistent` / `mismatch` ("wrong device, refused") | none |
 | RESEARCH (`research.ts`, `learn.ts`) | curated charts and the IR library in `data/devices/` (with provenance), learned IR codes from the device's own remote (one press per button, captured by a Cardputer or the sim), `web_search` as the fallback | `muse-spark-1.3` + `web_search` (fallback only) |
 | DRIVE (`drive.ts`) | a declarative Driver (SPEC §3.2: actions with deterministic encodes, never code) with `json_schema`; validated against allowlists (CCs from the chart, IR codes from the library or the learned frames, no SysEx, ranges, rate caps); issues are fed back for repairs | `muse-spark-1.3` low → medium, `muse-wonder-1.0` guarded |
-| VERIFY (`verify.ts`, `../oracle/`) | each action runs once for real; the camera oracle compares before/after frames inside the outline (mask-vs-ring luma, absolute luma at a fixed exposure, R/B for colour), the audio oracle compares feature windows; two consecutive confirmations; IR library candidates are cycled and an honest miss is reported as evidence | none |
+| VERIFY (`verify.ts`, `../oracle/`) | each action runs once for real; the camera oracle compares before/after frames inside the outline (mask-vs-ring luma, absolute luma at a fixed exposure, R/B for colour), the audio oracle compares feature windows; two consecutive confirmations; IR library candidates are cycled and an honest miss is reported as evidence | `sam-3.1` (outline only) |
 | FORGE (`../gen3d/`) | the verified driver → hack set + 3D controls (`ui.spec`); controls bound to unverified actions stay disarmed | `muse-spark-1.3` |
+| SKIN (`../gen3d/skin.ts`) | optional panel texture generated alongside controls; never gates arming; `GEN3D_SKIN=0` disables it | `muse-image-1.0` |
 | ARM (`arm.ts`) | one-tap human confirmation (`arm.request` → `arm.confirm`), pinch-and-hold for irreversible drivers | none |
 | CONTROL (`control.ts`, `dispatch.ts`) | `control.event` → hack → action → resolved op → executor; step planning for IR dimmers, latest-wins coalescing under the rate limits, undo, panic | none |
 
@@ -70,7 +71,7 @@ GET  /api/agent/scan/latest         newest scan result per camera client
 GET  /api/agent/steps[?cardId]      the work log
 GET  /api/agent/exec                every op sent and its ack
 GET  /api/agent/profiles[/:id]      curated device data
-POST /api/agent/select              {frameId, detId} | {cardId} | {deviceId}   (approver or localhost)
+POST /api/agent/select              {frameId, detId} | {cardId} | {deviceId}   (tag in Annotate; reopen in Control)
 POST /api/agent/arm                 {armId, approve, hold?}                      (approver or localhost)
 POST /api/agent/panic
 POST /api/takes/:take                 the headset app's Save take hands its zip here (localhost only) -> apps/quest/public/takes/<take>/
@@ -81,3 +82,17 @@ POST /api/takes/:take                 the headset app's Save take hands its zip 
 See `.env.example`. Brain-specific: `CE_SCAN_PROMPTS` (SAM prompts), `CE_IR_LEARN=1` (always learn the
 remote), `CE_MAC_LOCAL=0` (disable the in-process Mac executor), `CE_MAC_SILENT=1` (the Mac stays silent: nothing audible runs, a recorded clip stands in for its voice), `CE_DATA_DIR` (registry location),
 `MUSE_RECORD=1` (record live answers for replay).
+
+## Pairing API
+
+Paired approvers can approve a QR code or passcode. Codes expire after five minutes and are single use; tokens are stored as hashes in `apps/server/.data/space.json`. Revoke with `DELETE /api/devices/:id`. HTTP is unencrypted: use a trusted LAN or bind `HTTP_HOST=127.0.0.1`.
+
+```sh
+curl -s -X POST http://<mac>:8787/api/pair/start -H 'content-type: application/json' \
+  -d '{"name":"Cardputer","kind":"cardputer","capabilities":["ir","display"]}'
+# Returns pairingId, display code, QR, expiresAt and pollSecret.
+curl -s "http://<mac>:8787/api/pair/status?pairingId=<id>&pollSecret=<secret>"
+# After approval: deviceId and deviceToken (returned once; store them).
+```
+
+Connect to `/ws` and send `hello` with `{ deviceToken }` in the protocol envelope. See [architecture](../../docs/ARCHITECTURE.md#3-protocol).
