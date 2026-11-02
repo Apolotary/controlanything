@@ -7,7 +7,7 @@
  * - renders the armed / disarmed states and the streaming build-up
  * - emits ControlEvents to a sink; never talks to a socket itself
  */
-import { Camera, CircleGeometry, Color, DoubleSide, EdgesGeometry, Euler, Group, LineSegments, Mesh, MeshBasicMaterial, MeshStandardMaterial, Object3D, PlaneGeometry, Quaternion, RingGeometry, SRGBColorSpace, Texture, TextureLoader, Vector3, type Material as ThreeMaterial } from 'three';
+import { Box3, Camera, CircleGeometry, Color, DoubleSide, EdgesGeometry, Euler, Group, LineSegments, Mesh, MeshBasicMaterial, MeshStandardMaterial, Object3D, PlaneGeometry, Quaternion, RingGeometry, SRGBColorSpace, Texture, TextureLoader, Vector3, type Material as ThreeMaterial } from 'three';
 import type { Behavior, Control, ControlEvent, ControlValue, Feedback, Gen3dSpec, Part, PartialSpec, Skin } from '@ce/gen3d';
 import { NEON, expandSpec, repairSpec, validateSpec, type ExpandedSpec } from '@ce/gen3d';
 import { OneEuro3, Tweens, damp, ease } from './anim';
@@ -97,6 +97,7 @@ interface FRun {
 }
 
 const DEG = Math.PI / 180;
+const _box = new Box3();
 const _v = new Vector3();
 const _v2 = new Vector3();
 const _q = new Quaternion();
@@ -217,8 +218,8 @@ export class SpecObject extends Group {
       if (fresh.length) this.audio?.play('step');
       buildS = fresh.length * stagger + 0.3;
     }
-    // skin (Muse Image): fades in after the controls have built
-    if (spec.skin) this.applySkin(spec.skin, buildS + 0.4);
+    // skin (Muse Image): fades in after the controls have built (browser only)
+    if (spec.skin && typeof document !== 'undefined') this.applySkin(spec.skin, buildS + 0.4);
   }
 
   /** Paint the skin onto eligible plates / knob faces as a textured layer under the text plates. */
@@ -569,7 +570,7 @@ export class SpecObject extends Group {
         continue;
       }
       if (!c.tracked) continue;
-      // nearest candidate for pinch-style gestures
+      // nearest candidate for pinch-style gestures (distance to the part's centre, or to its bounds for wide parts)
       let best: BRun | null = null;
       let bestD = Infinity;
       for (const r of this.runs) {
@@ -577,9 +578,8 @@ export class SpecObject extends Group {
         const gestures = r.b.gestures ?? ['pinch-drag'];
         const pokeOnly = gestures.every((g) => g === 'poke');
         if (pokeOnly && c.canPoke) continue;
-        r.node.getWorldPosition(_v);
-        const d = _v.distanceTo(c.position);
-        if (d <= r.radius && d < bestD) {
+        const d = this.candidateDistance(r, c.position);
+        if (d < bestD) {
           bestD = d;
           best = r;
         }
@@ -627,6 +627,17 @@ export class SpecObject extends Group {
     if (this.reasonLabel) yawToward(this.reasonLabel, _v);
     // decay archetype hover map for next frame
     for (const [k, v] of this.hoverArchetype) this.hoverArchetype.set(k, v * 0.5);
+  }
+
+  /** How far a cursor is from a behaviour's part: within grabRadius of its centre, or within 2 cm of its bounds. */
+  private candidateDistance(r: BRun, p: Vector3): number {
+    r.node.getWorldPosition(_v);
+    const dc = _v.distanceTo(p);
+    if (dc <= r.radius) return dc;
+    _box.setFromObject(r.node);
+    if (_box.isEmpty()) return Infinity;
+    const db = _box.distanceToPoint(p);
+    return db <= 0.02 ? r.radius + db : Infinity;
   }
 
   private acquire(r: BRun, c: Cursor): void {
@@ -811,7 +822,7 @@ export class SpecObject extends Group {
     const local = toLocal(r.parent, c.tip, _v).sub(r.restPos);
     const front = local[axis];
     const lateral = axis === 'z' ? Math.hypot(local.x, local.y) : axis === 'y' ? Math.hypot(local.x, local.z) : Math.hypot(local.y, local.z);
-    const inside = lateral <= r.radius;
+    const inside = lateral <= r.radius || (_box.setFromObject(r.node), !_box.isEmpty() && _box.expandByScalar(0.01).containsPoint(c.tip));
     const pokeId = `poke:${c.id}`;
     if (r.pressedBy === pokeId) {
       if (front > depth + 0.004 || lateral > r.radius * 1.5) this.releasePress(r, c);

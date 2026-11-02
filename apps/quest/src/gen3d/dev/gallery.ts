@@ -23,14 +23,15 @@ const GALLERY: Record<string, Gen3dSpec> = { ...EXAMPLES, 'op1-knobs · skin': o
 const stage = document.getElementById('stage')!;
 const renderer = new WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
-renderer.setSize(stage.clientWidth, stage.clientHeight);
+renderer.setSize(Math.max(2, stage.clientWidth), Math.max(2, stage.clientHeight));
 renderer.setClearColor(0x000000, 0);
 renderer.outputColorSpace = SRGBColorSpace;
 renderer.xr.enabled = true;
 stage.appendChild(renderer.domElement);
 
 const scene = new Scene();
-const camera = new PerspectiveCamera(60, stage.clientWidth / stage.clientHeight, 0.02, 50);
+// the Browser pane can be 0 x 0 while hidden: never let a NaN aspect into the projection
+const camera = new PerspectiveCamera(60, stage.clientHeight > 1 ? stage.clientWidth / stage.clientHeight : 16 / 9, 0.02, 50);
 camera.position.set(0, 1.42, 0.05);
 const target = new Vector3(0, 1.2, -0.6);
 camera.lookAt(target);
@@ -348,6 +349,7 @@ renderer.setAnimationLoop((ts) => {
   }
 });
 function frame(ts: number): void {
+  if (stage.clientWidth > 1 && (renderer.domElement.width !== Math.round(stage.clientWidth * renderer.getPixelRatio()) || !Number.isFinite(camera.projectionMatrix.elements[0]!))) fit();
   timer.update(ts);
   const dt = Math.min(0.05, timer.getDelta());
   const time = timer.getElapsed();
@@ -382,11 +384,17 @@ function frame(ts: number): void {
   renderer.render(scene, cam);
 }
 
-window.addEventListener('resize', () => {
-  renderer.setSize(stage.clientWidth, stage.clientHeight);
-  camera.aspect = stage.clientWidth / stage.clientHeight;
+// the Browser pane may be hidden (0 x 0) when the page loads: size on every stage resize, never with zeros
+function fit(): void {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  if (w < 2 || h < 2) return;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
   camera.updateProjectionMatrix();
-});
+}
+window.addEventListener('resize', fit);
+new ResizeObserver(fit).observe(stage);
+fit();
 renderer.domElement.addEventListener('pointerdown', () => audio.unlock(), { once: true });
 
 show(GALLERY[initial]!);

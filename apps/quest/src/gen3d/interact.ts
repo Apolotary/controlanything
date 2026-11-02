@@ -59,6 +59,9 @@ export class MouseCursor {
   private ndc = new Vector2(-10, -10);
   private down = false;
   private wasDown = false;
+  /** edges latched between frames so a press shorter than one frame still produces a start and an end */
+  private pendingDown = false;
+  private pendingUp = false;
   private raycaster = new Raycaster();
   private plane = new Plane();
   private dragging = false;
@@ -73,8 +76,12 @@ export class MouseCursor {
       if (e.button !== 0) return;
       this.onMove(e);
       this.down = true;
+      this.pendingDown = true;
     });
-    const up = () => (this.down = false);
+    const up = () => {
+      this.down = false;
+      this.pendingUp = true;
+    };
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', up);
     el.addEventListener('wheel', (e) => {
@@ -103,15 +110,32 @@ export class MouseCursor {
   /** Call once per frame before the objects update. */
   update(): Cursor {
     const c = this.cursor;
-    c.justPinched = this.down && !this.wasDown;
-    c.justReleased = !this.down && this.wasDown;
-    c.pinching = this.down;
-    this.wasDown = this.down;
+    // deliver latched edges one per frame: a down+up between two frames becomes start (frame N) then end (N+1)
+    if (this.pendingDown && !this.wasDown) {
+      c.justPinched = true;
+      c.justReleased = false;
+      c.pinching = true;
+      this.pendingDown = false;
+      this.wasDown = true;
+      if (!this.down) this.pendingUp = true;
+    } else if (this.pendingUp && this.wasDown) {
+      c.justPinched = false;
+      c.justReleased = true;
+      c.pinching = false;
+      this.pendingUp = false;
+      this.wasDown = false;
+    } else {
+      c.justPinched = false;
+      c.justReleased = false;
+      c.pinching = this.wasDown;
+      this.pendingDown = false;
+      this.pendingUp = false;
+    }
     c.tracked = this.ndc.x > -5;
     if (!c.tracked) return c;
     this.raycaster.setFromCamera(this.ndc, this.camera);
     c.ray = { origin: this.raycaster.ray.origin.clone(), dir: this.raycaster.ray.direction.clone() };
-    if (this.dragging && this.down) {
+    if (this.dragging && c.pinching) {
       // keep moving on the drag plane
       const hit = this.raycaster.ray.intersectPlane(this.plane, this.tmp);
       if (hit) c.position.copy(hit);
@@ -129,7 +153,7 @@ export class MouseCursor {
         c.position.copy(this.raycaster.ray.origin).addScaledVector(this.raycaster.ray.direction, 100);
       }
     }
-    if (!this.down) this.dragging = false;
+    if (!c.pinching) this.dragging = false;
     c.tip.copy(c.position);
     return c;
   }

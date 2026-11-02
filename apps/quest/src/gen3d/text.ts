@@ -34,7 +34,9 @@ export class Label extends Mesh<PlaneGeometry, MeshBasicMaterial> {
   heightM = 0;
 
   constructor(style: TextStyle) {
-    const canvas = document.createElement('canvas');
+    // headless (unit tests, server-side render checks): no canvas, a plain plane of roughly the right size
+    const headless = typeof document === 'undefined';
+    const canvas = headless ? ({ width: 1, height: 1, getContext: () => null } as unknown as HTMLCanvasElement) : document.createElement('canvas');
     const texture = new CanvasTexture(canvas);
     texture.colorSpace = SRGBColorSpace;
     texture.minFilter = LinearFilter;
@@ -70,7 +72,15 @@ export class Label extends Mesh<PlaneGeometry, MeshBasicMaterial> {
     const s = this.style;
     const cap = s.heightM ?? 0.009;
     const fontPx = Math.round((cap * PX_PER_M) / 0.7); // cap height ≈ 0.7 em for these fonts
-    const ctx = this.canvas.getContext('2d')!;
+    const ctx = this.canvas.getContext('2d');
+    if (!ctx) {
+      // headless: approximate the plate size so layout-dependent logic (bounds, handles) still works
+      this.heightM = cap * 1.8;
+      this.widthM = Math.max(0.01, s.value.length * cap * 0.75 + cap);
+      this.geometry.dispose();
+      this.geometry = new PlaneGeometry(this.widthM, this.heightM);
+      return;
+    }
     const font = fontFor(s).replace('{px}', String(fontPx));
     ctx.font = font;
     const raw = s.uppercase === false ? s.value : s.font === 'mono' ? s.value : s.value.toUpperCase();
