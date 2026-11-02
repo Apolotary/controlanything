@@ -4,174 +4,113 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <title>ControlAnything Companion</title>
+    <title>Companion</title>
     <link rel="icon" href="data:," />
   </head>
   <body>
     <div id="workbench" class="app" hidden>
-      <header id="app-header" class="app-header">
-        <div class="wordmark">ControlAnything</div>
-        <button id="details-open" class="ghost" type="button" aria-controls="drawer" aria-haspopup="dialog" aria-expanded="false">Details</button>
-      </header>
-
-      <main class="calm-center">
-        <section id="onboarding" class="onboarding panel" data-state="connecting" aria-labelledby="onboarding-title">
-          <div id="paired-summary" class="paired-summary" role="status" aria-live="polite" hidden>
-            <span class="paired-check" aria-hidden="true">✓</span>
-            <p class="paired-title">Paired with Quest 3</p>
-            <p class="onboarding-next">You can leave this page open; the headset uses it to reach your devices.</p>
-          </div>
-          <p class="eyebrow">Your Mac + Quest</p>
-          <h1 id="onboarding-title">Connecting to your room</h1>
-          <p id="onboarding-next" class="onboarding-next" role="status" aria-live="polite"></p>
-          <div id="pairscreen" class="pairing-content" hidden>
-            <div id="pairplate" class="pairing-code">
-              <div id="self-qr" class="qr" aria-label="Pairing QR code"></div>
-              <p class="dim small">Or type this code in your headset</p>
-              <div id="self-code" class="passcode">———-———</div>
-              <p id="self-expiry" class="dim small"></p>
-              <p id="self-msg" class="small" role="status"></p>
-              <button id="self-retry" type="button" hidden>Try again</button>
-            </div>
-          </div>
-          <div id="headset-open" class="pairing-code" hidden>
-            <div id="headset-qr" class="qr" aria-label="Open ControlAnything in Quest Browser"></div>
-            <p id="headset-url" class="small dim"></p>
-          </div>
-          <div id="connection-steps" class="connection-steps" hidden>
-            <p id="headset-status">Waiting for your headset</p>
-            <p id="synth-status">Plug in a synth (USB)</p>
-          </div>
-          <button id="enable-midi" class="primary" type="button" hidden>Allow USB MIDI</button>
-          <p id="midi-message" class="small dim" role="status"></p>
-          <div id="setup-activity" class="setup-activity" hidden>
-            <p id="setup-activity-text" role="status" aria-live="polite"></p>
-            <button id="setup-stop" type="button" hidden>Stop</button>
-          </div>
-          <section id="approve-panel" class="pair-box" aria-label="Pair a device" hidden>
-            <form id="code-form" class="codeform" autocomplete="off">
-              <label for="code-input">Code shown in your headset</label>
-              <div class="row">
-                <input id="code-input" placeholder="K7Q-4M2" maxlength="9" spellcheck="false" autocapitalize="characters" aria-describedby="code-msg" />
-                <button class="primary" type="submit">Approve</button>
-              </div>
-            </form>
-            <p id="code-msg" class="small" role="status" aria-live="polite"></p>
-          </section>
-        </section>
-        <div class="row" aria-label="Devices">
-          <span>Visual synth · Virtual · Ready</span>
-          <a class="ghost" href="/vsynth/" target="_blank" rel="noopener">Open visuals</a>
+      <aside class="sidebar" aria-label="Companion navigation">
+        <div class="sidebar-top">
+          <div class="window-head" aria-hidden="true"><span class="traffic-lights"><i></i><i></i><i></i></span><span class="window-caption">Mac companion</span></div>
+          <div id="product-name" class="wordmark" data-product-name></div>
+          <nav class="nav-group" aria-label="Main">
+            <button id="nav-home" class="nav-item active" type="button" aria-current="page" aria-controls="home-view"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m3 8 7-6 7 6v9h-5v-6H8v6H3Z" /></svg>Home</button>
+            <button id="nav-devices" class="nav-item" type="button" aria-controls="home-view"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="3" width="16" height="11" rx="2" /><path d="M7 18h6m-3-4v4" /></svg>Devices</button>
+            <button id="nav-activity" class="nav-item" type="button" aria-controls="activity-view"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M1 10h4l3-7 4 14 3-7h4" /></svg>Activity</button>
+            <button id="details-open" class="nav-item" type="button" aria-controls="drawer" aria-expanded="false"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 5-5 5 5 5m8-10 5 5-5 5" /></svg>Details</button>
+          </nav>
         </div>
-      </main>
+        <footer class="sidebar-footer">
+          <div class="model-status-row"><span id="model-in-use" class="model-label">Model connecting</span><span id="pill" class="pill"><span id="conn-dot" class="dot" aria-hidden="true"></span><span id="pill-text">Connecting</span></span></div>
+          <div class="footer-meta"><span id="session" class="session">Space —</span><span id="exec-role" class="role-caption">…</span></div>
+          <button id="panic" class="panic" type="button" title="Stop all controls and turn off MIDI notes">Stop all</button>
+        </footer>
+      </aside>
 
-      <dialog id="drawer" class="drawer" aria-labelledby="details-title">
-        <header class="drawer-header">
-          <h1 id="details-title">Details</h1>
-          <button id="details-close" class="ghost" type="button" aria-label="Close details">Close</button>
+      <div class="main-shell">
+        <header id="app-header" class="app-header">
+          <div class="header-title"><h1 id="home-title">Connect your Quest 3</h1><span class="dim">Mac companion</span></div>
+          <div id="home-chips" class="row"></div>
         </header>
-        <div class="drawer-content">
-          <div class="connection-details">
-            <div id="agent-status" class="agent-status" role="status" aria-live="polite" aria-atomic="true">
-              <span id="status-dot" class="dot" aria-hidden="true"></span>
-              <span id="status-text">Idle</span>
+
+        <main id="home-view" class="home-view">
+          <section id="onboarding" class="onboarding panel" data-state="connecting" aria-labelledby="onboarding-title">
+            <div id="paired-summary" class="paired-summary" role="status" aria-live="polite" hidden>
+              <span class="paired-check" aria-hidden="true">✓</span>
+              <p class="paired-title">Paired with Quest 3</p>
+              <p class="onboarding-next">You can leave this page open; the headset uses it to reach your devices.</p>
             </div>
-            <ul id="device-dots" class="device-dots" aria-label="Paired devices"></ul>
-            <div class="bridge-pills" aria-label="Bridges">
-              <button id="bridge-midi" class="bridge-pill" type="button" aria-pressed="false" title="Enable MIDI">MIDI</button>
-              <button id="bridge-serial" class="bridge-pill" type="button" aria-pressed="false" title="Connect Cardputer">Cardputer</button>
-              <button id="bridge-mic" class="bridge-pill" type="button" aria-pressed="false" title="Enable microphone">Microphone</button>
+            <h1 id="onboarding-title">Pair with your headset</h1>
+            <p id="onboarding-next" class="onboarding-next" role="status" aria-live="polite"></p>
+            <div id="pairscreen" class="pairing-content" hidden>
+              <div id="pairplate" class="pairing-code">
+                <div id="self-qr" class="qr" aria-label="Pairing QR code"></div>
+                <div class="passcode-well"><div id="self-code" class="passcode">———-———</div><p id="self-expiry" class="dim small"></p></div>
+                <p id="self-msg" class="small waiting-status" role="status"></p>
+                <button id="self-retry" type="button" hidden>Try again</button>
+              </div>
             </div>
-            <p id="bridge-msg" class="small dim" role="status" aria-live="polite"></p>
-            <div id="session" class="session">space —</div>
-            <div class="row">
-              <span id="pill" class="pill"><span id="conn-dot" class="dot"></span><span id="pill-text">connecting</span></span>
-              <span id="exec-role" class="chip muted">…</span>
+            <div id="headset-open" class="pairing-code" hidden>
+              <div id="headset-qr" class="qr" aria-label="Open the app in Quest Browser"></div>
+              <p id="headset-url" class="small dim"></p>
             </div>
-            <button id="panic" class="panic" type="button" title="All notes off on every MIDI output, stop IR, and tell the server to disarm">Stop all controls</button>
+            <section id="approve-panel" class="pair-box" aria-label="Pair a device" hidden>
+              <form id="code-form" class="codeform" autocomplete="off">
+                <label for="code-input">Code shown in your headset</label>
+                <div class="row"><input id="code-input" placeholder="K7Q-4M2" maxlength="9" spellcheck="false" autocapitalize="characters" aria-describedby="code-msg" /><button class="primary" type="submit">Approve</button></div>
+              </form>
+              <p id="code-msg" class="small" role="status" aria-live="polite"></p>
+            </section>
+          </section>
+
+          <div id="connection-steps" class="connection-steps" hidden><p id="headset-status">Waiting for your headset</p><p id="synth-status">Connect a synth with USB</p></div>
+
+          <section id="setup-activity" class="setup-activity panel" aria-labelledby="now-title" hidden>
+            <div class="now-top"><h2 id="now-title"><span class="dot accent" aria-hidden="true"></span>Now</h2><button id="setup-stop" type="button" hidden>Stop</button></div>
+            <p id="setup-activity-text" role="status" aria-live="polite"></p>
+            <progress id="setup-progress" max="100" aria-label="Current task progress"></progress>
+          </section>
+
+          <section id="devices-panel" class="panel devices-panel" aria-labelledby="devices-title">
+            <header><h2 id="devices-title">Devices<small>Bridges and targets on this Mac</small></h2></header>
+            <div id="home-devices" class="home-devices"></div>
+            <div class="midi-permission"><button id="enable-midi" class="primary" type="button" hidden>Allow USB MIDI</button><p id="midi-message" class="small dim" role="status"></p></div>
+          </section>
+        </main>
+
+        <section id="drawer" class="details-view" aria-labelledby="details-title" hidden>
+          <header class="view-header"><h1 id="details-title">Details</h1><button id="details-close" class="ghost" type="button">Back to Home</button></header>
+          <div class="details-grid">
+            <div id="banners" class="banners"></div>
+            <section class="panel" id="device-panel"><header><h2>Controls<small>Target device</small></h2></header><div id="device-card" class="device-card"></div></section>
+            <section class="panel" id="code-panel">
+              <header><div class="tabs" role="tablist" aria-label="Generated controls"><button id="tab-code" class="tab" role="tab" type="button" aria-controls="code" aria-selected="true">Driver</button><button id="tab-tape" class="tab" role="tab" type="button" aria-controls="tape" aria-selected="false">Recording</button><button id="tab-spec" class="tab" role="tab" type="button" aria-controls="spec" aria-selected="false">Spec</button></div><div class="code-meta row"><span id="filetab" class="filetab"></span><span id="gen-chip"></span></div></header>
+              <div class="body"><div id="code" class="code" role="tabpanel" aria-labelledby="tab-code" tabindex="0"></div><div id="tape" class="tape" role="tabpanel" aria-labelledby="tab-tape" tabindex="0" hidden></div><div id="spec" class="code" role="tabpanel" aria-labelledby="tab-spec" tabindex="0" hidden></div></div>
+            </section>
+            <section class="panel" id="checks-panel"><header><h2>Checks<small>Sent, expected, and observed</small></h2></header><div id="evidence"></div></section>
+            <section class="panel agent" id="agent-panel"><header><h2>Agent log<small>Steps and model latency</small></h2><span id="calls-total" class="tiny dim"></span></header><div class="body"><div id="worklog" class="worklog"></div></div><div id="calls" class="calls"></div></section>
+            <section class="panel" id="connections-panel">
+              <header><h2>Connections<small>Local hardware bridges</small></h2></header>
+              <div id="links" class="links"></div>
+              <div class="connection-details"><div class="bridge-pills" aria-label="Bridge actions"><button id="bridge-midi" class="bridge-pill" type="button" aria-pressed="false" title="Allow USB MIDI">USB MIDI</button><button id="bridge-serial" class="bridge-pill" type="button" aria-pressed="false" title="Connect Cardputer">Cardputer serial</button><button id="bridge-mic" class="bridge-pill" type="button" aria-pressed="false" title="Enable microphone">Microphone</button></div><p id="bridge-msg" class="small dim" role="status" aria-live="polite"></p></div>
+            </section>
+            <section class="panel" id="learn-panel" hidden><header><h2>Remote learning<small>Captured buttons</small></h2><div id="learn-actions" class="row"></div></header><div id="learn"></div></section>
           </div>
-          <div id="banners" class="banners"></div>
+        </section>
 
-          <section class="panel" id="device-panel">
-            <header><h2>Device<small>Current target</small></h2></header>
-            <div id="device-card" class="device-card"></div>
-          </section>
+        <section id="activity-view" class="activity-view" aria-labelledby="activity-title" hidden>
+          <header class="view-header"><h1 id="activity-title">Activity</h1><div id="agent-status" class="agent-status" role="status" aria-live="polite" aria-atomic="true"><span id="status-dot" class="dot" aria-hidden="true"></span><span id="status-text">Idle</span></div></header>
+          <ul id="device-dots" class="device-dots" aria-label="Paired devices"></ul>
+          <section class="panel"><header><h2>System log</h2><button id="log-clear" class="ghost" type="button">Clear</button></header><pre id="log" class="monitor"></pre></section>
+          <section class="panel"><header><h2>MIDI in / out</h2><label class="tiny dim"><input id="midi-clock" type="checkbox" /> Clock</label></header><pre id="midi-monitor" class="monitor"></pre><div id="midi-test-row" class="row monitor-actions"></div></section>
+          <section class="panel"><header><h2>Serial · Cardputer</h2><span id="serial-state" class="tiny dim"></span></header><pre id="serial-monitor" class="monitor"></pre></section>
+          <section class="panel" id="daemons-panel" hidden><header><h2>Automations</h2></header><div id="daemons"></div></section>
+          <section class="panel"><header><h2>Add a device</h2></header><div class="add"><div id="add-qr" class="qr small" aria-label="QR code with the server address"></div><div class="stack small grow"><div id="add-tabs" class="tabs"></div><div id="add-url" class="small"></div><div id="add-hint" class="dim tiny"></div></div></div></section>
+        </section>
+      </div>
 
-          <section class="panel" id="code-panel">
-            <header>
-              <div class="tabs" role="tablist" aria-label="Generated controls">
-                <button id="tab-code" class="tab" role="tab" type="button" aria-controls="code" aria-selected="true">Driver</button>
-                <button id="tab-tape" class="tab" role="tab" type="button" aria-controls="tape" aria-selected="false">Commands</button>
-                <button id="tab-spec" class="tab" role="tab" type="button" aria-controls="spec" aria-selected="false">Spec</button>
-              </div>
-              <div class="row"><span id="filetab" class="filetab"></span><span id="gen-chip"></span></div>
-            </header>
-            <div class="body">
-              <div id="code" class="code" role="tabpanel" aria-labelledby="tab-code" tabindex="0"></div>
-              <div id="tape" class="tape" role="tabpanel" aria-labelledby="tab-tape" tabindex="0" hidden></div>
-              <div id="spec" class="code" role="tabpanel" aria-labelledby="tab-spec" tabindex="0" hidden></div>
-            </div>
-          </section>
-
-          <section class="panel agent">
-            <header><h2>Agent log<small>Meta models</small></h2><span id="calls-total" class="tiny dim"></span></header>
-            <div class="body"><div id="worklog" class="worklog"></div></div>
-            <div id="calls" class="calls"></div>
-          </section>
-
-          <section class="panel">
-            <header><h2>Evidence<small>Sent, expected, observed</small></h2></header>
-            <div id="evidence"></div>
-          </section>
-
-          <section class="panel" id="learn-panel" hidden>
-            <header><h2>Remote learning<small>Captured buttons</small></h2><div id="learn-actions" class="row"></div></header>
-            <div id="learn"></div>
-          </section>
-
-          <section class="panel">
-            <header><h2>Connections<small>Devices and bridges</small></h2></header>
-            <div id="links" class="links"></div>
-          </section>
-
-          <section class="panel">
-            <header><h2>Add a device</h2></header>
-            <div class="add">
-              <div id="add-qr" class="qr small" aria-label="QR code with the server address"></div>
-              <div class="stack small grow">
-                <div id="add-tabs" class="tabs"></div>
-                <div id="add-url" class="small"></div>
-                <div id="add-hint" class="dim tiny"></div>
-              </div>
-            </div>
-          </section>
-
-          <section class="panel" id="daemons-panel" hidden>
-            <header><h2>Automations</h2></header>
-            <div id="daemons"></div>
-          </section>
-
-          <section class="panel">
-            <header><h2>System log</h2><button id="log-clear" class="ghost" type="button">Clear</button></header>
-            <pre id="log" class="monitor"></pre>
-          </section>
-          <section class="panel">
-            <header><h2>MIDI in / out</h2><label class="tiny dim"><input id="midi-clock" type="checkbox" /> Clock</label></header>
-            <pre id="midi-monitor" class="monitor"></pre>
-            <div id="midi-test-row" class="row monitor-actions"></div>
-          </section>
-          <section class="panel">
-            <header><h2>Serial · Cardputer</h2><span id="serial-state" class="tiny dim"></span></header>
-            <pre id="serial-monitor" class="monitor"></pre>
-          </section>
-        </div>
-      </dialog>
-
-      <dialog id="pair-sheet" class="pair-sheet" aria-label="Pair device">
-        <div id="pending" class="pending"></div>
-      </dialog>
+      <dialog id="pair-sheet" class="pair-sheet" aria-label="Pair device"><div id="pending" class="pending"></div></dialog>
     </div>
-
     <div id="spike" class="spike" hidden></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

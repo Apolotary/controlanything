@@ -13,6 +13,7 @@ import { MidiBridge } from '../midi';
 import { describeIdentity, describeMidi, toHex } from '../midiDecode';
 import { MidiExecutor } from '../midiExec';
 import { $, appendLine, button, el } from '../ui/dom';
+import { PRODUCT_NAME } from '../ui/product';
 import { type Chart, CHARTS, chartForPort, checkIdentity, type IdentityCheck, type SweepCc } from './charts';
 import { SIM_PORT, SimSynth, SpikeIO } from './simSynth';
 
@@ -87,12 +88,12 @@ function check(id: string, label: string, checked: boolean): HTMLElement {
 function build(): void {
   const root = $('spike');
   root.hidden = false;
-  const panicBtn = button('Panic · all off', () => panic(), 'panic');
+  const panicBtn = button('Stop all', () => panic(), 'panic');
   root.append(
     el(
       'header',
       { className: 'topbar' },
-      el('div', { className: 'wordmark' }, 'CONTROLEVERYTHING', el('span', { text: 'SPIKE · MIDI' })),
+      el('div', { className: 'wordmark' }, PRODUCT_NAME, el('span', { text: 'MIDI spike' })),
       el('div', { className: 'session', text: 'G1(c): the synth answers MIDI from this Mac' }),
       el('div', { className: 'grow' }),
       el('span', { className: 'pill' }, el('span', { className: 'dot on' }), 'standalone · no server needed'),
@@ -326,7 +327,7 @@ function panic(): void {
   stopRequested = true;
   answer?.('skip');
   const n = exec.panic();
-  log('warn', `PANIC: ${n} messages (note-offs, CC 64=0, CC 123, CC 120 on 16 channels)`);
+  log('warn', `Stop all: ${n} messages (note-offs, CC 64=0, CC 123, CC 120 on 16 channels)`);
 }
 
 // --- listening --------------------------------------------------------------------------------
@@ -589,7 +590,7 @@ function download(): void {
 }
 
 export async function bootSpike(): Promise<void> {
-  document.title = 'MIDI spike · ControlAnything';
+  document.title = `MIDI spike · ${PRODUCT_NAME}`;
   build();
   log('info', 'MIDI spike ready (standalone). Step 1: enable MIDI.');
   realMidi.onChange = () => renderPorts();

@@ -54,10 +54,10 @@ describe('Executor', () => {
   });
   it('runs a MIDI exec.command and acks it to the server', async () => {
     const { ex, conn } = setup();
-    conn.emit('exec.command', { execId: 'x1', executorDeviceId: 'mac-1', op: { kind: 'midi', msg: 'cc', channel: 1, number: 46, value: 69 }, port: 'OP-1', actionId: 'a-cut' });
+    conn.emit('exec.command', { execId: 'x1', executorDeviceId: 'mac-1', op: { kind: 'midi', msg: 'cc', channel: 1, number: 46, value: 69 }, port: 'OP-1', actionId: 'a-cut', cardId: 'synth', driverId: 'driver-synth' });
     await tick();
     expect(conn.sent).toEqual([{ type: 'exec.ack', to: 'server', payload: expect.objectContaining({ execId: 'x1', ok: true, sentAt: 42 }) }]);
-    expect(ex.tape[0]).toMatchObject({ execId: 'x1', what: 'CC 46 → 69 · ch 1', target: 'OP-1', actionId: 'a-cut' });
+    expect(ex.tape[0]).toMatchObject({ execId: 'x1', what: 'CC 46 → 69 · ch 1', target: 'OP-1', actionId: 'a-cut', cardId: 'synth', driverId: 'driver-synth' });
   });
 
   it('a standby tab ignores commands', async () => {
