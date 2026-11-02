@@ -1,0 +1,61 @@
+{
+  "kind": "gen3d-run",
+  "kit": "ce.hackset/1+ce.gen3d/1",
+  "task": "generate",
+  "cardId": "card_tpl_devterm",
+  "request": "generate a hack set for the DevTerm",
+  "mode": "json",
+  "category": "computer",
+  "transport": "local",
+  "deviceName": "DevTerm",
+  "actions": [
+    {
+      "actionId": "print",
+      "kind": "trigger",
+      "label": "Print receipt",
+      "sense": "ack",
+      "effect": "any"
+    },
+    {
+      "actionId": "beep",
+      "kind": "trigger",
+      "label": "Beep",
+      "sense": "audio",
+      "effect": "louder"
+    }
+  ],
+  "recordedAt": "2026-11-02T02:54:48.076Z",
+  "calls": [
+    {
+      "label": "gen3d.forge",
+      "model": "muse-spark-1.3",
+      "effort": "low",
+      "text": "{\"hacks\": [{\"blurb\": \"single short beep\", \"commands\": [{\"action\": \"beep\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_beep\", \"inverse\": {\"commands\": [], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 2, \"name\": \"Sound beep\", \"oracle\": {\"expect\": \"louder\", \"reason\": \"\", \"type\": \"mic\"}, \"params\": [], \"reversible\": true}, {\"blurb\": \"two beeps in a row\", \"commands\": [{\"action\": \"beep\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}, {\"action\": \"beep\", \"delayMs\": 500, \"param\": \"\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_beep_twice\", \"inverse\": {\"commands\": [], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 2, \"name\": \"Beep twice\", \"oracle\": {\"expect\": \"louder\", \"reason\": \"\", \"type\": \"mic\"}, \"params\": [], \"reversible\": true}, {\"blurb\": \"three beeps in a row\", \"commands\": [{\"action\": \"beep\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}, {\"action\": \"beep\", \"delayMs\": 500, \"param\": \"\", \"value\": 0}, {\"action\": \"beep\", \"delayMs\": 500, \"param\": \"\", \"value\": 0}], \"confirm\": \"none\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_beep_thrice\", \"inverse\": {\"commands\": [], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 2, \"name\": \"Beep thrice\", \"oracle\": {\"expect\": \"louder\", \"reason\": \"\", \"type\": \"mic\"}, \"params\": [], \"reversible\": true}, {\"blurb\": \"print a receipt\", \"commands\": [{\"action\": \"print\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"confirm\": \"hold\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_print\", \"inverse\": {\"commands\": [], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 1, \"name\": \"Print receipt\", \"oracle\": {\"expect\": \"paper_moved\", \"reason\": \"\", \"type\": \"camera\"}, \"params\": [], \"reversible\": false}], \"title\": \"DevTerm\"}",
+      "finishReason": "stop",
+      "latencyMs": 11710,
+      "ttftMs": 10166,
+      "usage": {
+        "promptTokens": 2767,
+        "completionTokens": 2499,
+        "reasoningTokens": 1841,
+        "cachedTokens": 2545
+      }
+    },
+    {
+      "label": "gen3d.forge.repair",
+      "model": "muse-spark-1.3",
+      "effort": "medium",
+      "text": "{\"hacks\": [{\"blurb\": \"single short beep\", \"commands\": [{\"action\": \"beep\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"confirm\": \"hold\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_beep\", \"inverse\": {\"commands\": [], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 2, \"name\": \"Play beep\", \"oracle\": {\"expect\": \"louder\", \"reason\": \"\", \"type\": \"mic\"}, \"params\": [], \"reversible\": false}, {\"blurb\": \"two beeps in a row\", \"commands\": [{\"action\": \"beep\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}, {\"action\": \"beep\", \"delayMs\": 500, \"param\": \"\", \"value\": 0}], \"confirm\": \"hold\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_beep_twice\", \"inverse\": {\"commands\": [], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 2, \"name\": \"Beep twice\", \"oracle\": {\"expect\": \"louder\", \"reason\": \"\", \"type\": \"mic\"}, \"params\": [], \"reversible\": false}, {\"blurb\": \"three beeps in a row\", \"commands\": [{\"action\": \"beep\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}, {\"action\": \"beep\", \"delayMs\": 500, \"param\": \"\", \"value\": 0}, {\"action\": \"beep\", \"delayMs\": 500, \"param\": \"\", \"value\": 0}], \"confirm\": \"hold\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_beep_thrice\", \"inverse\": {\"commands\": [], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 2, \"name\": \"Beep thrice\", \"oracle\": {\"expect\": \"louder\", \"reason\": \"\", \"type\": \"mic\"}, \"params\": [], \"reversible\": false}, {\"blurb\": \"print a receipt\", \"commands\": [{\"action\": \"print\", \"delayMs\": 0, \"param\": \"\", \"value\": 0}], \"confirm\": \"hold\", \"control\": {\"accent\": \"\", \"archetype\": \"none\", \"param\": \"\", \"size\": \"m\"}, \"id\": \"h_print\", \"inverse\": {\"commands\": [], \"restore\": \"\"}, \"kind\": \"action\", \"max_rate_hz\": 1, \"name\": \"Print receipt\", \"oracle\": {\"expect\": \"paper_moved\", \"reason\": \"\", \"type\": \"camera\"}, \"params\": [], \"reversible\": false}], \"title\": \"DevTerm\"}",
+      "finishReason": "stop",
+      "latencyMs": 15940,
+      "ttftMs": 14468,
+      "usage": {
+        "promptTokens": 3518,
+        "completionTokens": 3292,
+        "reasoningTokens": 2634,
+        "cachedTokens": 0
+      }
+    }
+  ],
+  "ok": true
+}

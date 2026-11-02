@@ -9,7 +9,7 @@ import type { EditSet } from './editPatch';
 import { createForge, ForgeInputError, type ForgeProgress } from './forge';
 import { RECORDED_GEN3D_DIR } from './routes';
 import type { ForgeDevice, ForgeDriver } from './forgeTypes';
-import { allPass, FORGE_LIGHT_DEVICE, FORGE_LIGHT_DRIVER, FORGE_LIGHT_VERIFIED, FORGE_OP1_DEVICE, FORGE_OP1_DRIVER, FORGE_OP1_VERIFIED, LOOP_LIGHT_DEVICE, LOOP_LIGHT_DRIVER, LOOP_MAC_DEVICE, LOOP_MAC_DRIVER, LOOP_OP1_DEVICE, LOOP_OP1_DRIVER } from './sampleDevices';
+import { allPass, FORGE_LIGHT_DEVICE, FORGE_LIGHT_DRIVER, FORGE_LIGHT_VERIFIED, FORGE_OP1_DEVICE, FORGE_OP1_DRIVER, FORGE_OP1_VERIFIED, LOOP_DEVTERM_DEVICE, LOOP_DEVTERM_DRIVER, LOOP_LIGHT_DEVICE, LOOP_LIGHT_DRIVER, LOOP_MAC_DEVICE, LOOP_MAC_DRIVER, LOOP_OP1_DEVICE, LOOP_OP1_DRIVER } from './sampleDevices';
 import { loadRecordedRuns, type RecordedRun, ReplayTransport } from './transport';
 import { contentEvents, LIGHT_DRAFT, mockFetch, sseResponse } from './testkit';
 
@@ -210,6 +210,7 @@ describe('committed recordings (what judges replay without a key)', () => {
     card_tpl_light: { device: LOOP_LIGHT_DEVICE, driver: LOOP_LIGHT_DRIVER, verification: allPass(LOOP_LIGHT_DRIVER) },
     card_tpl_op1f: { device: LOOP_OP1_DEVICE, driver: LOOP_OP1_DRIVER, verification: allPass(LOOP_OP1_DRIVER) },
     card_tpl_mac: { device: LOOP_MAC_DEVICE, driver: LOOP_MAC_DRIVER, verification: allPass(LOOP_MAC_DRIVER) },
+    card_tpl_devterm: { device: LOOP_DEVTERM_DEVICE, driver: LOOP_DEVTERM_DRIVER, verification: allPass(LOOP_DEVTERM_DRIVER) },
   };
   const runs = loadRecordedRuns(RECORDED_GEN3D_DIR);
 
@@ -273,6 +274,7 @@ describe('replay for cards the discovery loop creates (no recording for that car
     ['light', LOOP_LIGHT_DEVICE, LOOP_LIGHT_DRIVER],
     ['synth', LOOP_OP1_DEVICE, LOOP_OP1_DRIVER],
     ['mac', LOOP_MAC_DEVICE, LOOP_MAC_DRIVER],
+    ['devterm', LOOP_DEVTERM_DEVICE, LOOP_DEVTERM_DRIVER],
   ] as const)('%s: replays the recording of the same category, with this card and driver ids', async (_n, dev, drv) => {
     const cardId = 'card-7f3a9c';
     const driver = rename(drv, cardId);
@@ -281,6 +283,16 @@ describe('replay for cards the discovery loop creates (no recording for that car
     expect(r.report.errors).toEqual([]);
     expect(r).toMatchObject({ ok: true, source: 'fixture', uiSpec: { cardId, specId: `spec_${cardId}`, driverId: driver.driverId, hackset: { device: { id: cardId } } } });
     boundOk(r.uiSpec!, driver);
+  });
+
+  it('a paired DevTerm (category computer, like the Mac) replays its own recording with its hacks, the Mac keeps the Mac one', async () => {
+    const dev = await replay().generate({ device: { ...LOOP_DEVTERM_DEVICE, cardId: 'dev-d7e1' }, driver: rename(LOOP_DEVTERM_DRIVER, 'dev-d7e1'), verification: allPass(LOOP_DEVTERM_DRIVER) });
+    expect(dev.ok).toBe(true);
+    expect(dev.report.attempts).toBe(2); // the recorded repair is replayed too
+    expect(dev.uiSpec!.hackset.hacks.map((h) => h.name)).toContain('Print receipt');
+    expect(dev.uiSpec!.gen3d.controls.length).toBeGreaterThan(0);
+    const mac = await replay().generate({ device: { ...LOOP_MAC_DEVICE, cardId: 'dev-m4c1' }, driver: rename(LOOP_MAC_DRIVER, 'dev-m4c1'), verification: allPass(LOOP_MAC_DRIVER) });
+    expect(mac.uiSpec!.hackset.hacks.some((h) => h.commands.some((c) => c.action === 'volume'))).toBe(true);
   });
 
   it('remaps library-style light action ids (fullOn, nightLight) and replays the edit', async () => {

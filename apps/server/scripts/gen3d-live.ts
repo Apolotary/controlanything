@@ -3,7 +3,7 @@
  *   npx tsx apps/server/scripts/gen3d-live.ts [--only light|op1|edit|loop] [--record] [--out DIR]
  * --only skins --crops DIR paints a muse-image-1.0 panel skin per loop device from DIR/{light,op1,mac}.jpg
  * (recorded under fixtures/recorded/gen3d/skins/ with --record; copies land in research/gen3d-live/skins/).
- * --only loop forges the three loop-shaped template drivers (light, OP-1 Field, this Mac) with the loop's
+ * --only loop [--device light|op1|mac|devterm] forges the loop-shaped template drivers (light, OP-1 Field, this Mac) with the loop's
  * default request plus the resonance edit, so a recording exists per device category for the judge path.
  * Forges hack sets for the ceiling light and the OP-1 Field from the sample verified drivers, then edits the
  * OP-1 spec ("make the resonance control a big red lever"). Prints every progress step with model id, effort
@@ -17,7 +17,7 @@ import { REPO_ROOT, SERVER_ROOT, loadDotEnv } from '../src/config';
 import { CallLog, resolveMuseConfig } from '../src/muse';
 import { createForge, type ForgeProgress, type ForgeResult } from '../src/gen3d/forge';
 import { LiveSkinPainter, SkinStore } from '../src/gen3d/skin';
-import { allPass, FORGE_LIGHT_DEVICE, FORGE_LIGHT_DRIVER, FORGE_LIGHT_VERIFIED, FORGE_OP1_DEVICE, FORGE_OP1_DRIVER, FORGE_OP1_VERIFIED, LOOP_LIGHT_DEVICE, LOOP_LIGHT_DRIVER, LOOP_MAC_DEVICE, LOOP_MAC_DRIVER, LOOP_OP1_DEVICE, LOOP_OP1_DRIVER } from '../src/gen3d/sampleDevices';
+import { allPass, FORGE_LIGHT_DEVICE, FORGE_LIGHT_DRIVER, FORGE_LIGHT_VERIFIED, FORGE_OP1_DEVICE, FORGE_OP1_DRIVER, FORGE_OP1_VERIFIED, LOOP_DEVTERM_DEVICE, LOOP_DEVTERM_DRIVER, LOOP_LIGHT_DEVICE, LOOP_LIGHT_DRIVER, LOOP_MAC_DEVICE, LOOP_MAC_DRIVER, LOOP_OP1_DEVICE, LOOP_OP1_DRIVER } from '../src/gen3d/sampleDevices';
 
 loadDotEnv();
 const cfg = resolveMuseConfig(process.env);
@@ -99,7 +99,9 @@ if (only === 'skins') {
 }
 void copyFileSync;
 if (only === 'loop') {
-  for (const [name, device, driver] of [['loop.light', LOOP_LIGHT_DEVICE, LOOP_LIGHT_DRIVER], ['loop.op1', LOOP_OP1_DEVICE, LOOP_OP1_DRIVER], ['loop.mac', LOOP_MAC_DEVICE, LOOP_MAC_DRIVER]] as const) {
+  const pickDevice = arg('device');
+  for (const [name, device, driver] of [['loop.light', LOOP_LIGHT_DEVICE, LOOP_LIGHT_DRIVER], ['loop.op1', LOOP_OP1_DEVICE, LOOP_OP1_DRIVER], ['loop.mac', LOOP_MAC_DEVICE, LOOP_MAC_DRIVER], ['loop.devterm', LOOP_DEVTERM_DEVICE, LOOP_DEVTERM_DRIVER]] as const) {
+    if (pickDevice ? name !== `loop.${pickDevice}` : name === 'loop.devterm') continue;
     console.log(`-- forge (loop template ids): ${device.name}`);
     const r = await forge.generate({ device, driver, verification: allPass(driver), onProgress: show });
     summarize(`${name}.hackset`, r);

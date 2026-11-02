@@ -117,3 +117,16 @@ export const LOOP_MAC_DRIVER: ForgeDriver = {
 };
 
 export const allPass = (d: ForgeDriver): Record<string, VerifyState> => Object.fromEntries(d.actions.map((a) => [a.actionId, 'pass' as VerifyState]));
+
+/** A paired DevTerm as the loop sees it (category "computer", like the Mac; executor actions print + beep). */
+export const LOOP_DEVTERM_DEVICE: ForgeDevice = { cardId: 'card_tpl_devterm', name: 'DevTerm', maker: 'ClockworkPi', model: 'devterm', category: 'computer' };
+export const LOOP_DEVTERM_DRIVER: ForgeDriver = {
+  driverId: 'drv_tpl_devterm',
+  cardId: 'card_tpl_devterm',
+  transport: 'local',
+  executor: { deviceId: 'dev_devterm' },
+  actions: [
+    { actionId: 'print', label: 'Print receipt', kind: 'trigger', expect: { sense: 'ack', effect: 'any' } },
+    { actionId: 'beep', label: 'Beep', kind: 'trigger', expect: { sense: 'audio', effect: 'louder' } },
+  ],
+};
