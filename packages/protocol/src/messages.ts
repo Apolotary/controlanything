@@ -64,6 +64,7 @@ import {
   WelcomePayload,
 } from './payloads';
 import { Id, PROTOCOL_VERSION } from './primitives';
+import { LibraryStatePayload, LibraryPlacePayload, LibraryForgetPayload, LibraryRestorePayload, LibraryRenamePayload } from './library';
 
 export const SERVER_ID = 'server';
 
@@ -104,6 +105,11 @@ export const PayloadSchemas = {
   'tag.add': TagAddPayload,
   'tag.remove': TagRemovePayload,
   'tags.state': TagsStatePayload,
+  'library.state': LibraryStatePayload,
+  'library.place': LibraryPlacePayload,
+  'library.forget': LibraryForgetPayload,
+  'library.restore': LibraryRestorePayload,
+  'library.rename': LibraryRenamePayload,
   'control.setup': ControlSetupPayload,
   'control.cancel': ControlCancelPayload,
   'target.status': TargetStatusPayload,
@@ -177,6 +183,11 @@ export const MessageSchemas = {
   'tag.add': message('tag.add'),
   'tag.remove': message('tag.remove'),
   'tags.state': message('tags.state'),
+  'library.state': message('library.state'),
+  'library.place': message('library.place'),
+  'library.forget': message('library.forget'),
+  'library.restore': message('library.restore'),
+  'library.rename': message('library.rename'),
   'control.setup': message('control.setup'),
   'control.cancel': message('control.cancel'),
   'target.status': message('target.status'),
@@ -231,6 +242,11 @@ export const Message = z.discriminatedUnion('type', [
   MessageSchemas['tag.add'],
   MessageSchemas['tag.remove'],
   MessageSchemas['tags.state'],
+  MessageSchemas['library.state'],
+  MessageSchemas['library.place'],
+  MessageSchemas['library.forget'],
+  MessageSchemas['library.restore'],
+  MessageSchemas['library.rename'],
   MessageSchemas['control.setup'],
   MessageSchemas['control.cancel'],
   MessageSchemas['target.status'],
@@ -278,6 +294,7 @@ export const SERVER_ONLY_TYPES: readonly MessageType[] = [
   'control.result',
   'mode.state',
   'tags.state',
+  'library.state',
   'welcome',
   'presence',
   'pair.pending',

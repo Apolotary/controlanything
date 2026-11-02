@@ -1,100 +1,14 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { DeviceCardPayload, Driver, Id, LinkResultPayload, TaggedDevice, UiSpecPayload, VerifyState } from '@ce/protocol';
-import { z } from 'zod';
+import type { TaggedDevice } from '@ce/protocol';
 import { roster as devices, type Roster } from './executors';
 import { neededCapability, type LinkCapability } from './link';
 import { MAC_LOCAL_ID } from './maclocal';
 import { synthConnectionGuidance } from './guidance';
 import type { Target } from './types';
 import { isHelperDevice } from '../helpers';
+import type { StoredTag } from './library-schema';
 
-const StoredTagSchema = z.object({
-  cardId: Id,
-  label: TaggedDevice.shape.label,
-  position: TaggedDevice.shape.position,
-  card: DeviceCardPayload.optional(),
-  selection: z.object({ userText: z.string().optional(), preferDeviceId: Id.optional() }).optional(),
-  driver: Driver.optional(),
-  link: LinkResultPayload.optional(),
-  verification: z.record(z.string(), VerifyState).default({}),
-  armed: z.boolean().default(false),
-  specId: Id.optional(),
-  uiSpec: UiSpecPayload.optional(),
-  controlCount: z.number().int().nonnegative().optional(),
-  stepIndex: z.record(z.string(), z.number()).default({}),
-  paramValues: z.record(z.string(), z.number()).default({}),
-});
-const TagFile = z.object({ version: z.literal(1), tags: z.array(StoredTagSchema).max(64) });
-
-export type StoredTag = z.infer<typeof StoredTagSchema>;
-
-/** Persistent user selections and their completed setup; frame bytes and in-flight work stay in memory. */
-export class TagStore {
-  private readonly tags = new Map<string, StoredTag>();
-
-  /** An omitted path keeps the store in memory for tests. */
-  constructor(private readonly file?: string) {
-    if (!file || !existsSync(file)) return;
-    const data = TagFile.parse(JSON.parse(readFileSync(file, 'utf8')));
-    for (const tag of data.tags) this.tags.set(tag.cardId, tag);
-  }
-
-  list(): StoredTag[] {
-    return structuredClone([...this.tags.values()]);
-  }
-
-  get(cardId: string): StoredTag | undefined {
-    const tag = this.tags.get(cardId);
-    return tag ? structuredClone(tag) : undefined;
-  }
-
-  has(cardId: string): boolean {
-    return this.tags.has(cardId);
-  }
-
-  add(target: Target, label: string, position?: TaggedDevice['position']): StoredTag {
-    if (!this.has(target.cardId) && this.tags.size >= 64) throw new Error('A space can have at most 64 tagged devices');
-    const tag = this.capture(target, label, position ?? this.tags.get(target.cardId)?.position);
-    this.tags.set(tag.cardId, tag);
-    this.flush();
-    return structuredClone(tag);
-  }
-
-  /** Synchronize setup changes only for a device the user has already tagged. */
-  sync(target: Target, spec?: UiSpecPayload): void {
-    const old = this.tags.get(target.cardId);
-    if (!old) return;
-    const tag = this.capture(target, old.label, old.position, spec);
-    if (JSON.stringify(old) === JSON.stringify(tag)) return;
-    this.tags.set(tag.cardId, tag);
-    this.flush();
-  }
-
-  remove(cardId: string): boolean {
-    if (!this.tags.delete(cardId)) return false;
-    this.flush();
-    return true;
-  }
-
-  private capture(t: Target, label: string, position?: TaggedDevice['position'], spec?: UiSpecPayload): StoredTag {
-    const candidate = spec ?? this.tags.get(t.cardId)?.uiSpec;
-    const uiSpec = candidate?.specId === t.specId && candidate?.cardId === t.cardId && candidate?.driverId === t.driver?.driverId ? candidate : undefined;
-    return StoredTagSchema.parse({
-      cardId: t.cardId, label, position, card: t.card, selection: t.selection,
-      driver: t.driver, link: t.link, verification: t.verification, armed: t.armed,
-      specId: t.specId, uiSpec, controlCount: t.controlCount, stepIndex: t.stepIndex, paramValues: t.paramValues,
-    });
-  }
-
-  private flush(): void {
-    if (!this.file) return;
-    mkdirSync(dirname(this.file), { recursive: true });
-    const temporary = `${this.file}.tmp`;
-    writeFileSync(temporary, JSON.stringify({ version: 1, tags: [...this.tags.values()] }), { mode: 0o600 });
-    renameSync(temporary, this.file);
-  }
-}
+export { TagStore } from './library-store';
+export type { AssetRef, LibraryRecord, SetupVersion, StoredTag } from './library-schema';
 
 export function isLaptopTarget(t: Target, label = ''): boolean {
   return t.card?.category === 'computer' || /\b(laptop|computer|macbook|this mac)\b/i.test(`${t.card?.name ?? ''} ${t.detection?.label ?? ''} ${label}`);
@@ -171,7 +85,7 @@ export function evaluateConnection(t: Target, roster: Roster, label?: string): P
 
 export function tagSnapshot(tag: StoredTag, target: Target, roster: Roster): TaggedDevice {
   return {
-    cardId: tag.cardId, label: tag.label, position: tag.position,
+    cardId: tag.cardId, label: tag.label, position: tag.position, placement: tag.placement,
     name: target.card?.name, category: target.card?.category, specId: target.specId,
     ...evaluateConnection(target, roster, tag.label),
   };

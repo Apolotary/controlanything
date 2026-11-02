@@ -7,7 +7,7 @@
  *   voice.audio / voice.text -> VoiceRelay · gen3d.generate / gen3d.edit -> the forge
  */
 import { join } from 'node:path';
-import { type DeviceCardPayload, EXPERIMENTAL_TYPE, newId, type TargetCancelPayload, type TargetRetryPayload, type Hack, type MessageType, type PayloadOf, type TargetSelectPayload, type UiSpecPayload, type Mode, type TagAddPayload, type TagsStatePayload } from '@ce/protocol';
+import { type DeviceCardPayload, EXPERIMENTAL_TYPE, newId, type TargetCancelPayload, type TargetRetryPayload, type Hack, type MessageType, type PayloadOf, type TargetSelectPayload, type UiSpecPayload, type Mode, type TagAddPayload, type TagsStatePayload, type LibraryStatePayload, type RoomPlacement } from '@ce/protocol';
 import type { ServerContext } from '../context';
 import { loadProfiles, type Profiles } from '../devices/profiles';
 import { getForge } from '../gen3d';
@@ -70,7 +70,12 @@ export interface Agent {
   tagsState(): TagsStatePayload;
   addTag(p: TagAddPayload, from: { deviceId: string; name?: string }): Target | undefined;
   removeTag(cardId: string): boolean;
-  setup(cardId: string, from: { deviceId: string; name?: string }): Target | undefined;
+  libraryState(): LibraryStatePayload;
+  forget(cardId: string): boolean;
+  restoreVersion(cardId: string, versionId: string): boolean;
+  rename(cardId: string, displayName: string): boolean;
+  place(cardId: string, placement: RoomPlacement): boolean;
+  setup(cardId: string, from: { deviceId: string; name?: string }, rerun?: boolean): Target | undefined;
   panic(reason?: string, cardId?: string): { disarmed: string[]; sent: number };
   close(): void;
 }
@@ -122,12 +127,13 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     helperUrl: () => helperPairUrls(ctx.bound.http ?? ctx.config.http.port)[0], unhealthy: (id) => dispatcher.unhealthy(id) };
   const steps = new StepLog(hub, log);
   const targets = new TargetStore(hub, log);
-  const tags = new TagStore(opts.tagsFile === null ? undefined : opts.tagsFile ?? join(ctx.config.dataDir, 'tags.json'));
+  const tags = new TagStore(opts.tagsFile === null ? undefined : opts.tagsFile ?? join(ctx.config.dataDir, 'library.json'));
+  for (const warning of tags.loadWarnings) log(`[library] ${warning}`);
   let mode: Mode = 'annotate';
   const setups = new Set<string>();
   for (const tag of tags.list()) targets.create({ ...tag, state: tag.armed ? 'armed' : tag.card ? 'identified' : 'scanned' });
   const connected = (t: Target) => tags.has(t.cardId) && evaluateConnection(t, roster).connection !== 'offline';
-  const canControl = (t: Target) => mode === 'control' && tags.has(t.cardId) && evaluateConnection(t, roster).connection === 'ready';
+  const canControl = (t: Target) => mode === 'control' && tags.has(t.cardId) && Boolean(t.specId && usableSpec(deviceSpec(t.specId))) && evaluateConnection(t, roster).connection === 'ready';
   const dispatcher = new Dispatcher({ hub, macLocal, log, canExec: (request) => {
     const t = request.cardId ? targets.get(request.cardId) : undefined;
     if (request.op.kind === 'midi' && request.op.msg === 'panic') return t?.driver?.executor.deviceId === request.executorDeviceId;
@@ -150,10 +156,10 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   let room: UiSpecPayload | undefined;
   let roomRev = 0;
   const deviceSpec = (specId: string) => {
-    const spec = forge()?.get(specId) ?? tags.list().find((t) => t.uiSpec?.specId === specId)?.uiSpec;
-    const target = spec?.cardId ? targets.get(spec.cardId) : undefined;
-    return target && spec?.driverId !== target.driver?.driverId ? undefined : spec;
+    return [forge()?.get(specId), tags.list().find((t) => t.uiSpec?.specId === specId)?.uiSpec]
+      .find((spec) => spec && spec.driverId === targets.get(spec.cardId ?? '')?.driver?.driverId);
   };
+  const usableSpec = (spec?: UiSpecPayload): boolean => Boolean(spec?.widgets?.length || spec?.gen3d?.controls.length || spec?.hackset?.hacks.length);
   const specs = {
     get: (specId: string) => (specId === ROOM_SPEC_ID ? room : deviceSpec(specId)),
     list: () => [...new Map([...(forge()?.list() ?? []), ...tags.list().flatMap((t) => t.uiSpec ? [t.uiSpec] : [])].filter((spec) => deviceSpec(spec.specId)).map((spec) => [spec.specId, spec])).values(), ...(room ? [room] : [])],
@@ -272,8 +278,30 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   };
   const loopDeps = { hub, targets, steps, dispatcher, roster, sam, spark: muse, wonder, web, profiles, forge, arm, heard, readVolume: () => macLocal.currentVolume(), restoreVolume, silentSpeech, log, companionWaitMs: opts.companionWaitMs, phaseTimeoutMs: opts.phaseTimeoutMs, settleMs: opts.settleMs, learnIr: opts.learnIr };
 
-  const tagsState = (): TagsStatePayload => ({ tags: tags.list().map((tag) => tagSnapshot(tag, targets.get(tag.cardId)!, roster)) });
-  const publishTags = () => hub.broadcast('tags.state', tagsState());
+  const tagsState = (): TagsStatePayload => ({ tags: tags.list().flatMap((tag) => {
+    const target = targets.get(tag.cardId);
+    if (!target) return [];
+    const snapshot = tagSnapshot(tag, target, roster);
+    if (snapshot.connection === 'ready' && (!target.specId || !usableSpec(deviceSpec(target.specId)))) {
+      snapshot.connection = 'setup';
+      snapshot.hint = 'Set up control for this device';
+    }
+    return [snapshot];
+  }) });
+  const libraryState = (): LibraryStatePayload => {
+    const visible = new Map(tagsState().tags.map((tag) => [tag.cardId, tag.connection]));
+    return { devices: tags.library().map((record) => ({
+      cardId: record.cardId, displayName: record.displayName, hidden: record.hidden,
+      identity: record.identity, placement: record.placement, createdAt: record.createdAt, updatedAt: record.updatedAt,
+      enabled: record.enabled, activeVersionId: record.activeVersionId, lastKnownState: record.lastKnownState,
+      versions: record.versions.map((version) => ({ versionId: version.versionId, createdAt: version.createdAt, specId: version.uiSpec?.specId })),
+      connection: visible.get(record.cardId) ?? 'offline',
+    })) };
+  };
+  const publishTags = () => {
+    hub.broadcast('library.state', libraryState());
+    hub.broadcast('tags.state', tagsState());
+  };
   const unsubscribeTags = targets.onChange((t) => {
     if (!tags.has(t.cardId)) return;
     tags.sync(t, t.specId ? specs.get(t.specId) : undefined);
@@ -291,8 +319,10 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const panic = (reason = 'panic', cardId?: string) => {
     combos.cancel(cardId);
     daemons.stopAll(reason);
+    for (const record of tags.library()) if (!cardId || record.cardId === cardId) tags.setEnabled(record.cardId, false);
     for (const t of targets.list()) if ((!cardId || t.cardId === cardId) && (t.abort || t.armId)) stop(t, reason);
     const result = control.panic(reason, cardId);
+    publishTags();
     hub.broadcast('panic', { reason, ...(cardId ? { cardId } : {}) });
     return result;
   };
@@ -343,18 +373,22 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (mode !== 'annotate' || /\b(person|people|human|man|woman|child|face|hand|body)\b/i.test(p.label)) return undefined;
     const frame = p.frameId ? scan.frame(p.frameId) : scan.latest(from.deviceId);
     const match = frame?.detections.find((d) => (p.detId && d.detId === p.detId) || (p.targetId && (d.trackId === p.targetId || d.detId === p.targetId)));
-    let t = p.targetId ? targets.get(p.targetId) : undefined;
+    const savedId = p.cardId ?? p.targetId;
+    let t = savedId ? targets.get(savedId) : undefined;
+    const saved = savedId ? tags.get(savedId) : undefined;
+    if (p.cardId && !saved) return undefined;
+    if (!t && saved) t = targets.create({ ...saved, state: saved.armed ? 'armed' : saved.card ? 'identified' : 'scanned' });
     if (!t && match?.cardId) t = targets.get(match.cardId);
     const detection = frame ? scan.tagDetection(frame.frame.frameId, p.detId ?? match?.detId, p.label) : undefined;
     if (!t && detection) t = targets.list().find((known) => known.detection?.sensorDeviceId === detection.sensorDeviceId && known.detection.detId === detection.detId);
-    if (!t && tags.list().length >= 64) return undefined;
+    if (!t && tags.library().length >= 64) return undefined;
     if (!t) t = targets.create({ ...(p.targetId ? { cardId: p.targetId } : {}), detection, selectedBy: from.deviceId });
-    if (!tags.has(t.cardId) && tags.list().length >= 64) return undefined;
+    if (!tags.get(t.cardId) && tags.library().length >= 64) return undefined;
     t.selectedBy = from.deviceId;
     if (detection) t.detection = detection;
     tags.add(t, p.label, p.position);
     publishTags();
-    identifyTag(t);
+    if (!saved?.card) identifyTag(t);
     return t;
   };
   const removeTag = (cardId: string): boolean => {
@@ -372,6 +406,44 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     publishTags();
     return true;
   };
+  const forget = (cardId: string): boolean => {
+    if (!tags.get(cardId)) return false;
+    removeTag(cardId);
+    tags.forget(cardId);
+    targets.remove(cardId);
+    publishTags();
+    return true;
+  };
+  const restoreVersion = (cardId: string, versionId: string): boolean => {
+    if (!tags.library().some((record) => record.cardId === cardId && record.versions.some((version) => version.versionId === versionId))) return false;
+    const previous = targets.get(cardId);
+    if (previous) {
+      setups.delete(cardId);
+      previous.abort?.abort();
+      arm.cancel(previous, 'restoring saved setup');
+      control.cancel(previous);
+    }
+    const saved = tags.restoreVersion(cardId, versionId);
+    if (!saved) return false;
+    if (tags.has(cardId)) {
+      const target = targets.create({ ...saved, state: saved.armed ? 'armed' : saved.card ? 'identified' : 'scanned' });
+      if (mode === 'control') showControls(target);
+    }
+    publishTags();
+    return true;
+  };
+  const rename = (cardId: string, displayName: string): boolean => {
+    if (!tags.get(cardId)) return false;
+    tags.rename(cardId, displayName);
+    publishTags();
+    return true;
+  };
+  const place = (cardId: string, placement: RoomPlacement): boolean => {
+    if (!tags.get(cardId)) return false;
+    tags.setPlacement(cardId, placement);
+    publishTags();
+    return true;
+  };
   const showControls = (t: Target, deviceId?: string) => {
     const send = <T extends MessageType>(type: T, payload: PayloadOf<T>) => deviceId
       ? hub.sendToDevice(deviceId, type, payload) : hub.broadcast(type, payload);
@@ -384,7 +456,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     }
     if (t.driver) send('driver.status', { driverId: t.driver.driverId, cardId: t.cardId, phase: t.armed ? 'armed' : 'disarmed', actions: t.driver.actions.map((a) => ({ actionId: a.actionId, verified: t.verification[a.actionId] ?? 'untested' })), modelId: t.driver.modelId });
   };
-  const setup = (cardId: string, from: { deviceId: string; name?: string }): Target | undefined => {
+  const setup = (cardId: string, from: { deviceId: string; name?: string }, rerun = false): Target | undefined => {
     const t = targets.get(cardId);
     const connection = t && tags.has(cardId) ? evaluateConnection(t, roster) : undefined;
     if (!t || !tags.has(cardId) || mode !== 'control' || connection?.connection === 'offline') {
@@ -397,7 +469,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       return undefined;
     }
     if (t.abort && !t.abort.signal.aborted) return t;
-    if (canControl(t)) {
+    if (!rerun && canControl(t)) {
       showControls(t, from.deviceId);
       return t;
     }
@@ -405,13 +477,14 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       if (previous !== t && previous.selectedBy === from.deviceId && setups.has(previous.cardId)) stop(previous, 'another device selected');
     }
     t.selectedBy = from.deviceId;
+    tags.beginCandidate(cardId);
     arm.cancel(t, 'retrying');
     control.cancel(t);
     steps.failRun(t.runId, CANCELLED_GUIDANCE);
     t.runId = newId('run-');
     setups.add(t.cardId);
     // A completed setup that was declined only needs a fresh ARM confirmation.
-    if (t.specId && t.driver && Object.values(t.verification).includes('pass') && specs.get(t.specId)) {
+    if (!rerun && t.specId && t.driver && Object.values(t.verification).includes('pass') && specs.get(t.specId)) {
       const abort = new AbortController();
       t.abort = abort;
       showControls(t, from.deviceId);
@@ -439,13 +512,21 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     t.lastError = undefined;
     const runId = t.runId;
     void runLoop(loopDeps, t, { ...t.selection, identified: tagIdentity.get(t.cardId) }).finally(() => {
-      if (targets.get(t.cardId) === t && t.runId === runId) { setups.delete(t.cardId); tags.sync(t, t.specId ? specs.get(t.specId) : undefined); publishTags(); }
+      if (targets.get(t.cardId) === t && t.runId === runId) {
+        setups.delete(t.cardId);
+        tags.sync(t, t.specId ? specs.get(t.specId) : undefined);
+        // A failed candidate leaves the last completed setup available as one coherent unit.
+        const saved = tags.get(t.cardId);
+        if (!t.armed && saved?.uiSpec) targets.create({ ...saved, state: saved.armed ? 'armed' : 'forged' });
+        publishTags();
+      }
     });
     return t;
   };
   const cancel = (p: TargetCancelPayload): boolean => {
     const t = targets.get(p.cardId);
     if (!t || !tags.has(t.cardId) || (p.runId && p.runId !== t.runId)) return false;
+    tags.setEnabled(t.cardId, false);
     stop(t);
     return true;
   };
@@ -503,7 +584,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (EXPERIMENTAL_TYPE.test(e.message.type)) return;
     const m = e.message as AgentMessage;
     const from = { deviceId: e.device.deviceId, name: e.device.name, canApprove: e.device.canApprove, local: e.connection.local };
-    if (['mode.set', 'tag.add', 'tag.remove', 'control.setup', 'target.select', 'target.retry'].includes(m.type) && !from.canApprove && !from.local) {
+    if (['mode.set', 'tag.add', 'tag.remove', 'library.place', 'library.forget', 'library.restore', 'library.rename', 'control.setup', 'target.select', 'target.retry'].includes(m.type) && !from.canApprove && !from.local) {
       hub.sendToDevice(from.deviceId, 'log', { level: 'error', code: 'forbidden', message: 'Only an owner may tag or set up devices.' });
       return;
     }
@@ -517,8 +598,20 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       case 'tag.remove':
         removeTag(m.payload.cardId);
         return;
+      case 'library.place':
+        if (m.payload.placement.headsetId === from.deviceId) place(m.payload.cardId, m.payload.placement);
+        return;
+      case 'library.forget':
+        forget(m.payload.cardId);
+        return;
+      case 'library.restore':
+        restoreVersion(m.payload.cardId, m.payload.versionId);
+        return;
+      case 'library.rename':
+        rename(m.payload.cardId, m.payload.displayName);
+        return;
       case 'control.setup':
-        setup(m.payload.cardId, from);
+        setup(m.payload.cardId, from, m.payload.rerun);
         return;
       case 'control.cancel':
         cancel(m.payload);
@@ -607,6 +700,11 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     tagsState,
     addTag,
     removeTag,
+    libraryState,
+    forget,
+    restoreVersion,
+    rename,
+    place,
     setup,
     panic,
     close: () => {
