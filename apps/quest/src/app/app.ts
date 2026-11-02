@@ -66,6 +66,7 @@ import { PushToTalk } from '../voice/ptt';
 import { ControlSender } from './controls';
 import { type Emulator, installEmulator } from './emulator';
 import { HandFeedback } from './hand-feedback';
+import { THEME as HUD_V2_THEME } from '../hud/v2/theme';
 import type { Handedness, Hud, ShellFrame } from './hud-contract';
 import { type HudKind, loadHud } from './hud-loader';
 import { handJointPositions, InputSampler } from './input';
@@ -437,6 +438,7 @@ export class QuestApp {
     const { hud, kind, error } = await loadHud({ scene: this.scene, camera: this.desktopCam, renderer: this.renderer }, this.params.get('hud'));
     this.hud = hud;
     this.hudKind = kind;
+    if (kind === 'v2') this.handFeedback.setAppearance({ accent: HUD_V2_THEME.color.accent, showHover: false });
     this.scene.add(hud.root);
     if (error) this.page.log(error, 'warn');
     this.page.log(`HUD: ${kind === 'v2' ? 'compact v2' : kind === 'gen3d' ? 'original renderer (v1)' : 'shell debug HUD'}`);
