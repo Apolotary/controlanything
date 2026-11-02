@@ -55,7 +55,7 @@ export interface ScannerEvents extends Record<string, unknown> {
 export class Scanner extends Emitter<ScannerEvents> {
   active = false;
   purpose: 'scan' | 'pair' = 'scan';
-  category: Category = 'electronics';
+  category: Category = 'everything';
   rangeM = ANNOTATION_RANGE_M;
   periodMs = 1000;
   maxInFlight = 2;

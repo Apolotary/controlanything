@@ -39,6 +39,7 @@ import {
 } from '../io/v1';
 import { type Envelope, WsClient } from '../io/ws';
 import { Approvals } from '../pair/approvals';
+import { homeHint } from '../hud/home';
 import { PairingFlow } from '../pair/self';
 import { type ReplayMode, ReplayCamera, TakePlayer } from '../replay/player';
 import { Recorder } from '../replay/recorder';
@@ -138,7 +139,7 @@ export class QuestApp {
   readonly encoder = new JpegEncoder(1280, 0.8);
   readonly targets = new TargetStore();
   readonly modes = new ModeState();
-  filter: ObjectFilter = 'electronics';
+  filter: ObjectFilter = 'everything';
   private readonly observed = new Map<string, { target: HudTarget; at: number }>();
   private readonly visibleTargets = new Set<string>();
   private readonly armedCards = new Set<string>();
@@ -630,7 +631,8 @@ export class QuestApp {
 
   private refreshHome(): void {
     this.hud.setHome?.({ mode: this.modes.mode, filter: this.filter, tagged: this.modes.tags.size,
-      status: this.modes.mode === 'annotate' ? 'Tag the devices you want to control' : this.pairingUntil ? 'Look at the companion’s QR code' : 'Choose a tagged device' });
+      status: homeHint(this.modes.mode, this.modes.tags.size, !!this.lockedId),
+      canStop: !!this.activeSetup || this.armedCards.size > 0 });
     const tag = this.lockedId ? this.modes.tags.get(this.lockedId) : undefined;
     this.hud.setDeviceState?.(tag ? { targetId: tag.targetId, connection: tag.connection, hint: tag.hint,
       busy: tag.busy, sentence: tag.sentence, handControl: this.handMapping?.targetId === tag.targetId } : null);
@@ -641,7 +643,7 @@ export class QuestApp {
     const tag = this.modes.tags.get(target.id);
     if (tag) {
       tag.position = { x: target.position[0], y: target.position[1], z: target.position[2] };
-      target = { ...target, label: tag.name ?? tag.label, tagged: true, connection: tag.connection };
+      target = { ...target, label: tag.name || tag.label, tagged: true, connection: tag.connection, identifying: !tag.name?.trim(), busy: tag.busy };
     }
     this.observed.set(target.id, { target, at: Date.now() });
     this.refreshAnnotations(true);
@@ -660,7 +662,8 @@ export class QuestApp {
       const observed = this.observed.get(id);
       if (!observed || !inAnnotationRange(observed.target.position, head, range)) continue;
       show.add(id);
-      if (force || !this.visibleTargets.has(id)) draw.push({ ...observed.target, tagged: true, connection: tag.connection, label: tag.name ?? tag.label });
+      if (force || !this.visibleTargets.has(id)) draw.push({ ...observed.target, tagged: true, connection: tag.connection,
+        label: tag.name || tag.label, identifying: !tag.name?.trim(), busy: tag.busy });
     }
     if (this.modes.mode === 'annotate') {
       const candidates = [...this.observed.values()].filter(({ target, at }) => !this.modes.tags.has(target.id)
@@ -1027,8 +1030,9 @@ export class QuestApp {
     this.armRequest = p;
     this.pendingArm = p.armId;
     this.acceptedArm = undefined;
-    this.hud.showConfirm({ id: p.armId, title: 'Arm controls', summary: p.summary, hold: p.irreversible, expiresAt: p.expiresAt, targetId: this.modes.byCard(p.cardId)?.targetId });
-    this.page.log('Controls verified. Confirm ARM to use them.', 'ok');
+    const tag = this.modes.byCard(p.cardId)!;
+    this.hud.showConfirm({ id: p.armId, kind: 'arm', title: `${tag.name?.trim() || tag.label} is ready`, summary: p.summary, hold: p.irreversible, expiresAt: p.expiresAt, targetId: tag.targetId });
+    this.page.log('Controls verified. Enable controls when you are ready.', 'ok');
   }
 
   private pendingArm?: string;

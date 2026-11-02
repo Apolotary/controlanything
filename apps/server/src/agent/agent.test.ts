@@ -240,7 +240,8 @@ class SimRoom {
   }
 
   capture(prompt: string): number[] | undefined {
-    const key = Object.keys(this.codes).find((k) => prompt.includes(k));
+    const names: Record<string, string> = { '全灯': 'Full on', '消灯': 'Off', '明るく': 'Brighter', '暗く': 'Dimmer', '常夜灯': 'Night light', '暖色': 'Warm', '白色': 'Cool white' };
+    const key = Object.keys(this.codes).find((k) => prompt.includes(k) || prompt.includes(`"${names[k]}"`));
     return key ? encodeFrame({ protocol: 'AEHA', bytes: this.codes[key], unitUs: 425 }) : undefined;
   }
 }

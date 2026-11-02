@@ -116,6 +116,23 @@ describe('executor and sensor picking by capability', () => {
 });
 
 describe('steps, targets, arm', () => {
+  it.each([
+    { results: ['pass', 'pass'] as const, summary: 'All 2 commands worked on the real device.' },
+    { results: ['pass', 'fail'] as const, summary: '1 of 2 commands worked; only those are enabled.' },
+    { results: ['pass', 'untested'] as const, summary: '1 of 2 commands worked; only those are enabled.' },
+  ])('describes verified command counts plainly: $summary', async ({ results, summary }) => {
+    const hub = new FakeHub();
+    const targets = new TargetStore(hub);
+    const arm = new ArmService({ hub, targets, steps: new StepLog(hub) });
+    const target = targets.create({ cardId: 'light' });
+    target.card = { cardId: 'light', name: 'Ceiling light', maker: '', model: '', category: 'lighting', confidence: 1, protocols: ['ir'], evidence: [] };
+    const driver: Driver = { driverId: 'driver', cardId: 'light', transport: 'ir', executor: { deviceId: 'bridge' }, provenance: [], actions: results.map((verified, index) => ({ actionId: `command_${index}`, label: `Command ${index}`, kind: 'trigger', encode: { kind: 'ir', protocol: 'RAW', rawUs: [9000, 4500] }, verified })) };
+    const pending = arm.request(target, driver);
+    expect(hub.of('arm.request')[0]).toMatchObject({ title: 'Ceiling light is ready', summary });
+    arm.close();
+    await pending;
+  });
+
   it('step log broadcasts agent.step with model fields and keeps history', () => {
     const hub = new FakeHub();
     const log = new StepLog(hub);

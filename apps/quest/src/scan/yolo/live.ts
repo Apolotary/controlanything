@@ -111,7 +111,7 @@ export class LiveDetector {
   readonly stats: LiveStats = { state: 'off', inferMs: 0, latencyMs: 0, fps: 0, intervalMs: 100, frameMs: 0, baselineMs: 0, tracks: 0, shown: 0, handedOver: 0, frames: 0, skipped: 0, errors: 0 };
   readonly tracker = new BoxTracker();
   readonly telemetry = new YoloTelemetry();
-  category: Category = 'electronics';
+  category: Category = 'everything';
   scoreThreshold = ANNOTATION_MIN_SCORE;
   rangeM = ANNOTATION_RANGE_M;
   running = false;

@@ -1,7 +1,7 @@
 import { Color, Mesh, PlaneGeometry, ShaderMaterial, Vector2 } from 'three';
 import { THEME } from './theme';
 
-export type SurfaceStyle = 'plate' | 'button' | 'selected' | 'hover' | 'selected-hover' | 'pressed';
+export type SurfaceStyle = 'plate' | 'button' | 'primary' | 'selected' | 'hover' | 'selected-hover' | 'pressed';
 
 /** Rounded fill and an antialiased inner stroke share two triangles and one draw. */
 export class GlassSurfaces {
@@ -12,18 +12,19 @@ export class GlassSurfaces {
     const key = `${style}/${pill}`;
     let material = this.materials.get(key);
     if (material) return material;
-    const selected = style === 'selected' || style === 'selected-hover' || style === 'pressed';
+    const primary = style === 'primary';
+    const selected = primary || style === 'selected' || style === 'selected-hover' || style === 'pressed';
     const outlined = style === 'hover' || style === 'selected-hover' || style === 'pressed';
     material = new ShaderMaterial({
       transparent: true, depthWrite: false, toneMapped: false,
       uniforms: {
         size: { value: new Vector2(w, h) },
         radius: { value: pill ? h / 2 : THEME.card.radius },
-        stroke: { value: THEME.surface.stroke * (outlined ? 2 : 1) },
+        stroke: { value: THEME.surface.stroke * (primary ? 1.5 : outlined ? 2 : 1) },
         fill: { value: new Color(selected ? THEME.color.accent : style === 'plate' ? THEME.color.plate : THEME.color.stroke) },
-        fillAlpha: { value: style === 'pressed' ? 0.48 : selected ? THEME.opacity.accentSoft : style === 'plate' ? THEME.opacity.plate : THEME.surface.buttonOpacity },
+        fillAlpha: { value: style === 'pressed' ? 0.48 : primary ? 0.28 : selected ? THEME.opacity.accentSoft : style === 'plate' ? THEME.opacity.plate : 0.1 },
         edge: { value: new Color(selected || outlined ? THEME.color.accent : THEME.color.stroke) },
-        edgeAlpha: { value: outlined ? 1 : THEME.opacity.stroke },
+        edgeAlpha: { value: primary || outlined ? 1 : style === 'button' ? 0.26 : THEME.opacity.stroke },
       },
       vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
       fragmentShader: `

@@ -18,6 +18,7 @@ export interface BoxState {
   pulse: number;
   removing: boolean;
   opacity: number;
+  tagged: boolean;
   facing?: Vector3;
 }
 export type BoxRay = { origin: Vector3 } & ({ direction: Vector3 } | { dir: Vector3 });
@@ -41,6 +42,7 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
   private readonly frame = new Matrix4();
   private readonly colorScratch = new Color();
   private readonly activeColor = new Color(THEME.color.accent);
+  private readonly idleColor = new Color(THEME.color.stroke);
   private active: string | null = null;
   private hovered: string | null = null;
   private selected: string | null = null;
@@ -96,7 +98,7 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
         if (this.boxes.size >= this.limit) return;
       }
       if (this.boxes.size >= this.capacity) this.grow();
-      b = { id, center: center.clone(), w, h, color: c.clone(), scale: 1, tCenter: center.clone(), tw: w, th: h, tColor: c.clone(), tScale: 1, pulse: 0, removing: false, opacity: 1 };
+      b = { id, center: center.clone(), w, h, color: c.clone(), scale: 1, tCenter: center.clone(), tw: w, th: h, tColor: c.clone(), tScale: 1, pulse: 0, removing: false, opacity: 1, tagged: false };
       this.boxes.set(id, b);
     }
     b.tCenter.copy(center);
@@ -156,6 +158,10 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
   setActive(id: string | null): void { this.active = id; }
   setHovered(id: string | null): void { this.hovered = id; }
   setSelected(id: string | null): void { this.selected = id; }
+  setTagged(id: string, tagged: boolean): void {
+    const box = this.boxes.get(id);
+    if (box) box.tagged = tagged;
+  }
   setOpacity(id: string, opacity: number): void {
     const box = this.boxes.get(id);
     if (box) box.opacity = Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 0;
@@ -210,15 +216,14 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
     this.col[offset] = color.r;
     this.col[offset + 1] = color.g;
     this.col[offset + 2] = color.b;
-    this.alpha[offset / 3] = b.opacity;
+    this.alpha[offset / 3] = b.opacity * (b.tagged ? 1 : 0.4 / THEME.opacity.line);
   }
   private writeBox(index: number, b: BoxState, head: Vector3): void {
     this.basis(b.center, head, b.facing);
     const hw = b.w / 2, hh = b.h / 2;
     const radius = Math.min(THEME.box.corner, hw / 2, hh / 2);
-    const active = b.id === this.active || b.id === this.hovered || b.id === this.selected;
-    const halfStroke = (active ? THEME.box.activeStroke : THEME.box.stroke) * this.labelScale(b, head) / 2;
-    const color = active ? this.activeColor : b.color;
+    const halfStroke = THEME.box.stroke * (b.tagged ? 2.5 / 1.5 : 1) * this.labelScale(b, head) / 2;
+    const color = b.tagged ? this.activeColor : this.idleColor;
     // Two offset contours give the stroke a real width on WebGL, including its rounded corners.
     for (let sample = 0; sample < SEGMENTS; sample++) {
       const corner = Math.floor(sample / (THEME.box.cornerSteps + 1));

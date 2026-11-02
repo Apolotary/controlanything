@@ -393,7 +393,7 @@ describe('plain-language guidance', () => {
     ['linking', 'Finding a connection to your device…'],
     ['researching', 'Looking up how to control it…'],
     ['driving', 'Preparing commands for your device…'],
-    ['verifying', 'Keep the light in view: testing it now'],
+    ['verifying', 'Testing the light: keep it in view'],
     ['forging', 'Making your controls…'],
     ['arming', 'Tap once to enable the controls'],
     ['controlling', 'Ready: 3 controls'],
@@ -418,6 +418,25 @@ describe('plain-language guidance', () => {
     expect(hub.of('target.status').at(-1)?.sentence).toMatch(/remote codes/);
     expect(drive).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([true, false])('keeps the testing instruction visible after a command result (pass: %s)', async (pass) => {
+    const { hub, target, deps } = setup();
+    vi.mocked(verifyDriver).mockImplementation(async (_deps, _target, _driver, options) => {
+      options?.onStep?.('off', 'internal command detail');
+      options?.onEvidence?.({
+        evidenceId: 'evidence', execId: 'command', actionId: 'off', attempt: 1,
+        sent: { op: { kind: 'ir', protocol: 'NEC', bytes: [1, 2, 3, 4] }, at: 1 },
+        expected: { sense: 'camera', effect: 'off' },
+        observed: { sense: 'camera', metric: 'luma-abs', before: 1, after: 0, delta: -1, threshold: 0.1 }, pass,
+      });
+      return structuredClone(verified);
+    });
+    await runLoop({ ...deps, forge: () => undefined }, target);
+
+    const progress = hub.of('agent.step').filter((step) => step.phase === 'verify' && (step.title === 'off' || step.title.startsWith('off:')));
+    expect(progress).toHaveLength(2);
+    expect(progress.every((step) => step.sentence === 'Testing the light: keep it in view')).toBe(true);
   });
 
   it('explains a device the camera could not verify and keeps controls disarmed', async () => {

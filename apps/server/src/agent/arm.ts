@@ -41,8 +41,10 @@ export class ArmService {
     const passed = actions.filter((a) => a.verified === 'pass').length;
     return this.ask(target, {
       driverId: driver.driverId,
-      title: `Arm ${target.card?.name ?? target.cardId}?`,
-      summary: summary ?? `${passed} of ${actions.length} actions verified on the real device. Controls bound to unverified actions stay disarmed.`,
+      title: `${target.card?.name ?? target.detection?.label ?? 'Device'} is ready`,
+      summary: summary ?? (passed === actions.length
+        ? `All ${actions.length} commands worked on the real device.`
+        : `${passed} of ${actions.length} commands worked; only those are enabled.`),
       actions,
       irreversible,
     }, signal);
