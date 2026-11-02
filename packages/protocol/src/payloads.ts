@@ -15,6 +15,7 @@
 import { Control as Gen3dControl, Gen3dSpec, HackItem as Gen3dHackItem, Part as Gen3dPart } from '@ce/gen3d';
 import { z } from 'zod';
 import { Driver, Evidence, ExecOp, IrCapture, VerifyState } from './driver';
+import { GestureMap } from './gestures';
 import { Hack, HackSet } from './hackset';
 import { RoomPlacement } from './library';
 import {
@@ -542,6 +543,7 @@ export const UiSpecPayload = z.object({
   widgets: z.array(Widget).min(1).max(64).optional(),
   gen3d: Gen3dSpec.optional(),
   hackset: HackSet.optional(),
+  gestureMap: GestureMap.optional(),
   notes: z.string().max(2000).optional(),
   source: ModelSource.optional(),
   /** the Meta model that generated it, e.g. "muse-spark-1.3" */

@@ -24,6 +24,7 @@ import { issue, type Issue, type Stage } from './issues';
 import { applyEdit, EditSet, syncHackset } from './editPatch';
 import { editMessages, forgeMessages } from './forgePrompt';
 import { ForgeDevice, ForgeDriver, verificationOf, VerifyState } from './forgeTypes';
+import { proposeGestureMap } from '../devices/gestures';
 import { draftIssues, isStepper } from './forgeVerify';
 import { draftAccent, draftToHack, ForgeDraft, type Hack, HackDraft, HACKSET_VERSION, type HackSet } from './hackset';
 import { TopLevelItemScanner } from './partial';
@@ -472,6 +473,14 @@ export function createForge(deps: ForgeDeps): Forge {
       : undefined);
 
   const publish = (e: ForgeEvent) => {
+    if (e.type === 'spec') {
+      const entry = store.get(e.uiSpec.specId);
+      if (entry) {
+        const map = proposeGestureMap(entry.driver, entry.verification, entry.device);
+        if (map) e.uiSpec.gestureMap = map;
+        else delete e.uiSpec.gestureMap;
+      }
+    }
     for (const fn of listeners) {
       try {
         fn(e);

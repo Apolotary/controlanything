@@ -91,6 +91,8 @@ export interface ExecRequest {
 
 export type ExecResult = (ok: boolean, detail?: string) => void;
 interface FireOptions {
+  /** Performance gestures freeze immediately: a missed send is never queued. */
+  dropIfLimited?: boolean;
   port?: string;
   cardId?: string;
   driverId?: string;
@@ -232,6 +234,10 @@ export class Dispatcher {
     const limiter = this.limiter(executorDeviceId, op, Boolean(opts.lightCap));
     // Stop must reach the executor before the caller disarms and clears queued work.
     if (!(op.kind === 'midi' && op.msg === 'panic') && !limiter.take()) {
+      if (opts.dropIfLimited) {
+        opts.onResult?.(false, 'Rate limited');
+        return false;
+      }
       const key = `${executorDeviceId}:${opts.cardId ?? ''}:${op.kind}:${opts.actionId ?? (op.kind === 'midi' ? `${op.msg}:${op.channel}:${op.number ?? ''}` : op.kind)}`;
       const existing = this.trailing.get(key);
       if (existing) {

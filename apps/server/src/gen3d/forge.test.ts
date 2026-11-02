@@ -179,6 +179,17 @@ describe('forge: edit, undo, redo, rearm', () => {
     expect(ui.rev).toBe(2);
     expect(ui.gen3d.controls.find((c) => c.id === 'h_warm')?.armed).toBe(true);
   });
+
+  it('publishes only current verified gesture bindings, including after undo', async () => {
+    const { forge, g } = await forged();
+    const id = g.uiSpec!.specId;
+    expect(g.uiSpec!.gestureMap?.postures.map((binding) => binding.actionId)).toContain('ir.full');
+    const verification = Object.fromEntries(FORGE_LIGHT_DRIVER.actions.map((action) => [action.actionId, 'fail' as const]));
+    expect(forge.rearm(id, verification).gestureMap).toBeUndefined();
+    expect(forge.undo(id).uiSpec?.gestureMap).toBeUndefined();
+    const restored = forge.rearm(id, { 'ir.full': 'pass' });
+    expect(restored.gestureMap?.postures.map((binding) => binding.actionId)).toEqual(['ir.full']);
+  });
 });
 
 describe('forge: record and replay (FIXTURE mode replays real recorded runs)', () => {

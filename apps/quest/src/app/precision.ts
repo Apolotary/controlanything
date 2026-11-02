@@ -4,6 +4,33 @@ const radians = Math.PI / 180;
 const clampDot = (value: number): number => Math.max(-1, Math.min(1, value));
 const alpha = (cutoff: number, seconds: number): number => 1 / (1 + 1 / (2 * Math.PI * cutoff * seconds));
 
+/** Adaptive scalar smoothing; reset on a new clutch reference so pickup never drifts. */
+export class OneEuroScalar {
+  private time = -Infinity;
+  private previous = 0;
+  private filtered = 0;
+  private velocity = 0;
+
+  constructor(private readonly minCutoff = 1.2, private readonly beta = 0.4) {}
+
+  reset(): void { this.time = -Infinity; }
+
+  update(value: number, timeMs: number): number {
+    if (!Number.isFinite(value) || !Number.isFinite(timeMs)) return this.filtered;
+    const seconds = (timeMs - this.time) / 1000;
+    if (!Number.isFinite(this.time) || seconds > 0.25 || seconds < 0) {
+      this.filtered = value;
+      this.velocity = 0;
+    } else if (seconds > 0) {
+      this.velocity += ((value - this.previous) / seconds - this.velocity) * alpha(1, seconds);
+      this.filtered += (value - this.filtered) * alpha(this.minCutoff + this.beta * Math.abs(this.velocity), seconds);
+    }
+    this.previous = value;
+    this.time = timeMs;
+    return this.filtered;
+  }
+}
+
 /** Research synthesis rule 8: slow rays reject tremor; deliberate motion raises the cutoff. */
 export class OneEuroRayFilter {
   private time = -Infinity;

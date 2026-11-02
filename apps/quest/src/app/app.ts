@@ -74,6 +74,9 @@ import type { AppMode, HudTarget, ObjectFilter } from '../hud/contract';
 import { annotationFadeMs, annotationRange, matchesAnnotationFilter, inAnnotationRange } from '../scan/policy';
 import { type Emulator, installEmulator } from './emulator';
 import { HandFeedback } from './hand-feedback';
+import { GestureSession } from '../gestures/session';
+import { GestureFeedback } from '../gestures/feedback';
+import { routeLabel } from '../hud/v2/command-state';
 import { THEME as HUD_V2_THEME } from '../hud/v2/theme';
 import type { Handedness, Hud, ShellFrame } from './hud-contract';
 import { type HudKind, loadHud } from './hud-loader';
@@ -175,7 +178,9 @@ export class QuestApp {
   private pairCodeRequest: string | null = null;
   private lastPairFrame = 0;
   private pairCapturing = false;
-  private handMapping?: { targetId: string; specId: string; controlId: string; originY?: number; value: number; current: number; lastAt: number };
+  private readonly gestureSpecs = new Map<string, UiSpecPayload>();
+  private handMapping?: { targetId: string; session: GestureSession; live: boolean; controllerEngaged: boolean; route: string };
+  private gestureFeedback?: GestureFeedback;
   readonly xrHit = new XrHitTester();
   readonly handheld = new HandheldTracker();
   readonly recorder = new Recorder();
@@ -282,6 +287,7 @@ export class QuestApp {
     this.renderer = r;
     this.handFeedback = new HandFeedback(this.params.get('debug') === '1');
     this.scene.add(this.handFeedback.root);
+    this.gestureFeedback = new GestureFeedback(this.scene);
     this.page.stage.appendChild(r.domElement);
     const resize = () => {
       const w = this.page.stage.clientWidth || window.innerWidth;
@@ -588,7 +594,7 @@ export class QuestApp {
       if (s === 'closed') {
         const active = this.activeSetup ? this.modes.byCard(this.activeSetup) : undefined;
         if (active) this.cancelControl(active.targetId);
-        this.controls.clear(); this.modes.disconnected(); this.refreshHome(); this.refreshTags();
+        this.controls.clear(); this.clearHandControl(); this.modes.disconnected(); this.refreshHome(); this.refreshTags();
       }
       if (s === 'closed' && info) this.page.log(`socket closed (${info.code}${info.reason ? ` ${info.reason}` : ''}); reconnecting`, 'warn');
     };
@@ -678,7 +684,9 @@ export class QuestApp {
     const tag = this.lockedId ? this.modes.tags.get(this.lockedId) : undefined;
     this.hud.setDeviceState?.(tag ? { targetId: tag.targetId, connection: tag.connection, hint: tag.hint, action: tag.action,
       pairingSeconds: this.pairingUntil ? Math.max(1, Math.ceil((this.pairingUntil - performance.now()) / 1000)) : undefined,
-      busy: tag.busy, sentence: tag.sentence, handControl: this.handMapping?.targetId === tag.targetId } : null);
+      busy: tag.busy, sentence: tag.sentence, handControl: this.handMapping?.targetId === tag.targetId,
+      performAvailable: !!tag.cardId && this.gestureSpecs.has(tag.cardId),
+      performingLive: this.handMapping?.live ?? false, performanceRoute: this.handMapping?.route } : null);
   }
 
   private observeTarget(target: HudTarget): void {
@@ -925,7 +933,7 @@ export class QuestApp {
     this.ws.send('control.cancel', { cardId: tag.cardId }, { to: 'server' });
     tag.busy = false; tag.sentence = 'Setup cancelled.';
     this.activeSetup = undefined; this.pendingArm = undefined; this.armRequest = undefined; this.acceptedArm = undefined;
-    this.armedCards.delete(tag.cardId); this.controls.clear(); this.handMapping = undefined;
+    this.armedCards.delete(tag.cardId); this.controls.clear(); this.clearHandControl();
     const specId = this.specByCard.get(tag.cardId);
     if (specId) this.hud.setArmed(this.gen3dIdFor(specId), false);
     this.hud.showConfirm(null); this.refreshHome();
@@ -1029,37 +1037,45 @@ export class QuestApp {
   }
 
   private setHandControl(targetId: string, enabled: boolean): void {
-    this.handMapping = undefined;
+    this.clearHandControl();
     const tag = this.modes.tags.get(targetId);
-    const spec = tag?.cardId ? this.generated.get(tag.cardId) : undefined;
-    if (enabled && this.canControl(tag?.cardId) && spec && /synth|keyboard|midi/i.test(`${tag?.category} ${spec.device?.category} ${tag?.label}`)) {
-      const control = spec.controls.find((c) => (c.kind === 'continuous' || c.kind === 'stepped') && c.armed !== false);
-      if (control) {
-        const value = Number(this.controlValues.get(`${spec.specId}:${control.id}`) ?? control.default ?? control.range?.min ?? 0);
-        this.handMapping = { targetId, specId: spec.specId, controlId: control.id, value, current: value, lastAt: 0 };
-      }
+    const spec = tag?.cardId ? this.gestureSpecs.get(tag.cardId) : undefined;
+    if (enabled && this.canControl(tag?.cardId) && spec?.gestureMap) {
+      this.controls.clear();
+      const lastMirror = new Map<string, number>();
+      const session = new GestureSession({ ...spec, gestureMap: spec.gestureMap }, this.controlValues, (event) => {
+        if (this.handMapping?.session !== session || !this.canControl(tag?.cardId)) return;
+        this.controlValues.set(`${event.specId}:${event.widgetId}`, event.value);
+        this.ws.send('control.event', event);
+      }, (specId, controlId, value) => {
+        this.controlValues.set(`${specId}:${controlId}`, value);
+        const now = performance.now();
+        if (now - (lastMirror.get(controlId) ?? -Infinity) >= 200) {
+          lastMirror.set(controlId, now);
+          this.hud.setControlValue(specId, controlId, value);
+        }
+      });
+      this.handMapping = { targetId, session, live: false, controllerEngaged: !!(this.lastFrame?.hands.right?.controller || this.lastFrame?.hands.left?.controller),
+        route: routeLabel(spec.gen3d?.device?.transport, spec.hackset?.device.channel.type) };
     }
     this.refreshHome();
   }
 
+  private clearHandControl(): void {
+    this.handMapping?.session.engine.reset();
+    this.handMapping = undefined;
+    if (this.lastFrame) this.gestureFeedback?.update(this.lastFrame, null);
+  }
+
   private updateHandControl(frame: ShellFrame, time: number): void {
     const mapping = this.handMapping;
-    if (!mapping) return;
+    if (!mapping) { this.gestureFeedback?.update(frame, null); return; }
     const tag = this.modes.tags.get(mapping.targetId);
-    if (!this.canControl(tag?.cardId)) { this.handMapping = undefined; this.refreshHome(); return; }
-    const wrist = frame.hands.right?.joints.wrist?.position;
-    if (!wrist) { mapping.originY = undefined; mapping.value = mapping.current; return; }
-    if (mapping.originY === undefined) { mapping.originY = wrist.y; return; }
-    if (time - mapping.lastAt < 50) return;
-    const spec = this.generated.get(tag!.cardId!);
-    const control = spec?.controls.find((c) => c.id === mapping.controlId);
-    if (!control) return;
-    const range = control.range ?? { min: 0, max: 1 };
-    let value = Math.max(range.min, Math.min(range.max, mapping.value + (wrist.y - mapping.originY) / 0.4 * (range.max - range.min)));
-    if (range.step) value = range.min + Math.round((value - range.min) / range.step) * range.step;
-    mapping.lastAt = time; mapping.current = value;
-    this.onControl({ specId: mapping.specId, controlId: mapping.controlId, value, phase: 'move', ts: Date.now() });
-    this.hud.setControlValue(mapping.specId, mapping.controlId, value);
+    if (!this.canControl(tag?.cardId)) { this.clearHandControl(); this.refreshHome(); return; }
+    const state = mapping.session.engine.update(frame, time, mapping.controllerEngaged);
+    if (state.stopped) { this.onDeck('panic', 'press'); return; }
+    this.gestureFeedback?.update(frame, state);
+    if (mapping.live !== state.engaged) { mapping.live = state.engaged; this.refreshHome(); }
   }
 
   private helloPayload(): PayloadOf<'hello'> {
@@ -1155,6 +1171,10 @@ export class QuestApp {
       // another client moved a control: mirror it without re-emitting
       const p = m.payload as PayloadOf<'control.event'>;
       if (m.from === this.identity?.deviceId || !p.specId) return;
+      if (p.widgetId.startsWith('gesture:')) {
+        this.controlValues.set(`${p.specId}:${p.widgetId}`, p.value);
+        return;
+      }
       const gen3dId = [...this.uiSpecOfGen3d.entries()].find(([, ui]) => ui === p.specId)?.[0] ?? p.specId;
       this.controlValues.set(`${gen3dId}:${p.widgetId}`, p.value);
       this.hud.setControlValue(gen3dId, p.widgetId, p.value);
@@ -1347,6 +1367,9 @@ export class QuestApp {
       while (this.deferredSpecs.size > 64) this.deferredSpecs.delete(this.deferredSpecs.keys().next().value!);
       return;
     }
+    if (this.handMapping?.targetId === this.modes.byCard(p.cardId)?.targetId) this.clearHandControl();
+    if (p.gestureMap && (p.gestureMap.axes.length || p.gestureMap.postures.length)) this.gestureSpecs.set(p.cardId, p);
+    else this.gestureSpecs.delete(p.cardId);
     // a card's spec sits at that device; a room-level spec (no cardId: daemons, combos) floats on its own
     const t = p.cardId ? this.targetForCard(p.cardId) : undefined;
     if (!t || t.locating) { this.deferredSpecs.set(p.cardId, p); return; }
@@ -1373,6 +1396,7 @@ export class QuestApp {
       this.hud.showHackMenu(menuKey, { title: p.hackset.device.name, subtitle: 'Device controls', items });
     }
     this.page.log(`ui.spec ${p.title ?? p.specId} rev ${p.rev ?? 1}${p.cardId ? '' : ' (room)'}${p.modelId ? ` · ${p.modelId}` : ''}${p.source === 'fixture' ? ' · FIXTURE' : ''}`, 'ok');
+    this.refreshHome();
   }
 
   /** Is a world point inside the current camera frame (with a 5 % margin)? */
@@ -1464,7 +1488,7 @@ export class QuestApp {
       if (tag.connection === 'ready') tag.connection = 'setup';
     }
     this.activeSetup = undefined; this.pendingArm = undefined; this.armRequest = undefined; this.acceptedArm = undefined;
-    this.armedCards.clear(); this.controls.clear(); this.handMapping = undefined;
+    this.armedCards.clear(); this.controls.clear(); this.clearHandControl();
     for (const specId of this.specByCard.values()) this.hud.setArmed(this.gen3dIdFor(specId), false);
     this.hud.showConfirm(null); this.release(); this.refreshTags();
   }
@@ -1487,6 +1511,7 @@ export class QuestApp {
     // the pinch IS the human confirmation: an action hack fires as {widgetId: hackId, value: true, phase: 'end'}
     const t = this.targets.get(e.targetId);
     if (!t?.cardId || !this.canControl(t.cardId) || this.lockedId !== t.id) return;
+    if (this.handMapping) { this.clearHandControl(); this.refreshHome(); }
     const specId = this.menuSpec.get(e.targetId) ?? (t?.cardId ? this.specByCard.get(t.cardId) : undefined);
     const payload: PayloadOf<'control.event'> = { widgetId: e.itemId, value: true, ts: e.ts ?? Date.now(), phase: 'end' };
     if (specId) payload.specId = specId;
@@ -1519,8 +1544,14 @@ export class QuestApp {
     const cardId = this.cardOfSpec.get(ui);
     const control = cardId ? this.generated.get(cardId)?.controls.find((c) => c.id === e.controlId) : undefined;
     if (!control || control.armed === false) return;
+    // Touching an ordinary control explicitly leaves Perform and picks up normal widget input.
+    if (this.handMapping) this.clearHandControl();
+    const gestureSpec = cardId ? this.gestureSpecs.get(cardId) : undefined;
+    if (gestureSpec?.gestureMap) for (const axis of gestureSpec.gestureMap.axes) this.controlValues.delete(`${ui}:gesture:${axis.axis}`);
     // One-shot commands execute on release; their activation value must stay true.
     this.controls.push({ ...e, value: control?.kind === 'trigger' ? true : e.value, specId: ui });
+    // Let an ongoing drag finish before rebuilding the card to remove its Perform selection.
+    if (e.phase === 'end') this.refreshHome();
   }
 
   private refreshPing(force = false): void {
@@ -1583,6 +1614,8 @@ export class QuestApp {
   }
 
   private interact(f: ShellFrame, time: number): void {
+    // Performance pinches belong to the selected device until Perform is turned off.
+    if (this.handMapping) return;
     const list = this.aimList();
     this.handFeedback.setHover('left');
     this.handFeedback.setHover('right');
@@ -1650,7 +1683,7 @@ export class QuestApp {
       const active = this.modes.byCard(this.activeSetup);
       if (active) this.cancelControl(active.targetId);
     }
-    this.handMapping = undefined;
+    this.clearHandControl();
     this.pairingUntil = 0;
     this.lockedId = id;
     const savedCard = this.modes.tags.get(id)?.cardId;
@@ -1673,7 +1706,7 @@ export class QuestApp {
   }
 
   release(): void {
-    this.handMapping = undefined;
+    this.clearHandControl();
     this.pairingUntil = 0;
     this.lockedId = null;
     this.hud.setLocked(null);
@@ -1851,6 +1884,7 @@ export class QuestApp {
         this.pairingUntil = 0;
         this.pairCodeRequest = null;
         this.refreshHelper();
+        this.clearHandControl(); this.refreshHome();
         this.session = undefined;
         this.refSpace = undefined;
         this.xrHit.detach();

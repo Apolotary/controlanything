@@ -2553,6 +2553,167 @@
           ],
           "additionalProperties": false
         },
+        "gestureMap": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "number",
+              "const": 1
+            },
+            "clutchPosture": {
+              "type": "string",
+              "const": "L_FIST"
+            },
+            "panicPosture": {
+              "type": "string",
+              "const": "BOTH_PALMS_OUT"
+            },
+            "axes": {
+              "maxItems": 4,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "axis": {
+                    "type": "string",
+                    "enum": [
+                      "right_height",
+                      "right_roll",
+                      "right_pinch_aperture",
+                      "two_hand_distance"
+                    ]
+                  },
+                  "actionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "outMin": {
+                    "type": "number"
+                  },
+                  "outMax": {
+                    "type": "number"
+                  },
+                  "curve": {
+                    "type": "string",
+                    "enum": [
+                      "linear",
+                      "exp",
+                      "log",
+                      "s-curve"
+                    ]
+                  },
+                  "deadzone": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 0.49
+                  },
+                  "smoothingMinCutoff": {
+                    "type": "number",
+                    "minimum": 0.1,
+                    "maximum": 20
+                  },
+                  "smoothingBeta": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 10
+                  },
+                  "quantizeStep": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "maxRateHz": {
+                    "type": "number",
+                    "minimum": 0.1,
+                    "maximum": 30
+                  },
+                  "bipolar": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "axis",
+                  "actionId",
+                  "label",
+                  "outMin",
+                  "outMax",
+                  "curve",
+                  "deadzone",
+                  "smoothingMinCutoff",
+                  "smoothingBeta",
+                  "quantizeStep",
+                  "maxRateHz"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "postures": {
+              "maxItems": 4,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "R_FIST",
+                      "R_OPEN_PALM",
+                      "R_POINT",
+                      "R_PINCH"
+                    ]
+                  },
+                  "actionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "mode": {
+                    "type": "string",
+                    "const": "press"
+                  },
+                  "value": {
+                    "type": [
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "maxRateHz": {
+                    "default": 2,
+                    "type": "number",
+                    "minimum": 0.1,
+                    "maximum": 2
+                  }
+                },
+                "required": [
+                  "posture",
+                  "actionId",
+                  "label",
+                  "mode",
+                  "maxRateHz"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "version",
+            "clutchPosture",
+            "panicPosture",
+            "axes",
+            "postures"
+          ],
+          "additionalProperties": false
+        },
         "notes": {
           "type": "string",
           "maxLength": 2000
