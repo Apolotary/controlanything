@@ -22,6 +22,7 @@ export interface Cursor {
   justReleased: boolean;
   wristQuat?: Quaternion;
   ray?: { origin: Vector3; dir: Vector3 };
+  rawRay?: { origin: Vector3; dir: Vector3 };
   /** true when the cursor is tracked this frame */
   tracked: boolean;
   /** pokes only make sense for real fingers */
@@ -212,6 +213,7 @@ export interface HandInput {
   justReleased: boolean;
   pinchPoint: Vector3;
   ray?: { origin: Vector3; dir: Vector3 };
+  rawRay?: { origin: Vector3; dir: Vector3 };
 }
 
 /** Hand state (sampled by the app shell) → cursor. */
@@ -221,6 +223,7 @@ export function handCursor(hand: 'left' | 'right', h: HandInput | undefined, out
   // A native select can remain available without joint poses. Its ray origin is not a fingertip.
   out.canPoke = Boolean(h?.joints['index-finger-tip']);
   out.ray = h?.ray;
+  out.rawRay = h?.rawRay;
   if (!h?.joints.wrist) out.wristQuat = undefined;
   if (!h) {
     out.tracked = false;

@@ -566,6 +566,16 @@ export const ControlEventPayload = z.object({
 });
 export type ControlEventPayload = z.infer<typeof ControlEventPayload>;
 
+/** S->C. The executor acknowledged all operations for the originating control event. */
+export const ControlResultPayload = z.object({
+  specId: Id,
+  widgetId: z.string().min(1).max(64),
+  ts: z.number(),
+  ok: z.boolean(),
+  detail: z.string().max(512).optional(),
+});
+export type ControlResultPayload = z.infer<typeof ControlResultPayload>;
+
 /**
  * S->C, droppable. One finished piece of a spec while the model is still writing it, so the headset can show
  * the object assembling: a control with its 3D part and hack-menu row. The complete spec follows as ui.spec.

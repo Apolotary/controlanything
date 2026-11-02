@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Group, Quaternion, Vector3 } from 'three';
 import type { HandState, HudFrame } from '../contract';
-import { HandDockAnchor } from './hand-dock';
+import { DockHold, HandDockAnchor } from './hand-dock';
 
 function hand(x = -0.2, palmUp = true, palmUpMs = 300): HandState {
   return {
@@ -24,6 +24,10 @@ function setup(nonDominant: 'left' | 'right' = 'left') {
   };
   const update = (time: number) => { frame.time = time; anchor.update(frame, dock, wrist, 0.192); };
   return { anchor, dock, wrist, frame, update };
+}
+
+function controller(position = new Vector3(-0.18, 1.4, -0.4)): HandState {
+  return { ...hand(), joints: {}, controller: true, grip: { position, quaternion: new Quaternion() } };
 }
 
 describe('HandDockAnchor', () => {
@@ -132,25 +136,95 @@ describe('HandDockAnchor', () => {
     expect(anchor.open).toBe(false);
   });
 
-  it('uses an untouched fallback for controllers or mouse, and hands take priority immediately', () => {
+  it('never reveals a world fallback for missing controller poses, and hands take priority immediately', () => {
     const { anchor, dock, wrist, frame, update } = setup();
     dock.position.set(1, 2, 3);
     frame.hands.left = { ...hand(), controller: true };
     update(0);
-    expect(anchor.tracked).toBe(false);
-    expect(anchor.open).toBe(true);
-    expect(anchor.opacity).toBe(1);
+    expect(anchor.tracked).toBe(true);
+    expect(anchor.open).toBe(false);
+    expect(anchor.opacity).toBe(0);
     expect(wrist.visible).toBe(false);
     expect(dock.position.toArray()).toEqual([1, 2, 3]);
     frame.hands.left = { ...hand(), joints: {} };
     update(20);
-    expect(anchor.tracked).toBe(false);
+    expect(anchor.tracked).toBe(true);
     frame.hands.left = hand(-0.2, false, 0);
     update(40);
     expect(anchor.tracked).toBe(true);
     expect(anchor.open).toBe(false);
     expect(anchor.opacity).toBe(0);
     expect(wrist.visible).toBe(true);
+  });
+
+  it('opens above the left controller after a raised dwell and follows the grip smoothly', () => {
+    const { anchor, dock, frame, update } = setup('right');
+    frame.hands.left = controller();
+    update(0); update(299);
+    expect(anchor.source).toBe('controller');
+    expect(anchor.tracked).toBe(true);
+    expect(anchor.open).toBe(false);
+    update(300); update(480);
+    expect(anchor.open).toBe(true);
+    expect(anchor.opacity).toBe(1);
+    const grip = frame.hands.left.grip!;
+    expect(dock.position.y).toBeGreaterThan(grip.position.y + 0.1);
+    const facing = new Vector3(0, 0, 1).applyQuaternion(dock.quaternion);
+    expect(facing.dot(frame.head.position.clone().sub(dock.position).normalize())).toBeCloseTo(1);
+    const before = dock.position.clone();
+    grip.position.x += 0.1;
+    frame.dt = 0.08;
+    update(560);
+    const target = grip.position.clone().add(new Vector3(0, 0.11, 0));
+    target.addScaledVector(frame.head.position.clone().sub(target).normalize(), 0.04);
+    expect(dock.position.distanceTo(before.clone().lerp(target, 1 - Math.exp(-1)))).toBeLessThan(1e-8);
+  });
+
+  it('keeps the raised dock stable near its threshold, then closes after lowering', () => {
+    const { anchor, frame, update } = setup();
+    frame.hands.left = controller(new Vector3(0, 1.3, -0.5));
+    update(0); update(300); update(480);
+    frame.hands.left.grip!.position.y = 1.19;
+    update(600); update(1000);
+    expect(anchor.open).toBe(true);
+    frame.hands.left.grip!.position.y = 1.0;
+    update(1100); update(1400); update(1580);
+    expect(anchor.open).toBe(false);
+    expect(anchor.opacity).toBe(0);
+  });
+
+  it('opens from the left menu button while lowered, with no right-controller substitute', () => {
+    const { anchor, frame, update } = setup();
+    frame.hands.left = controller(new Vector3(-0.2, 0.9, -0.4));
+    update(0);
+    frame.hands.left.menuPressed = true;
+    update(20);
+    expect(anchor.open).toBe(true);
+    frame.hands.left.menuPressed = false;
+    update(300); update(1000);
+    expect(anchor.opacity).toBe(1);
+    frame.hands.left.menuPressed = true;
+    update(1100);
+    frame.hands.left.menuPressed = false;
+    update(1400); update(1580);
+    expect(anchor.open).toBe(false);
+    delete frame.hands.left;
+    frame.hands.right = controller();
+    update(1800);
+    expect(anchor.source).toBeNull();
+    expect(anchor.opacity).toBe(0);
+  });
+
+  it('gives real hands priority over controllers without carrying over menu visibility', () => {
+    const { anchor, frame, update } = setup();
+    frame.hands.left = controller();
+    frame.hands.left.menuPressed = true;
+    update(0); update(180);
+    frame.hands.left = hand(-0.2, false, 0);
+    update(200);
+    expect(anchor.source).toBe('hand');
+    expect(anchor.open).toBe(false);
+    expect(anchor.opacity).toBe(0);
   });
 
   it('uses the fallback while the desktop mouse drives input, even with emulated hands present', () => {
@@ -164,5 +238,39 @@ describe('HandDockAnchor', () => {
     delete frame.pointer;
     update(200);
     expect(anchor.tracked).toBe(true);
+  });
+});
+
+describe('DockHold', () => {
+  it('fills for 600 ms and commits exactly once while still held', () => {
+    const hold = new DockHold();
+    hold.begin(100);
+    expect(hold.update(400)).toBe(false);
+    expect(hold.progress).toBe(0.5);
+    expect(hold.update(699)).toBe(false);
+    expect(hold.update(700)).toBe(true);
+    expect(hold.progress).toBe(1);
+    expect(hold.update(1000)).toBe(false);
+  });
+
+  it('cancels an early release and requires a full fresh hold', () => {
+    const hold = new DockHold();
+    hold.begin(0); hold.update(500); hold.cancel();
+    expect(hold.progress).toBe(0);
+    expect(hold.update(700)).toBe(false);
+    hold.begin(1000);
+    expect(hold.update(1599)).toBe(false);
+    expect(hold.update(1600)).toBe(true);
+  });
+
+  it('does not restart an active hold and cancels when session time moves backward', () => {
+    const hold = new DockHold();
+    hold.begin(1000); hold.begin(1200);
+    expect(hold.update(1600)).toBe(true);
+    expect(hold.update(900)).toBe(false);
+    expect(hold.progress).toBe(0);
+    expect(hold.update(2000)).toBe(false);
+    hold.begin(2000);
+    expect(hold.update(2600)).toBe(true);
   });
 });

@@ -5,7 +5,7 @@ describe('target chip words', () => {
   it('distinguishes a detection, a pending tag, and the identified device name', () => {
     expect(targetChipLabel({ label: 'Ceiling light' }, 'annotate')).toBe('Ceiling light');
     expect(targetChipLabel({ label: 'Ceiling light', tagged: true, identifying: true }, 'annotate')).toBe('✓ Ceiling light · Identifying…');
-    expect(targetChipLabel({ label: 'KOIZUMI ceiling light', tagged: true, identifying: false }, 'annotate')).toBe('✓ KOIZUMI ceiling light');
+    expect(targetChipLabel({ label: 'KOIZUMI ceiling light', tagged: true, identifying: false }, 'annotate')).toBe('✓ KOIZUMI ceiling l…');
   });
 
   it('offers untagging only when a tagged annotation is hovered', () => {

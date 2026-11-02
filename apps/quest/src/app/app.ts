@@ -41,6 +41,7 @@ import { type Envelope, WsClient } from '../io/ws';
 import { Approvals } from '../pair/approvals';
 import { homeHint } from '../hud/home';
 import { PairingFlow } from '../pair/self';
+import { candidateScore } from '../hud/v2/anchor-stability';
 import { pairingCode } from '../hud/v2/pair-code';
 import { type ReplayMode, ReplayCamera, TakePlayer } from '../replay/player';
 import { Recorder } from '../replay/recorder';
@@ -65,6 +66,7 @@ import { LiveReadout } from '../scan/yolo/readout';
 import { Mic } from '../voice/mic';
 import { pairingApi } from '../io/api';
 import { PushToTalk } from '../voice/ptt';
+import { PinchTargetHistory } from './precision';
 import { ControlSender } from './controls';
 import { ModeState } from './modes';
 import type { AppMode, HudTarget, ObjectFilter } from '../hud/contract';
@@ -76,7 +78,7 @@ import type { Handedness, Hud, ShellFrame } from './hud-contract';
 import { type HudKind, loadHud } from './hud-loader';
 import { handJointPositions, InputSampler } from './input';
 import { Page } from './page';
-import { frameReferenceSpace, startXr, xrSupport } from './xr';
+import { frameReferenceSpace, endXr, startXr, xrSupport } from './xr';
 
 export const APP_VERSION = 'quest@0.1.0';
 const GAZE_AIM = { marginDeg: 3 };
@@ -509,6 +511,8 @@ export class QuestApp {
         this.page.log(`gen3d dev cursor unavailable: ${(e as Error).message}`, 'warn');
       }
     }
+    hud.on('exit', () => { void endXr(this.renderer).catch(() => this.hud.toast('Could not exit AR. Hold Exit to try again.', 'warn')); });
+    hud.on('selectTarget', (e) => this.lock(e.targetId, 'chip'));
     hud.on('mode', (e) => this.setMode(e.mode));
     hud.on('filter', (e) => this.setLiveCategory(e.filter));
     hud.on('tagRemove', (e) => this.untag(e.targetId));
@@ -539,7 +543,11 @@ export class QuestApp {
         removeItem: (key: string) => { foreignIdentity.delete(key); } },
     } : {}) });
     if (!savedAllowed) this.page.log('The socket destination differs from this page; pairing fresh without sending the saved device token.', 'warn');
-    this.controls = new ControlSender((p) => { if (p.specId && this.canControl(this.cardOfSpec.get(p.specId))) this.ws.send('control.event', p); }, 30);
+    this.controls = new ControlSender((p) => {
+      if (!p.specId) return;
+      const sent = this.canControl(this.cardOfSpec.get(p.specId)) && this.ws.send('control.event', p);
+      if (!sent) this.hud.setCommandResult?.(this.gen3dIdFor(p.specId), p.widgetId, p.ts, false);
+    }, 30);
     this.approvals = new Approvals(this.ws);
     this.ptt = new PushToTalk(this.mic, this.ws, () => WsClient.allowsSavedToken(this.ws.url) ? this.identity?.deviceToken : undefined, () => {
       const cardId = this.lockedId ? this.modes.tags.get(this.lockedId)?.cardId : undefined;
@@ -656,12 +664,15 @@ export class QuestApp {
   }
 
   /** One budget shared by both detectors. Tagged anchors survive detection expiry. */
+  private readonly annotationForward = new Vector3();
+
   private refreshAnnotations(force = false): void {
     const now = Date.now();
     if (!force && now - this.lastAnnotationsAt < 80) return;
     this.lastAnnotationsAt = now;
     const head = this.lastFrame?.head.position ?? this.desktopCam.position;
-    const range = annotationRange(this.params.get('range'));
+    const range = Math.min(3, annotationRange(this.params.get('range')));
+    this.annotationForward.set(0, 0, -1).applyQuaternion(this.lastFrame?.head.quaternion ?? this.desktopCam.quaternion);
     const show = new Set<string>();
     const draw: HudTarget[] = [];
     for (const [id, tag] of this.modes.tags) {
@@ -675,8 +686,14 @@ export class QuestApp {
       const candidates = [...this.observed.values()].filter(({ target, at }) => !this.modes.tags.has(target.id)
         && now - at <= annotationFadeMs(isLiveId(target.id)) && (target.score ?? 0) >= 0.5 && matchesAnnotationFilter(target.label, this.filter)
         && inAnnotationRange(target.position, head, range));
-      candidates.sort((a, b) => (b.target.score ?? 0) - (a.target.score ?? 0));
-      for (const { target } of candidates.slice(0, Math.max(0, 6 - show.size))) {
+      const rank = (target: HudTarget) => {
+        const x = target.position[0] - head.x, y = target.position[1] - head.y, z = target.position[2] - head.z;
+        const distance = Math.hypot(x, y, z);
+        return candidateScore(distance, (x * this.annotationForward.x + y * this.annotationForward.y + z * this.annotationForward.z) / Math.max(0.001, distance));
+      };
+      candidates.sort((a, b) => rank(a.target) - rank(b.target));
+      for (const { target } of candidates.slice(0, 5)) {
+        if (!Number.isFinite(rank(target))) continue;
         show.add(target.id);
         if (force || !this.visibleTargets.has(target.id)) draw.push(target);
       }
@@ -940,6 +957,11 @@ export class QuestApp {
       const p = m.payload as PayloadOf<'panic'>;
       this.stopControls();
       this.hud.toast(`Stopped${p.reason ? ` · ${p.reason}` : ''}`, 'warn');
+    });
+    ws.on('control.result', (m) => {
+      if (m.from !== 'server') return;
+      const p = m.payload as { specId: string; widgetId: string; ts: number; ok: boolean };
+      this.hud.setCommandResult?.(this.gen3dIdFor(p.specId), p.widgetId, p.ts, p.ok);
     });
     ws.on('control.event', (m) => {
       // another client moved a control: mirror it without re-emitting
@@ -1243,7 +1265,7 @@ export class QuestApp {
 
   private lastHack = { key: '', at: 0 };
 
-  private onHack(e: { targetId: string; itemId: string; controlId?: string; index: number; hold?: boolean }): void {
+  private onHack(e: { ts?: number; targetId: string; itemId: string; controlId?: string; index: number; hold?: boolean }): void {
     // one pinch = one action on a real device: drop a repeat of the same hack within 400 ms
     const key = `${e.targetId}:${e.itemId}`;
     const now = performance.now();
@@ -1253,7 +1275,7 @@ export class QuestApp {
     const t = this.targets.get(e.targetId);
     if (!t?.cardId || !this.canControl(t.cardId) || this.lockedId !== t.id) return;
     const specId = this.menuSpec.get(e.targetId) ?? (t?.cardId ? this.specByCard.get(t.cardId) : undefined);
-    const payload: PayloadOf<'control.event'> = { widgetId: e.itemId, value: true, ts: Date.now(), phase: 'end' };
+    const payload: PayloadOf<'control.event'> = { widgetId: e.itemId, value: true, ts: e.ts ?? Date.now(), phase: 'end' };
     if (specId) payload.specId = specId;
     this.ws.send('control.event', payload);
     this.upload = { hackId: e.itemId, label: e.itemId, cardId: t?.cardId, stepsDone: 1, startedAt: performance.now() };
@@ -1310,6 +1332,7 @@ export class QuestApp {
 
   // --- targeting -----------------------------------------------------------------------------------
 
+  private readonly targetHistory = { left: new PinchTargetHistory<string>(), right: new PinchTargetHistory<string>() };
   private readonly aimTargets = new Map<string, AimTarget>();
   private readonly aimBuffer: AimTarget[] = [];
   private readonly gazeHit: AimHit = { id: '', angleDeg: 0, distance: 0 };
@@ -1323,15 +1346,26 @@ export class QuestApp {
       if (!this.visibleTargets.has(t.id)) continue;
       let aim = this.aimTargets.get(t.id);
       if (!aim) {
-        aim = { id: t.id, position: t.position, size: 0 };
+        aim = { id: t.id, position: new Vector3(), size: 0 };
         this.aimTargets.set(t.id, aim);
       }
       aim.size = Math.max(0.06, t.sizeM[0], t.sizeM[1]);
+      aim.position.copy(t.position);
+      if (this.hud.getTargetAim && !this.hud.getTargetAim(t.id, aim)) continue;
       list.push(aim);
     }
-    for (const id of this.aimTargets.keys()) if (!this.targets.get(id)) this.aimTargets.delete(id);
+    for (const id of this.aimTargets.keys()) if (!this.targets.get(id) && !this.visibleTargets.has(id)) this.aimTargets.delete(id);
     if (this.modes.mode === 'annotate') this.live?.appendAimables(list);
-    for (let i = list.length - 1; i >= 0; i--) if (!this.visibleTargets.has(list[i]!.id)) list.splice(i, 1);
+    for (let i = list.length - 1; i >= 0; i--) {
+      const source = list[i]!;
+      if (!this.visibleTargets.has(source.id)) { list.splice(i, 1); continue; }
+      if (isLiveId(source.id) && this.hud.getTargetAim) {
+        let aim = this.aimTargets.get(source.id);
+        if (!aim) { aim = { id: source.id, position: new Vector3(), size: source.size }; this.aimTargets.set(source.id, aim); }
+        if (this.hud.getTargetAim(source.id, aim)) list[i] = aim;
+        else list.splice(i, 1);
+      }
+    }
     return list;
   }
 
@@ -1359,9 +1393,12 @@ export class QuestApp {
     }
     for (const hand of HANDS) {
       const h = f.hands[hand];
-      if (!h || this.consumed[hand]) continue;
+      if (!h || this.consumed[hand]) { this.targetHistory[hand].reset(); continue; }
       const handAim = h.ray.dir.lengthSq() > 0.5 ? aimAt(h.ray.origin, h.ray.dir, list, HAND_AIM, this.handHit) : null;
       if (handAim) this.handFeedback.setHover(hand, this.targets.get(handAim.id) ?? this.live?.hoverTarget(handAim.id));
+      const raw = h.rawRay ?? h.ray;
+      const previous = h.justPinched ? this.targetHistory[hand].compensate(time, handAim?.id ?? null, raw.origin, raw.dir) : null;
+      this.targetHistory[hand].record(time, handAim?.id ?? null, raw.origin, raw.dir);
       if (!h.justPinched) continue;
       // A system pinch can arrive without joints; only a measured midpoint can refine a target.
       if (!h.controller && h.joints['thumb-tip'] && h.joints['index-finger-tip']) {
@@ -1371,7 +1408,7 @@ export class QuestApp {
           continue;
         }
       }
-      const pick = handAim?.id ?? this.candidate.shown ?? null;
+      const pick = previous && this.visibleTargets.has(previous) ? previous : handAim?.id ?? this.candidate.shown ?? null;
       if (!pick) continue;
       this.lock(pick, handAim ? 'ray' : 'gaze');
     }

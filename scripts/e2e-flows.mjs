@@ -245,7 +245,7 @@ async function phase(name, action, capture = true) {
   console.log(`PASS ${name} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
 }
 
-async function pinch({ targetId, nodeName, turn = false }) {
+async function pinch({ targetId, nodeName, turn = false, holdMs = 0 }) {
   await renderedFrames();
   if (targetId && !turn) await waitQuest((id) => {
     const app = window.__ce;
@@ -253,9 +253,10 @@ async function pinch({ targetId, nodeName, turn = false }) {
   }, targetId);
   const point = await quest.evaluate(({ targetId, nodeName, turn }) => {
     const app = window.__ce;
-    const object = nodeName ? app.hud.root.getObjectByName(nodeName) : null;
+    const object = nodeName ? app.hud.root.getObjectByName(nodeName)
+      : app.modes.tags.has(targetId) ? app.hud.root.getObjectByName(`target-label:${targetId}`) : null;
     if (nodeName && !object) throw new Error(`HUD node not found: ${nodeName}`);
-    for (let node = object; node; node = node.parent) {
+    for (let node = turn ? null : object; node; node = node.parent) {
       if (!node.visible) throw new Error(`HUD node is hidden: ${nodeName}`);
     }
     const world = object
@@ -274,11 +275,15 @@ async function pinch({ targetId, nodeName, turn = false }) {
     }
     return { x: rect.left + (ndc.x + 1) * rect.width / 2, y: rect.top + (1 - ndc.y) * rect.height / 2 };
   }, { targetId, nodeName, turn });
-  if (turn) return pinch({ targetId, nodeName });
+  if (turn) {
+    await elapsedFrames(300); // Ready rings expand after looking at them for 250 ms.
+    return pinch({ targetId, nodeName, holdMs });
+  }
   await quest.mouse.move(point.x, point.y);
   await quest.mouse.down();
   try {
     await renderedFrames();
+    if (holdMs) await elapsedFrames(holdMs);
   } finally {
     await quest.mouse.up();
   }
@@ -298,7 +303,7 @@ async function assertDockIcons(mode, canStop = false) {
     if (!dock) throw new Error('Hand dock is missing');
     const icons = [];
     dock.traverse((node) => {
-      if (!/^(mode-(annotate|control)|filter:(everything|lights|electronics)|deck:panic)$/.test(node.name)) return;
+      if (!/^(mode-(annotate|control)|filter:(everything|lights|electronics)|deck:panic|exit-ar)$/.test(node.name)) return;
       for (let current = node; current; current = current.parent) if (!current.visible) return;
       icons.push(node.name);
     });
@@ -306,11 +311,11 @@ async function assertDockIcons(mode, canStop = false) {
       oldBar: !!hud.root.getObjectByName('home-bar'), oldHint: !!hud.root.getObjectByName('home-hint'),
       close: !!hud.root.getObjectByName('deck-close') };
   });
-  const expected = ['mode-annotate', 'mode-control'];
+  const expected = ['mode-annotate', 'mode-control', 'exit-ar'];
   if (mode === 'annotate') expected.push('filter:everything', 'filter:lights', 'filter:electronics');
   if (canStop) expected.push('deck:panic');
   assert.deepEqual(state.icons, expected.sort(), `${mode} dock must expose only its available actions`);
-  assert.equal(state.anchor, 'fallback', 'Controller and mouse input must use the fallback dock');
+  assert.equal(state.anchor, 'fallback', 'Mouse emulator input must use the fallback dock');
   assert.equal(state.oldBar || state.oldHint || state.close, false, 'The old bar, permanent hint, and Close button must be removed');
 }
 
@@ -469,6 +474,30 @@ async function run() {
       const dir = p.clone().set(0, 0, -1).applyQuaternion(head.quaternion);
       return p.addScaledVector(dir, 3).toArray();
     });
+  });
+  await phase('02a-detector-deadband', async () => {
+    const stability = await quest.evaluate((id) => {
+      const app = window.__ce, hud = app.hud, source = hud.targets.get(id);
+      if (!source) throw new Error('A detector candidate is required');
+      const probeId = 'flows-stability';
+      const initial = { ...source, id: probeId, tagged: false, position: [...source.position], sizeM: [0.3, 0.2, 0.1] };
+      hud.upsertTarget(initial);
+      const box = hud.boxes.boxes.get(probeId), before = box.center.clone();
+      let movement = 0, resize = 0;
+      try {
+        for (let sample = 0; sample < 90; sample++) {
+          hud.upsertTarget({ ...initial, position: [initial.position[0] + Math.sin(sample) * 0.04,
+            initial.position[1] + Math.cos(sample) * 0.03, initial.position[2]],
+          sizeM: [0.3 + Math.sin(sample) * 0.01, 0.2 + Math.cos(sample) * 0.01, 0.1] });
+          hud.boxes.update(1 / 90, app.lastFrame.head.position, app.lastFrame, 'annotate');
+          movement = Math.max(movement, before.distanceTo(box.center));
+          resize = Math.max(resize, Math.abs(box.w - 0.3), Math.abs(box.h - 0.2));
+        }
+        return { movement, resize };
+      } finally { hud.removeTarget(probeId); }
+    }, targetId);
+    assert(stability.movement < 1e-6, `Small detector noise moved the box ${stability.movement} m`);
+    assert(stability.resize < 1e-6, `Small size noise resized the box ${stability.resize} m`);
   });
   await phase('03-tag-light', async () => {
     await pinch({ targetId });
@@ -732,7 +761,8 @@ async function run() {
     // Input cursors deliberately track input rays; hide them to sample every visible HUD node.
     await quest.evaluate(() => {
       const app = window.__ce;
-      app.input.mouseAsHand = false;
+      app.input.mouseAsHand = true;
+      app.input.pointer.inside = app.input.pointer.down = app.input.pointer.latched = false;
       for (const hand of Object.values(app.emulator.device.hands)) hand.connected = false;
     });
     try {
@@ -746,7 +776,7 @@ async function run() {
       for (let frame = 0; frame < 30; frame++) {
         await yaw(2 * Math.sin(frame / 29 * Math.PI));
         const state = await panelState();
-        assertLocked(initial, state, `small motion frame ${frame}`, true);
+        assertLocked(initial, state, `small motion frame ${frame}`);
         assertSeparated(state);
       }
       await yaw(20);
@@ -773,6 +803,45 @@ async function run() {
     } finally {
       await quest.evaluate(() => { window.__ce.input.mouseAsHand = true; });
     }
+  });
+
+  await phase('15b-device-lock-and-edge-arrow', async () => {
+    await pinch({ nodeName: 'device-lock', turn: true });
+    await waitQuest(() => window.__ce.hud.card.userData.pinned === true);
+    const before = (await panelState()).card;
+    await quest.evaluate((id) => {
+      const app = window.__ce, head = app.emulator.head();
+      const device = app.targets.get(id).position;
+      app.emulator.lookAt(head.position.clone().multiplyScalar(2).sub(device));
+    }, targetId);
+    await elapsedFrames(2300);
+    const state = await quest.evaluate(() => {
+      const app = window.__ce, edge = app.hud.root.getObjectByName('device-edge-pill');
+      const arrow = edge?.getObjectByName('edge-direction');
+      const camera = app.renderer.xr.getCamera().cameras[0];
+      const point = edge?.getWorldPosition(app.lastFrame.head.position.clone()).project(camera);
+      let pills = 0;
+      app.hud.root.traverse((node) => { if (node.name === 'device-edge-pill' && node.visible) pills++; });
+      return { lockedId: app.lockedId, pinned: app.hud.card.userData.pinned,
+        card: app.hud.card.position.toArray(), pills, edgeVisible: edge?.visible,
+        ndc: point?.toArray(), vertices: arrow?.geometry?.getAttribute('position').count ?? 0 };
+    });
+    assert.equal(state.pinned, true);
+    assert.equal(state.lockedId, targetId, 'Looking away must preserve the bound device');
+    assert(Math.hypot(...before.position.map((v, i) => v - state.card[i])) < 1e-5, 'Locked card moved after looking away');
+    assert.equal(state.pills, 1, 'Only the selected device may show an edge pill');
+    assert(state.edgeVisible && state.vertices > 0, 'Off-screen device needs a geometry arrow');
+    assert(state.ndc && Math.abs(state.ndc[0]) < 1 && Math.abs(state.ndc[1]) < 1
+      && Math.abs(state.ndc[2]) < 1, `Edge pill left the view: ${state.ndc}`);
+    await screenshot('15b-locked-device-edge-arrow');
+    await pinch({ nodeName: 'device-lock', turn: true });
+    await waitQuest(() => window.__ce.hud.card.userData.pinned === false);
+    await pinch({ nodeName: 'device-lock' });
+    await waitQuest(() => window.__ce.hud.card.userData.pinned === true);
+    await pinch({ targetId: synthId, turn: true });
+    await waitQuest((id) => window.__ce.lockedId === id && window.__ce.hud.card.userData.pinned === false, synthId);
+    await pinch({ targetId, turn: true });
+    await waitQuest((id) => window.__ce.lockedId === id && window.__ce.hud.card.userData.pinned === false, targetId);
   });
 
   await phase('16-stop-disarms-and-blocks-ir', async () => {
@@ -933,6 +1002,21 @@ async function run() {
       'Server restart must retain the saved Mac and Quest identities');
     assert.equal(newPairRequests, 0, 'Recovering after a server restart must not begin another pairing');
     await companionScreenshot('20-companion-server-restarted');
+  }, false);
+  await phase('21-exit-ar-hold', async () => {
+    await quest.locator('#btn-enter').click();
+    await waitQuest(() => window.__ce.renderer.xr.isPresenting);
+    // A plain tap (~200 ms incl. the harness's 100 ms polling) is an unambiguous early release of the 600 ms hold.
+    await pinch({ nodeName: 'exit-ar', turn: true });
+    assert.equal(await quest.evaluate(() => window.__ce.renderer.xr.isPresenting), true, 'An early release must cancel Exit');
+    await waitQuest(() => window.__ce.hud.root.getObjectByName('exit-ar')?.userData.holdProgress === 0);
+    await pinch({ nodeName: 'exit-ar', holdMs: 650 });
+    await waitQuest(() => !window.__ce.renderer.xr.isPresenting);
+    const enter = quest.locator('#btn-enter');
+    assert(await enter.isVisible() && await enter.isEnabled(), 'Enter AR must be immediately pressable after Exit');
+    const bounds = await enter.boundingBox();
+    assert(bounds && bounds.width >= 160 && bounds.height >= 48, 'Enter AR needs a large return target');
+    await quest.screenshot({ path: join(SCREENS, '21-exit-ar-ready-to-return.png') });
   }, false);
 }
 

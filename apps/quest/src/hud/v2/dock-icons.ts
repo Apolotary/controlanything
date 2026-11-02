@@ -2,12 +2,14 @@ import { BufferGeometry, Color, Float32BufferAttribute, Group, Mesh, MeshBasicMa
 import type { HomeState } from '../contract';
 import { makeText, setText, type SdfText } from './text';
 import { THEME } from './theme';
+import { DockHold } from './hand-dock';
 
-type Icon = 'tag' | 'sliders' | 'grid' | 'bulb' | 'plug' | 'stop';
+type Icon = 'tag' | 'sliders' | 'grid' | 'bulb' | 'plug' | 'stop' | 'exit';
 type Point = readonly [number, number];
 interface ButtonSpec { name: string; label: string; icon: Icon }
-const DIAMETER = 0.032, GAP = 0.008, GLYPH_SCALE = 0.009;
-const MAX_PARTS = 7; // Six buttons and the count badge.
+const DIAMETER = 0.032, GAP = 0.012, GLYPH_SCALE = 0.009;
+const MAX_PARTS = 7; // Six buttons including Exit, and the count badge.
+const EXIT_BUTTON: ButtonSpec = { name: 'exit-ar', label: 'Exit AR (hold)', icon: 'exit' };
 const MODE_BUTTONS: ButtonSpec[] = [
   { name: 'mode-annotate', label: 'Annotate', icon: 'tag' },
   { name: 'mode-control', label: 'Control', icon: 'sliders' },
@@ -62,22 +64,30 @@ function iconVertices(icon: Icon): number[] {
     case 'stop':
       stroke(Array.from({ length: 8 }, (_, i): Point => [Math.cos(Math.PI / 8 + i * Math.PI / 4) * 0.87, Math.sin(Math.PI / 8 + i * Math.PI / 4) * 0.87]), true);
       break;
+    case 'exit':
+      stroke([[0.1, 0.83], [-0.72, 0.83], [-0.72, -0.83], [0.1, -0.83]]);
+      stroke([[-0.22, 0], [0.9, 0]]);
+      stroke([[0.48, 0.42], [0.9, 0], [0.48, -0.42]]);
+      break;
   }
   return vertices;
 }
 
-const ICONS = Object.fromEntries(['tag', 'sliders', 'grid', 'bulb', 'plug', 'stop'].map((icon) => [icon, iconVertices(icon as Icon)])) as Record<Icon, number[]>;
+const ICONS = Object.fromEntries(['tag', 'sliders', 'grid', 'bulb', 'plug', 'stop', 'exit'].map((icon) => [icon, iconVertices(icon as Icon)])) as Record<Icon, number[]>;
 const vertexShader = `
   attribute float part;
   uniform vec3 transforms[${MAX_PARTS}];
   uniform vec3 states[${MAX_PARTS}];
+  uniform float holdProgress, holdPart;
   varying vec2 local;
   varying vec3 state;
+  varying float hold;
   void main() {
     int i = int(part);
     vec3 transform = transforms[i];
     local = uv * 2.0 - 1.0;
     state = states[i];
+    hold = abs(part - holdPart) < 0.5 ? holdProgress : 0.0;
     vec3 p = vec3(position.xy * transform.z + transform.xy, position.z);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   }`;
@@ -104,8 +114,11 @@ export class DockIcons extends Group {
     fillAlpha = mix(fillAlpha, 1.0, badge);
     float edgeAlpha = mix(0.16, 1.0, highlight);
     float border = smoothstep(-0.038 - aa, -0.038, d) * edgeAlpha;
+    float angle = fract(atan(local.x, local.y) / 6.2831853 + 1.0);
+    float progressRing = smoothstep(-0.13 - aa, -0.13, d) * step(angle, hold) * step(0.00001, hold);
+    border = max(border, progressRing);
     float alpha = fillAlpha + border * (1.0 - fillAlpha);
-    vec3 edge = mix(white, accent, max(selected, highlight));
+    vec3 edge = mix(white, accent, max(max(selected, highlight), progressRing));
     vec3 color = (fill * fillAlpha * (1.0 - border) + edge * border) / max(alpha, 0.00001);
     gl_FragColor = vec4(color, alpha * cover * opacity);
   `);
@@ -120,6 +133,8 @@ export class DockIcons extends Group {
   private wristMode = '';
   private taggedCount = 0;
   private opacity = 1;
+  private readonly exitHold = new DockHold();
+  private exitButton: Group | undefined;
 
   constructor() {
     super();
@@ -152,10 +167,11 @@ export class DockIcons extends Group {
       transparent: true, depthWrite: false, toneMapped: false,
       uniforms: {
         transforms: { value: this.transforms }, states: { value: this.states }, opacity: { value: 1 },
+        holdProgress: { value: 0 }, holdPart: { value: -1 },
         white: { value: new Color(THEME.color.text) }, accent: { value: new Color(THEME.color.accent) }, plate: { value: new Color(THEME.color.plate) },
       },
       vertexShader,
-      fragmentShader: `varying vec2 local; varying vec3 state; uniform vec3 white, accent, plate; uniform float opacity;
+      fragmentShader: `varying vec2 local; varying vec3 state; varying float hold; uniform vec3 white, accent, plate; uniform float opacity;
         void main() { ${fragment} \n #include <colorspace_fragment> \n }`,
     });
   }
@@ -166,15 +182,21 @@ export class DockIcons extends Group {
     this.taggedCount = home.tagged;
     if (structure !== this.structure) {
       this.structure = structure;
+      this.cancelExitHold();
       for (const button of this.buttons) this.remove(button);
       this.buttons.length = 0;
-      const specs = [...MODE_BUTTONS, ...(home.mode === 'annotate' ? FILTER_BUTTONS : []), ...(stop ? [{ name: 'deck:panic', label: 'Stop everything', icon: 'stop' as const }] : [])];
+      const specs = [...MODE_BUTTONS, ...(home.mode === 'annotate' ? FILTER_BUTTONS : []), ...(stop ? [{ name: 'deck:panic', label: 'Stop everything', icon: 'stop' as const }] : []), EXIT_BUTTON];
       for (const [index, spec] of specs.entries()) {
         const button = new Group();
         button.name = spec.name;
         button.position.x = (index - (specs.length - 1) / 2) * (DIAMETER + GAP);
         button.userData = { dockIcon: true, label: spec.label };
         this.buttons.push(button); this.add(button);
+        if (spec.name === 'exit-ar') {
+          this.exitButton = button;
+          button.userData.holdProgress = 0;
+          this.discMaterial.uniforms.holdPart!.value = index;
+        }
       }
       this.rebuildGeometry(specs);
     }
@@ -215,7 +237,8 @@ export class DockIcons extends Group {
     this.opacity = Math.min(1, Math.max(0, opacity));
     this.discMaterial.uniforms.opacity!.value = this.glyphMaterial.uniforms.opacity!.value = this.opacity;
     let hover: Group | undefined;
-    for (const [index, button] of this.buttons.entries()) {
+    for (let index = 0; index < this.buttons.length; index++) {
+      const button = this.buttons[index]!;
       const { selected, hovered, pressed } = button.userData;
       this.transforms[index]!.set(button.position.x, button.position.y, button.scale.x);
       this.states[index]!.set(Number(!!selected), Number(!!hovered), Number(!!pressed));
@@ -232,7 +255,24 @@ export class DockIcons extends Group {
       setText(this.hoverLabel, hover.userData.label as string);
       this.hoverLabel.position.x = hover.position.x;
     }
-    for (const label of [this.hoverLabel, this.badge]) (label as SdfText & { fillOpacity: number }).fillOpacity = this.opacity;
+    (this.hoverLabel as SdfText & { fillOpacity: number }).fillOpacity = this.opacity;
+    (this.badge as SdfText & { fillOpacity: number }).fillOpacity = this.opacity;
+  }
+
+  beginExitHold(time: number): void { this.exitHold.begin(time); }
+
+  cancelExitHold(): void {
+    this.exitHold.cancel();
+    this.discMaterial.uniforms.holdProgress!.value = 0;
+    if (this.exitButton) this.exitButton.userData.holdProgress = 0;
+  }
+
+  /** Updates the existing disc shader: progress adds no geometry or draw call. */
+  updateExitHold(time: number): boolean {
+    const complete = this.exitHold.update(time);
+    this.discMaterial.uniforms.holdProgress!.value = this.exitHold.progress;
+    if (this.exitButton) this.exitButton.userData.holdProgress = this.exitHold.progress;
+    return complete;
   }
 
   setWrist(mode: HomeState['mode'], opacity: number): void {

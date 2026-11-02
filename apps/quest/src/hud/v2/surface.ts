@@ -1,7 +1,7 @@
 import { Color, Mesh, PlaneGeometry, ShaderMaterial, Vector2 } from 'three';
 import { THEME } from './theme';
 
-export type SurfaceStyle = 'plate' | 'button' | 'primary' | 'selected' | 'hover' | 'selected-hover' | 'pressed';
+export type SurfaceStyle = 'plate' | 'button' | 'primary' | 'selected' | 'hover' | 'selected-hover' | 'pressed' | 'sending' | 'failed';
 
 /** Rounded fill and an antialiased inner stroke share two triangles and one draw. */
 export class GlassSurfaces {
@@ -13,24 +13,26 @@ export class GlassSurfaces {
     let material = this.materials.get(key);
     if (material) return material;
     const primary = style === 'primary';
-    const selected = primary || style === 'selected' || style === 'selected-hover' || style === 'pressed';
-    const outlined = style === 'hover' || style === 'selected-hover' || style === 'pressed';
+    const selected = primary || style === 'selected' || style === 'selected-hover' || style === 'pressed' || style === 'sending';
+    const outlined = style === 'hover' || style === 'selected-hover' || style === 'pressed' || style === 'sending';
     material = new ShaderMaterial({
       transparent: true, depthWrite: false, toneMapped: false,
       uniforms: {
+        time: { value: 0 },
+        shimmer: { value: style === 'sending' ? 1 : 0 },
         size: { value: new Vector2(w, h) },
         radius: { value: pill ? h / 2 : THEME.card.radius },
         stroke: { value: THEME.surface.stroke * (primary ? 1.5 : outlined ? 2 : 1) },
         fill: { value: new Color(selected ? THEME.color.accent : style === 'plate' ? THEME.color.plate : THEME.color.stroke) },
         fillAlpha: { value: style === 'pressed' ? 0.48 : primary ? 0.28 : selected ? THEME.opacity.accentSoft : style === 'plate' ? THEME.opacity.plate : 0.1 },
-        edge: { value: new Color(selected || outlined ? THEME.color.accent : THEME.color.stroke) },
+        edge: { value: new Color(style === 'failed' ? '#FBBF24' : selected || outlined ? THEME.color.accent : THEME.color.stroke) },
         edgeAlpha: { value: primary || outlined ? 1 : style === 'button' ? 0.26 : THEME.opacity.stroke },
       },
       vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
       fragmentShader: `
         varying vec2 vUv;
         uniform vec2 size;
-        uniform float radius, stroke, fillAlpha, edgeAlpha;
+        uniform float radius, stroke, fillAlpha, edgeAlpha, time, shimmer;
         uniform vec3 fill, edge;
         void main() {
           vec2 q = abs((vUv - 0.5) * size) - size * 0.5 + radius;
@@ -40,7 +42,8 @@ export class GlassSurfaces {
           float border = smoothstep(-stroke - aa, -stroke, d) * edgeAlpha;
           float alpha = fillAlpha + border * (1.0 - fillAlpha);
           vec3 color = (fill * fillAlpha * (1.0 - border) + edge * border) / max(alpha, 0.00001);
-          gl_FragColor = vec4(color, alpha * cover);
+          float sweep = pow(max(0.0, 1.0 - abs(vUv.x - fract(time * 0.55)) * 7.0), 2.0) * shimmer;
+          gl_FragColor = vec4(color + sweep * 0.16, (alpha + sweep * 0.12) * cover);
           #include <colorspace_fragment>
         }`,
     });
@@ -58,6 +61,11 @@ export class GlassSurfaces {
     };
     mesh.renderOrder = THEME.render.plates;
     return mesh;
+  }
+
+  tick(time: number): void {
+    const material = this.materials.get('sending/true');
+    if (material) material.uniforms.time!.value = time;
   }
 
   dispose(): void {

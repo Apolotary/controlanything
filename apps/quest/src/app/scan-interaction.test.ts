@@ -9,6 +9,7 @@ import { QuestApp } from './app';
 import type { Hud, ShellFrame } from './hud-contract';
 import { InputSampler } from './input';
 import { ModeState } from './modes';
+import { PinchTargetHistory } from './precision';
 
 async function setup() {
   // Use the real HUD wiring and render-frame ordering, without opening media, WebGL, or a socket.
@@ -31,7 +32,11 @@ async function setup() {
     ['index-finger-tip', {} as XRJointSpace], ['thumb-tip', {} as XRJointSpace],
   ]);
   const source = { handedness: 'right', hand: jointSpaces, targetRaySpace: {}, profiles: ['oculus-hand'] } as unknown as XRInputSource;
-  const session = Object.assign(new EventTarget(), { inputSources: [source] }) as unknown as XRSession;
+  const leftWrist = new Vector3(-0.18, 1.15, -0.4);
+  const palmUp = new Quaternion().setFromUnitVectors(new Vector3(0, -1, 0), camera.position.clone().sub(leftWrist).normalize());
+  const leftJoint = {} as XRJointSpace;
+  const leftSource = { handedness: 'left', hand: new Map([['wrist', leftJoint]]), targetRaySpace: {}, profiles: ['oculus-hand'] } as unknown as XRInputSource;
+  const session = Object.assign(new EventTarget(), { inputSources: [leftSource, source] }) as unknown as XRSession;
   const refSpace = {} as XRReferenceSpace;
   let jointsVisible = true;
   const pose = (position: Vector3, orientation = new Quaternion()) => ({ transform: { position, orientation }, radius: 0.008 });
@@ -39,7 +44,8 @@ async function setup() {
     session,
     getViewerPose: () => pose(camera.position, camera.quaternion),
     getPose: (space: XRSpace) => space === source.targetRaySpace ? pose(rayOrigin, rayRotation) : null,
-    getJointPose: (space: XRJointSpace) => jointsVisible ? pose(space === jointSpaces.get('index-finger-tip') ? index : thumb) : null,
+    getJointPose: (space: XRJointSpace) => space === leftJoint ? pose(leftWrist, palmUp)
+      : jointsVisible ? pose(space === jointSpaces.get('index-finger-tip') ? index : thumb) : null,
   } as unknown as XRFrame;
   const recorder = { input: vi.fn(), pose: vi.fn() };
   const lock = vi.fn(), send = vi.fn<(type: string, payload: unknown, routing?: unknown) => void>();
@@ -57,6 +63,7 @@ async function setup() {
     handheld: { update: () => [] }, wristPoses: {}, heldMoves: [],
     nonDominant: 'left', candidate: { id: null, since: 0, shown: null },
     consumed: { left: false, right: false }, lockedId: null, lock,
+    targetHistory: { left: new PinchTargetHistory<string>(), right: new PinchTargetHistory<string>() }, annotationForward: new Vector3(),
     aimTargets: new Map(), aimBuffer: [],
     gazeHit: { id: '', angleDeg: 0, distance: 0 },
     handHit: { id: '', angleDeg: 0, distance: 0 },
@@ -74,11 +81,12 @@ async function setup() {
   app.setMode('annotate');
   let time = 0;
   const step = (elapsed = 16) => app.frameInner(time += elapsed, xrFrame);
-  step(200);
+  step(200); step(320); step(200); // Palm dwell and opening fade expose the real left-hand dock.
   let chosen: 'annotate' | 'control' = 'control';
   const button = () => app.hud.root.getObjectByName(`mode-${chosen}`)!;
   const point = button().getWorldPosition(new Vector3());
   rayRotation.setFromUnitVectors(new Vector3(0, 0, -1), point.clone().sub(rayOrigin).normalize());
+  step(300); // Let the filtered ray reach the newly aimed icon before pinching.
   const behind = targets.upsert(
     { detId: 'behind-home', label: 'Laptop', score: 1, box: [0, 0, 100, 100] },
     { position: point.clone().sub(rayOrigin).multiplyScalar(3).add(rayOrigin), facing: new Vector3(0, 0, 1), confirmed: true, method: 'fixture', depth: 2, sizeM: [0.2, 0.2, 0.1] },
@@ -93,6 +101,7 @@ async function setup() {
       chosen = mode;
       const point = button().getWorldPosition(new Vector3());
       rayRotation.setFromUnitVectors(new Vector3(0, 0, -1), point.sub(rayOrigin).normalize());
+      step(300);
     },
     setJointsVisible: (on: boolean) => { jointsVisible = on; },
     select: (type: 'selectstart' | 'selectend') => session.dispatchEvent(Object.assign(new Event(type), { inputSource: source, frame: xrFrame })),

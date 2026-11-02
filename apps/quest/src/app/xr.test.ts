@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WebGLRenderer } from 'three';
-import { frameReferenceSpace, startXr } from './xr';
+import { endXr, frameReferenceSpace, startXr } from './xr';
 
 function session() {
   const space = {} as XRReferenceSpace;
@@ -29,6 +29,18 @@ function renderer() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('XR startup and reference space lifecycle', () => {
+  it('ends only the current session and allows another session to be entered and ended', async () => {
+    const r = renderer();
+    await expect(endXr(r.value)).resolves.toBeUndefined();
+    const old = session(), current = session();
+    r.state.session = old as unknown as XRSession;
+    await endXr(r.value);
+    expect(old.end).toHaveBeenCalledOnce();
+    r.state.session = current as unknown as XRSession;
+    await endXr(r.value);
+    expect(old.end).toHaveBeenCalledOnce();
+    expect(current.end).toHaveBeenCalledOnce();
+  });
   it('resolves floor support before initializing the renderer once', async () => {
     const s = session();
     const r = renderer();

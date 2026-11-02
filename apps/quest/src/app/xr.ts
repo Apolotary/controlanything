@@ -35,6 +35,11 @@ export function frameReferenceSpace(renderer: WebGLRenderer, frame?: XRFrame): X
   return renderer.xr.getReferenceSpace() ?? undefined;
 }
 
+/** All exit controls share the renderer's active session, including after re-entry. */
+export async function endXr(renderer: WebGLRenderer): Promise<void> {
+  await renderer.xr.getSession()?.end();
+}
+
 export async function startXr(renderer: WebGLRenderer, opts: { allowVr?: boolean } = {}): Promise<XrStart> {
   const xr = navigator.xr;
   if (!xr) throw new Error('WebXR is not available in this browser');

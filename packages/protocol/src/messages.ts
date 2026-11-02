@@ -16,6 +16,7 @@ import {
   ArmRequestPayload,
   ArmResultPayload,
   ControlEventPayload,
+  ControlResultPayload,
   DaemonStatusPayload,
   DeviceCardPayload,
   DeviceSignalPayload,
@@ -129,6 +130,7 @@ export const PayloadSchemas = {
   'ui.spec': UiSpecPayload,
   'ui.partial': UiPartialPayload,
   'control.event': ControlEventPayload,
+  'control.result': ControlResultPayload,
   'gen3d.generate': Gen3dGeneratePayload,
   'gen3d.edit': Gen3dEditPayload,
   // voice
@@ -199,6 +201,7 @@ export const MessageSchemas = {
   'ui.spec': message('ui.spec'),
   'ui.partial': message('ui.partial'),
   'control.event': message('control.event'),
+  'control.result': message('control.result'),
   'gen3d.generate': message('gen3d.generate'),
   'gen3d.edit': message('gen3d.edit'),
   'voice.audio': message('voice.audio'),
@@ -252,6 +255,7 @@ export const Message = z.discriminatedUnion('type', [
   MessageSchemas['ui.spec'],
   MessageSchemas['ui.partial'],
   MessageSchemas['control.event'],
+  MessageSchemas['control.result'],
   MessageSchemas['gen3d.generate'],
   MessageSchemas['gen3d.edit'],
   MessageSchemas['voice.audio'],
@@ -271,6 +275,7 @@ export type AnyMessage = Message | ExperimentalMessage;
  * command to an executor come from the server, so nothing bypasses validation, allowlists and rate limits.
  */
 export const SERVER_ONLY_TYPES: readonly MessageType[] = [
+  'control.result',
   'mode.state',
   'tags.state',
   'welcome',

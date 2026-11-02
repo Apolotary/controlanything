@@ -185,7 +185,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     void combos.run(hack, spec).catch((e) => log(`[combo] ${hack.id}: ${(e as Error).message}`));
     return { ok: true, hackId: hack.id, fired: 0, ms: 0 };
   };
-  const control = new ControlRouter({ targets, dispatcher, specs, steps, hub, log, onRoomHack, canControl });
+  const control = new ControlRouter({ targets, dispatcher, specs, steps, hub, log, onRoomHack, canControl,
+    onResult: (result, from) => { hub.sendToDevice(from, 'control.result', result); },
+  });
   const daemons = new DaemonRunner({ hub, steps, log, drive: control });
   const roster0: Roster = { devices: () => hub.devices(), macLocal: macLocal.available, unhealthy: (id) => dispatcher.unhealthy(id) };
   const combos = new ComboRunner({ hub, targets, steps, dispatcher, sam, roster: roster0, arm, daemons, heard, readVolume: () => macLocal.currentVolume(), silentSpeech, log, canControl });

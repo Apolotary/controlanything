@@ -3,10 +3,10 @@
  * exec.command, with no model, no await before the send, per-hack and per-executor rate limits, the human
  * arm gate and panic. Target: under 50 ms on the LAN (the server part is well under 1 ms).
  */
-import type { ControlEventPayload, Driver, DriverAction, Hack, HackCommand, UiSpecPayload } from '@ce/protocol';
+import type { ControlEventPayload, ControlResultPayload, Driver, DriverAction, Hack, HackCommand, UiSpecPayload } from '@ce/protocol';
 import { clamp, planSteps, resolveOp } from '../devices/encode';
 import type { Hub } from '../hub';
-import { Dispatcher, RateLimiter } from './dispatch';
+import { Dispatcher, RateLimiter, type ExecResult } from './dispatch';
 import type { StepLog } from './steps';
 import type { TargetStore } from './targets';
 import type { Target } from './types';
@@ -26,6 +26,7 @@ export interface ControlDeps {
   now?: () => number;
   /** Space mode, tag membership and connection policy, rechecked for scheduled operations. */
   canControl?: (target: Target) => boolean;
+  onResult?: (result: ControlResultPayload, from: string) => void;
   /** room hacks (combos, daemons) are not fired here: the owner of the hook runs them */
   onRoomHack?: (hack: Hack, spec: UiSpecPayload, value: number | boolean, from?: string) => RouteResult;
 }
@@ -46,12 +47,37 @@ interface LastRun {
   previousParam?: { paramId: string; value: number };
 }
 
+/** Reserve every operation before sealing; success means every actual executor ack succeeded. */
+class CommandBatch {
+  private pending = 1;
+  private completed = false;
+  constructor(private readonly result: ExecResult) {}
+  next(): ExecResult {
+    this.pending++;
+    let called = false;
+    return (ok, detail) => {
+      if (called) return;
+      called = true;
+      this.finish(ok, detail);
+    };
+  }
+  seal(): void { this.finish(true); }
+  private finish(ok: boolean, detail?: string): void {
+    this.pending--;
+    if (this.completed || ok && this.pending > 0) return;
+    this.completed = true;
+    this.result?.(ok, detail);
+  }
+}
+
 export class ControlRouter {
   private readonly hackLimiters = new Map<string, RateLimiter>();
-  private readonly stepTimers = new Map<string, { cardId: string; timer: ReturnType<typeof setTimeout> }>();
-  private readonly commandTimers = new Map<ReturnType<typeof setTimeout>, { cardId: string; sourceCardId: string }>();
+  private readonly stepTimers = new Map<string, { cardId: string; timer: ReturnType<typeof setTimeout>; cancel?: () => void }>();
+  private readonly commandTimers = new Map<ReturnType<typeof setTimeout>, { cardId: string; sourceCardId: string; cancel?: () => void }>();
   private readonly trailingControls = new Map<string, { cardId: string; timer: ReturnType<typeof setTimeout>; event: ControlEventPayload; from?: string }>();
   private readonly lastRun = new Map<string, LastRun>();
+  private readonly latestCommand = new Map<string, number>();
+  private commandSerial = 0;
   private readonly log: (line: string) => void;
   private lastDisarmedLog = 0;
 
@@ -78,6 +104,16 @@ export class ControlRouter {
   }
 
   onControlEvent(ev: ControlEventPayload, from?: string): RouteResult {
+    const result = this.routeControlEvent(ev, from);
+    if (!result.ok && ev.phase !== 'start') this.report(ev, from, false, result.reason);
+    return result;
+  }
+
+  private report(ev: ControlEventPayload, from: string | undefined, ok: boolean, detail?: string, specId = ev.specId): void {
+    if (from && specId) this.d.onResult?.({ specId, widgetId: ev.widgetId, ts: ev.ts, ok, detail: detail?.slice(0, 512) }, from);
+  }
+
+  private routeControlEvent(ev: ControlEventPayload, from?: string): RouteResult {
     const t0 = performance.now();
     const r = this.resolve(ev);
     if ('reason' in r) return { ok: false, reason: r.reason, fired: 0, ms: performance.now() - t0 };
@@ -109,6 +145,7 @@ export class ControlRouter {
       if (hack.kind !== 'control') return { ok: false, reason: 'rate limited', cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
       const pending = this.trailingControls.get(key);
       if (pending) {
+        this.report(pending.event, pending.from, false, 'Superseded by a newer command');
         pending.event = ev;
         pending.from = from;
       } else {
@@ -116,13 +153,17 @@ export class ControlRouter {
         const entry = { cardId: target.cardId, event: ev, from, timer: setTimeout(() => {
           this.trailingControls.delete(key);
           if (target.runId === runId) this.onControlEvent(entry.event, entry.from);
+          else this.report(entry.event, entry.from, false, 'Command cancelled');
         }, Math.max(1, limiter.waitMs())) };
         this.trailingControls.set(key, entry);
       }
       return { ok: true, cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
     }
     const pending = this.trailingControls.get(key);
-    if (pending) clearTimeout(pending.timer);
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.report(pending.event, pending.from, false, 'Superseded by a newer command');
+    }
     this.trailingControls.delete(key);
 
     const value = typeof ev.value === 'number' ? ev.value : ev.value === true ? 1 : ev.value === false ? 0 : (ev.value as { x: number }).x;
@@ -130,12 +171,27 @@ export class ControlRouter {
     let fired = 0;
     const param = hack.params?.find((p) => p.id === hack.control?.param) ?? hack.params?.[0];
     const prev = param ? target.paramValues[param.id] : undefined;
+    const observed = !!from && !!this.d.onResult;
+    const serial = ++this.commandSerial;
+    if (observed) this.latestCommand.set(key, serial);
+    const batch = observed ? new CommandBatch((ok, detail) => {
+      if (this.latestCommand.get(key) === serial) {
+        this.latestCommand.delete(key);
+        // A retry must not mistake a refused write for the device's new state.
+        if (!ok && param && !stepper) {
+          if (prev === undefined) delete target.paramValues[param.id];
+          else target.paramValues[param.id] = prev;
+        }
+      }
+      this.report(ev, from, ok, detail, spec.specId);
+    }) : undefined;
+    if (param && !(stepper && observed)) target.paramValues[param.id] = clamp(value, param.min, param.max);
     if (stepper && param && hack.commands.length >= 2) {
-      fired += this.fireStepper(target, driver, hack, param.id, prev, value);
+      fired += this.fireStepper(target, driver, hack, param.id, prev, value, batch?.next());
     } else {
-      for (const cmd of hack.commands) fired += this.fireCommand(target, driver, hack, cmd, value, cmd.delayMs ?? 0);
+      for (const cmd of hack.commands) fired += this.fireCommand(target, driver, hack, cmd, value, cmd.delayMs ?? 0, batch?.next());
     }
-    if (param) target.paramValues[param.id] = clamp(value, param.min, param.max);
+    batch?.seal();
     this.lastRun.set(target.cardId, { hackId: hack.id, previousParam: param && prev !== undefined ? { paramId: param.id, value: prev } : undefined });
     if (target.state !== 'controlling') this.d.targets.setState(target, 'controlling', hack.name);
     return { ok: true, cardId: target.cardId, hackId: hack.id, fired, ms: performance.now() - t0 };
@@ -160,18 +216,18 @@ export class ControlRouter {
   }
 
   /** One hack command -> op(s). Returns the number of ops fired now (steps may schedule more). */
-  private fireCommand(target0: Target, driver0: Driver, hack: Hack, cmd: HackCommand, value: number, delayMs: number): number {
+  private fireCommand(target0: Target, driver0: Driver, hack: Hack, cmd: HackCommand, value: number, delayMs: number, onResult?: ExecResult): number {
     // a command may name another device (room combos); it must be armed and verified there
     let target = target0;
     let driver = driver0;
     if (cmd.cardId && cmd.cardId !== target0.cardId) {
       const other = this.d.targets.get(cmd.cardId);
-      if (!other?.driver || !other.armed || other.verification[cmd.action] !== 'pass') return 0;
+      if (!other?.driver || !other.armed || other.verification[cmd.action] !== 'pass') { onResult?.(false, 'Device is not ready'); return 0; }
       target = other;
       driver = other.driver;
     }
     const a = this.action(driver, cmd.action);
-    if (!a) return 0;
+    if (!a) { onResult?.(false, 'Control action is unavailable'); return 0; }
     const runId = target.runId;
     const sourceRunId = target0.runId;
     const v = cmd.param !== undefined ? (() => {
@@ -179,13 +235,14 @@ export class ControlRouter {
       return p ? clamp(value, p.min, p.max) : value;
     })() : cmd.value;
     const send = () => {
-      if (!target.armed || target.runId !== runId || !target0.armed || target0.runId !== sourceRunId || !this.allowed(target) || !this.allowed(target0) || target.verification[a.actionId] !== 'pass') return 0;
-      if (a.encode.kind === 'step') return this.fireSteps(target, driver, a, v ?? 0);
+      if (!target.armed || target.runId !== runId || !target0.armed || target0.runId !== sourceRunId || !this.allowed(target) || !this.allowed(target0) || target.verification[a.actionId] !== 'pass') { onResult?.(false, 'Command cancelled'); return 0; }
+      if (a.encode.kind === 'step') return this.fireSteps(target, driver, a, v ?? 0, onResult);
       try {
         const op = resolveOp(a, a.kind === 'set' ? (v ?? 0) : undefined);
-        return this.d.dispatcher.fire(driver.executor.deviceId, op, { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: a.actionId, lightCap: driver.transport === 'ir' }) ? 1 : 0;
+        return this.d.dispatcher.fire(driver.executor.deviceId, op, { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: a.actionId, lightCap: driver.transport === 'ir', onResult }) ? 1 : 0;
       } catch (e) {
         this.log(`[control] ${a.actionId}: ${(e as Error).message}`);
+        onResult?.(false, (e as Error).message);
         return 0;
       }
     };
@@ -194,78 +251,108 @@ export class ControlRouter {
         this.commandTimers.delete(timer);
         send();
       }, delayMs);
-      this.commandTimers.set(timer, { cardId: target.cardId, sourceCardId: target0.cardId });
+      this.commandTimers.set(timer, { cardId: target.cardId, sourceCardId: target0.cardId, cancel: () => onResult?.(false, 'Command cancelled') });
       return 0;
     }
     return send();
   }
 
   /** A step composite: fire the first trigger now, schedule the rest at the device's settle time. */
-  private fireSteps(target: Target, driver: Driver, a: DriverAction, value: number): number {
+  private fireSteps(target: Target, driver: Driver, a: DriverAction, value: number, onResult?: ExecResult): number {
     const current = target.stepIndex[a.actionId] ?? (a.encode.kind === 'step' ? Math.floor(a.encode.steps / 2) : 0);
     const plan = planSteps(driver, a, current, value);
     const key = `${target.cardId}:${a.actionId}`;
     const pending = this.stepTimers.get(key);
-    if (pending) clearTimeout(pending.timer);
+    if (pending) { clearTimeout(pending.timer); pending.cancel?.(); }
     this.stepTimers.delete(key);
-    if (!plan.actionIds.length) return 0;
+    if (!plan.actionIds.length) { onResult?.(true); return 0; }
+    const batch = onResult ? new CommandBatch(onResult) : undefined;
+    const scheduled = batch?.next();
+    const cancel = () => scheduled?.(false, 'Command cancelled');
     const runId = target.runId;
     const active = () => target.armed && target.runId === runId && this.allowed(target);
     let i = 0;
     let fired = 0;
     const fireOne = (): boolean => {
-      if (!active()) return false;
+      if (!active()) { cancel(); return false; }
       const t = this.action(driver, plan.actionIds[i]);
-      if (!t || target.verification[t.actionId] !== 'pass') return false;
-      const ok = this.d.dispatcher.fire(driver.executor.deviceId, resolveOp(t), { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: t.actionId, lightCap: driver.transport === 'ir' });
+      if (!t || target.verification[t.actionId] !== 'pass') { cancel(); return false; }
+      const direction = plan.actionIds[i] === (a.encode as { upActionId: string }).upActionId ? 1 : -1;
+      const result = batch?.next();
+      const acknowledged: ExecResult | undefined = result ? (ok, detail) => {
+        if (ok && target.runId === runId) target.stepIndex[a.actionId] = (target.stepIndex[a.actionId] ?? current) + direction;
+        result(ok, detail);
+      } : undefined;
+      const ok = this.d.dispatcher.fire(driver.executor.deviceId, resolveOp(t), { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: t.actionId, lightCap: driver.transport === 'ir', onResult: acknowledged });
       if (ok) {
-        target.stepIndex[a.actionId] = current + (plan.actionIds[i] === (a.encode as { upActionId: string }).upActionId ? 1 : -1) * (i + 1);
+        if (!onResult) target.stepIndex[a.actionId] = current + direction * (i + 1);
         i++;
       }
       return ok;
     };
-    if (!fireOne()) return 0;
+    batch?.seal();
+    if (!fireOne()) { cancel(); return 0; }
     fired++;
     const tick = () => {
       this.stepTimers.delete(key);
-      if (!active() || i >= plan.actionIds.length) return;
-      if (!fireOne()) return;
+      if (!active()) { cancel(); return; }
+      if (i >= plan.actionIds.length) { scheduled?.(true); return; }
+      if (!fireOne()) { cancel(); return; }
       if (active() && i < plan.actionIds.length) schedule();
+      else scheduled?.(true);
     };
-    const schedule = () => this.stepTimers.set(key, { cardId: target.cardId, timer: setTimeout(tick, Math.max(plan.settleMs, 334)) });
+    const schedule = () => this.stepTimers.set(key, { cardId: target.cardId, timer: setTimeout(tick, Math.max(plan.settleMs, 334)), cancel });
     if (active() && i < plan.actionIds.length) schedule();
+    else scheduled?.(true);
     return fired;
   }
 
   /** gen3d-forge's fallback: a control over two triggers [raise, lower] with no param. */
-  private fireStepper(target: Target, driver: Driver, hack: Hack, paramId: string, prev: number | undefined, value: number): number {
+  private fireStepper(target: Target, driver: Driver, hack: Hack, paramId: string, prev: number | undefined, value: number, onResult?: ExecResult): number {
     const param = hack.params!.find((p) => p.id === paramId)!;
     const step = param.step ?? Math.max(1, (param.max - param.min) / 10);
     const from = prev ?? param.default ?? (param.min + param.max) / 2;
     const presses = Math.round((value - from) / step);
-    if (!presses) return 0;
+    if (!presses) { onResult?.(true); return 0; }
     const cmd = presses > 0 ? hack.commands[0] : hack.commands[1];
     const a = this.action(driver, cmd.action);
-    if (!a || a.encode.kind === 'step') return 0;
+    if (!a || a.encode.kind === 'step') { onResult?.(false, 'Control action is unavailable'); return 0; }
     const op = resolveOp(a);
     const runId = target.runId;
     const active = () => target.armed && target.runId === runId && this.allowed(target);
-    const fire = () => active() && target.verification[a.actionId] === 'pass' && this.d.dispatcher.fire(driver.executor.deviceId, op, { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: a.actionId, lightCap: driver.transport === 'ir' });
+    const batch = onResult ? new CommandBatch(onResult) : undefined;
+    const scheduled = batch?.next();
+    const cancel = () => scheduled?.(false, 'Command cancelled');
+    const fire = () => {
+      if (!active() || target.verification[a.actionId] !== 'pass') { cancel(); return false; }
+      const result = batch?.next();
+      const acknowledged: ExecResult | undefined = result ? (ok, detail) => {
+        if (ok && target.runId === runId) target.paramValues[paramId] = clamp((target.paramValues[paramId] ?? from) + (presses > 0 ? step : -step), param.min, param.max);
+        result(ok, detail);
+      } : undefined;
+      return this.d.dispatcher.fire(driver.executor.deviceId, op, { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: a.actionId, lightCap: driver.transport === 'ir', onResult: acknowledged });
+    };
+    batch?.seal();
     let fired = fire() ? 1 : 0;
     const key = `${target.cardId}:${hack.id}:stepper`;
     const pending = this.stepTimers.get(key);
-    if (pending) clearTimeout(pending.timer);
+    if (pending) { clearTimeout(pending.timer); pending.cancel?.(); }
     this.stepTimers.delete(key);
+    if (!fired) { cancel(); return 0; }
     let left = Math.abs(presses) - 1;
     const interval = Math.max(334, Math.round(1000 / hack.max_rate_hz));
     const tick = () => {
       this.stepTimers.delete(key);
-      if (!active() || left-- <= 0) return;
+      if (!active()) { cancel(); return; }
+      if (left-- <= 0) { scheduled?.(true); return; }
       if (fire()) fired++;
+      else { cancel(); return; }
       if (active() && left > 0) schedule();
+      else scheduled?.(true);
     };
-    const schedule = () => this.stepTimers.set(key, { cardId: target.cardId, timer: setTimeout(tick, interval) });
+    const schedule = () => this.stepTimers.set(key, { cardId: target.cardId, timer: setTimeout(tick, interval), cancel });
     if (active() && left > 0) schedule();
+    else scheduled?.(true);
     return fired;
   }
 
@@ -320,16 +407,19 @@ export class ControlRouter {
       if (pending.cardId !== target.cardId) continue;
       clearTimeout(pending.timer);
       this.trailingControls.delete(key);
+      this.report(pending.event, pending.from, false, 'Command cancelled');
     }
     for (const [key, pending] of this.stepTimers) {
       if (pending.cardId !== target.cardId) continue;
       clearTimeout(pending.timer);
       this.stepTimers.delete(key);
+      pending.cancel?.();
     }
     for (const [timer, pending] of this.commandTimers) {
       if (pending.cardId !== target.cardId && pending.sourceCardId !== target.cardId) continue;
       clearTimeout(timer);
       this.commandTimers.delete(timer);
+      pending.cancel?.();
     }
     this.d.dispatcher.flushQueued(target.cardId);
     this.lastRun.delete(target.cardId);
