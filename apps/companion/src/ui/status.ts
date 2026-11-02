@@ -14,11 +14,11 @@ const phaseText: Record<AgentPhase, [string, string]> = {
   plan: ['Planning your controls', 'Controls planned'],
   drive: ['Writing your device driver', 'Device driver written'],
   codegen: ['Writing your device driver', 'Device driver written'],
-  verify: ['Testing your device', 'Testing complete'],
-  forge: ['Creating your controls', 'Controls created'],
+  verify: ['Checking your device', 'Checks complete'],
+  forge: ['Making controls', 'Controls ready'],
   arm: ['Open Details to approve your controls', 'Approval received'],
-  deploy: ['Preparing your device', 'Device prepared'],
-  ui: ['Creating your controls', 'Controls created'],
+  deploy: ['Preparing your controls', 'Controls ready'],
+  ui: ['Making controls', 'Controls ready'],
   control: ['Updating your device', 'Device updated'],
   other: ['Working on your device', 'Idle'],
 };
@@ -32,13 +32,13 @@ const targetText: Record<TargetState, CalmStatus> = {
   linked: { text: 'Device connected', working: false },
   researching: { text: 'Learning how your device works', working: true },
   driving: { text: 'Writing your device driver', working: true },
-  verifying: { text: 'Testing your device', working: true },
-  verified: { text: 'Testing complete', working: false },
-  forging: { text: 'Creating your controls', working: true },
-  forged: { text: 'Controls created: open Details', working: false },
+  verifying: { text: 'Checking your device', working: true },
+  verified: { text: 'Checks complete', working: false },
+  forging: { text: 'Making controls', working: true },
+  forged: { text: 'Controls ready: open Details', working: false },
   arming: { text: 'Open Details to approve your controls', working: false },
-  armed: { text: 'Ready: controls armed', working: false },
-  controlling: { text: 'Ready: controls armed', working: false },
+  armed: { text: 'Ready: controls enabled', working: false },
+  controlling: { text: 'Ready: controls enabled', working: false },
   failed: { text: 'Could not finish: open Details', working: false },
 };
 
@@ -51,7 +51,7 @@ function stepStatus(step: AgentStepPayload): CalmStatus {
     return { text: `Learning your remote: ${prompt ?? 'press each button once'}`, working: true };
   }
   if (step.status === 'fail') {
-    return { text: step.phase === 'verify' ? 'Test did not pass: open Details' : 'Could not finish: open Details', working: false };
+    return { text: step.phase === 'verify' ? 'Check did not pass: open Details' : 'Could not finish: open Details', working: false };
   }
   const working = step.status === 'running' || step.status === 'pending';
   return { text: phaseText[step.phase][working ? 0 : 1], working: working && step.phase !== 'arm' };
@@ -68,22 +68,22 @@ export function statusForMessage(message: AnyMessage): CalmStatus | undefined {
       return { ...targetText[m.payload.state] };
     case 'sense.request':
       if (m.payload.kind === 'ir-capture') return { text: `Learning your remote: ${m.payload.prompt ?? 'press each button once'}`, working: true };
-      if (m.payload.kind === 'frame') return { text: 'Testing: did the light change?', working: true };
-      return { text: 'Testing: listening for a change', working: true };
+      if (m.payload.kind === 'frame') return { text: 'Checking: did the light change?', working: true };
+      return { text: 'Checking: listening for a change', working: true };
     case 'verify.result': {
       const { pass, expected, observed } = m.payload;
-      if (!pass) return { text: 'Test did not pass: no expected change detected', working: false };
-      if (expected.effect === 'none') return { text: 'Test passed: no change, as expected', working: false };
-      return { text: observed.sense === 'camera' ? 'Test passed: the light changed' : observed.sense === 'audio' ? 'Test passed: a change was heard' : 'Test passed', working: false };
+      if (!pass) return { text: 'Check did not pass: no expected change detected', working: false };
+      if (expected.effect === 'none') return { text: 'Check passed: no change, as expected', working: false };
+      return { text: observed.sense === 'camera' ? 'Check passed: the light changed' : observed.sense === 'audio' ? 'Check passed: a change was heard' : 'Check passed', working: false };
     }
     case 'ui.spec':
-      return { text: 'Controls created: open Details', working: false };
+      return { text: 'Controls ready: open Details', working: false };
     case 'arm.request':
       return { text: 'Open Details to approve your controls', working: false };
     case 'arm.result':
-      return { text: m.payload.armed ? 'Ready: controls armed' : 'Controls are not armed', working: false };
+      return { text: m.payload.armed ? 'Ready: controls enabled' : 'Controls are not enabled', working: false };
     case 'panic':
-      return { text: 'Stopped: controls are not armed', working: false };
+      return { text: 'Stopped: controls are not enabled', working: false };
     default:
       return undefined;
   }
@@ -108,7 +108,7 @@ export function createStatusPresenter() {
       const controls = spec.gen3d?.controls ?? spec.widgets;
       if (controls) count = controls.filter((c) => !('armed' in c && c.armed === false) && (!passed || passed.has(c.binding.action))).length;
     }
-    return { text: count === undefined ? 'Ready: controls armed' : `Ready: ${count} ${count === 1 ? 'control' : 'controls'} armed`, working: false };
+    return { text: count === undefined ? 'Ready: controls enabled' : `Ready: ${count} ${count === 1 ? 'control' : 'controls'} enabled`, working: false };
   }
 
   return {
@@ -132,7 +132,7 @@ export function createStatusPresenter() {
           if (m.payload.cardId && m.payload.actions) actions.set(m.payload.cardId, new Set(m.payload.actions.filter((a) => a.verified === 'pass').map((a) => a.actionId)));
           if (m.payload.phase === 'disarmed') {
             if (m.payload.cardId) armed.delete(m.payload.cardId);
-            return { text: 'Controls are not armed', working: false };
+            return { text: 'Controls are not enabled', working: false };
           }
           return undefined;
         case 'arm.result':

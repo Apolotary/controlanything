@@ -19,6 +19,8 @@ export interface TapeRow {
   what: string;
   target: string;
   actionId?: string;
+  cardId?: string;
+  driverId?: string;
   ack?: ExecAckPayload;
   /** from verify.result: "heard ✓" / "no change ✗" */
   verdict?: { pass: boolean; text: string };
@@ -99,7 +101,7 @@ export class Executor {
   }
 
   private record(cmd: ExecCommandPayload): TapeRow {
-    const row: TapeRow = { execId: cmd.execId, at: Date.now(), ...describeOp(cmd), ...(cmd.actionId ? { actionId: cmd.actionId } : {}) };
+    const row: TapeRow = { execId: cmd.execId, at: Date.now(), ...describeOp(cmd), ...(cmd.actionId ? { actionId: cmd.actionId } : {}), ...(cmd.cardId ? { cardId: cmd.cardId } : {}), ...(cmd.driverId ? { driverId: cmd.driverId } : {}) };
     this.tape.push(row);
     if (this.tape.length > 200) this.tape.shift();
     this.onTape();
@@ -133,11 +135,11 @@ export class Executor {
     }
   }
 
-  /** Stop sound and IR right here, now (the PANIC button and the server's panic fan-out). */
+  /** Stop sound and IR right here, now (the Stop all button and the server's panic fan-out). */
   async panicLocal(from: 'button' | 'server'): Promise<number> {
     const n = this.midi.panic();
     await this.bridge.panic();
-    this.log('warn', `PANIC (${from}): ${n} MIDI messages, IR stopped`);
+    this.log('warn', `Stop all (${from}): ${n} MIDI messages, IR stopped`);
     return n;
   }
 }

@@ -145,17 +145,21 @@ class Element {
   remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter((child) => child !== this); }
   setAttribute(name: string, value: string) { this.attributes.set(name, value); }
   getAttribute(name: string) { return this.attributes.get(name) ?? null; }
+  removeAttribute(name: string) { this.attributes.delete(name); }
+  focus() { Object.assign(document, { activeElement: this }); }
+  click() { if (!this.disabled) return this.fire('click'); }
   hasAttribute(name: string) { return name === 'open' ? this.open : this.attributes.has(name); }
   showModal() { this.open = true; }
   close() { this.open = false; }
   addEventListener(type: string, callback: (event: unknown) => unknown) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), callback]); }
-  async fire(type: string) {
-    const event = { target: this, preventDefault: vi.fn() };
+  async fire(type: string, detail: Record<string, unknown> = {}) {
+    const event = { target: this, preventDefault: vi.fn(), ...detail };
     for (const handler of this.listeners.get(type) ?? []) await handler(event);
     return event;
   }
   querySelectorAll(selector: string): Element[] {
     const matches = (child: Element) => selector.startsWith('#') ? child.id === selector.slice(1)
+      : selector.startsWith('.') ? child.classList.contains(selector.slice(1))
       : selector.startsWith('[data-') ? selector.slice(6, -1) in child.dataset : child.tagName === selector;
     return this.children.flatMap((child) => child instanceof Element ? [...(matches(child) ? [child] : []), ...child.querySelectorAll(selector)] : []);
   }
@@ -195,6 +199,10 @@ beforeEach(() => {
   for (const match of html.matchAll(/<([a-z][a-z0-9-]*)\b[^>]*\bid="([^"]+)"[^>]*>/g)) {
     const element = new Element(match[1]);
     element.id = match[2];
+    element.hidden = /\bhidden(?:\s|>)/.test(match[0]);
+    const className = match[0].match(/\bclass="([^"]+)"/)?.[1];
+    if (className) element.className = className;
+    for (const attribute of match[0].matchAll(/\b(aria-[\w-]+)="([^"]*)"/g)) element.setAttribute(attribute[1], attribute[2]);
     body.append(element);
   }
   byId('code-form').append(new Element('button'));
@@ -202,6 +210,7 @@ beforeEach(() => {
     body, visibilityState: 'visible',
     getElementById: (id: string) => body.querySelector(`#${id}`),
     createElement: (tag: string) => new Element(tag),
+    createElementNS: (_namespace: string, tag: string) => new Element(tag),
     createDocumentFragment: () => new Element('fragment'),
     querySelector: (selector: string) => body.querySelector(selector),
     querySelectorAll: (selector: string) => body.querySelectorAll(selector),
@@ -276,7 +285,7 @@ describe('Calm companion behavior', () => {
     expect(byId('app-header').hidden).toBe(true);
     expect(byId('workbench').classList.contains('pair-only')).toBe(true);
     expect(byId('onboarding').dataset.state).toBe('pairing');
-    expect(byId('onboarding-next').textContent).toBe('Look at this QR code with your Quest 3.');
+    expect(byId('onboarding-next').textContent).toBe('Scan this QR code with your Quest 3, or enter the code in your headset.');
     expect(byId('self-code').textContent).toBe('K7Q-4M2');
     expect(byId('self-qr').htmlWrites[0]).toContain('<svg');
     for (const id of ['connection-steps', 'headset-open', 'enable-midi', 'paired-summary']) expect(byId(id).hidden).toBe(true);
@@ -329,7 +338,7 @@ describe('Calm companion behavior', () => {
     expect(byId('onboarding').dataset.state).toBe('pairing');
     expect(byId('self-code').textContent).toBe('K7Q-4M2');
     expect(byId('self-qr').htmlWrites[0]).toContain('<svg');
-    expect(byId('self-expiry').textContent).toContain('expires in');
+    expect(byId('self-expiry').textContent).toContain('Expires in');
     await vi.advanceTimersByTimeAsync(1100);
     expect(mocks.api.pairStart).toHaveBeenCalledTimes(2);
     expect(byId('self-code').textContent).toBe('ABC-234');
@@ -376,7 +385,7 @@ describe('Calm companion behavior', () => {
     expect(byId('setup-activity').hidden).toBe(true);
     await app.emit('target.status', { cardId: 'synth', executorDeviceId: 'mac-1', state: 'verifying', runId: 'run-1', sentence: 'Listening through the headset mic…', since: 0 });
     expect(byId('setup-activity').hidden).toBe(false);
-    expect(byId('setup-activity-text').textContent).toBe('Quest is testing OP-1 Field: listening through the headset mic…');
+    expect(byId('setup-activity-text').textContent).toBe('Quest is checking OP-1 Field: listening through the headset mic…');
     mocks.send.mockReturnValue(true);
     await byId('setup-stop').fire('click');
     expect(mocks.send).toHaveBeenCalledWith('control.cancel', { cardId: 'synth', runId: 'run-1' }, { to: 'server' });
@@ -483,7 +492,7 @@ describe('Calm companion behavior', () => {
     expect(byId('status-text').textContent).toBe('Scanning the room');
     expect(byId('status-dot').classList.contains('working')).toBe(true);
     await app.emit('target.status', { cardId: 'light', state: 'verified' });
-    expect(byId('status-text').textContent).toBe('Testing complete');
+    expect(byId('status-text').textContent).toBe('Checks complete');
     expect(byId('status-dot').classList.contains('working')).toBe(false);
   });
 
@@ -501,7 +510,7 @@ describe('Calm companion behavior', () => {
     ], { duration: 120, easing, fill: 'forwards' });
 
     animations[0].onfinish?.();
-    expect(host.children).toEqual(['Testing complete']);
+    expect(host.children).toEqual(['Checks complete']);
     expect(animations[0].cancel).toHaveBeenCalledOnce();
     expect(animate).toHaveBeenNthCalledWith(2, [
       { opacity: 0, transform: 'translateY(4px)' },
@@ -511,7 +520,7 @@ describe('Calm companion behavior', () => {
     animations[1].onfinish?.();
     await app.emit('target.status', { cardId: 'light', state: 'verifying' });
     expect(animate).toHaveBeenCalledTimes(3);
-    expect(host.children).toEqual(['Testing complete']);
+    expect(host.children).toEqual(['Checks complete']);
   });
 
   it.each(['exit', 'entry'])('shows the latest status immediately during %s and ignores stale finishes', async (phase) => {
@@ -526,13 +535,13 @@ describe('Calm companion behavior', () => {
     const started = animations.length;
 
     await app.emit('target.status', { cardId: 'light', state: 'verified' });
-    expect(host.children).toEqual(['Testing complete']);
+    expect(host.children).toEqual(['Checks complete']);
     expect(active.cancel).toHaveBeenCalledOnce();
     expect(active.onfinish).toBeNull();
     expect(animate).toHaveBeenCalledTimes(started);
     staleExit?.();
     staleFinish?.();
-    expect(host.children).toEqual(['Testing complete']);
+    expect(host.children).toEqual(['Checks complete']);
     expect(animate).toHaveBeenCalledTimes(started);
 
     await app.emit('target.status', { cardId: 'light', state: 'forging' });
@@ -541,7 +550,7 @@ describe('Calm companion behavior', () => {
     staleFinish?.();
     await app.emit('target.status', { cardId: 'light', state: 'forged' });
     expect(next.cancel).toHaveBeenCalledOnce();
-    expect(host.children).toEqual(['Controls created: open Details']);
+    expect(host.children).toEqual(['Controls ready: open Details']);
     expect(animate).toHaveBeenCalledTimes(started + 1);
   });
 
@@ -565,7 +574,7 @@ describe('Calm companion behavior', () => {
     const app = await live();
     const { animate } = controlStatusAnimations(true);
     await app.emit('target.status', { cardId: 'light', state: 'verified' });
-    expect(byId('status-text').children).toEqual(['Testing complete']);
+    expect(byId('status-text').children).toEqual(['Checks complete']);
     expect(animate).not.toHaveBeenCalled();
   });
 
@@ -690,11 +699,170 @@ describe('Calm companion behavior', () => {
   it('opens and closes Details with an accessible expanded state', async () => {
     await live();
     await byId('details-open').fire('click');
-    expect(byId('drawer').open).toBe(true);
+    expect(byId('drawer').hidden).toBe(false);
     expect(byId('details-open').getAttribute('aria-expanded')).toBe('true');
-    const event = await byId('drawer').fire('cancel');
-    expect(event.preventDefault).toHaveBeenCalled();
-    expect(byId('drawer').open).toBe(false);
+    await byId('details-close').fire('click');
+    expect(byId('drawer').hidden).toBe(true);
     expect(byId('details-open').getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('switches Home, Devices, Activity and Details without dropping a live task', async () => {
+    const app = await live();
+    await app.emit('presence', { devices: [{ deviceId: 'quest', kind: 'quest', name: 'Quest 3', online: true, capabilities: ['mic'], ports: [] }] });
+    await app.emit('target.status', { cardId: 'light', executorDeviceId: 'mac-1', state: 'verifying', runId: 'run-1', since: 0 });
+    await byId('nav-devices').fire('click');
+    await flush();
+    expect(byId('nav-devices').getAttribute('aria-current')).toBe('page');
+    expect(byId('home-view').hidden).toBe(false);
+    expect(byId('setup-activity').hidden).toBe(true);
+
+    await byId('nav-activity').fire('click');
+    await flush();
+    expect(byId('activity-view').hidden).toBe(false);
+    expect(byId('home-view').hidden).toBe(true);
+    expect(byId('status-text').textContent).toBe('Checking your device');
+    expect(byId('nav-devices').getAttribute('aria-current')).toBe('false');
+
+    await byId('details-open').fire('click');
+    expect(byId('activity-view').hidden).toBe(true);
+    expect(byId('drawer').hidden).toBe(false);
+    await byId('nav-home').fire('click');
+    await flush();
+    expect(byId('drawer').hidden).toBe(true);
+    expect(byId('home-view').hidden).toBe(false);
+    expect(byId('setup-activity').hidden).toBe(false);
+    expect(byId('setup-stop').hidden).toBe(false);
+    expect(byId('nav-home').getAttribute('aria-current')).toBe('page');
+    expect(byId('details-open').getAttribute('aria-expanded')).toBe('false');
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('only shows the ready chips for connected USB outputs and an online headset mic', async () => {
+    const app = await live();
+    expect(byId('home-chips').textContent).toBe('');
+    const quest = { deviceId: 'quest', kind: 'quest', name: 'Quest 3', online: true, capabilities: [], ports: [] };
+    await app.emit('presence', { devices: [quest] });
+    expect(byId('home-chips').textContent).toBe('');
+    mocks.midiPorts = [{ id: 'op1', kind: 'midi-out', name: 'OP-1 Field', state: 'connected' }];
+    await app.emit('presence', { devices: [{ ...quest, capabilities: ['mic'] }] });
+    expect(byId('home-chips').textContent).toContain('USB MIDI ready');
+    expect(byId('home-chips').textContent).toContain('Headset mic active');
+    mocks.midiPorts = [];
+    await app.emit('presence', { devices: [{ ...quest, online: false, capabilities: ['mic'] }] });
+    expect(byId('home-chips').textContent).toBe('');
+  });
+
+  it('stops a local target’s active run and hides Stop when its controls are ready', async () => {
+    const app = await live();
+    await app.emit('presence', { devices: [{ deviceId: 'quest', kind: 'quest', name: 'Quest 3', online: true, capabilities: [], ports: [] }] });
+    await app.emit('device.card', { cardId: 'laptop', name: 'MacBook', protocols: ['local'], category: 'computer' });
+    await app.emit('link.result', { linkId: 'link-laptop', cardId: 'laptop', channel: 'local', verdict: 'confirmed', evidence: [] });
+    await app.emit('target.status', { cardId: 'laptop', executorDeviceId: 'server', runId: 'run-laptop', state: 'verifying', since: 0 });
+    expect(byId('setup-stop').hidden).toBe(false);
+    expect(byId('setup-progress').hidden).toBe(false);
+    mocks.send.mockReturnValue(true);
+    await byId('setup-stop').fire('click');
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith('control.cancel', { cardId: 'laptop', runId: 'run-laptop' }, { to: 'server' });
+    await app.emit('target.status', { cardId: 'laptop', executorDeviceId: 'server', state: 'armed', since: 0 });
+    expect(byId('setup-stop').hidden).toBe(true);
+    expect(byId('setup-progress').hidden).toBe(true);
+    await app.emit('target.status', { cardId: 'laptop', executorDeviceId: 'server', state: 'controlling', since: 0 });
+    expect(byId('setup-stop').hidden).toBe(true);
+    expect(byId('setup-progress').hidden).toBe(true);
+  });
+
+  it('shows and stops the active local target while a MIDI target is already ready', async () => {
+    mocks.midiEnabled = true;
+    mocks.midiPorts = [{ id: 'op1', kind: 'midi-out', name: 'OP-1 Field', state: 'connected' }];
+    const app = await live();
+    await app.emit('presence', { devices: [{ deviceId: 'quest', kind: 'quest', name: 'Quest 3', online: true, capabilities: [], ports: [] }] });
+    await app.emit('device.card', { cardId: 'synth', name: 'OP-1 Field', protocols: ['midi'], category: 'synthesizer' });
+    await app.emit('target.status', { cardId: 'synth', executorDeviceId: 'mac-1', state: 'armed', since: 0 });
+    await app.emit('device.card', { cardId: 'laptop', name: 'MacBook', protocols: ['local'], category: 'computer' });
+    await app.emit('link.result', { linkId: 'link-laptop', cardId: 'laptop', channel: 'local', verdict: 'confirmed', evidence: [] });
+    await app.emit('target.status', { cardId: 'laptop', executorDeviceId: 'server', runId: 'run-laptop', state: 'verifying', since: 0 });
+    expect(byId('setup-activity-text').textContent).toBe('Checking MacBook…');
+    expect(byId('setup-stop').hidden).toBe(false);
+    mocks.send.mockReturnValue(true);
+    await byId('setup-stop').fire('click');
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith('control.cancel', { cardId: 'laptop', runId: 'run-laptop' }, { to: 'server' });
+  });
+
+  it('keeps the selected device’s driver, spec and checks separate when action IDs are reused', async () => {
+    const app = await live();
+    const result = (cardId: string, value: number) => ({
+      evidenceId: `e-${cardId}`, cardId, driverId: `driver-${cardId}`, actionId: 'level', execId: `x-${cardId}`, attempt: 1,
+      sent: { op: { kind: 'midi', msg: 'cc', channel: 1, number: 46, value }, at: Date.now() },
+      expected: { sense: 'audio', effect: 'tone-up' },
+      observed: { sense: 'audio', metric: 'centroid', before: 400, after: 800, delta: 400, threshold: 0.3 },
+      pass: true,
+    });
+    for (const [cardId, name, value] of [['synth-a', 'First synth', 40], ['synth-b', 'Second synth', 90]] as const) {
+      const model = cardId === 'synth-a' ? 'muse-spark-1.3' : 'muse-wonder-1.0';
+      await app.emit('device.card', { cardId, name, maker: 'Maker', model: name, category: 'synthesizer', protocols: ['midi'] });
+      await app.emit('agent.step', { stepId: `write-${cardId}`, cardId, phase: 'drive', status: 'ok', title: `Driver ready for ${name}`, model, latencyMs: 2000 });
+      await app.emit('driver.spec', {
+        driverId: `driver-${cardId}`, cardId, name, modelId: model, transport: 'midi', executor: { deviceId: 'mac-1', port: cardId }, provenance: [],
+        actions: [{ actionId: 'level', label: `${name} level`, kind: 'set', encode: { kind: 'midi', msg: 'cc', channel: 1, number: 46, value: '$value' }, verified: 'pass' }],
+      });
+      await app.emit('ui.spec', { specId: `spec-${cardId}`, cardId, title: `${name} controls`, widgets: [] });
+      await app.emit('verify.result', result(cardId, value));
+    }
+    const row = byId('home-devices').querySelectorAll('.device-row').find((candidate) => candidate.textContent.includes('First synth'))!;
+    await row.querySelector('button')!.fire('click');
+    await flush();
+    expect(byId('drawer').hidden).toBe(false);
+    expect(byId('device-card').textContent).toContain('First synth');
+    expect(byId('device-card').textContent).not.toContain('Second synth');
+    expect(byId('code').textContent).toContain('driver-synth-a');
+    expect(byId('code').textContent).not.toContain('driver-synth-b');
+    expect(byId('gen-chip').textContent).toContain('muse-spark-1.3');
+    await app.emit('agent.step', { stepId: 'rewrite-synth-b', cardId: 'synth-b', phase: 'drive', status: 'running', title: 'Updating the second driver', model: 'muse-wonder-1.0' });
+    await app.emit('device.card', { cardId: 'synth-b', name: 'Second synth updated', protocols: ['midi'], category: 'synthesizer' });
+    await app.emit('driver.spec', { driverId: 'driver-synth-b-new', cardId: 'synth-b', name: 'Second synth updated', modelId: 'muse-wonder-1.0', transport: 'midi', executor: { deviceId: 'mac-1', port: 'synth-b' }, provenance: [], actions: [] });
+    expect(byId('device-card').textContent).toContain('First synth');
+    expect(byId('code').textContent).toContain('driver-synth-a');
+    expect(byId('code').textContent).not.toContain('driver-synth-b');
+    expect(byId('gen-chip').textContent).toContain('muse-spark-1.3');
+    expect(byId('gen-chip').textContent).not.toContain('muse-wonder-1.0');
+    expect(byId('spec').textContent).toContain('spec-synth-a');
+    expect(byId('spec').textContent).not.toContain('spec-synth-b');
+    expect(byId('evidence').querySelectorAll('.ev')).toHaveLength(1);
+    expect(byId('evidence').textContent).toContain('Sent CC 46 → 40');
+    expect(byId('evidence').textContent).not.toContain('Sent CC 46 → 90');
+    expect(byId('evidence').querySelectorAll('.step-pill').map((pill) => [pill.textContent, pill.classList.contains('done')])).toEqual([
+      ['Generated', true], ['Checked', true], ['Sent', true], ['Heard', true],
+    ]);
+    const details = byId('evidence').querySelector('details')!;
+    details.open = true;
+    await app.emit('verify.result', { ...result('synth-a', 41), evidenceId: 'e-new', attempt: 2 });
+    expect(byId('evidence').querySelector('details')!.open).toBe(true);
+    expect(byId('evidence').textContent).toContain('Sent CC 46 → 41');
+    expect(byId('evidence').querySelector('svg')!.getAttribute('width')).toBe('76');
+    expect(byId('evidence').querySelector('svg')!.getAttribute('height')).toBe('26');
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('supports keyboard navigation of the code tabs', async () => {
+    await live();
+    const event = await byId('tab-code').fire('keydown', { key: 'ArrowRight' });
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(byId('tab-tape').getAttribute('aria-selected')).toBe('true');
+    expect(byId('tape').hidden).toBe(false);
+    expect(byId('code').hidden).toBe(true);
+    expect(document.activeElement).toBe(byId('tab-tape'));
+    await byId('tab-tape').fire('keydown', { key: 'End' });
+    expect(byId('tab-spec').getAttribute('aria-selected')).toBe('true');
+    expect(byId('spec').hidden).toBe(false);
+    expect(document.activeElement).toBe(byId('tab-spec'));
+  });
+
+  it('renders agent steps as a readable table with model latency and current wording', async () => {
+    const app = await live();
+    await app.emit('agent.step', { stepId: 'make-1', phase: 'forge', status: 'ok', title: 'Hack set ready: 5 hacks (2 controls)', model: 'muse-spark-1.3', effort: 'low', latencyMs: 16_000 });
+    expect(byId('worklog').querySelectorAll('th').map((heading) => heading.textContent)).toEqual(['Time', 'Step', 'Message', 'Model']);
+    expect(byId('worklog').textContent).toContain('Making controls');
+    expect(byId('worklog').textContent).toContain('Control set ready: 5 controls (2 sliders)');
+    expect(byId('worklog').textContent).toContain('muse-spark-1.3 · low · 16 s');
   });
 });

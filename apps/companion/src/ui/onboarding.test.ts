@@ -14,7 +14,7 @@ const target = (state: TargetStatusPayload['state']): TargetStatusPayload => ({ 
 
 describe('companion first-run state', () => {
   it('walks pairing, USB permission, cable, setup and enable controls without starting work', () => {
-    expect(companionView({ ...initial, connected: false, authenticated: false, pairing: true })).toMatchObject({ stage: 'pairing', title: 'Pair with your headset', enableMidi: false });
+    expect(companionView({ ...initial, connected: false, authenticated: false, pairing: true })).toMatchObject({ stage: 'pairing', title: 'Pair with your headset', next: 'Scan this QR code with your Quest 3, or enter the code in your headset.', enableMidi: false });
     expect(companionView({ ...initial, devices: [] })).toMatchObject({ stage: 'headset', title: 'Pair with your headset' });
     expect(companionView(initial)).toMatchObject({ stage: 'midi-permission', headset: 'Connected to Quest 3', enableMidi: true });
     expect(companionView({ ...initial, midiEnabled: true })).toMatchObject({ stage: 'usb', title: 'Plug in a synth (USB)', enableMidi: false });
@@ -59,8 +59,8 @@ describe('ports belonging to this Mac', () => {
 
 describe('headset setup activity', () => {
   it('describes testing and puts approval in the headset', () => {
-    expect(setupActivity('OP-1 Field', { ...target('verifying'), sentence: 'Listening through the headset mic…' })).toMatchObject({ text: 'Quest is testing OP-1 Field: listening through the headset mic…', working: true, canStop: true });
-    expect(setupActivity('OP-1 Field', target('verifying'))?.text).toBe('Quest is testing OP-1 Field: listening for a sound change…');
+    expect(setupActivity('OP-1 Field', { ...target('verifying'), sentence: 'Listening through the headset mic…' })).toMatchObject({ text: 'Quest is checking OP-1 Field: listening through the headset mic…', working: true, canStop: true });
+    expect(setupActivity('OP-1 Field', target('verifying'))?.text).toBe('Quest is checking OP-1 Field: listening for a sound change…');
     expect(setupActivity('OP-1 Field', target('arming'))).toMatchObject({ text: 'Enable controls for OP-1 Field in your headset.', working: false, ready: false, canStop: true });
   });
 
