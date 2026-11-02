@@ -6,7 +6,7 @@
  *   exec.ack / sense.result -> Dispatcher · arm.confirm -> ArmService · control.event / panic -> ControlRouter
  *   voice.audio / voice.text -> VoiceRelay · gen3d.generate / gen3d.edit -> the forge
  */
-import { type DeviceCardPayload, EXPERIMENTAL_TYPE, type Hack, type Message, type TargetSelectPayload, type UiSpecPayload } from '@ce/protocol';
+import { type DeviceCardPayload, EXPERIMENTAL_TYPE, newId, type TargetCancelPayload, type TargetRetryPayload, type Hack, type Message, type TargetSelectPayload, type UiSpecPayload } from '@ce/protocol';
 import type { ServerContext } from '../context';
 import { loadProfiles, type Profiles } from '../devices/profiles';
 import { getForge } from '../gen3d';
@@ -26,6 +26,8 @@ import { fixtureDriverDraft, WONDER_MODEL } from './drive';
 import { macLocalInfo, type Roster } from './executors';
 import { fixtureDeviceCard } from './identify';
 import { runLoop } from './loop';
+import { CANCELLED_GUIDANCE, type TimedPhase } from './guidance';
+import { subscribeForge } from './forgeBridge';
 import { MacLocalExecutor } from './maclocal';
 import { loadRecordedSpeech } from './recordedSpeech';
 import { ScanService } from './scan';
@@ -53,6 +55,8 @@ export interface Agent {
   forge(): Forge | undefined;
   /** start the loop for a selection (returns the target, or undefined when nothing matched) */
   select(p: TargetSelectPayload, from: { deviceId: string; name?: string }): Target | undefined;
+  cancel(p: TargetCancelPayload): boolean;
+  retry(p: TargetRetryPayload, from: { deviceId: string; name?: string }): Target | undefined;
   close(): void;
 }
 
@@ -61,6 +65,7 @@ export interface AgentOptions {
   macLocal?: boolean;
   settleMs?: (t: Target, transport: 'midi' | 'ir' | 'local') => number;
   companionWaitMs?: number;
+  phaseTimeoutMs?: Partial<Record<TimedPhase, number>>;
   learnIr?: boolean;
   prompts?: string[];
   /** replace the forge lookup (tests) */
@@ -101,12 +106,20 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const targets = new TargetStore(hub, log);
   const dispatcher = new Dispatcher({ hub, macLocal, log });
   const arm = new ArmService({ hub, targets, steps, log });
-  const forge = opts.forge ?? (() => getForge(ctx));
+  // Own the broadcast bridge so cancelled discovery runs cannot publish stale controls.
+  const sharedForge = opts.forge ? undefined : getForge(ctx, { broadcast: false });
+  const forge = opts.forge ?? (() => sharedForge);
+  const unsubscribeForge = sharedForge ? subscribeForge(sharedForge, hub, targets) : () => {};
   let room: UiSpecPayload | undefined;
   let roomRev = 0;
+  const deviceSpec = (specId: string) => {
+    const spec = forge()?.get(specId);
+    const target = spec?.cardId ? targets.get(spec.cardId) : undefined;
+    return target && spec?.driverId !== target.driver?.driverId ? undefined : spec;
+  };
   const specs = {
-    get: (specId: string) => (specId === ROOM_SPEC_ID ? room : forge()?.get(specId)),
-    list: () => [...(forge()?.list() ?? []), ...(room ? [room] : [])],
+    get: (specId: string) => (specId === ROOM_SPEC_ID ? room : deviceSpec(specId)),
+    list: () => [...(forge()?.list().filter((spec) => deviceSpec(spec.specId)) ?? []), ...(room ? [room] : [])],
   };
   const heard = (line: string, wav: Uint8Array, signal?: AbortSignal) => hearBack({ transcriber: ctx.transcriber, recordDir: ctx.config.muse.recordDir, replayDir: ctx.config.muse.replayDir, log }, line, wav, signal);
   // room hacks: daemons start after a tap, combos run with a tap of their own
@@ -152,7 +165,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     return built;
   };
   let roomTimer: ReturnType<typeof setTimeout> | undefined;
-  targets.onChange((t) => {
+  const unsubscribeTargets = targets.onChange((t) => {
     if (t.cardId === ROOM_CARD_ID || !['armed', 'forged', 'verified'].includes(t.state)) return;
     if (roomTimer) clearTimeout(roomTimer);
     roomTimer = setTimeout(() => publishRoom(), 300);
@@ -198,7 +211,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
           }
         }
         const t = latestSpecTarget(cardId);
-        const spec = t?.specId ? forge()?.get(t.specId) : undefined;
+        const spec = t?.specId ? specs.get(t.specId) : undefined;
         if (!t || !spec?.hackset) return false;
         const lower = text.toLowerCase();
         const hack = spec.hackset.hacks.find((h) => lower.includes(h.name.toLowerCase()) || lower.includes(h.id.toLowerCase()));
@@ -217,16 +230,61 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     },
   });
 
-  const loopDeps = { hub, targets, steps, dispatcher, roster, sam, spark: muse, wonder, web, profiles, forge, arm, heard, readVolume: () => macLocal.currentVolume(), silentSpeech, log, companionWaitMs: opts.companionWaitMs, settleMs: opts.settleMs, learnIr: opts.learnIr };
+  const loopDeps = { hub, targets, steps, dispatcher, roster, sam, spark: muse, wonder, web, profiles, forge, arm, heard, readVolume: () => macLocal.currentVolume(), silentSpeech, log, companionWaitMs: opts.companionWaitMs, phaseTimeoutMs: opts.phaseTimeoutMs, settleMs: opts.settleMs, learnIr: opts.learnIr };
+
+  const stop = (t: Target, reason = 'cancelled') => {
+    t.abort?.abort(new Error(reason));
+    arm.cancel(t, reason);
+    control.cancel(t);
+    steps.failRun(t.runId, CANCELLED_GUIDANCE);
+    targets.setState(t, 'failed', reason, CANCELLED_GUIDANCE);
+  };
+  const focus = (t: Target, from: { deviceId: string }) => {
+    for (const previous of targets.list()) {
+      if (previous !== t && previous.selectedBy === from.deviceId && (previous.abort || previous.armId)) stop(previous, 'another device selected');
+    }
+    t.selectedBy = from.deviceId;
+  };
+  const start = (t: Target, from: { deviceId: string }, options: { userText?: string; preferDeviceId?: string }, initial = false) => {
+    focus(t, from);
+    t.abort?.abort(new Error('retrying'));
+    arm.cancel(t, 'retrying');
+    control.cancel(t);
+    steps.failRun(t.runId, CANCELLED_GUIDANCE);
+    if (!initial) t.runId = newId('run-');
+    t.selection = options;
+    t.specId = undefined;
+    t.controlCount = undefined;
+    t.driver = undefined;
+    t.link = undefined;
+    t.verification = {};
+    t.evidence = [];
+    t.lastError = undefined;
+    void runLoop(loopDeps, t, options);
+  };
+  const cancel = (p: TargetCancelPayload): boolean => {
+    const t = targets.get(p.cardId);
+    if (!t || (p.runId && p.runId !== t.runId)) return false;
+    stop(t);
+    return true;
+  };
+  const retry = (p: TargetRetryPayload, from: { deviceId: string; name?: string }): Target | undefined => {
+    const t = targets.get(p.cardId);
+    if (!t || (p.runId && p.runId !== t.runId)) return undefined;
+    // A declined or expired confirmation only needs another tap, not another physical test.
+    if (!t.abort && t.specId && t.driver && ['forged', 'verified', 'armed', 'controlling'].includes(t.state)) return select({ cardId: t.cardId }, from);
+    start(t, from, t.selection ?? { preferDeviceId: from.deviceId });
+    return t;
+  };
 
   const select = (p: TargetSelectPayload, from: { deviceId: string; name?: string }): Target | undefined => {
     if (p.cardId) {
       const existing = targets.get(p.cardId);
       if (!existing) return undefined;
-      if (existing.abort) return existing; // already running
+      focus(existing, from);
+      if (existing.abort && !existing.abort.signal.aborted) return existing; // already running
       if (existing.state === 'failed' || existing.state === 'needs-companion') {
-        existing.runId = `run-${Date.now().toString(36)}`;
-        void runLoop(loopDeps, existing, { userText: p.text, preferDeviceId: from.deviceId });
+        start(existing, from, { ...existing.selection, ...(p.text ? { userText: p.text } : {}), preferDeviceId: existing.selection?.preferDeviceId ?? from.deviceId });
         return existing;
       }
       // a headset that (re)joined mid-session pinches a device it already owns: give it the card, the controls and the armed state again
@@ -239,9 +297,12 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       if (!existing.armed && !existing.armId && existing.driver && (existing.state === 'forged' || existing.state === 'verified') && existing.cardId !== ROOM_CARD_ID) {
         // the ARM window closed without a pinch (or was declined): pinching the device again asks again
         const driver = existing.driver;
-        void arm.request(existing, driver).then((r) => {
-          if (r.armed) hub.broadcast('driver.status', { driverId: driver.driverId, cardId: existing.cardId, phase: 'armed', actions: driver.actions.map((a) => ({ actionId: a.actionId, verified: existing.verification[a.actionId] ?? 'untested' })), modelId: driver.modelId });
-        });
+        const abort = new AbortController();
+        existing.abort = abort;
+        existing.runId = newId('run-');
+        void arm.request(existing, driver, undefined, abort.signal).then((r) => {
+          if (!abort.signal.aborted && r.armed) hub.broadcast('driver.status', { driverId: driver.driverId, cardId: existing.cardId, phase: 'armed', actions: driver.actions.map((a) => ({ actionId: a.actionId, verified: existing.verification[a.actionId] ?? 'untested' })), modelId: driver.modelId });
+        }).finally(() => { if (existing.abort === abort) existing.abort = undefined; });
       }
       return existing;
     }
@@ -267,7 +328,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       const t = targets.create({ cardId: card.cardId, card, selectedBy: from.deviceId });
       hub.broadcast('device.card', card);
       targets.setState(t, 'identified', `${info.name}, a paired ${info.kind}`);
-      void runLoop(loopDeps, t, { userText: p.text, preferDeviceId: info.deviceId });
+      start(t, from, { userText: p.text, preferDeviceId: info.deviceId }, true);
       return t;
     }
     if (p.frameId && p.detId) {
@@ -277,7 +338,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       if (known) return select({ cardId: known.cardId, text: p.text }, from);
       const t = targets.create({ detection: det, selectedBy: from.deviceId });
       targets.setState(t, 'scanned', `${det.label} selected by ${from.name ?? from.deviceId}`);
-      void runLoop(loopDeps, t, { userText: p.text, preferDeviceId: from.deviceId });
+      start(t, from, { userText: p.text, preferDeviceId: from.deviceId }, true);
       return t;
     }
     return undefined;
@@ -294,6 +355,12 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       case 'target.select':
         select(m.payload, from);
         return;
+      case 'target.cancel':
+        cancel(m.payload);
+        return;
+      case 'target.retry':
+        retry(m.payload, from);
+        return;
       case 'exec.ack':
         dispatcher.onAck(m.payload);
         return;
@@ -309,6 +376,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         return;
       }
       case 'panic':
+        for (const t of targets.list()) if ((!m.payload.cardId || t.cardId === m.payload.cardId) && (t.abort || t.armId)) stop(t, 'stopped');
         daemons.stopAll(m.payload.reason ?? 'panic');
         control.panic(m.payload.reason ?? `panic from ${from.name}`, m.payload.cardId);
         return;
@@ -356,8 +424,12 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     roster,
     forge,
     select,
+    cancel,
+    retry,
     close: () => {
       unsubscribe();
+      unsubscribeTargets();
+      unsubscribeForge();
       if (roomTimer) clearTimeout(roomTimer);
       daemons.close();
       for (const t of targets.list()) t.abort?.abort();

@@ -1,7 +1,8 @@
 /** The per-target state machine store; every transition is a `target.status` broadcast. */
-import { newId, type TargetState, type TargetStatusPayload } from '@ce/protocol';
+import { newId, type AgentGuidance, type TargetState, type TargetStatusPayload } from '@ce/protocol';
 import type { Hub } from '../hub';
 import type { Target } from './types';
+import { stateGuidance } from './guidance';
 
 export class TargetStore {
   private readonly targets = new Map<string, Target>();
@@ -54,12 +55,16 @@ export class TargetStore {
   }
 
   /** Move a target to a state and tell every client. */
-  setState(t: Target, state: TargetState, detail?: string): void {
+  setState(t: Target, state: TargetState, detail?: string, guidance?: AgentGuidance): void {
     t.state = state;
     t.since = Date.now();
     t.detail = detail;
     if (state === 'failed' && detail) t.lastError = detail;
-    const payload: TargetStatusPayload = { cardId: t.cardId, state, since: t.since };
+    const words = guidance ?? stateGuidance(t, state);
+    t.sentence = words.sentence;
+    t.hint = words.hint;
+    t.action = words.action;
+    const payload: TargetStatusPayload = { cardId: t.cardId, runId: t.runId, state, since: t.since, ...words };
     if (detail) payload.detail = detail.slice(0, 300);
     if (t.driver) payload.driverId = t.driver.driverId;
     if (t.specId) payload.specId = t.specId;

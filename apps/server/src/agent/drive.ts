@@ -13,6 +13,7 @@ import { formatIssues, validateDriver, type ValidationContext, type ValidationRe
 import { type ChatMessage, ModelCallError, ModelOutputError, type MuseChat } from '../muse/adapter';
 import type { DeviceCardPayload } from '@ce/protocol';
 import type { Research } from './types';
+import { throwIfCancelled } from '../muse/cancellation';
 
 export const WONDER_MODEL = 'muse-wonder-1.0';
 export const DRIVE_EFFORT = 'low' as const;
@@ -106,6 +107,7 @@ export async function drive(
   let last: DriveResult | undefined;
   const steps = plan(deps, opts.maxAttempts ?? 3);
   for (const [i, step] of steps.entries()) {
+    throwIfCancelled(opts.signal);
     const attempt = i + 1;
     const t0 = Date.now();
     let res: Awaited<ReturnType<MuseChat['chatJson']>> & { data: DriverDraft };
@@ -123,6 +125,7 @@ export async function drive(
         timeoutMs: step.timeoutMs,
       });
     } catch (e) {
+      throwIfCancelled(opts.signal);
       if (!(e instanceof ModelOutputError) && !(e instanceof ModelCallError)) throw e;
       const error = (e as Error).message.slice(0, 200);
       deps.log?.(`[drive] attempt ${attempt} (${step.tag} ${step.effort}) failed: ${error}`);
@@ -130,6 +133,7 @@ export async function drive(
       if (e instanceof ModelOutputError && repair === undefined) repair = { draft: { cardId: card.cardId, transport, provenance: [], actions: [] } as DriverDraft, issues: `the previous answer was not valid JSON for the schema: ${e.issues.slice(0, 5).join('; ')}` };
       continue;
     }
+    throwIfCancelled(opts.signal);
     const draft = postProcess(res.data, card.cardId, transport);
     const validation = validateDriver(draft, ids, vctx);
     const model = res.recordedFrom ?? res.model;

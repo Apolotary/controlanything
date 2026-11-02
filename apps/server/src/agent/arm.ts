@@ -6,6 +6,7 @@
 import type { ArmConfirmPayload, ArmRequestPayload, ArmResultPayload, Driver } from '@ce/protocol';
 import { newId } from '@ce/protocol';
 import type { Hub } from '../hub';
+import { stateGuidance } from './guidance';
 import type { StepLog } from './steps';
 import type { TargetStore } from './targets';
 import type { Target } from './types';
@@ -14,9 +15,9 @@ export const ARM_TIMEOUT_MS = 120_000;
 
 interface PendingArm {
   target: Target;
+  driverId: string;
   irreversible: boolean;
   resolve: (r: ArmResultPayload) => void;
-  timer: ReturnType<typeof setTimeout>;
 }
 
 export interface Approver {
@@ -34,7 +35,7 @@ export class ArmService {
   ) {}
 
   /** Build and send the request; resolves with the result (approved, declined or expired). */
-  request(target: Target, driver: Driver, summary?: string): Promise<ArmResultPayload> {
+  request(target: Target, driver: Driver, summary?: string, signal?: AbortSignal): Promise<ArmResultPayload> {
     const irreversible = driver.actions.some((a) => a.confirm === 'hold');
     const actions = driver.actions.map((a) => ({ actionId: a.actionId, label: a.label.slice(0, 40), verified: target.verification[a.actionId] ?? a.verified ?? 'untested' }));
     const passed = actions.filter((a) => a.verified === 'pass').length;
@@ -44,13 +45,15 @@ export class ArmService {
       summary: summary ?? `${passed} of ${actions.length} actions verified on the real device. Controls bound to unverified actions stay disarmed.`,
       actions,
       irreversible,
-    });
+    }, signal);
   }
 
   /** A one-tap question about any target (a device to arm, a room combo to run). */
-  ask(target: Target, q: { driverId?: string; title: string; summary: string; actions: ArmRequestPayload['actions']; irreversible?: boolean }): Promise<ArmResultPayload> {
+  ask(target: Target, q: { driverId?: string; title: string; summary: string; actions: ArmRequestPayload['actions']; irreversible?: boolean }, signal?: AbortSignal): Promise<ArmResultPayload> {
     const armId = newId('arm');
     const driverId = q.driverId ?? target.driver?.driverId ?? 'room';
+    if (signal?.aborted) return Promise.resolve({ armId, cardId: target.cardId, driverId, armed: false, reason: 'cancelled' });
+    this.cancel(target, 'replaced by a new confirmation');
     const payload: ArmRequestPayload = {
       armId,
       cardId: target.cardId,
@@ -63,16 +66,27 @@ export class ArmService {
       expiresAt: Date.now() + (this.d.timeoutMs ?? ARM_TIMEOUT_MS),
     };
     target.armId = armId;
-    this.d.targets.setState(target, 'arming', 'waiting for a pinch');
-    this.d.hub.broadcast('arm.request', payload);
     return new Promise<ArmResultPayload>((resolve) => {
+      const finish = (result: ArmResultPayload) => {
+        if (!this.pending.delete(armId)) return;
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+        this.finish(target, result);
+        resolve(result);
+      };
+      const onAbort = () => finish({ armId, cardId: target.cardId, driverId, armed: false, reason: 'cancelled' });
       const timer = setTimeout(() => {
-        this.pending.delete(armId);
-        const r: ArmResultPayload = { armId, cardId: target.cardId, driverId, armed: false, reason: 'no confirmation in time' };
-        this.finish(target, r);
-        resolve(r);
+        finish({ armId, cardId: target.cardId, driverId, armed: false, reason: 'no confirmation in time' });
       }, this.d.timeoutMs ?? ARM_TIMEOUT_MS);
-      this.pending.set(armId, { target, irreversible: Boolean(q.irreversible), resolve, timer });
+      this.pending.set(armId, { target, driverId, irreversible: Boolean(q.irreversible), resolve: finish });
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) return onAbort();
+      this.d.targets.setState(target, 'arming', 'waiting for a pinch', {
+        sentence: 'Tap once to enable these controls',
+        hint: q.irreversible ? 'Hold to confirm actions that cannot be undone, or cancel.' : 'Confirm when you are ready, or cancel.',
+        action: 'cancel',
+      });
+      if (this.pending.has(armId)) this.d.hub.broadcast('arm.request', payload);
     });
   }
 
@@ -85,7 +99,7 @@ export class ArmService {
       return false;
     }
     const { target } = pend;
-    const driverId = target.driver?.driverId ?? 'room'; // a room combo has no driver; the protocol wants a non-empty id
+    const { driverId } = pend;
     let r: ArmResultPayload;
     if (!p.approve) r = { armId: p.armId, cardId: target.cardId, driverId, armed: false, by: by.name ?? by.deviceId, reason: 'declined' };
     else if (pend.irreversible && !p.hold) r = { armId: p.armId, cardId: target.cardId, driverId, armed: false, by: by.name ?? by.deviceId, reason: 'this driver has an irreversible action: pinch and hold to arm' };
@@ -95,9 +109,6 @@ export class ArmService {
       this.d.hub.broadcast('arm.result', r);
       return true;
     }
-    clearTimeout(pend.timer);
-    this.pending.delete(p.armId);
-    this.finish(target, r);
     pend.resolve(r);
     return true;
   }
@@ -106,9 +117,23 @@ export class ArmService {
     target.armed = r.armed;
     target.armId = undefined;
     this.d.hub.broadcast('arm.result', r);
-    this.d.steps.note('arm', r.armed ? `armed by ${r.by ?? 'the owner'}` : `not armed: ${r.reason ?? 'declined'}`, { cardId: target.cardId, kind: 'proof', status: r.armed ? 'ok' : 'fail', evidence: r.armed ? 'human confirmed' : r.reason });
+    const guidance = r.armed
+      ? stateGuidance(target, 'armed')
+      : { sentence: r.reason === 'no confirmation in time' ? 'Confirmation timed out' : 'Controls remain off', hint: 'Retry when you are ready, or pick another device.', action: 'retry' as const };
+    this.d.steps.note('arm', r.armed ? `armed by ${r.by ?? 'the owner'}` : `not armed: ${r.reason ?? 'declined'}`, { cardId: target.cardId, kind: 'proof', status: r.armed ? 'ok' : 'fail', evidence: r.armed ? 'human confirmed' : r.reason, ...guidance });
     const isRoom = target.cardId === 'room';
-    this.d.targets.setState(target, r.armed && !isRoom ? 'armed' : target.specId ? 'forged' : 'verified', r.armed ? `${isRoom ? 'confirmed' : 'armed'} by ${r.by ?? 'the owner'}` : r.reason);
+    this.d.targets.setState(target, r.armed && !isRoom ? 'armed' : target.specId ? 'forged' : 'verified', r.armed ? `${isRoom ? 'confirmed' : 'armed'} by ${r.by ?? 'the owner'}` : r.reason, guidance);
+  }
+
+  /** Remove confirmation immediately so a late tap cannot enable a cancelled target. */
+  cancel(target: Target, reason = 'cancelled'): boolean {
+    let cancelled = false;
+    for (const [armId, pending] of this.pending) {
+      if (pending.target !== target) continue;
+      pending.resolve({ armId, cardId: target.cardId, driverId: pending.driverId, armed: false, reason });
+      cancelled = true;
+    }
+    return cancelled;
   }
 
   pendingIds(): string[] {
@@ -117,8 +142,7 @@ export class ArmService {
 
   close(): void {
     for (const [armId, p] of this.pending) {
-      clearTimeout(p.timer);
-      p.resolve({ armId, cardId: p.target.cardId, driverId: p.target.driver?.driverId ?? '', armed: false, reason: 'server closing' });
+      p.resolve({ armId, cardId: p.target.cardId, driverId: p.driverId, armed: false, reason: 'server closing' });
     }
     this.pending.clear();
   }

@@ -31,7 +31,31 @@
     "payload": {
       "type": "object",
       "properties": {
+        "sentence": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "hint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "retry",
+            "cancel",
+            "open-companion",
+            "pair-device"
+          ]
+        },
         "cardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "runId": {
           "type": "string",
           "minLength": 1,
           "maxLength": 128

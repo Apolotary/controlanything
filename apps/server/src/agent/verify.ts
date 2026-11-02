@@ -7,6 +7,7 @@
  */
 import type { Driver, DriverAction, Effect, Evidence, ExecOp, Polygon, SenseResultPayload, VerifyState } from '@ce/protocol';
 import { newId } from '@ce/protocol';
+import { cancellableDelay as sleep, throwIfCancelled } from '../muse/cancellation';
 import { resolveOp } from '../devices/encode';
 import type { IrCandidate } from '../devices/profiles';
 import { audioEvidence, audioMatches, observeAudio } from '../oracle/audio';
@@ -68,17 +69,6 @@ function effectFor(a: DriverAction): Effect {
   return a.expect?.effect ?? 'any';
 }
 
-async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms <= 0) return;
-  await new Promise<void>((resolve, reject) => {
-    const t = setTimeout(resolve, ms);
-    signal?.addEventListener('abort', () => {
-      clearTimeout(t);
-      reject(new ExecError('cancelled', 'refused'));
-    });
-  });
-}
-
 /** Ask the camera for one verify frame. */
 async function captureFrame(d: Dispatcher, sensorDeviceId: string, cardId: string, signal?: AbortSignal): Promise<{ img: DecodedImage; jpeg: string; width: number; height: number; exposureLocked: boolean }> {
   const [r] = await d.sense(sensorDeviceId, 'frame', { cardId, signal, timeoutMs: 6000 });
@@ -88,28 +78,34 @@ async function captureFrame(d: Dispatcher, sensorDeviceId: string, cardId: strin
   return { img: decodeJpeg(r.frame.jpeg), jpeg: r.frame.jpeg, width: r.frame.width, height: r.frame.height, exposureLocked: src === 'synthetic' || src === 'replay' || r.frame.camera?.exposure === 'locked' };
 }
 
-/** Re-find the target's outline on a fresh frame with SAM (nearest to the stored box); fall back to the stored polygon. */
+/** Re-find the selected target in a fresh frame before sending a camera-verified command. */
 export async function refreshPolygon(sam: Sam, t: Target, jpeg: string, width: number, height: number, signal?: AbortSignal): Promise<{ polygon: Polygon; fresh: boolean; latencyMs: number; model: string }> {
+  throwIfCancelled(signal);
   const det = t.detection;
-  // no detection (a device the user pointed at without a scan): watch the middle of the frame
+  // Paired devices selected without a detection use the centre of the camera view.
   if (!det) return { polygon: polygonFor(null, [Math.round(width * 0.25), Math.round(height * 0.25), Math.round(width * 0.5), Math.round(height * 0.5)]), fresh: false, latencyMs: 0, model: 'none' };
-  const fallback = det.polygon ?? polygonFor(null, det.box);
-  try {
-    const r = await sam.segment(det.prompt, jpeg, { width, height, signal, label: `sam:verify:${det.prompt}` });
-    let best: { score: number; polygon: Polygon } | undefined;
-    for (const rec of r.records) {
-      const box: [number, number, number, number] = [rec.x1, rec.y1, rec.x2 - rec.x1 + 1, rec.y2 - rec.y1 + 1];
-      const overlap = iou(box, det.box);
-      if (overlap < 0.2) continue;
-      const raster = decodeMask(rec);
-      const polygon = rec.polygon ?? polygonFor(raster ? { data: raster, width: rec.mask!.width, height: rec.mask!.height, x0: rec.x1, y0: rec.y1 } : null, box);
-      if (!best || overlap > best.score) best = { score: overlap, polygon };
+  let r;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      r = await sam.segment(det.prompt, jpeg, { width, height, signal, label: `sam:verify:${det.prompt}` });
+      throwIfCancelled(signal);
+      break;
+    } catch (e) {
+      throwIfCancelled(signal);
+      if (attempt === 1) throw new ExecError(`camera check failed twice: ${(e as Error).message}`, 'device');
     }
-    if (best) return { polygon: best.polygon, fresh: true, latencyMs: r.latencyMs, model: r.recordedFrom ?? r.model };
-    return { polygon: fallback, fresh: false, latencyMs: r.latencyMs, model: r.recordedFrom ?? r.model };
-  } catch (e) {
-    return { polygon: fallback, fresh: false, latencyMs: 0, model: 'none' };
   }
+  let best: { score: number; polygon: Polygon } | undefined;
+  for (const rec of r!.records) {
+    const box: [number, number, number, number] = [rec.x1, rec.y1, rec.x2 - rec.x1 + 1, rec.y2 - rec.y1 + 1];
+    const overlap = iou(box, det.box);
+    if (overlap < 0.2) continue;
+    const raster = decodeMask(rec);
+    const polygon = rec.polygon ?? polygonFor(raster ? { data: raster, width: rec.mask!.width, height: rec.mask!.height, x0: rec.x1, y0: rec.y1 } : null, box);
+    if (!best || overlap > best.score) best = { score: overlap, polygon };
+  }
+  if (!best) throw new ExecError('the camera cannot see the selected device; keep it in view and retry', 'device');
+  return { polygon: best.polygon, fresh: true, latencyMs: r!.latencyMs, model: r!.recordedFrom ?? r!.model };
 }
 
 async function audioWindow(d: Dispatcher, micDeviceId: string, cardId: string, offsetMs: number | undefined, signal?: AbortSignal): Promise<SenseResultPayload['audio']> {
@@ -140,6 +136,7 @@ export function spokenLine(op: ExecOp): string | undefined {
  * (executor/sensor offline, timeouts) failed, which is not evidence about the device.
  */
 export async function verifyOnce(deps: VerifyDeps, t: Target, driver: Driver, a: DriverAction, attempt: number, o: VerifyOptions, polygon?: Polygon): Promise<{ evidence: Evidence; polygon?: Polygon }> {
+  throwIfCancelled(o.signal);
   const d = deps.dispatcher;
   const expected = effectFor(a);
   const sense = a.expect?.sense ?? 'none';
@@ -304,6 +301,7 @@ export async function verifyDriver(deps: VerifyDeps, t: Target, driver: Driver, 
   let irMatch: IrCandidate | undefined;
   let polygon: Polygon | undefined;
   const push = (e: Evidence) => {
+    throwIfCancelled(o.signal);
     evidence.push(e);
     o.onEvidence?.(e);
   };
@@ -384,6 +382,7 @@ export async function verifyDriver(deps: VerifyDeps, t: Target, driver: Driver, 
   };
   const ordered = [...current.actions].sort((x, y) => rank(x) - rank(y));
   for (const a of ordered) {
+    throwIfCancelled(o.signal);
     if (!wanted.has(a.actionId) || verification[a.actionId] === 'pass' || verification[a.actionId] === 'fail') continue;
     if (a.encode.kind === 'step') {
       // a step composite is verified through its up/down triggers
@@ -418,11 +417,12 @@ export async function verifyDriver(deps: VerifyDeps, t: Target, driver: Driver, 
       verification[a.actionId] = passed ? 'pass' : 'fail';
       if (passed && a.expect.sense === 'camera') lamp = a.expect.effect === 'off' ? 'off' : a.expect.effect === 'none' ? lamp : 'on';
     } catch (e) {
+      throwIfCancelled(o.signal);
       if (!(e instanceof ExecError)) throw e;
       deps.log?.(`[verify] ${a.actionId}: ${e.message}`);
       o.onStep?.(`${a.label}: could not verify`, e.message);
       verification[a.actionId] = 'untested';
-      if (e.code === 'offline' || e.code === 'refused') break;
+      if (e.code === 'offline' || e.code === 'refused' || (a.expect.sense === 'camera' && !polygon)) break;
     }
   }
   // steps whose triggers were verified later
