@@ -16,7 +16,9 @@ export class OneEuroRayFilter {
   private readonly rotation = new Quaternion();
   private angularSpeed = 0;
 
-  constructor(private readonly minCutoff = 1, private readonly beta = 0.01) {}
+  // beta is per rad/s (direction) and per m/s (origin): 1 keeps resting tremor smoothed (≈1.5-2 Hz) while a deliberate
+  // 1 rad/s move raises the cutoff to ≈2.5 Hz and a fast flick to ≈7 Hz, so the pointer keeps up with a moving hand.
+  constructor(private readonly minCutoff = 1.5, private readonly beta = 1) {}
 
   reset(): void { this.time = -Infinity; }
 

@@ -788,7 +788,7 @@ describe('bounded card wording and stable home updates', () => {
     hud.dispose();
   });
 
-  it('renders the tag check, identification, untag hover and live setup status on the chip', () => {
+  it('renders the tag check, identification, untag-after-select and live setup status on the chip', () => {
     const { hud } = setup('annotate');
     const label = () => hud.root.getObjectByName('target-label:device')!;
     const text = () => label().getObjectByName('sdf') as Object3D & { text: string };
@@ -800,9 +800,14 @@ describe('bounded card wording and stable home updates', () => {
     expect(label().getObjectByName('tagged-check')).toBeTruthy();
     hud.upsertTarget({ ...target, label: 'KOIZUMI ceiling light', identifying: false, connection: 'setup' });
     expect(text().text).toBe('KOIZUMI ceiling l…');
+    // Hover alone never arms removal (a scaled chip can cover the device); selecting it does.
     hud.setCandidate(target.id);
-    expect(text().text).toBe('Pinch to untag');
+    expect(text().text).toBe('KOIZUMI ceiling l…');
+    expect(hud.root.getObjectByName('tag-remove:device')).toBeUndefined();
     hud.setCandidate(null);
+    hud.setLocked(target.id);
+    expect(hud.root.getObjectByName('tag-remove:device')).toBeTruthy();
+    hud.setLocked(null);
     expect(text().text).toBe('KOIZUMI ceiling l…');
     hud.setHome?.({ mode: 'control', filter: 'everything', tagged: 1, status: '' });
     expect(text().text).toBe('KOIZUMI ceiling l… · Needs setup');

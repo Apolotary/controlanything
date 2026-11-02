@@ -1006,7 +1006,8 @@ async function run() {
   await phase('21-exit-ar-hold', async () => {
     await quest.locator('#btn-enter').click();
     await waitQuest(() => window.__ce.renderer.xr.isPresenting);
-    await pinch({ nodeName: 'exit-ar', turn: true, holdMs: 180 });
+    // A plain tap (~200 ms incl. the harness's 100 ms polling) is an unambiguous early release of the 600 ms hold.
+    await pinch({ nodeName: 'exit-ar', turn: true });
     assert.equal(await quest.evaluate(() => window.__ce.renderer.xr.isPresenting), true, 'An early release must cancel Exit');
     await waitQuest(() => window.__ce.hud.root.getObjectByName('exit-ar')?.userData.holdProgress === 0);
     await pinch({ nodeName: 'exit-ar', holdMs: 650 });

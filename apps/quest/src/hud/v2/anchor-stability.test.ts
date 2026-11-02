@@ -47,7 +47,8 @@ describe('chip attention and angular sizes', () => {
   it('ranks central candidates first and excludes distant or peripheral candidates', () => {
     expect(candidateScore(2, cos(1))).toBeLessThan(candidateScore(1, cos(20)));
     expect(candidateScore(3.01, 1)).toBe(Infinity);
-    expect(candidateScore(1, cos(31))).toBe(Infinity);
+    expect(Number.isFinite(candidateScore(1, cos(35)))).toBe(true); // a desk device ~35° below eye level still gets a box
+    expect(candidateScore(1, cos(41))).toBe(Infinity);
   });
   it.each([0.5, 1, 2, 3])('keeps a chip at least four degrees tall at %s m', (distance) => {
     const height = 0.07 * chipScale(distance, 0.07);

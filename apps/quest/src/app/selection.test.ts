@@ -304,7 +304,7 @@ describe('explicit annotation and control', () => {
     for (const entry of observed.values()) entry.at -= 401;
     receive('refreshAnnotations', true);
     expect([...visible].some((id) => id.startsWith('yolo_'))).toBe(false);
-    expect([...visible]).toEqual(['box4', 'box5']);
+    expect([...visible]).toEqual(['box4', 'box5', 'box6', 'box7']); // 22-35° off-centre: inside the 40° cone
     expect(erase).toHaveBeenCalled();
     for (const entry of observed.values()) entry.at -= 3500;
     receive('refreshAnnotations', true);

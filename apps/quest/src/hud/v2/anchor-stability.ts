@@ -48,7 +48,8 @@ export class ChipAttention {
 
 /** Research rule 3: central nearby candidates win; Infinity means outside the view budget. */
 export function candidateScore(distance: number, cosine: number): number {
-  if (!(distance > 0 && distance <= 3) || cosine < Math.cos(Math.PI / 6)) return Infinity;
+  // 40° keeps devices in natural view (e.g. a synth on the desk ~35° below eye level) while capping clutter at 5 boxes.
+  if (!(distance > 0 && distance <= 3) || cosine < Math.cos(40 * Math.PI / 180)) return Infinity;
   return Math.acos(Math.max(-1, Math.min(1, cosine))) * 4 + distance * 0.1;
 }
 

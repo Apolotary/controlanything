@@ -570,10 +570,9 @@ export class LeanHud implements Hud {
   getTargetAim(id: string, out: { position: Vector3; size: number }): boolean {
     const box = this.boxes.boxes.get(id);
     if (!box || !this.boxes.isVisible(id)) return false;
-    const label = this.labels.get(id);
-    if (box.tagged && label) {
-      label.getWorldPosition(out.position); out.size = THEME.box.labelHeight * label.scale.y;
-    } else { out.position.copy(box.center); out.size = Math.max(box.w, box.h); }
+    // The device body stays aimable even when tagged (only its chip is drawn): people pinch the object itself.
+    // The chip above it is its own pinchable widget ('selectTarget').
+    out.position.copy(box.center); out.size = Math.max(box.w, box.h);
     return true;
   }
   upsertTarget(t: HudTarget): void {
@@ -594,7 +593,9 @@ export class LeanHud implements Hud {
     let label = this.labels.get(t.id);
     if (!label) { label = new Group(); label.name = `target-label:${t.id}`; this.labels.set(t.id, label); this.root.add(label); }
     this.clear(label);
-    const removable = this.home.mode === 'annotate' && t.tagged && (this.locked === t.id || this.candidate === t.id);
+    // Untag only after an explicit selection: on hover the (distance-scaled) chip can cover the device, so a pinch aimed
+    // at the device would otherwise remove its tag by accident.
+    const removable = this.home.mode === 'annotate' && t.tagged && this.locked === t.id;
     const state = this.deviceState?.targetId === t.id ? this.deviceState : null;
     const text = targetChipLabel({ ...t, ...(state ? { connection: state.connection, busy: state.busy } : {}) }, this.home.mode, !!removable);
     const width = Math.max(0.09, Math.ceil((text.length * THEME.font.label * 0.56 + THEME.box.labelPadding * 3) * 100) / 100);
@@ -917,7 +918,8 @@ export class LeanHud implements Hud {
     else this.modalPlacement.reset();
     if (!this.handDock.tracked) {
       this.follow(this.deck, this.deckPlacement);
-      if (this.card.visible) this.panelSeparation.update(this.card, this.deck, this.headPose, THEME.card.width, THEME.card.height, this.deck.width, this.deck.height);
+      if (this.card.visible) // The card is angularly scaled (>= 4° buttons), so separate against its real size.
+        this.panelSeparation.update(this.card, this.deck, this.headPose, THEME.card.width * this.card.scale.y, THEME.card.height * this.card.scale.y, this.deck.width, this.deck.height);
     }
     if (this.coach.visible) this.follow(this.coach, this.coachPlacement);
     if (this.notice.visible) this.follow(this.notice, this.noticePlacement);
