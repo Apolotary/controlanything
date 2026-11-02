@@ -243,14 +243,14 @@ export function createApp(ctx: ServerContext): express.Express {
 
   // static client apps
   app.use((req, res, next) => {
-    const m = /^\/(companion|quest|sim)$/.exec(req.path);
+    const m = /^\/(companion|quest|sim|vsynth)$/.exec(req.path);
     if (m) {
       res.redirect(301, `/${m[1]}/${req.originalUrl.slice(req.path.length)}`);
       return;
     }
     next();
   });
-  for (const [name, dir] of Object.entries(ctx.config.staticDirs)) {
+  for (const [name, dir] of Object.entries({ ...ctx.config.staticDirs, vsynth: join(ctx.config.staticDirs.companion, 'vsynth') })) {
     app.use(
       `/${name}`,
       express.static(dir, {

@@ -1,4 +1,4 @@
-# ControlEverything
+# ControlAnything
 
 **Tag a device you own. Choose to set it up. Meta's models generate controls, and a camera or microphone checks that the device actually reacts.**
 
@@ -49,6 +49,22 @@ npm run e2e:flows           # 18 phases: adds untag, offline/reconnect, mode ret
 They use ports **8796/8446** and **8797/8447**, respectively. Screenshots and diagnostics go to `research/screens/v2-flow/` and `research/screens/v2-flows/`. These checks disable YOLOX and use server fixture detections; they do not establish detector accuracy, physical synth verification or headset frame rate.
 
 Inspect `/api/muse/calls` for model ids, latency and tokens; `/api/agent/steps`, `/api/agent/exec` and `/api/agent/targets` show progress, commands and evidence. [Sim and replay details](apps/sim/README.md).
+
+## Try it without hardware: the visual synth
+
+The **ControlAnything Visual Synth** is a silent WebGL2 instrument: Warp bends a flowing field, and three pattern buttons change its appearance. Setup sends MIDI-style commands to a virtual output and verifies the laptop screen with the headset camera. No microphone, speaker or physical synthesizer is needed.
+
+```sh
+npm install
+npm run build
+MODEL_MODE=fixture CE_MAC_SILENT=1 CE_MAC_LOCAL=0 npm run start
+```
+
+Open [the sim room](http://localhost:8787/sim/?mute=1), [the visuals](http://localhost:8787/vsynth/), and [the Quest emulator](http://localhost:8787/quest/?emulate=1&camera=sim&mute=1&mic=0&yolo=0) in the same Chrome profile. Choose **Enter AR**, tag the laptop screen labelled **ControlAnything Visual Synth** in Annotate, switch to **Control**, then choose **Set up control**. Keep the screen in view while the camera checks the changes. Choose **Enable controls**, move **Warp**, try the patterns, and choose **Stop** to restore the default visuals. The fixture controls use an explicitly labelled local template; camera verification still measures the rendered screen.
+
+For a real Quest looking at your Mac, keep [the paired companion](http://localhost:8787/companion/) open and choose **Open visuals** in its **Visual synth · Virtual · Ready** row. The virtual output appears automatically without MIDI permission; `/vsynth/` is the display, while the companion bridges its commands.
+
+`npm run e2e:vsynth` runs this sequence in installed Chrome on isolated ports **8798/8448**. It checks camera verification, generated controls, a measurable pixel change inside the sim laptop screen, and Stop restoring the defaults. Screenshots and failure diagnostics go to `research/screens/vsynth/`. The first check is that the sim advertises the connected **ControlAnything Visual Synth** port and renders a nonblank laptop screen.
 
 ## How Meta's models are used
 

@@ -203,7 +203,7 @@ export class ScanService {
   private toDetections(s: StoredFrame, found: { rec: SamRecord; prompt: string }[]): ScanDetection[] {
     const kept: { det: ScanDetection; spec: number }[] = [];
     const sorted = found
-      .filter((f) => (f.rec.confidence ?? 1) >= MIN_SCORE && !FORBIDDEN.test(f.prompt))
+      .filter((f) => (f.rec.confidence ?? 1) >= MIN_SCORE && !FORBIDDEN.test(f.prompt) && !FORBIDDEN.test(f.rec.fixtureLabel ?? ''))
       .sort((a, b) => specificity(b.prompt) - specificity(a.prompt) || (b.rec.confidence ?? 0) - (a.rec.confidence ?? 0));
     let n = 0;
     for (const { rec, prompt } of sorted) {
@@ -214,7 +214,8 @@ export class ScanService {
       const raster = decodeMask(rec);
       const mask = raster && rec.mask ? { data: raster, width: rec.mask.width, height: rec.mask.height, x0: rec.x1, y0: rec.y1 } : null;
       s.masks.set(detId, mask);
-      const det: ScanDetection = { detId, label: prompt, prompt, score: Math.round((rec.confidence ?? 1) * 1000) / 1000, box, polygon: rec.polygon ?? polygonFor(mask, box) };
+      const label = this.d.sam.mode === 'fixture' ? rec.fixtureLabel ?? prompt : prompt;
+      const det: ScanDetection = { detId, label, prompt: label, score: Math.round((rec.confidence ?? 1) * 1000) / 1000, box, polygon: rec.polygon ?? polygonFor(mask, box) };
       kept.push({ det, spec: specificity(prompt) });
     }
     return kept.map((k) => k.det).slice(0, 64);

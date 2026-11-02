@@ -3,6 +3,7 @@ import '@fontsource/chakra-petch/latin-600.css';
 import '@fontsource/share-tech-mono/latin-400.css';
 import './style.css';
 import type { AnyMessage, PresencePayload } from '@ce/protocol';
+import { createVisualSynth, createVisualSynthRelay, VISUAL_SYNTH_PORT } from '@ce/vsynth';
 import QRCode from 'qrcode';
 import { describeLamp, loadLamp, type LogLine, promptedButton, SimDevice } from './device';
 import { hex } from './ir/codec';
@@ -25,8 +26,8 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 // --- the device -----------------------------------------------------------------------------------
 
 const synth = new SynthEngine();
-// ?mute=1: no speaker output (the audio features the server verifies by are read from the analyser, so they are unchanged)
-synth.muted = params.get('mute') === '1';
+// The legacy analyser can still be exercised explicitly, but the sim never sends sound to speakers.
+synth.muted = true;
 const meter = new FeatureMeter(
   () => synth.analyser,
   () => synth.running,
@@ -46,7 +47,36 @@ if (EMBED) {
   overlayCanvas = $<HTMLCanvasElement>('overlay');
 }
 const room = new RoomView(roomCanvas, overlayCanvas, animator);
-const device = new SimDevice(synth, meter, room, animator);
+const visualCanvas = document.createElement('canvas');
+visualCanvas.width = 640;
+visualCanvas.height = 400;
+const visualDisplay = document.createElement('canvas');
+visualDisplay.width = visualCanvas.width;
+visualDisplay.height = visualCanvas.height;
+const visualContext = visualDisplay.getContext('2d')!;
+let visualChange = 'Ready';
+const visualSynth = createVisualSynth(visualCanvas, { onChange: (label) => { visualChange = label; } });
+const visualRelay = createVisualSynthRelay(visualSynth, { authoritative: () => sync.leader });
+const device = new SimDevice(synth, meter, room, animator, visualRelay);
+room.visualScreenSource = visualDisplay;
+let visualTime: number | undefined;
+room.beforePaintScreens = () => {
+  if (visualTime === undefined) visualSynth.render(performance.now());
+  else visualSynth.renderAt(visualTime);
+  visualContext.drawImage(visualCanvas, 0, 0);
+  visualContext.fillStyle = 'rgba(0, 0, 0, 0.55)';
+  visualContext.fillRect(10, 340, 332, 50);
+  visualContext.fillStyle = '#ffffff';
+  visualContext.font = '17px system-ui, sans-serif';
+  visualContext.fillText(VISUAL_SYNTH_PORT, 19, 361);
+  visualContext.font = '14px system-ui, sans-serif';
+  visualContext.fillText(visualChange, 19, 381);
+};
+/** Fixed shader time makes pixel comparisons independent of its continuous animation. */
+function renderVisualAt(timeMs?: number): void {
+  visualTime = timeMs;
+  room.render();
+}
 // the embed has no remote anyone can reach, so it answers learn prompts itself unless ?autopress=0
 device.autoPress = EMBED ? params.get('autopress') !== '0' : params.get('autopress') === '1';
 device.startClockSignal(); // tempo -> device.signal clock_bpm for the "breathe to tempo" daemon
@@ -192,7 +222,8 @@ function connect(id: Identity): void {
 }
 
 function stopLeader(): void {
-  device.panic();
+  // Leadership can move to a full sim tab while the instrument continues to run.
+  device.panic({ resetVisual: false });
   device.setScanning(false);
   conn?.stop();
   conn = undefined;
@@ -497,8 +528,6 @@ function wireUi(): void {
     audioBtn.disabled = ok;
   };
   audioBtn.addEventListener('click', () => void startAudio());
-  // any first click on the page also unlocks audio (browser autoplay rules)
-  window.addEventListener('pointerdown', () => void startAudio(), { once: true });
   const loopBtn = $('loop');
   loopBtn.addEventListener('click', async () => {
     await startAudio();
@@ -624,7 +653,7 @@ async function boot(): Promise<void> {
     },
   };
   // devtools handle (and scripted tests): the same objects the page uses
-  (window as unknown as { ceSimDebug: unknown }).ceSimDebug = { device, synth, meter, room, sync };
+  (window as unknown as { ceSimDebug: unknown }).ceSimDebug = { device, synth, meter, room, sync, visualSynth, renderVisualAt };
   device.log('lamp', `virtual lamp ready: ${describeLamp(device.state)} · obeys ${device.codeSet.name} (e.g. off = ${hex(device.codeSet.codes.find((c) => c.cmd === 'off' && c.channel === 1)!.bytes)})`);
   // elect first, then announce, so leader() is already right when 'ce-sim-ready' fires
   await sync.start();

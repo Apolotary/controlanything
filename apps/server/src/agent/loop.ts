@@ -6,6 +6,7 @@
 import type { AgentGuidance, AgentPhase, Driver, DriverDraft } from '@ce/protocol';
 import { newId } from '@ce/protocol';
 import { resolveOp } from '../devices/encode';
+import { isVisualSynthPort } from '../devices/visualSynth';
 import { allowedCcs, matchMidiProfile, type Profiles } from '../devices/profiles';
 import { formatIssues, validateDriver } from '../devices/validate';
 import type { Forge } from '../gen3d/forge';
@@ -242,9 +243,10 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       // A real synth is heard through the headset; fixture instruments keep their own analyser.
       const mic = pickSensor(d.roster, 'mic', { preferDeviceId: cap === 'midi' && executor.kind !== 'sim' ? headset?.deviceId : executor.deviceId });
       const verifyGuidance = stateGuidance(t, 'verifying');
-      if (cap === 'midi' && mic) verifyGuidance.sentence = mic.kind === 'quest'
+      if (cap === 'midi' && mic && !isVisualSynthPort(driver.executor.port)) verifyGuidance.sentence = mic.kind === 'quest'
         ? 'Listening through the headset mic…'
         : mic.kind === 'sim' ? 'Checking the simulated synth…' : 'Listening through the connected microphone…';
+      if (isVisualSynthPort(driver.executor.port)) verifyGuidance.sentence = 'Watching the selected screen change…';
       d.targets.setState(t, 'verifying', `${driver.actions.length} actions to prove`, verifyGuidance);
       // The identity query is device output too: keep it inside verification.
       if (cap === 'midi') {
@@ -298,6 +300,9 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
     if (!verified) return;
     const summary = verified;
     flow.check();
+    if (isVisualSynthPort(summary.driver.executor.port)) {
+      await flow.wait(d.dispatcher.exec(executor.deviceId, { kind: 'midi', msg: 'panic', channel: 1 }, { port: executor.port?.id, cardId: t.cardId, driverId, actionId: 'restore-visual-defaults', waitForSlot: true, signal }));
+    }
     // VERIFY may leave a light off or in its night-light mode, where dimmer steps do nothing: put it back on for the controls
     if (cap === 'ir') {
       const lit = (a: Driver['actions'][number]) => summary.verification[a.actionId] === 'pass' && a.expect?.sense === 'camera' && a.expect.effect === 'on' && !/night/i.test(`${a.actionId} ${a.label}`);

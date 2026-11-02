@@ -31,6 +31,8 @@ export interface SamMask {
 }
 
 export interface SamRecord {
+  /** Authored simulated device label, never an inferred model identity. */
+  fixtureLabel?: string;
   id: number;
   /** source pixels, x2/y2 inclusive */
   x1: number;
@@ -335,6 +337,7 @@ function loadSimMeta(): SimMeta | null {
 /** Which sim devices a SAM concept would find. */
 function promptMatches(prompt: string, d: { kind: string; label: string }): boolean {
   const p = prompt.toLowerCase();
+  if (p.includes('visual synth')) return /visual synth/i.test(d.label);
   if (p === d.label.toLowerCase()) return true;
   if (p === 'electronic device') return d.kind !== 'lighting';
   if (p.includes('remote')) return d.kind === 'remote-control';
@@ -371,7 +374,7 @@ export function simCannedRecords(prompt: string, width: number, height: number, 
     .filter((d) => promptMatches(prompt, d))
     .map((d, i) => {
       const [x, y, w, h] = d.boxPx;
-      return { id: i, x1: x, y1: y, x2: x + w - 1, y2: y + h - 1, w: width, h: height, confidence: 0.9, polygon: d.polygon.map(([px, py]) => [Math.round(px), Math.round(py)] as [number, number]) };
+      return { ...(/visual synth/i.test(d.label) ? { fixtureLabel: d.label } : {}), id: i, x1: x, y1: y, x2: x + w - 1, y2: y + h - 1, w: width, h: height, confidence: 0.9, polygon: d.polygon.map(([px, py]) => [Math.round(px), Math.round(py)] as [number, number]) };
     });
 }
 
