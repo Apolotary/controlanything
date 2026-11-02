@@ -15,6 +15,7 @@ export class RoomDim extends Mesh<PlaneGeometry, MeshBasicMaterial> {
     this.frustumCulled = false;
     this.visible = false;
     this.name = 'roomDim';
+    this.raycast = () => {}; // a full-screen effect never takes a cursor ray (the desktop mouse would hit it first)
   }
   update(camera: Camera, dt: number): void {
     this.material.opacity = damp(this.material.opacity, this.target, 0.25, dt);

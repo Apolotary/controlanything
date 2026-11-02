@@ -145,7 +145,9 @@ export class MouseCursor {
       const hit = this.raycaster.ray.intersectPlane(this.plane, this.tmp);
       if (hit) c.position.copy(hit);
     } else {
-      const hits = this.raycaster.intersectObjects(this.targets, true);
+      // hidden parts (hints, a dim plane) are still raycast by three: only what the user can see may take the cursor
+      const shown = (o: Object3D | null): boolean => (o ? o.visible && shown(o.parent) : true);
+      const hits = this.raycaster.intersectObjects(this.targets, true).filter((h) => shown(h.object));
       if (hits.length) {
         c.position.copy(hits[0]!.point);
         if (c.justPinched) {

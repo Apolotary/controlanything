@@ -19,6 +19,7 @@ export class ScanSweep extends Group {
     this.edge.position.z = 0.001;
     this.add(this.band, this.edge);
     this.visible = false;
+    for (const m of [this.band, this.edge]) m.raycast = () => {}; // never catches a cursor ray
   }
 
   start(time: number): void {

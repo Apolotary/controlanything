@@ -67,6 +67,9 @@ class HudImpl implements Hud {
     this.camera = ctx.camera;
     this.root.name = 'hud';
     this.root.add(this.roomDim, this.sweep);
+    // full-screen effects must never catch the desktop mouse ray (the dim plane sits 0.3 m in front of the camera
+    // and three's Raycaster does not skip invisible meshes): without this no widget could be clicked in the emulator
+    for (const fx of [this.roomDim, this.sweep]) fx.traverse((o) => void (o.raycast = () => {}));
     ctx.scene.add(this.root);
     this.sink = { control: (e) => this.events.emit('control', e) };
     ctx.renderer.domElement.addEventListener('pointerdown', () => this.audio.unlock(), { once: true });
