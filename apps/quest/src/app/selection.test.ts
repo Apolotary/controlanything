@@ -1,7 +1,7 @@
 import { Quaternion, Vector3 } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { EXAMPLES } from '@ce/gen3d';
-import { TargetStore } from '../scan/targets';
+import { TargetStore, toHudTarget } from '../scan/targets';
 import { QuestApp } from './app';
 import { ModeState } from './modes';
 import type { ShellFrame } from './hud-contract';
@@ -94,9 +94,47 @@ describe('explicit annotation and control', () => {
   });
 
   it('offline tags explain connection without starting setup', () => {
-    const { app, target, connected, ws } = shell();
-    connected('offline'); app.setupControl(target.id);
+    const { app, target, connected, receive, ws, hud } = shell();
+    connected('offline');
+    const hint = 'Open the Mac app to control this laptop.';
+    receive('onTagsState', { tags: [{ cardId: 'laptop', label: 'Laptop', connection: 'offline', hint }] });
+    app.setupControl(target.id);
+    expect(hud.setDeviceState).toHaveBeenLastCalledWith(expect.objectContaining({ targetId: target.id, connection: 'offline', hint }));
     expect(ws.send.mock.calls.some(([type]) => type === 'control.setup')).toBe(false);
+  });
+
+  it('untags the selected outline and only tags it again after another explicit pick', () => {
+    const { app, target, receive, ws, hud, modes } = shell();
+    app.lock(target.id);
+    receive('onTagsState', { tags: [{ cardId: 'laptop', label: 'Laptop', connection: 'offline', position: { x: 0, y: 1.6, z: -1 } }] });
+    app.lock(target.id);
+    app.untag(target.id);
+    expect(ws.send).toHaveBeenCalledWith('tag.remove', { cardId: 'laptop' }, { to: 'server' });
+    expect(modes.tags.size).toBe(0);
+    expect(app.lockedId).toBeNull();
+    expect(hud.removeTarget).toHaveBeenCalledWith(target.id);
+    receive('onTagsState', { tags: [] });
+    app.setMode('control'); app.lock(target.id); app.setupControl(target.id);
+    expect(app.lockedId).toBeNull();
+    expect(ws.send.mock.calls.some(([type]) => type === 'control.setup')).toBe(false);
+    app.setMode('annotate'); app.lock(target.id);
+    expect(ws.send.mock.calls.filter(([type]) => type === 'tag.add')).toHaveLength(2);
+    expect(modes.tags.has(target.id)).toBe(true);
+  });
+
+  it.each(['untag', 'snapshot'] as const)('keeps a named synth eligible for re-tagging after %s removes its tag', (source) => {
+    const { app, target, receive, ws, hud } = shell();
+    target.label = target.prompt = 'Synthesizer';
+    app.lock(target.id);
+    receive('onTagsState', { tags: [{ cardId: 'synth', label: 'Synthesizer', name: 'OP-1 Field', connection: 'setup', position: { x: 0, y: 1.6, z: -1 } }] });
+    expect(target.label).toBe('OP-1 Field');
+    if (source === 'untag') app.untag(target.id);
+    receive('onTagsState', { tags: [] });
+    // The next detector result keeps the existing tracker, including its display label.
+    hud.upsertTarget(toHudTarget(target));
+    expect((Reflect.get(app, 'visibleTargets') as Set<string>).has(target.id)).toBe(true);
+    app.lock(target.id);
+    expect(ws.send).toHaveBeenLastCalledWith('tag.add', expect.objectContaining({ targetId: target.id, label: 'Synthesizer' }), { to: 'server' });
   });
 
   it('cancels setup and closes cards when leaving Control', () => {
@@ -136,6 +174,19 @@ describe('explicit annotation and control', () => {
     expect(app.modes.tags.get(target.id)).toMatchObject({ connection: 'offline', busy: false });
   });
 
+  it('removing a tag during setup closes ARM and allows setup for another tagged device', () => {
+    const { app, target, connected, receive, ws, hud } = shell();
+    connected(); app.setupControl(target.id);
+    receive('onArmRequest', { armId: 'removed', cardId: 'laptop', expiresAt: Date.now() + 5000 });
+    receive('onTagsState', { tags: [{ cardId: 'other', label: 'Keyboard', connection: 'setup', position: { x: 1, y: 1.6, z: -1 } }] });
+    app.answerConfirm('removed', true);
+    expect(ws.send.mock.calls.some(([type]) => type === 'arm.confirm')).toBe(false);
+    expect(app.lockedId).toBeNull();
+    expect(hud.showConfirm).toHaveBeenLastCalledWith(null);
+    app.lock('tag:other'); app.setupControl('tag:other');
+    expect(ws.send).toHaveBeenLastCalledWith('control.setup', { cardId: 'other' }, { to: 'server' });
+  });
+
   it('an old arm result cannot close or arm a newer request, including after cancel', () => {
     const { app, target, connected, receive, hud } = shell();
     connected(); app.setupControl(target.id);
@@ -165,6 +216,8 @@ describe('explicit annotation and control', () => {
     connected(); app.setupControl(target.id);
     receive('onArmRequest', { armId: 'pending', cardId: 'laptop', expiresAt: Date.now() + 5000 });
     app.onDeck('panic', 'press');
+    expect(app.lockedId).toBeNull();
+    expect(hud.setDeviceState).toHaveBeenLastCalledWith(null);
     app.answerConfirm('pending', true);
     receive('onArmResult', { armId: 'pending', cardId: 'laptop', armed: true });
     receive('onTagsState', { tags: [{ cardId: 'laptop', label: 'Laptop', connection: 'ready' }] });
@@ -172,8 +225,24 @@ describe('explicit annotation and control', () => {
     expect(app.modes.tags.get(target.id)).toMatchObject({ busy: false, connection: 'setup' });
   });
 
+  it('Stop closes an armed card and rejects subsequent controls until setup is requested again', () => {
+    const { app, target, connected, receive, hud } = shell();
+    Object.assign(hud, { toast: vi.fn() });
+    connected('ready');
+    const spec = { ...EXAMPLES['ceiling-dimmer']!, specId: 'lamp' };
+    receive('onUiSpec', { cardId: 'laptop', specId: 'ui', gen3d: spec });
+    app.onDeck('panic', 'press');
+    expect(app.lockedId).toBeNull();
+    expect(hud.setDeviceState).toHaveBeenLastCalledWith(null);
+    expect(hud.setArmed).toHaveBeenLastCalledWith('lamp', false);
+    app.lock(target.id);
+    receive('onControl', { specId: 'lamp', controlId: 'level', value: 80, phase: 'move', ts: 0 });
+    expect(app.controls.push).not.toHaveBeenCalled();
+    expect(app.modes.tags.get(target.id)?.connection).toBe('setup');
+  });
+
   it('sends continuous light controls and a true trigger release only while ready and selected in Control', () => {
-    const { app, target, connected, receive } = shell();
+    const { app, target, connected, receive, scanner, ws } = shell();
     connected('ready');
     const spec = { ...EXAMPLES['ceiling-dimmer']!, specId: 'lamp', controls: [
       { id: 'level', kind: 'continuous', label: 'Brightness', default: 20, binding: { action: 'brightness' } },
@@ -188,6 +257,13 @@ describe('explicit annotation and control', () => {
     receive('onControl', { specId: 'lamp', controlId: 'level', value: 0, phase: 'move', ts: 0 });
     expect(push).toHaveBeenCalledTimes(2);
     expect(app.modes.tags.has(target.id)).toBe(true);
+    expect(scanner.start).toHaveBeenCalled();
+    expect(app.lockedId).toBeNull();
+    app.setMode('control'); app.lock(target.id);
+    receive('onControl', { specId: 'lamp', controlId: 'level', value: 40, phase: 'move', ts: 0 });
+    expect(push).toHaveBeenCalledTimes(3);
+    expect(app.modes.tags.get(target.id)?.connection).toBe('ready');
+    expect(ws.send.mock.calls.some(([type]) => type === 'control.setup')).toBe(false);
   });
 
   it('applies one six-box budget, fades stale detections, and hides out-of-range devices', () => {

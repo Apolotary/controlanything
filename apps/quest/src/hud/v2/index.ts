@@ -127,6 +127,7 @@ export class LeanHud implements Hud {
   private readonly point = new Vector3();
   private readonly direction = new Vector3();
   private readonly right = new Vector3();
+  private readonly cardEdge = new Vector3();
   private readonly local = new Vector3();
   private readonly origin = new Vector3();
   private readonly inverse = new Matrix4();
@@ -143,6 +144,7 @@ export class LeanHud implements Hud {
   private readonly noticePlacement = new WorldPanel({ height: THEME.panel.toastY });
   private placementKey = '';
   private docked = false;
+  private openingBesideTarget = false;
   private hasFrame = false;
   private deckAt?: [number, number, number];
 
@@ -660,19 +662,28 @@ export class LeanHud implements Hud {
       this.placementKey = key;
       this.idlePlacement.reset(); this.dockPlacement.reset();
       this.docked = !!box && (box.center.distanceTo(this.head) > THEME.card.maxTargetDistance || box.center.y - this.head.y > THEME.card.maxTargetHeight);
-    }
-    if (box) {
-      if (this.docked) this.follow(this.card, this.dockPlacement);
-      else {
+      this.openingBesideTarget = !!box && !this.docked;
+      if (box && this.openingBesideTarget) {
         this.boxes.facingQuaternion(this.head, box.center, this.card.quaternion, box.facing);
         this.right.set(1, 0, 0).applyQuaternion(this.card.quaternion);
-        this.card.position.copy(box.center).addScaledVector(this.right, box.w / 2 + THEME.card.gap + THEME.card.width / 2 * this.card.scale.x);
+        this.cardEdge.copy(box.center).addScaledVector(this.right, box.w / 2 + THEME.card.gap);
+      } else if (m?.position) {
+        this.card.position.fromArray(m.position); this.face(this.card);
+        this.idlePlacement.anchor(this.card, this.headPose, this.time * 1000);
       }
+    }
+    if (box) {
+      if (this.openingBesideTarget) {
+        this.card.position.copy(this.cardEdge).addScaledVector(this.right, THEME.card.width / 2 * this.card.scale.x);
+        if (unfold >= 1) {
+          this.dockPlacement.anchor(this.card, this.headPose, this.time * 1000);
+          this.openingBesideTarget = false;
+        }
+      } else this.follow(this.card, this.dockPlacement);
       this.placeTether(box.id);
     } else {
       this.tether.hide();
-      if (m?.position) { this.card.position.fromArray(m.position); this.face(this.card); }
-      else this.follow(this.card, this.idlePlacement);
+      this.follow(this.card, this.idlePlacement);
     }
     if (this.modal.visible) this.follow(this.modal, this.modalPlacement);
     else this.modalPlacement.reset();

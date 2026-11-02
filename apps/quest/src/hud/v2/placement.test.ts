@@ -3,6 +3,7 @@ import { PerspectiveCamera, Quaternion, Scene, Vector3, type WebGLRenderer } fro
 import { EXAMPLES } from '@ce/gen3d';
 import type { Hud, HudTarget } from '../contract';
 import { createHud } from './index';
+import { THEME } from './theme';
 
 const UP = new Vector3(0, 1, 0);
 const target: HudTarget = {
@@ -22,6 +23,16 @@ function setup(kind: 'idle' | 'dock' | 'modal' = 'idle') {
   const panel = hud.root.getObjectByName(kind === 'modal' ? 'confirmation-panel' : kind === 'idle' ? 'home-bar' : 'device-card')!;
   const update = (time: number) => hud.update({ time, dt: 1 / 72, head, hands: {} });
   return { hud, head, panel, update };
+}
+
+function projectedBounds(panel: Hud['root'], head: { position: Vector3; quaternion: Quaternion }, width: number, height: number) {
+  const inverse = head.quaternion.clone().invert();
+  const corners = [-1, 1].flatMap((x) => [-1, 1].map((y) => {
+    const point = new Vector3(x * width / 2, y * height / 2, 0).applyQuaternion(panel.quaternion)
+      .add(panel.position).sub(head.position).applyQuaternion(inverse);
+    return { x: point.x / -point.z, y: point.y / -point.z };
+  }));
+  return { bottom: Math.min(...corners.map((p) => p.y)), top: Math.max(...corners.map((p) => p.y)) };
 }
 
 afterEach(() => { for (const hud of instances.splice(0)) hud.dispose(); });
@@ -72,10 +83,11 @@ describe('HUD world placement', () => {
     head.position.x = 0.1;
     head.quaternion.setFromAxisAngle(UP, Math.PI);
     update(1751);
-    expect(panel.position.x).toBeCloseTo(-0.3);
-    expect(panel.position.z).toBeCloseTo(-0.3);
+    const distance = kind === 'dock' ? THEME.card.dockDistance : 0.6;
+    expect(panel.position.x).toBeCloseTo(-distance / 2);
+    expect(panel.position.z).toBeCloseTo(-distance / 2);
     update(1901);
-    expect(panel.position.x).toBeCloseTo(-0.6);
+    expect(panel.position.x).toBeCloseTo(-distance);
     expect(panel.position.z).toBeCloseTo(0);
     expect(panel.quaternion.angleTo(new Quaternion().setFromAxisAngle(UP, Math.PI / 2))).toBeLessThan(1e-6);
   });
@@ -115,8 +127,56 @@ describe('HUD world placement', () => {
     hud.upsertTarget(next);
     hud.setLocked(next.id);
     update(400);
-    const expected = new Vector3(0, -0.14, -0.6).applyQuaternion(head.quaternion).add(head.position);
+    const expected = new Vector3(0, -0.14, -THEME.card.dockDistance).applyQuaternion(head.quaternion).add(head.position);
     expect(panel.position.distanceTo(expected)).toBeLessThan(1e-6);
+    expect(panel.quaternion.angleTo(head.quaternion)).toBeLessThan(1e-6);
+  });
+
+  it('holds the open card and home bar through a sustained 20 degree turn', () => {
+    const { hud, head, panel, update } = setup('dock');
+    update(200);
+    const bar = hud.root.getObjectByName('home-bar')!;
+    const cardPosition = panel.position.clone(), barPosition = bar.position.clone();
+    head.quaternion.setFromAxisAngle(UP, 20 * Math.PI / 180);
+    for (let time = 300; time <= 3000; time += 100) update(time);
+    expect(panel.position).toEqual(cardPosition);
+    expect(bar.position).toEqual(barPosition);
+    expect(Math.abs(panel.position.z - bar.position.z)).toBeGreaterThanOrEqual(0.01);
+    expect(projectedBounds(bar, head, 0.48, 0.16).top).toBeLessThan(projectedBounds(panel, head, 0.4, 0.32).bottom);
+
+    head.quaternion.setFromAxisAngle(UP, 100 * Math.PI / 180);
+    update(3100); update(4601); update(4901);
+    for (const node of [panel, bar]) {
+      expect(node.position.distanceTo(head.position)).toBeGreaterThan(0.5);
+      expect(node.position.distanceTo(head.position)).toBeLessThan(1);
+      expect(new Vector3(0, 1, 0).applyQuaternion(node.quaternion).distanceTo(UP)).toBeLessThan(1e-6);
+      expect(node.quaternion.angleTo(head.quaternion)).toBeLessThan(1e-6);
+    }
+    const inverse = head.quaternion.clone().invert();
+    const depth = (node: typeof panel) => node.position.clone().sub(head.position).applyQuaternion(inverse).z;
+    expect(Math.abs(depth(panel) - depth(bar))).toBeGreaterThanOrEqual(0.01);
+    expect(projectedBounds(bar, head, 0.48, 0.16).top).toBeLessThan(projectedBounds(panel, head, 0.4, 0.32).bottom);
+  });
+
+  it('keeps a nearby card fixed after opening and lazily brings it back when looking away', () => {
+    const { hud, head, panel, update } = setup('dock');
+    hud.upsertTarget({ ...target, id: 'nearby', position: [0, 1.46, -0.8] });
+    hud.setLocked('nearby');
+    update(200);
+    const position = panel.position.clone(), rotation = panel.quaternion.clone();
+    for (let frame = 1; frame <= 30; frame++) {
+      head.position.x = frame * 0.001;
+      head.quaternion.setFromAxisAngle(UP, frame * 0.002);
+      hud.upsertTarget({ ...target, id: 'nearby', position: [frame * 0.001, 1.46, -0.8] });
+      update(200 + frame * 16);
+      expect(panel.position).toEqual(position);
+      expect(panel.quaternion.equals(rotation)).toBe(true);
+    }
+    head.quaternion.setFromAxisAngle(UP, 100 * Math.PI / 180);
+    update(700); update(2201); update(2501);
+    expect(panel.position.distanceTo(head.position)).toBeGreaterThan(0.5);
+    expect(panel.position.distanceTo(head.position)).toBeLessThan(1);
+    expect(new Vector3(0, 1, 0).applyQuaternion(panel.quaternion).distanceTo(UP)).toBeLessThan(1e-6);
     expect(panel.quaternion.angleTo(head.quaternion)).toBeLessThan(1e-6);
   });
 });

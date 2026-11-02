@@ -46,6 +46,13 @@ describe('local tags and server snapshots', () => {
     expect(state.removals.size).toBe(0);
   });
 
+  it('clears the offline hint when the next full snapshot reports an online bridge', () => {
+    const state = new ModeState();
+    state.snapshot([{ cardId: 'synth', label: 'Keyboard', connection: 'offline', hint: 'Plug the synth into your Mac and open the Mac app.' }]);
+    state.snapshot([{ cardId: 'synth', label: 'Keyboard', connection: 'setup' }]);
+    expect(state.byCard('synth')).toMatchObject({ connection: 'setup', hint: undefined });
+  });
+
   it('only allows setup in Control with a confirmed online tag', () => {
     const state = new ModeState();
     state.add('light', { label: 'Light' });
