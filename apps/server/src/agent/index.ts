@@ -225,18 +225,21 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       if (existing.state === 'failed' || existing.state === 'needs-companion') {
         existing.runId = `run-${Date.now().toString(36)}`;
         void runLoop(loopDeps, existing, { userText: p.text, preferDeviceId: from.deviceId });
-      } else if (!existing.armed && !existing.armId && existing.driver && (existing.state === 'forged' || existing.state === 'verified') && existing.cardId !== ROOM_CARD_ID) {
+        return existing;
+      }
+      // a headset that (re)joined mid-session pinches a device it already owns: give it the card, the controls and the armed state again
+      if (existing.specId && existing.card) {
+        const spec = specs.get(existing.specId);
+        hub.sendToDevice(from.deviceId, 'device.card', existing.card);
+        if (spec) hub.sendToDevice(from.deviceId, 'ui.spec', spec);
+        if (existing.driver) hub.sendToDevice(from.deviceId, 'driver.status', { driverId: existing.driver.driverId, cardId: existing.cardId, phase: existing.armed ? 'armed' : 'disarmed', actions: existing.driver.actions.map((a) => ({ actionId: a.actionId, verified: existing.verification[a.actionId] ?? 'untested' })), modelId: existing.driver.modelId });
+      }
+      if (!existing.armed && !existing.armId && existing.driver && (existing.state === 'forged' || existing.state === 'verified') && existing.cardId !== ROOM_CARD_ID) {
         // the ARM window closed without a pinch (or was declined): pinching the device again asks again
         const driver = existing.driver;
         void arm.request(existing, driver).then((r) => {
           if (r.armed) hub.broadcast('driver.status', { driverId: driver.driverId, cardId: existing.cardId, phase: 'armed', actions: driver.actions.map((a) => ({ actionId: a.actionId, verified: existing.verification[a.actionId] ?? 'untested' })), modelId: driver.modelId });
         });
-      } else if (existing.specId && existing.card) {
-        // a headset that (re)joined mid-session pinches a device it already owns: give it the card, the controls and the armed state again
-        const spec = specs.get(existing.specId);
-        hub.sendToDevice(from.deviceId, 'device.card', existing.card);
-        if (spec) hub.sendToDevice(from.deviceId, 'ui.spec', spec);
-        if (existing.driver) hub.sendToDevice(from.deviceId, 'driver.status', { driverId: existing.driver.driverId, cardId: existing.cardId, phase: existing.armed ? 'armed' : 'disarmed', actions: existing.driver.actions.map((a) => ({ actionId: a.actionId, verified: existing.verification[a.actionId] ?? 'untested' })), modelId: existing.driver.modelId });
       }
       return existing;
     }
