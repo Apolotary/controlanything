@@ -105,6 +105,7 @@ export class LeanHud implements Hud {
   private wristOpen = false;
   private readonly homePosition = new Vector3();
   private readonly homeRotation = new Quaternion();
+  private homeHeight = 0.22;
   private readonly homeCount = makeText({ text: '0 tagged', size: THEME.font.detail, anchorX: 'center', singleLine: true, maxWidth: 0.11 });
   private readonly homeStatus = makeText({ text: '', size: THEME.font.detail, anchorX: 'center', singleLine: true, maxWidth: 0.44 });
   private readonly notice = new Group();
@@ -446,7 +447,8 @@ export class LeanHud implements Hud {
     }
     const valueText = group?.getObjectByName('control-value') as SdfText | undefined;
     const unit = c.unit ?? (/brightness|level/i.test(c.label) && range.max === 100 ? '%' : '');
-    thumb.visible = !off;
+    // Off hides the fill but keeps the thumb, so there is still something to drag back up
+    thumb.visible = true;
     if (valueText) setText(valueText, off ? 'Off' : `${Number(x.toFixed(2))}${unit}`, off ? THEME.color.muted : THEME.color.accent);
   }
   private emitControl(m: Mounted, c: Control, phase: ControlEvent['phase']): void {
@@ -661,21 +663,23 @@ export class LeanHud implements Hud {
     this.homeCount.removeFromParent(); this.homeStatus.removeFromParent();
     this.clear(this.deck);
     const annotate = this.home.mode === 'annotate';
-    this.deck.add(this.plate(0.48, 0.22));
+    // Annotate holds the filter row; Control is compact so the bar stays in view below an open card.
+    this.homeHeight = annotate ? 0.22 : 0.16;
+    this.deck.add(this.plate(0.48, this.homeHeight));
     for (const [mode, text, x] of [['annotate', 'Annotate', -0.115], ['control', controlSegmentLabel(this.home.tagged), 0.115]] as const) {
-      const button = this.button(this.deck, `mode-${mode}`, text, x, 0.066, 0.216, 'deck', () => this.events.emit('mode', { mode }));
+      const button = this.button(this.deck, `mode-${mode}`, text, x, annotate ? 0.066 : 0.036, 0.216, 'deck', () => this.events.emit('mode', { mode }));
       this.selectButton(button.group, this.home.mode === mode, 0.216);
     }
-    this.homeCount.position.set(this.wristOpen ? -0.145 : 0, 0.015, THEME.panel.depth);
-    this.homeStatus.position.set(0, -0.088, THEME.panel.depth);
+    this.homeCount.position.set(annotate && !this.wristOpen ? 0 : -0.145, annotate ? 0.015 : -0.022, THEME.panel.depth);
+    this.homeStatus.position.set(0, annotate ? -0.088 : -0.058, THEME.panel.depth);
     this.deck.add(this.homeCount, this.homeStatus);
     setText(this.homeCount, `${this.home.tagged} tagged`); this.refreshHomeHint();
     if (annotate) for (const [filter, text, x] of [['everything', 'All', -0.152], ['lights', 'Lights', 0], ['electronics', 'Electronics', 0.152]] as const) {
       const button = this.button(this.deck, `filter:${filter}`, text, x, -0.035, 0.14, 'deck', () => this.events.emit('filter', { filter }));
       this.selectButton(button.group, this.home.filter === filter, 0.14);
     }
-    else if (this.canStop()) this.button(this.deck, 'deck:panic', 'Stop', 0.15, -0.035, 0.12, 'deck', () => this.events.emit('deck', { key: 'panic', phase: 'press' }), () => this.events.emit('deck', { key: 'panic', phase: 'release' }));
-    if (this.wristOpen) this.button(this.deck, 'deck-close', 'Close', annotate ? 0.15 : 0, annotate ? 0.015 : -0.035, 0.11, 'deck', () => this.setDeck({ open: false }));
+    else if (this.canStop()) this.button(this.deck, 'deck:panic', 'Stop', 0.15, -0.022, 0.12, 'deck', () => this.events.emit('deck', { key: 'panic', phase: 'press' }), () => this.events.emit('deck', { key: 'panic', phase: 'release' }));
+    if (this.wristOpen) this.button(this.deck, 'deck-close', 'Close', annotate ? 0.15 : 0, annotate ? 0.015 : -0.022, 0.11, 'deck', () => this.setDeck({ open: false }));
     this.homeCount.visible = true;
   }
   setDeck(d: { open?: boolean; scanning?: boolean; daemons?: boolean; at?: [number, number, number] }): void {
@@ -752,7 +756,7 @@ export class LeanHud implements Hud {
     else this.modalPlacement.reset();
     if (!this.wristOpen) {
       this.follow(this.deck, this.deckPlacement);
-      if (this.card.visible) this.panelSeparation.update(this.card, this.deck, this.headPose, THEME.card.width, THEME.card.height, 0.48, 0.22);
+      if (this.card.visible) this.panelSeparation.update(this.card, this.deck, this.headPose, THEME.card.width, THEME.card.height, 0.48, this.homeHeight);
     }
     if (this.notice.visible) this.follow(this.notice, this.noticePlacement);
   }

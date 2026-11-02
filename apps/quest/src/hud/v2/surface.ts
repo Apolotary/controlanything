@@ -22,9 +22,9 @@ export class GlassSurfaces {
         radius: { value: pill ? h / 2 : THEME.card.radius },
         stroke: { value: THEME.surface.stroke * (primary ? 1.5 : outlined ? 2 : 1) },
         fill: { value: new Color(selected ? THEME.color.accent : style === 'plate' ? THEME.color.plate : THEME.color.stroke) },
-        fillAlpha: { value: style === 'pressed' ? 0.48 : primary ? 0.28 : selected ? THEME.opacity.accentSoft : style === 'plate' ? THEME.opacity.plate : 0.06 },
+        fillAlpha: { value: style === 'pressed' ? 0.48 : primary ? 0.28 : selected ? THEME.opacity.accentSoft : style === 'plate' ? THEME.opacity.plate : 0.1 },
         edge: { value: new Color(selected || outlined ? THEME.color.accent : THEME.color.stroke) },
-        edgeAlpha: { value: primary || outlined ? 1 : style === 'button' ? 0.18 : THEME.opacity.stroke },
+        edgeAlpha: { value: primary || outlined ? 1 : style === 'button' ? 0.26 : THEME.opacity.stroke },
       },
       vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
       fragmentShader: `

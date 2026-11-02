@@ -34,9 +34,9 @@ describe('shared HUD resources', () => {
     const surfaces = new GlassSurfaces();
     const button = surfaces.material(0.112, 0.048, 'button', true).uniforms;
     expect(button.fill!.value.getHexString()).toBe('ffffff');
-    expect(button.fillAlpha!.value).toBe(0.06);
+    expect(button.fillAlpha!.value).toBe(0.1);
     expect(button.edge!.value.getHexString()).toBe('ffffff');
-    expect(button.edgeAlpha!.value).toBe(0.18);
+    expect(button.edgeAlpha!.value).toBe(0.26);
     expect(button.stroke!.value).toBe(THEME.surface.stroke);
     const primary = surfaces.material(0.168, 0.048, 'primary', true).uniforms;
     expect(primary.fill!.value.getHexString()).toBe('38bdf8');

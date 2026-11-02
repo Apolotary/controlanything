@@ -441,7 +441,7 @@ describe('HUD button interaction feedback', () => {
     expect(phases).toEqual(['press', 'release', 'press', 'release']);
     expect(button.userData.hovered).toBe(false);
     expect(button.scale.x).toBe(1);
-    expect(material().uniforms.edgeAlpha!.value).toBe(0.18);
+    expect(material().uniforms.edgeAlpha!.value).toBe(0.26);
     hud.dispose();
   });
 
@@ -571,7 +571,7 @@ describe('explicit annotation and control modes', () => {
 });
 
 describe('bounded card wording and stable home updates', () => {
-  it('updates the next-step hint and count without moving the home bar or mode buttons', () => {
+  it('updates the next-step hint and count, compact bar in Control', () => {
     const { hud, frame } = setup('annotate');
     hud.update(frame());
     const bar = hud.root.getObjectByName('home-bar')!;
@@ -588,9 +588,10 @@ describe('bounded card wording and stable home updates', () => {
     expect(toggle.children.some((child) => 'text' in child && child.text === 'Control · 2')).toBe(true);
     hud.setHome?.({ mode: 'control', filter: 'electronics', tagged: 2, status: 'stale hint' });
     hud.update(frame());
-    expect(dimensions()).toEqual(originalSize);
-    expect(top()).toBe(originalTop);
-    expect(hud.root.getObjectByName('mode-control')!.position.y).toBe(buttonY);
+    // Control has no filter row: the bar is compact (0.16 m) so it stays in view below an open card
+    expect(dimensions()[1]).toBeCloseTo(originalSize[1]! * 0.16 / 0.22, 5);
+    expect(top()).toBeLessThanOrEqual(originalTop);
+    expect(hud.root.getObjectByName('mode-control')!.position.y).toBeLessThan(buttonY);
     expect(hud.root.getObjectByName('filter:electronics')).toBeUndefined();
     expect(hint.text).toBe('Pinch a tagged device to open it');
     hud.upsertTarget(target); hud.setLocked(target.id);
@@ -665,8 +666,8 @@ describe('bounded card wording and stable home updates', () => {
       const plate = button.getObjectByName('button-plate') as Mesh;
       expect(button.position.y).toBe(THEME.card.buttonsY);
       expect(plate.scale.toArray()).toEqual([THEME.control.buttonWidth, THEME.control.buttonHeight, 1]);
-      expect((plate.material as ShaderMaterial).uniforms.fillAlpha!.value).toBe(0.06);
-      expect((plate.material as ShaderMaterial).uniforms.edgeAlpha!.value).toBe(0.18);
+      expect((plate.material as ShaderMaterial).uniforms.fillAlpha!.value).toBe(0.1);
+      expect((plate.material as ShaderMaterial).uniforms.edgeAlpha!.value).toBe(0.26);
       expect(button.getObjectByName('sdf')!.position.y).toBe(0);
     }
     expect(hud.root.getObjectByName('device-status')!.visible).toBe(false);
