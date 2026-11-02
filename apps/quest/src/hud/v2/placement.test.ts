@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { PerspectiveCamera, Quaternion, Scene, Vector3, type WebGLRenderer } from 'three';
+import { Matrix4, PerspectiveCamera, Quaternion, Scene, Vector3, type WebGLRenderer } from 'three';
 import { EXAMPLES } from '@ce/gen3d';
 import type { Hud, HudTarget } from '../contract';
 import { createHud } from './index';
@@ -189,5 +189,15 @@ describe('HUD world placement', () => {
     expect(panel.position.distanceTo(head.position)).toBeLessThan(1);
     expect(new Vector3(0, 1, 0).applyQuaternion(panel.quaternion).distanceTo(UP)).toBeLessThan(1e-6);
     expect(panel.quaternion.angleTo(head.quaternion)).toBeLessThan(1e-6);
+  });
+
+  it('does not slide away while the user looks straight at an offset panel', () => {
+    const { head, panel, update } = setup();
+    update(0);
+    const start = panel.position.clone();
+    // Look directly at the lower-left fallback dock for longer than the follow delay.
+    head.quaternion.setFromRotationMatrix(new Matrix4().lookAt(head.position, panel.getWorldPosition(new Vector3()), UP));
+    update(100); update(2000); update(4000);
+    expect(panel.position.distanceTo(start)).toBeLessThan(1e-6);
   });
 });

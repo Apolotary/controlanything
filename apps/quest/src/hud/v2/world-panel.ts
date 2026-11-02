@@ -5,6 +5,8 @@ interface PanelOffset { distance?: number; height?: number; lateral?: number }
 
 const UP = new Vector3(0, 1, 0);
 const CONE_COS = Math.cos(35 * Math.PI / 180);
+/** Looking at the panel itself is never "looking away", however far below or beside the anchor it sits. */
+const PANEL_COS = Math.cos(25 * Math.PI / 180);
 const FOLLOW_DELAY_MS = 1500;
 const FOLLOW_DURATION_MS = 300;
 const MOVE_DISTANCE_SQ = 0.75 ** 2;
@@ -17,6 +19,7 @@ export class WorldPanel {
   private previousTime: number | null = null;
   private readonly anchorHead = new Vector3();
   private readonly lookPoint = new Vector3();
+  private readonly toPanel = new Vector3();
   private readonly fromPosition = new Vector3();
   private readonly toPosition = new Vector3();
   private readonly fromRotation = new Quaternion();
@@ -63,7 +66,8 @@ export class WorldPanel {
       this.gaze.set(0, 0, -1).applyQuaternion(head.quaternion);
       // Judge the look-away angle around the anchor, not its deliberate below-eye offset.
       this.direction.subVectors(this.lookPoint, head.position).normalize();
-      if (this.direction.dot(this.gaze) < CONE_COS) this.outsideSince ??= timeMs;
+      const lookingAtPanel = this.toPanel.subVectors(panel.position, head.position).normalize().dot(this.gaze) > PANEL_COS;
+      if (!lookingAtPanel && this.direction.dot(this.gaze) < CONE_COS) this.outsideSince ??= timeMs;
       else this.outsideSince = null;
       const lookedAway = this.outsideSince !== null && timeMs - this.outsideSince > FOLLOW_DELAY_MS;
       if (lookedAway || head.position.distanceToSquared(this.anchorHead) > MOVE_DISTANCE_SQ) {
