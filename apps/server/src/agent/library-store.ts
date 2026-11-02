@@ -205,8 +205,10 @@ export class TagStore {
     if (!parsed.success) return undefined;
     const ref = parsed.data;
     const file = this.file ? join(dirname(this.file), ref.path) : undefined;
-    const bytes = file ? existsSync(file) ? readFileSync(file) : undefined : this.memoryAssets.get(ref.path);
-    return bytes && hash(bytes) === contentHash ? Buffer.from(bytes) : undefined;
+    try {
+      const bytes = file ? existsSync(file) ? readFileSync(file) : undefined : this.memoryAssets.get(ref.path);
+      return bytes && hash(bytes) === contentHash ? Buffer.from(bytes) : undefined;
+    } catch { return undefined; }
   }
 
   private snapshot(record: LibraryRecord): StoredTag {
@@ -297,8 +299,8 @@ export class TagStore {
     if (Array.isArray(context)) return context.map((item) => this.loadContext(item));
     if (context !== null && typeof context === 'object') {
       if ('$libraryAsset' in context) {
-        const ref = AssetRef.parse(context.$libraryAsset);
-        return this.readAsset(ref.hash, ref.ext)?.toString('base64');
+        const ref = AssetRef.safeParse(context.$libraryAsset);
+        return ref.success ? this.readAsset(ref.data.hash, ref.data.ext)?.toString('base64') : undefined;
       }
       return Object.fromEntries(Object.entries(context).map(([key, item]) => [key, this.loadContext(item)]));
     }

@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validateSpec } from '@ce/gen3d';
@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CallLog } from '../muse/callLog';
 import { resolveMuseConfig } from '../muse/config';
 import type { EditSet } from './editPatch';
-import { createForge, type ForgeProgress } from './forge';
+import { createForge, type ForgeProgress, type ForgeSnapshot } from './forge';
 import { FORGE_LIGHT_DEVICE, FORGE_LIGHT_DRIVER, FORGE_LIGHT_VERIFIED, FORGE_OP1_DEVICE } from './sampleDevices';
 import { LiveSkinPainter, ReplaySkinPainter, skinPrompt, SkinStore, webpSize } from './skin';
 import { contentEvents, fakeWebp, imageResponse, LIGHT_DRAFT, routeFetch, sseResponse } from './testkit';
@@ -83,10 +83,63 @@ describe('skin prompt and request', () => {
     expect(webpSize(fakeWebp(800, 300))).toEqual({ width: 800, height: 300 });
     expect(webpSize(new Uint8Array(40))).toBeUndefined();
   });
+
+  it('serves identical content-addressed bytes after restart and rejects missing or corrupt assets', () => {
+    const dir = tmp();
+    const first = new SkinStore(1, dir);
+    const bytes = fakeWebp(800, 300);
+    const id = first.put(bytes);
+    expect(first.put(bytes)).toBe(id);
+    first.put(fakeWebp(801, 300));
+    expect(first.size).toBe(1);
+    const restarted = new SkinStore(1, dir);
+    expect(restarted.get(id)?.bytes).toEqual(Buffer.from(bytes));
+    expect(restarted.get('skn_missing')).toBeUndefined();
+    expect(restarted.get('../outside')).toBeUndefined();
+    writeFileSync(join(dir, `${id.slice(4)}.webp`), 'interrupted');
+    expect(restarted.get(id)).toBeUndefined();
+    expect(readdirSync(dir).some((file) => file.endsWith('.tmp'))).toBe(false);
+  });
 });
 
 describe('forge + skin: controls arm first, the skin arrives as a later revision', () => {
   const lever: EditSet = { behaviors: [], controls: [], feedback: [], parts: [{ id: 'p_h_dim', kind: 'archetype', archetype: 'lever', controlId: 'h_dim', params: { length: 0.22, accent: '#FF2020' } }], remove: [], summary: 'lever', title: '' };
+
+  it('restores an edited interface, late skin and history without a model call, then accepts another edit', async () => {
+    const dir = tmp();
+    const f = routeFetch({ '/chat/completions': [() => sseResponse(contentEvents(JSON.stringify(LIGHT_DRAFT))), () => sseResponse(contentEvents(JSON.stringify(lever)))], '/images/': [imageResponse(fakeWebp(), 80)] });
+    const forge = createForge({ muse: live, fetchImpl: f.impl, skin: true, skinStore: new SkinStore(64, dir) });
+    const snapshots: ForgeSnapshot[] = [];
+    forge.subscribe((event) => {
+      if (event.type === 'spec') snapshots.push(forge.snapshot!(event.uiSpec.specId)!);
+    });
+    const generated = await forge.generate({ device: FORGE_LIGHT_DEVICE, driver: FORGE_LIGHT_DRIVER, verification: FORGE_LIGHT_VERIFIED, crop: CROP });
+    const id = generated.uiSpec!.specId;
+    await forge.edit({ specId: id, instruction: 'make the dimmer a lever' });
+    const withSkin = await forge.whenSkin!(id);
+    expect(snapshots).toHaveLength(3);
+    expect(snapshots[0].revs[0].gen3d.skin).toBeUndefined();
+    expect(snapshots.at(-1)!.revs.at(-1)!.gen3d.skin).toEqual(withSkin!.gen3d.skin);
+    const saved = JSON.parse(JSON.stringify(snapshots.at(-1)));
+    const editFetch = routeFetch({ '/chat/completions': [() => sseResponse(contentEvents(JSON.stringify(lever)))] });
+    const restarted = createForge({ muse: live, fetchImpl: editFetch.impl, skin: true, skinStore: new SkinStore(64, dir) });
+    const events: unknown[] = [];
+    restarted.subscribe((event) => events.push(event));
+    expect(restarted.restore!(saved)).toEqual(withSkin);
+    expect(events).toHaveLength(0);
+    expect(editFetch.calls).toHaveLength(0);
+    expect(restarted.snapshot!(id)).toEqual(saved);
+    expect(restarted.target(FORGE_LIGHT_DEVICE.cardId)?.verification).toEqual(FORGE_LIGHT_VERIFIED);
+    const skinId = withSkin!.gen3d.skin!.url.match(/(skn_[A-Za-z0-9]+)/)![1];
+    expect(restarted.skins!.get(skinId)?.bytes).toEqual(Buffer.from(fakeWebp()));
+    expect(restarted.undo(id).ok).toBe(true);
+    expect(restarted.redo(id).ok).toBe(true);
+    expect(editFetch.calls).toHaveLength(0);
+    const edited = await restarted.edit({ specId: id, instruction: 'use a lever again' });
+    expect(edited.ok).toBe(true);
+    expect(edited.uiSpec!.gen3d.skin).toEqual(withSkin!.gen3d.skin);
+    expect(editFetch.calls).toHaveLength(1);
+  });
 
   it('paints in parallel, never gates arming, attaches the skin on rev+1 and keeps it through edits and undo', async () => {
     const f = routeFetch({ '/chat/completions': [() => sseResponse(contentEvents(JSON.stringify(LIGHT_DRAFT))), () => sseResponse(contentEvents(JSON.stringify(lever)))], '/images/': [imageResponse(fakeWebp(), 80)] });
@@ -132,6 +185,20 @@ describe('forge + skin: controls arm first, the skin arrives as a later revision
     expect(await forge.whenSkin!(r.uiSpec!.specId)).toBeUndefined();
     expect(forge.get(r.uiSpec!.specId)?.rev).toBe(1);
     expect(f.calls[0].url).toContain('/images/generations');
+  });
+
+  it('ignores an older generation skin after a replacement interface is committed', async () => {
+    const f = routeFetch({ '/chat/completions': [() => sseResponse(contentEvents(JSON.stringify(LIGHT_DRAFT)))], '/images/': [imageResponse(fakeWebp(800, 300), 80), imageResponse(fakeWebp(1600, 600))] });
+    const forge = createForge({ muse: live, fetchImpl: f.impl, skin: true });
+    const req = { device: FORGE_LIGHT_DEVICE, driver: FORGE_LIGHT_DRIVER, verification: FORGE_LIGHT_VERIFIED };
+    const first = await forge.generate(req);
+    const oldSkin = forge.whenSkin!(first.uiSpec!.specId);
+    const second = await forge.generate({ ...req, repaintSkin: true });
+    const current = await forge.whenSkin!(second.uiSpec!.specId);
+    const saved = forge.snapshot!(second.uiSpec!.specId);
+    expect(await oldSkin).toBeUndefined();
+    expect(forge.get(second.uiSpec!.specId)).toEqual(current);
+    expect(forge.snapshot!(second.uiSpec!.specId)).toEqual(saved);
   });
 
   it('regenerating the same device reuses its skin without painting again', async () => {

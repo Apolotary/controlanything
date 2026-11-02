@@ -8,10 +8,9 @@
  * /api/skins/<id>.webp, so WebSocket messages only carry the URL. With MUSE_RECORD=1 the painted images are
  * saved under fixtures/recorded/gen3d/skins/ and FIXTURE mode replays them (by card, then device category).
  */
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { newId } from '@ce/protocol';
 import { cancellableDelay, forwardCancellation, throwIfCancelled } from '../muse/cancellation';
 import type { ForgeDevice } from './forgeTypes';
 
@@ -85,20 +84,46 @@ export interface StoredSkin {
   at: number;
 }
 
-/** Painted skins by id, in memory (they live as long as the specs that reference them). */
+/** Immutable content-addressed skins; durable bytes are committed before their URL is published. */
 export class SkinStore {
   private readonly items = new Map<string, StoredSkin>();
-  constructor(private readonly max = 64) {}
+  constructor(private readonly max = 64, private readonly assetDir?: string) {}
 
   put(bytes: Uint8Array, mime = 'image/webp'): string {
-    const id = newId('skn_');
-    this.items.set(id, { bytes, mime, at: Date.now() });
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    const id = `skn_${hash}`;
+    if (this.assetDir) {
+      if (mime !== 'image/webp') throw new Error('Durable panel skins must be WebP');
+      mkdirSync(this.assetDir, { recursive: true });
+      const file = join(this.assetDir, `${hash}.webp`);
+      if (!existsSync(file)) {
+        const temp = `${file}.${randomUUID()}.tmp`;
+        try {
+          const fd = openSync(temp, 'wx', 0o600);
+          try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
+          renameSync(temp, file);
+          const dir = openSync(this.assetDir, 'r');
+          try { fsyncSync(dir); } finally { closeSync(dir); }
+        } finally {
+          if (existsSync(temp)) unlinkSync(temp);
+        }
+      }
+    }
+    this.items.set(id, { bytes: Uint8Array.from(bytes), mime, at: Date.now() });
     while (this.items.size > this.max) this.items.delete(this.items.keys().next().value!);
     return id;
   }
 
   get(id: string): StoredSkin | undefined {
-    return this.items.get(id);
+    const cached = this.items.get(id);
+    if (cached || !this.assetDir) return cached;
+    const hash = /^skn_([a-f0-9]{64})$/.exec(id)?.[1];
+    if (!hash) return undefined;
+    try {
+      const bytes = readFileSync(join(this.assetDir, `${hash}.webp`));
+      if (createHash('sha256').update(bytes).digest('hex') !== hash) return undefined;
+      return { bytes, mime: 'image/webp', at: 0 };
+    } catch { return undefined; }
   }
 
   get size(): number {

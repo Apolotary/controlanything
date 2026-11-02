@@ -30,6 +30,7 @@ import { decodeJpeg } from '../oracle/image';
 import { runLoop } from './loop';
 import { CANCELLED_GUIDANCE, type TimedPhase } from './guidance';
 import { subscribeForge } from './forgeBridge';
+import { restoreSavedForge } from './restoreForge';
 import { detachRouteBridge } from '../gen3d/routes';
 import { MacLocalExecutor } from './maclocal';
 import { loadRecordedSpeech } from './recordedSpeech';
@@ -148,10 +149,34 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const sharedForge = opts.forge ? undefined : getForge(ctx, { broadcast: false });
   const forge = opts.forge ?? (() => sharedForge);
   if (sharedForge) detachRouteBridge(sharedForge);
-  const unsubscribeForge = sharedForge ? subscribeForge(sharedForge, hub, targets, (cardId) => {
+  // Restore both controls and editing history before any presence or message listener can serve clients.
+  for (const saved of tags.listAll()) restoreSavedForge(forge(), saved, log);
+  const setupContext = (spec: UiSpecPayload) => {
+    const current = forge();
+    const skinId = /^\/api\/skins\/(skn_[a-f0-9]{64})\.webp$/.exec(spec.gen3d?.skin?.url ?? '')?.[1];
+    const skin = skinId ? current?.skins?.get(skinId) : undefined;
+    return {
+      forgeContext: current?.snapshot?.(spec.specId),
+      ...(skin ? { skinRefs: [tags.putAsset(skin.bytes, 'webp', skin.mime)] } : {}),
+    };
+  };
+  const activeForge = forge();
+  const unsubscribeForge = activeForge?.subscribe ? subscribeForge(activeForge, hub, targets, (cardId) => {
     const t = targets.get(cardId);
-    if (!t) return true; // HTTP / sample generations that no discovery run owns
+    if (!t) return !tags.get(cardId); // Standalone HTTP samples have no saved device intent.
     return mode === 'control' && tags.has(cardId) && (setups.has(cardId) || canControl(t));
+  }, (spec) => {
+    const target = targets.get(spec.cardId!);
+    const saved = tags.get(spec.cardId!);
+    if (!saved) return;
+    const context = setupContext(spec);
+    if (target?.specId === spec.specId && target.driver?.driverId === spec.driverId && (target.armed || setups.has(target.cardId))) {
+      tags.sync(target, spec, context);
+    } else if (saved.specId === spec.specId && saved.driver?.driverId === spec.driverId) {
+      // A skin may finish after leaving Control or hiding the device. Retain the accepted interface.
+      tags.saveSetupContext(saved.cardId, context, spec);
+    }
+    publishTags();
   }) : () => {};
   let room: UiSpecPayload | undefined;
   let roomRev = 0;
@@ -304,7 +329,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   };
   const unsubscribeTags = targets.onChange((t) => {
     if (!tags.has(t.cardId)) return;
-    tags.sync(t, t.specId ? specs.get(t.specId) : undefined);
+    const spec = t.specId ? specs.get(t.specId) : undefined;
+    tags.sync(t, spec, spec ? setupContext(spec) : undefined);
     publishTags();
   });
   const stop = (t: Target, reason = 'cancelled') => {
@@ -409,6 +435,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const forget = (cardId: string): boolean => {
     if (!tags.get(cardId)) return false;
     removeTag(cardId);
+    const specIds = new Set(tags.library().find((record) => record.cardId === cardId)?.versions.map((version) => version.specId));
+    for (const specId of specIds) forge()?.forget?.(specId);
     tags.forget(cardId);
     targets.remove(cardId);
     publishTags();
@@ -425,6 +453,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     }
     const saved = tags.restoreVersion(cardId, versionId);
     if (!saved) return false;
+    restoreSavedForge(forge(), saved, log);
     if (tags.has(cardId)) {
       const target = targets.create({ ...saved, state: saved.armed ? 'armed' : saved.card ? 'identified' : 'scanned' });
       if (mode === 'control') showControls(target);
@@ -450,6 +479,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (t.card) send('device.card', t.card);
     if (t.link) send('link.result', t.link);
     if (t.driver) send('driver.spec', t.driver);
+    for (const evidence of t.evidence) send('verify.result', evidence);
     if (t.specId) {
       const spec = specs.get(t.specId);
       if (spec) send('ui.spec', spec);
@@ -514,10 +544,14 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     void runLoop(loopDeps, t, { ...t.selection, identified: tagIdentity.get(t.cardId) }).finally(() => {
       if (targets.get(t.cardId) === t && t.runId === runId) {
         setups.delete(t.cardId);
-        tags.sync(t, t.specId ? specs.get(t.specId) : undefined);
+        const spec = t.specId ? specs.get(t.specId) : undefined;
+        tags.sync(t, spec, spec ? setupContext(spec) : undefined);
         // A failed candidate leaves the last completed setup available as one coherent unit.
         const saved = tags.get(t.cardId);
-        if (!t.armed && saved?.uiSpec) targets.create({ ...saved, state: saved.armed ? 'armed' : 'forged' });
+        if (!t.armed && saved?.uiSpec) {
+          restoreSavedForge(forge(), saved, log);
+          targets.create({ ...saved, state: saved.armed ? 'armed' : 'forged' });
+        }
         publishTags();
       }
     });

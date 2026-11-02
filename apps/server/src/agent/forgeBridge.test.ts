@@ -17,7 +17,7 @@ const item = {
   control: { id: 'off' }, part: { id: 'off-part' }, hackItem: { id: 'off-item' },
 } as NonNullable<ForgeProgress['item']>;
 
-function setup(withTarget = true, allowed?: (cardId: string) => boolean) {
+function setup(withTarget = true, allowed?: (cardId: string) => boolean, onSpec?: (spec: UiSpec) => void) {
   const listeners = new Set<(event: ForgeEvent) => void>();
   const forge = {
     subscribe(listener: (event: ForgeEvent) => void) {
@@ -29,12 +29,24 @@ function setup(withTarget = true, allowed?: (cardId: string) => boolean) {
   const hub = { broadcast: vi.fn(() => 1) };
   const targets = new TargetStore(hub);
   const target = withTarget ? targets.create({ cardId: 'light', runId: 'run-light', state: 'forging', driver, abort: new AbortController() }) : undefined;
-  const unsubscribe = subscribeForge(forge, hub, targets, allowed);
+  const unsubscribe = subscribeForge(forge, hub, targets, allowed, onSpec);
   const emit = (event: ForgeEvent) => { for (const listener of listeners) listener(event); };
   return { hub, target, targets, listeners, unsubscribe, emit };
 }
 
 describe('guided forge publishing', () => {
+  it('persists accepted late skins and edits while controls are hidden, but excludes stale drivers', () => {
+    const saved = vi.fn();
+    const { hub, target, emit } = setup(true, () => false, saved);
+    target!.state = 'armed';
+    target!.abort = undefined;
+    emit({ type: 'spec', uiSpec: spec });
+    expect(saved).toHaveBeenCalledExactlyOnceWith(spec, undefined);
+    expect(hub.broadcast).not.toHaveBeenCalled();
+    target!.driver = { ...driver, driverId: 'replacement' };
+    emit({ type: 'spec', uiSpec: spec });
+    expect(saved).toHaveBeenCalledTimes(1);
+  });
   it('forwards active progress and streamed controls with guidance', () => {
     const { hub, emit } = setup();
     emit({ type: 'progress', progress: { ...progress, item } });

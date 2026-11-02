@@ -222,7 +222,7 @@ describe('control router', () => {
   it('drives a step composite from the tracked level and undoes with the inverse', async () => {
     vi.useFakeTimers();
     try {
-      const { hub, router, t } = setup();
+      const { hub, router, t, dispatcher } = setup();
       t.stepIndex.level = 5;
       t.paramValues.p = 50;
       const r = router.onControlEvent({ widgetId: 'h_dim', value: 80, ts: 1, specId: 'spec_light', phase: 'end' });
@@ -232,12 +232,16 @@ describe('control router', () => {
       const cmds = hub.of('exec.command') as PayloadOf<'exec.command'>[];
       expect(cmds.length).toBe(2); // 5 -> 7: two "up" presses
       expect(cmds.every((c) => c.actionId === 'up')).toBe(true);
+      for (const cmd of cmds) dispatcher.onAck({ execId: cmd.execId, ok: true, sentAt: Date.now() });
       expect(t.paramValues.p).toBe(80);
       const u = router.undo(t); // restores p to 50: 7 -> 5, two "down" presses (first now)
       expect(u.ok).toBe(true);
-      expect(t.paramValues.p).toBe(50);
+      expect(t.paramValues.p).toBe(80);
       await vi.advanceTimersByTimeAsync(2000);
-      expect(hub.of('exec.command').filter((c: PayloadOf<'exec.command'>) => c.actionId === 'down').length).toBe(2);
+      const inverseCommands = hub.of('exec.command').filter((c: PayloadOf<'exec.command'>) => c.actionId === 'down') as PayloadOf<'exec.command'>[];
+      expect(inverseCommands.length).toBe(2);
+      for (const cmd of inverseCommands) dispatcher.onAck({ execId: cmd.execId, ok: true, sentAt: Date.now() });
+      expect(t.paramValues.p).toBe(50);
       const off = router.onControlEvent({ widgetId: 'h_off', value: true, ts: 2, specId: 'spec_light', phase: 'end' });
       expect(off.ok).toBe(true);
       await vi.advanceTimersByTimeAsync(400); // the 3 Hz light cap between IR sends

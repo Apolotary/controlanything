@@ -234,4 +234,24 @@ describe('durable device library', () => {
     expect(library.library()[0]).toMatchObject({ displayName, placement });
     expect(library.get('lamp')?.label).toHaveLength(80);
   });
+
+  it.each(['malformed', 'missing'] as const)('a %s crop asset does not prevent other saved devices loading', (failure) => {
+    const path = file();
+    const library = new TagStore(path);
+    for (const id of ['lamp', 'second']) {
+      const target = device(id);
+      library.add(target, id);
+      library.sync(target, setup(target), { forgeContext: { crop: { jpegBase64: Buffer.from(`${id} crop`).toString('base64') } } });
+    }
+    const root = JSON.parse(readFileSync(path, 'utf8'));
+    const crop = root.records[0].versions[0].forgeContext.crop;
+    if (failure === 'malformed') crop.jpegBase64.$libraryAsset = { hash: 'invalid', path: '../wrong', ext: 'jpeg' };
+    else rmSync(join(path.replace('/library.json', ''), crop.jpegBase64.$libraryAsset.path));
+    writeFileSync(path, JSON.stringify(root));
+    const restored = new TagStore(path);
+    expect(() => restored.list()).not.toThrow();
+    expect(restored.list()).toHaveLength(2);
+    expect(restored.get('lamp')).toMatchObject({ armed: true, forgeContext: { crop: { jpegBase64: undefined } } });
+    expect(restored.get('second')).toMatchObject({ armed: true, forgeContext: { crop: { jpegBase64: Buffer.from('second crop').toString('base64') } } });
+  });
 });

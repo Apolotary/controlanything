@@ -25,6 +25,7 @@ import { RequestCancelledError, requestCancellation } from '../muse/cancellation
 import { createForge, type Forge, ForgeInputError, type ForgeProgress } from './forge';
 import { ForgeDevice, ForgeDriver, VerifyState } from './forgeTypes';
 import { FORGE_LIGHT_DEVICE, FORGE_LIGHT_DRIVER, FORGE_LIGHT_VERIFIED, FORGE_OP1_DEVICE, FORGE_OP1_DRIVER, FORGE_OP1_VERIFIED } from './sampleDevices';
+import { SkinStore } from './skin';
 
 export const RECORDED_GEN3D_DIR = join(SERVER_ROOT, 'fixtures/recorded/gen3d');
 
@@ -87,6 +88,7 @@ export function getForge(ctx: ServerContext, opts: { broadcast?: boolean } = {})
     replaySpeed: Number.isFinite(replaySpeed) && replaySpeed >= 0 ? replaySpeed : 1,
     // muse-image-1.0 panel skins, painted after the controls arm (GEN3D_SKIN=0 turns them off)
     skin: process.env.GEN3D_SKIN !== '0',
+    skinStore: new SkinStore(64, join(ctx.config.dataDir, 'library', 'assets')),
   });
   if (opts.broadcast !== false) bridge(ctx, f);
   forges.set(ctx, f);
