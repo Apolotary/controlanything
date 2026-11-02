@@ -84,7 +84,7 @@ class HudImpl implements Hud {
 
   // --- mounting -------------------------------------------------------------------------------------
 
-  private mount(key: string, spec: Gen3dSpec, place?: { position?: Vector3; yaw?: number; faceHead?: boolean }, animate: 'none' | 'buildup' | 'diff' = 'diff', targetId?: string): Mounted {
+  private mount(key: string, spec: Gen3dSpec, place?: { position?: Vector3; yaw?: number; faceHead?: boolean }, animate: 'none' | 'buildup' | 'diff' = 'diff', targetId?: string, forwardControls = false): Mounted {
     const v = validateSpec(spec);
     if (!v.spec) {
       console.warn('[hud] invalid spec', key, v.errors);
@@ -93,7 +93,8 @@ class HudImpl implements Hud {
     spec = v.spec;
     let m = this.objects.get(key);
     if (!m) {
-      const obj = new SpecObject(spec, { clock: this.clock, audio: this.audio, sink: this.sink });
+      // only generated specs (renderSpec) forward `control`; HUD chrome reports through hack/deck/confirm/approve
+      const obj = new SpecObject(spec, { clock: this.clock, audio: this.audio, sink: forwardControls ? this.sink : { control: () => {} } });
       if (animate === 'buildup') obj.applySpec(spec, 'buildup');
       obj.emitter.on('consumed', (e) => this.events.emit('consumed', { hand: e.hand, widget: e.widget }));
       obj.emitter.on('grab', (g) => this.events.emit('grab', g));
@@ -131,6 +132,18 @@ class HudImpl implements Hud {
 
   private rightOfHead(out: Vector3): Vector3 {
     return this.headForward(out).cross(new Vector3(0, 1, 0)).normalize();
+  }
+
+  private floatingSlots = new Map<string, number>();
+  /** Stable slot index for a floating object: the lowest index not used by another mounted floating object. */
+  private floatingSlot(key: string): number {
+    const have = this.floatingSlots.get(key);
+    if (have !== undefined && this.objects.has(key)) return have;
+    const used = new Set([...this.floatingSlots.entries()].filter(([k]) => this.objects.has(k) && k !== key).map(([, v]) => v));
+    let slot = 0;
+    while (used.has(slot)) slot++;
+    this.floatingSlots.set(key, slot);
+    return slot;
   }
 
   /** A target beyond comfortable reach (a ceiling light at 2.3 m): its menus and controls come to arm's length. */
@@ -318,7 +331,12 @@ class HudImpl implements Hud {
     if (t && !this.isFar(t)) {
       pos = new Vector3(...t.position).addScaledVector(this.rightOfHead(new Vector3()), -((t.sizeM?.[0] ?? 0.25) / 2 + 0.19));
       pos.y += 0.1;
-    } else pos = this.armsLength(t, -0.16);
+    } else {
+      // floating menus (room specs, far or unplaced targets) take distinct slots so they never stack
+      const slot = this.floatingSlot(`hack_${targetId}`);
+      pos = this.armsLength(t, -0.16 + (slot % 2) * 0.32);
+      pos.y -= Math.floor(slot / 2) * 0.24;
+    }
     const m = this.mount(`hack_${targetId}`, spec, { position: pos, faceHead: true }, 'buildup', targetId);
     m.obj.emitter.on('control', (e: ControlEvent) => {
       if (e.phase !== 'start') return;
@@ -380,7 +398,12 @@ class HudImpl implements Hud {
       ],
     };
     const t = c.targetId ? this.targets.get(c.targetId) : undefined;
-    const pos = t ? new Vector3(...t.position).add(new Vector3(0, (t.sizeM?.[1] ?? 0.1) / 2 + 0.2, 0)) : this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.55).add(new Vector3(0, -0.05, 0));
+    // above a desk device; a far target (the ceiling light, overhead) would put the key out of view and out of reach, so it comes to arm's length like its menus
+    const pos = t
+      ? this.isFar(t)
+        ? this.armsLength(t, 0).add(new Vector3(0, -0.12, 0))
+        : new Vector3(...t.position).add(new Vector3(0, (t.sizeM?.[1] ?? 0.1) / 2 + 0.2, 0))
+      : this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.55).add(new Vector3(0, -0.05, 0));
     const m = this.mount('confirm', spec, { position: pos, faceHead: true }, 'buildup');
     let holdStart = 0;
     m.obj.emitter.on('control', (e: ControlEvent) => {
@@ -418,11 +441,9 @@ class HudImpl implements Hud {
       position = this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), Math.cos(pitch) * d);
       position.y += Math.sin(pitch) * d;
     }
-    const m = this.mount(key, spec, { position, ...(at.yawDeg !== undefined ? { yaw: at.yawDeg } : { faceHead: spec.anchor.faceUser ?? true }) }, existed ? 'diff' : 'buildup', at.targetId);
-    if (!m.history) {
-      m.history = new SpecHistory(m.spec);
-      m.obj.emitter.on('control', (e: ControlEvent) => this.events.emit('control', e));
-    } else m.history.push(m.spec);
+    const m = this.mount(key, spec, { position, ...(at.yawDeg !== undefined ? { yaw: at.yawDeg } : { faceHead: spec.anchor.faceUser ?? true }) }, existed ? 'diff' : 'buildup', at.targetId, true);
+    if (!m.history) m.history = new SpecHistory(m.spec);
+    else m.history.push(m.spec);
     // a Muse Image skin lights its model chip while it fades in, then marks it done
     if (spec.skin && spec.skin.source !== 'hand') {
       const model = spec.skin.source;
@@ -588,7 +609,25 @@ class HudImpl implements Hud {
       this.faceHead(wl.obj);
     }
     const cursors = this.devCursors.length ? [...this.cursors, ...this.devCursors] : this.cursors;
-    for (const m of this.objects.values()) m.obj.update(f.dt, f.time, cursors, this.camera);
+    // one pinch acquires in ONE object: the one whose nearest candidate is closest; the others see no press edge
+    const winners = new Map<string, Mounted | null>();
+    for (const c of cursors) {
+      if (!c.justPinched || !c.tracked) continue;
+      let best: Mounted | null = null;
+      let bestD = Infinity;
+      for (const m of this.objects.values()) {
+        const d = m.obj.nearestCandidate(c);
+        if (d < bestD) {
+          bestD = d;
+          best = m;
+        }
+      }
+      winners.set(c.id, best);
+    }
+    for (const m of this.objects.values()) {
+      const view = cursors.map((c) => (c.justPinched && winners.has(c.id) && winners.get(c.id) !== m ? { ...c, justPinched: false } : c));
+      m.obj.update(f.dt, f.time, view, this.camera);
+    }
   }
 
   private updateReticle(f: HudFrame): void {

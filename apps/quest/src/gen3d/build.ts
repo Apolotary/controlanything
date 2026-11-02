@@ -629,6 +629,18 @@ export class SpecObject extends Group {
     for (const [k, v] of this.hoverArchetype) this.hoverArchetype.set(k, v * 0.5);
   }
 
+  /** Distance of the nearest acquirable behaviour to a cursor's pinch point (Infinity when none), for arbitration across objects. */
+  nearestCandidate(c: Cursor): number {
+    let best = Infinity;
+    for (const r of this.runs) {
+      if (r.owner) continue;
+      const gestures = r.b.gestures ?? ['pinch-drag'];
+      if (gestures.every((g) => g === 'poke') && c.canPoke) continue;
+      best = Math.min(best, this.candidateDistance(r, c.position));
+    }
+    return best;
+  }
+
   /** How far a cursor is from a behaviour's part: within grabRadius of its centre, or within 2 cm of its bounds. */
   private candidateDistance(r: BRun, p: Vector3): number {
     r.node.getWorldPosition(_v);

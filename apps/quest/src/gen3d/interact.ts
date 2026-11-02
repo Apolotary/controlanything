@@ -71,6 +71,9 @@ export class MouseCursor {
 
   constructor(private el: HTMLElement, private camera: Camera) {
     this.cursor = { id: 'mouse', hand: 'mouse', position: new Vector3(), tip: new Vector3(), pinching: false, justPinched: false, justReleased: false, tracked: false, canPoke: false };
+    // three's defaults treat any Line/Points within ONE METRE of the ray as a hit (edge keylines, particles)
+    this.raycaster.params.Line.threshold = 0.004;
+    this.raycaster.params.Points.threshold = 0.004;
     el.addEventListener('pointermove', (e) => this.onMove(e));
     el.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
@@ -82,8 +85,10 @@ export class MouseCursor {
       this.down = false;
       this.pendingUp = true;
     };
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', up);
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pointerup', up);
+      window.addEventListener('pointercancel', up);
+    }
     el.addEventListener('wheel', (e) => {
       this.wheelDelta += e.deltaY;
       e.preventDefault();
