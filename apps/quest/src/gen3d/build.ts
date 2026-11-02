@@ -127,6 +127,8 @@ export class SpecObject extends Group {
   private ghosted = new Map<Mesh, { material: ThreeMaterial | ThreeMaterial[]; edges?: LineSegments }>();
   private hoverArchetype = new Map<string, number>();
   private now = 0;
+  /** archetype / part ids hidden by the HUD (e.g. a spec's embedded hack list when the HUD already shows one) */
+  private hiddenParts = new Set<string>();
   private skinLayers: Mesh<PlaneGeometry | CircleGeometry, MeshBasicMaterial>[] = [];
   private skinTexture?: Texture;
   private skinUrl?: string;
@@ -408,6 +410,19 @@ export class SpecObject extends Group {
     return this.controls.get(controlId)?.value;
   }
 
+  /** Hide (or show) a part and everything generated from it; hidden parts take no input. */
+  setPartHidden(partId: string, hidden: boolean): void {
+    if (hidden) this.hiddenParts.add(partId);
+    else this.hiddenParts.delete(partId);
+    const node = this.nodes.get(partId);
+    if (node) node.visible = !hidden;
+  }
+
+  private isHidden(partId: string): boolean {
+    if (!this.hiddenParts.size) return false;
+    return this.hiddenParts.has(partId) || this.hiddenParts.has(this.expanded.origin.get(partId) ?? '');
+  }
+
   /** Set a control value. emit=false for device echoes / replay (moves the control silently). */
   setValue(controlId: string, value: ControlValue, opts: { emit?: boolean; phase?: ControlEvent['phase']; index?: number; immediate?: boolean } = {}): void {
     const c = this.controls.get(controlId);
@@ -574,7 +589,7 @@ export class SpecObject extends Group {
       let best: BRun | null = null;
       let bestD = Infinity;
       for (const r of this.runs) {
-        if (r.owner) continue;
+        if (r.owner || this.isHidden(r.b.partId)) continue;
         const gestures = r.b.gestures ?? ['pinch-drag'];
         const pokeOnly = gestures.every((g) => g === 'poke');
         if (pokeOnly && c.canPoke) continue;
@@ -591,7 +606,7 @@ export class SpecObject extends Group {
       }
       if (best && c.justPinched) this.acquire(best, c);
       // pokes
-      if (c.canPoke) for (const r of this.runs) this.updatePoke(r, c);
+      if (c.canPoke) for (const r of this.runs) if (!this.isHidden(r.b.partId)) this.updatePoke(r, c);
       if (c.hand === 'mouse' && best && wheel !== 0 && best.ctrl && best.b.type === 'rotate') {
         this.setT(best.ctrl, best.ctrl.t - wheel / 2400, undefined, 'move');
       }
@@ -633,7 +648,7 @@ export class SpecObject extends Group {
   nearestCandidate(c: Cursor): number {
     let best = Infinity;
     for (const r of this.runs) {
-      if (r.owner) continue;
+      if (r.owner || this.isHidden(r.b.partId)) continue;
       const gestures = r.b.gestures ?? ['pinch-drag'];
       if (gestures.every((g) => g === 'poke') && c.canPoke) continue;
       best = Math.min(best, this.candidateDistance(r, c.position));
@@ -1036,7 +1051,7 @@ export class SpecObject extends Group {
       const f = age < 0 ? 0 : Math.min(1, age / 0.3);
       const e = ease.outCubic(f);
       const base = this.baseScale.get(id) ?? new Vector3(1, 1, 1);
-      node.visible = age >= 0;
+      node.visible = age >= 0 && !this.isHidden(id);
       node.scale.copy(base).multiplyScalar(0.9 + 0.1 * e);
       // position-only glitch while curing (no luminance flashing)
       const part = this.parts.get(id);
@@ -1054,7 +1069,12 @@ export class SpecObject extends Group {
   }
 
   private applyVisibility(): void {
+    for (const id of this.hiddenParts) {
+      const n = this.nodes.get(id);
+      if (n) n.visible = false;
+    }
     for (const node of this.nodes.values()) {
+      if (this.hiddenParts.size && this.isHidden(node.userData.partId as string)) continue;
       const when = node.userData.visibleWhen as Part['visibleWhen'];
       if (!when || when === 'always') continue;
       if (this.births.has(node.userData.partId as string)) {

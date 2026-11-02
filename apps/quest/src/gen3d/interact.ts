@@ -62,6 +62,10 @@ export class MouseCursor {
   /** edges latched between frames so a press shorter than one frame still produces a start and an end */
   private pendingDown = false;
   private pendingUp = false;
+  /** where the press happened and whether the pointer moved since the last frame: a down+move+up that all
+   *  arrive between two frames is replayed as press (at the down point) → move → release on successive frames */
+  private downNdc = new Vector2();
+  private movePending = false;
   private raycaster = new Raycaster();
   private plane = new Plane();
   private dragging = false;
@@ -78,6 +82,8 @@ export class MouseCursor {
     el.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
       this.onMove(e);
+      this.downNdc.copy(this.ndc);
+      this.movePending = false;
       this.down = true;
       this.pendingDown = true;
     });
@@ -101,6 +107,7 @@ export class MouseCursor {
   private onMove(e: PointerEvent): void {
     const r = this.el.getBoundingClientRect();
     this.ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    if (this.wasDown || this.pendingDown) this.movePending = true;
   }
 
   setTargets(objects: Object3D[]): void {
@@ -115,14 +122,22 @@ export class MouseCursor {
   /** Call once per frame before the objects update. */
   update(): Cursor {
     const c = this.cursor;
-    // deliver latched edges one per frame: a down+up between two frames becomes start (frame N) then end (N+1)
+    // deliver latched edges one per frame: down+move+up between two frames becomes press (at the down point),
+    // then move, then release on three successive frames, so synthetic or very fast drags still turn knobs
+    let rayNdc = this.ndc;
     if (this.pendingDown && !this.wasDown) {
       c.justPinched = true;
       c.justReleased = false;
       c.pinching = true;
       this.pendingDown = false;
       this.wasDown = true;
+      rayNdc = this.downNdc;
       if (!this.down) this.pendingUp = true;
+    } else if (this.wasDown && this.movePending) {
+      c.justPinched = false;
+      c.justReleased = false;
+      c.pinching = true;
+      this.movePending = false;
     } else if (this.pendingUp && this.wasDown) {
       c.justPinched = false;
       c.justReleased = true;
@@ -136,9 +151,9 @@ export class MouseCursor {
       this.pendingDown = false;
       this.pendingUp = false;
     }
-    c.tracked = this.ndc.x > -5;
+    c.tracked = rayNdc.x > -5;
     if (!c.tracked) return c;
-    this.raycaster.setFromCamera(this.ndc, this.camera);
+    this.raycaster.setFromCamera(rayNdc, this.camera);
     c.ray = { origin: this.raycaster.ray.origin.clone(), dir: this.raycaster.ray.direction.clone() };
     if (this.dragging && c.pinching) {
       // keep moving on the drag plane

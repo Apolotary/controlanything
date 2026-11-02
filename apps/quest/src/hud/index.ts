@@ -56,6 +56,13 @@ class HudImpl implements Hud {
   private chips: ModelChip[] = [];
   private pings: PingLine[] = [];
   private scanning = false;
+  /** declutter state: menus by target, which collapsed menus the user expanded, armed → ticker, verifying → focus */
+  private menus = new Map<string, { title: string; subtitle?: string; items: HackItem[] }>();
+  private expandedMenus = new Set<string>();
+  private armedAny = false;
+  private logExpanded = false;
+  private verifying = false;
+  private evidenceTimer: ReturnType<typeof setTimeout> | null = null;
   private worklogPose = { position: new Vector3(), yaw: 0, placed: false };
   private deckOpen = false;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -87,11 +94,11 @@ class HudImpl implements Hud {
 
   // --- mounting -------------------------------------------------------------------------------------
 
-  private mount(key: string, spec: Gen3dSpec, place?: { position?: Vector3; yaw?: number; faceHead?: boolean }, animate: 'none' | 'buildup' | 'diff' = 'diff', targetId?: string, forwardControls = false): Mounted {
+  private mount(key: string, spec: Gen3dSpec, place?: { position?: Vector3; yaw?: number; faceHead?: boolean }, animate: 'none' | 'buildup' | 'diff' = 'diff', targetId?: string, forwardControls = false): Mounted | undefined {
     const v = validateSpec(spec);
     if (!v.spec) {
       console.warn('[hud] invalid spec', key, v.errors);
-      return this.objects.get(key)!;
+      return this.objects.get(key);
     }
     spec = v.spec;
     let m = this.objects.get(key);
@@ -135,6 +142,13 @@ class HudImpl implements Hud {
 
   private rightOfHead(out: Vector3): Vector3 {
     return this.headForward(out).cross(new Vector3(0, 1, 0)).normalize();
+  }
+
+  /** Nudge a floating menu down until it is >= 25 cm from every other mounted menu (max 4 steps). */
+  private separateFrom(pos: Vector3, key: string): Vector3 {
+    const others = [...this.objects.entries()].filter(([k]) => k.startsWith('hack_') && k !== key).map(([, m]) => m.obj.position);
+    for (let i = 0; i < 4 && others.some((o) => o.distanceTo(pos) < 0.25); i++) pos.y -= 0.26;
+    return pos;
   }
 
   private floatingSlots = new Map<string, number>();
@@ -213,6 +227,7 @@ class HudImpl implements Hud {
     const spec = this.hudSpec(`tgt_${t.id}`, t.label, parts, { modelId: t.modelId ?? 'sam-3.1' });
     const existed = this.objects.has(`tgt_${t.id}`);
     const m = this.mount(`tgt_${t.id}`, spec, { position: new Vector3(...t.position), faceHead: false }, existed ? 'diff' : 'buildup', t.id);
+    if (!m) return;
     // tag faces the user; the contour plane is world-fixed
     m.obj.rotation.set(0, 0, 0);
     const tag = m.obj.nodes.get('tag');
@@ -257,6 +272,9 @@ class HudImpl implements Hud {
       this.audio.play('lock');
       this.roomDim.target = 0;
     }
+    // focus: only the locked device keeps a full menu; everything else collapses to a chip
+    this.expandedMenus.clear();
+    for (const t of this.menus.keys()) this.renderMenu(t);
   }
 
   private refreshTarget(id: string): void {
@@ -304,9 +322,33 @@ class HudImpl implements Hud {
   }
 
   private renderWorklog(): void {
-    const rows: LogRow[] = [...this.steps.values()].slice(-8).map((s) => ({ title: s.title.slice(0, 28), status: s.status, ...(s.evidence || s.detail ? { evidence: (s.evidence ?? s.detail ?? '').slice(0, 64) } : {}), ...(s.kind ? { kind: s.kind } : {}) }));
-    const parts: Part[] = [{ id: 'log', kind: 'archetype', archetype: 'worklog', params: { title: 'AGENT', width: 0.36, logRows: rows, models: this.chips.slice(0, 6) } }];
-    const m = this.mount('worklog', this.hudSpec('worklog', 'Agent', parts), { position: this.worklogPose.placed ? this.worklogPose.position : this.worklogTarget(new Vector3()), faceHead: true });
+    const ticker = this.armedAny && !this.logExpanded;
+    const all = [...this.steps.values()];
+    const rows: LogRow[] = (ticker ? all.slice(-3) : all.slice(-8)).map((s) => ({ title: s.title.slice(0, 28), status: s.status, ...(s.evidence || s.detail ? { evidence: (s.evidence ?? s.detail ?? '').slice(0, 64) } : {}), ...(s.kind ? { kind: s.kind } : {}) }));
+    const width = ticker ? 0.3 : 0.36;
+    const chips = this.chips.slice(0, 6);
+    const h = 0.036 + rows.length * 0.034 + (chips.length ? 0.03 : 0) + 0.016;
+    const parts: Part[] = [
+      { id: 'log', kind: 'archetype', archetype: 'worklog', params: { title: ticker ? 'AGENT · PINCH FOR LOG' : 'AGENT', width, logRows: rows, models: chips } },
+      // a pinch anywhere on the plate toggles ticker ↔ full log
+      { id: 'hit', kind: 'primitive', shape: 'box', dims: { w: width, h, d: 0.002 }, transform: { position: [0, 0, 0.006] }, material: { style: 'holo', color: NEON.void, opacity: 0.05, glow: 0, fresnel: 0 }, role: 'cap' },
+    ];
+    const spec: Gen3dSpec = {
+      ...this.hudSpec('worklog', 'Agent', parts),
+      controls: [{ id: 'toggle', kind: 'trigger', label: 'LOG', binding: { action: 'hud.log.toggle' } }],
+      behaviors: [{ id: 'b_toggle', partId: 'hit', controlId: 'toggle', type: 'press', axis: 'z', depth: 0.002, gestures: ['poke', 'pinch'], grabRadius: 0.02 }],
+    };
+    const existed = this.objects.has('worklog');
+    const m = this.mount('worklog', spec, { position: this.worklogPose.placed ? this.worklogPose.position : this.worklogTarget(new Vector3()), faceHead: true });
+    if (!m) return;
+    if (!existed) {
+      m.obj.emitter.on('control', (e: ControlEvent) => {
+        if (e.phase !== 'start') return;
+        this.logExpanded = !this.logExpanded;
+        this.renderWorklog();
+        this.events.emit('consumed', { hand: 'right', widget: 'hack' });
+      });
+    }
     if (!this.worklogPose.placed) {
       this.worklogPose.position.copy(m.obj.position);
       this.worklogPose.placed = true;
@@ -325,22 +367,64 @@ class HudImpl implements Hud {
   // --- HACKS ---------------------------------------------------------------------------------------------
 
   showHackMenu(targetId: string, menu: { title: string; subtitle?: string; items: HackItem[] }): void {
+    this.menus.set(targetId, menu);
+    this.renderMenu(targetId);
+    // exactly one hack list per device: a spec's embedded list yields to the HUD menu
+    for (const m of this.objects.values()) if (m.targetId === targetId && m.history) this.hideEmbeddedLists(m.obj);
+  }
+
+  /** Full list for the locked device (or when nothing is locked); a small chip for every other menu until pinched. */
+  private renderMenu(targetId: string): void {
+    const menu = this.menus.get(targetId);
+    if (!menu) return;
     const t = this.targets.get(targetId);
-    const controls = menu.items.map((it) => ({ id: `hack_${it.id}`, kind: 'trigger' as const, label: it.label.slice(0, 16), binding: { action: 'hud.hack', args: { itemId: it.id, targetId } } }));
-    const items = menu.items.map((it) => ({ ...it, controlId: `hack_${it.id}` }));
-    const spec: Gen3dSpec = { ...this.hudSpec(`hack_${targetId}`, menu.title, [{ id: 'list', kind: 'archetype', archetype: 'hack-list', params: { title: menu.title, ...(menu.subtitle ? { subtitle: menu.subtitle } : {}), items, width: 0.24 } }]), controls };
-    // the hack menu takes the user's LEFT of the target; generated controls (renderSpec) take the right
+    const key = `hack_${targetId}`;
+    const collapsed = this.locked !== null && targetId !== this.locked && !this.expandedMenus.has(targetId);
+    const items = menu.items.slice(0, 12).map((it) => ({ ...it, label: it.label.slice(0, 24), ...(it.detail ? { detail: it.detail.slice(0, 32) } : {}), ...(it.subtitle ? { subtitle: it.subtitle.slice(0, 20) } : {}), controlId: `hack_${it.id}` }));
+    const title = menu.title.slice(0, 32);
+    const subtitle = menu.subtitle?.slice(0, 40);
+    let spec: Gen3dSpec;
+    if (collapsed) {
+      const w = 0.17;
+      spec = {
+        ...this.hudSpec(key, title.slice(0, 40), [
+          { id: 'plate', kind: 'primitive', shape: 'box', dims: { w, h: 0.036, d: 0.003, radius: 0.004 }, transform: { position: [0, 0, 0] }, material: { style: 'holo', color: NEON.plate, opacity: 0.92, edges: true, edgeColor: NEON.dim, scanlines: true }, role: 'cap' },
+          { id: 'title', kind: 'text', text: { value: title, heightM: 0.0085, color: NEON.bone, align: 'left' }, transform: { position: [-w / 2 + 0.01, 0.005, 0.002] } },
+          { id: 'count', kind: 'text', text: { value: `${menu.items.length} HACKS · PINCH TO OPEN`, heightM: 0.005, color: NEON.dim, align: 'left' }, transform: { position: [-w / 2 + 0.01, -0.009, 0.002] } },
+        ]),
+        controls: [{ id: 'open', kind: 'trigger', label: 'OPEN', binding: { action: 'hud.menu.open', args: { targetId } } }],
+        behaviors: [{ id: 'b_open', partId: 'plate', controlId: 'open', type: 'press', axis: 'z', depth: 0.003, gestures: ['poke', 'pinch'], grabRadius: 0.03 }],
+      };
+    } else {
+      const controls = items.map((it) => ({ id: it.controlId, kind: 'trigger' as const, label: it.label.slice(0, 16), binding: { action: 'hud.hack', args: { itemId: it.id, targetId } } }));
+      spec = { ...this.hudSpec(key, title.slice(0, 40), [{ id: 'list', kind: 'archetype', archetype: 'hack-list', params: { title, ...(subtitle ? { subtitle } : {}), items, width: 0.24 } }]), controls };
+    }
     let pos: Vector3;
     if (t && !this.isFar(t)) {
       pos = new Vector3(...t.position).addScaledVector(this.rightOfHead(new Vector3()), -((t.sizeM?.[0] ?? 0.25) / 2 + 0.19));
       pos.y += 0.1;
     } else {
-      // floating menus (room specs, far or unplaced targets) take distinct slots so they never stack
-      const slot = this.floatingSlot(`hack_${targetId}`);
-      pos = this.armsLength(t, -0.16 + (slot % 2) * 0.32);
-      pos.y -= Math.floor(slot / 2) * 0.24;
+      // floating menus: far targets (the ceiling light) centre-left on the line of sight, room / unplaced menus to the
+      // right; chips sit low; a final pass guarantees >= 25 cm from every other mounted menu
+      const slot = this.floatingSlot(key);
+      pos = t ? this.armsLength(t, -0.26) : this.armsLength(undefined, 0.24);
+      pos.y -= collapsed ? 0.3 + (slot % 3) * 0.06 : (slot % 3) * 0.26;
+      pos = this.separateFrom(pos, key);
     }
-    const m = this.mount(`hack_${targetId}`, spec, { position: pos, faceHead: true }, 'buildup', targetId);
+    const existed = this.objects.get(key);
+    if (existed) this.unmount(key); // a chip and a list are different objects: rebuild rather than diff
+    const m = this.mount(key, spec, { position: pos, faceHead: true }, 'buildup', targetId);
+    if (!m) return;
+    m.obj.visible = !this.verifying;
+    if (collapsed) {
+      m.obj.emitter.on('control', (e: ControlEvent) => {
+        if (e.phase !== 'start') return;
+        this.expandedMenus.add(targetId);
+        this.renderMenu(targetId);
+        this.events.emit('consumed', { hand: 'right', widget: 'hack' });
+      });
+      return;
+    }
     m.obj.emitter.on('control', (e: ControlEvent) => {
       if (e.phase !== 'start') return;
       const item = menu.items[e.index ?? -1] ?? menu.items.find((it) => `hack_${it.id}` === e.controlId);
@@ -348,8 +432,24 @@ class HudImpl implements Hud {
     });
   }
 
+  /** A spec's own hack-list archetypes are hidden when the HUD shows a menu for the same target (one list per device). */
+  private hideEmbeddedLists(obj: SpecObject): void {
+    for (const p of obj.spec.parts) if (p.kind === 'archetype' && p.archetype === 'hack-list') obj.setPartHidden(p.id, true);
+  }
+
+  /** Height of a mounted menu (list or chip), for stacking things under it. */
+  private menuHeight(targetId: string): number {
+    const menu = this.menus.get(targetId);
+    if (!menu) return 0.04;
+    const collapsed = this.locked !== null && targetId !== this.locked && !this.expandedMenus.has(targetId);
+    return collapsed ? 0.036 : 0.032 + Math.max(1, Math.min(6, menu.items.length) + (menu.items.length > 6 ? 1 : 0)) * 0.046 + 0.012;
+  }
+
   hideHackMenu(): void {
+    this.menus.clear();
+    this.expandedMenus.clear();
     for (const key of [...this.objects.keys()]) if (key.startsWith('hack_')) this.unmount(key);
+    for (const m of this.objects.values()) if (m.history) for (const p of m.spec.parts) if (p.archetype === 'hack-list') m.obj.setPartHidden(p.id, false);
   }
 
   setUpload(u: UploadState | null): void {
@@ -357,28 +457,44 @@ class HudImpl implements Hud {
       this.unmount('upload');
       return;
     }
-    const parts: Part[] = [{ id: 'bar', kind: 'archetype', archetype: 'upload-bar', params: { title: u.label.slice(0, 32), steps: u.steps ?? ['GEN', 'CHECK', 'SEND', 'SEEN'], stepsDone: u.stepsDone, width: 0.24, ...(u.verdict === 'fail' ? { status: 'failed' as const } : {}) } }];
+    const parts: Part[] = [{ id: 'bar', kind: 'archetype', archetype: 'upload-bar', params: { title: u.label.slice(0, 32), steps: (u.steps ?? ['GEN', 'CHECK', 'SEND', 'SEEN']).slice(0, 6).map((x) => x.slice(0, 8)), stepsDone: Math.min(6, u.stepsDone), width: 0.24, ...(u.verdict === 'fail' ? { status: 'failed' as const } : {}) } }];
     this.mount('upload', this.hudSpec('upload', 'Upload', parts, u.modelId ? { modelId: u.modelId } : {}), { position: this.belowHackMenu(0.0), faceHead: true });
     if (u.verdict === 'ok') this.audio.play('ok');
     if (u.verdict === 'fail') this.audio.play('fail');
   }
 
   showEvidence(e: EvidenceState | null): void {
+    if (this.evidenceTimer) clearTimeout(this.evidenceTimer);
+    this.evidenceTimer = null;
     if (!e) {
       this.unmount('evidence');
+      this.setVerifying(false);
       return;
     }
     const parts: Part[] = [{ id: 'strip', kind: 'archetype', archetype: 'oracle-strip', params: { sent: e.sent.slice(0, 24), expect: e.expect.slice(0, 24), seen: e.seen.slice(0, 24), verdict: e.verdict, width: 0.3 } }];
     const t = e.targetId ? this.targets.get(e.targetId) : undefined;
-    const pos = t ? new Vector3(...t.position).add(new Vector3(0, (t.sizeM?.[1] ?? 0.1) / 2 + 0.115, 0)) : this.belowHackMenu(-0.05);
+    // VERIFY is the focal point: the strip comes to arm's length for far targets and the menus step back
+    const pos = t ? (this.isFar(t) ? this.armsLength(t, 0).add(new Vector3(0, 0.06, 0)) : new Vector3(...t.position).add(new Vector3(0, (t.sizeM?.[1] ?? 0.1) / 2 + 0.115, 0))) : this.belowHackMenu(-0.05);
     this.mount('evidence', this.hudSpec('evidence', 'Evidence', parts), { position: pos, faceHead: true });
+    this.setVerifying(e.verdict === 'pending');
     if (e.verdict === 'ok') this.audio.play('ok');
     if (e.verdict === 'fail') this.audio.play('fail');
+    // a verdict is read in 3 s; then the controls are the focal point again
+    if (e.verdict !== 'pending') this.evidenceTimer = setTimeout(() => this.unmount('evidence'), 3000);
+  }
+
+  private setVerifying(on: boolean): void {
+    this.verifying = on;
+    for (const [key, m] of this.objects) if (key.startsWith('hack_')) m.obj.visible = !on;
   }
 
   private belowHackMenu(dy: number): Vector3 {
-    const menu = [...this.objects.entries()].find(([k]) => k.startsWith('hack_'))?.[1];
-    if (menu) return menu.obj.position.clone().add(new Vector3(0, -0.16 + dy, 0));
+    const entry = [...this.objects.entries()].find(([k]) => k.startsWith('hack_') && (this.locked ? k === `hack_${this.locked}` : true)) ?? [...this.objects.entries()].find(([k]) => k.startsWith('hack_'));
+    if (entry) {
+      const [key, menu] = entry;
+      const h = this.menuHeight(key.slice(5));
+      return menu.obj.position.clone().add(new Vector3(0, -(h / 2 + 0.045) + dy, 0));
+    }
     return this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.6).add(new Vector3(0, -0.18 + dy, 0));
   }
 
@@ -408,6 +524,7 @@ class HudImpl implements Hud {
         : new Vector3(...t.position).add(new Vector3(0, (t.sizeM?.[1] ?? 0.1) / 2 + 0.2, 0))
       : this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.55).add(new Vector3(0, -0.05, 0));
     const m = this.mount('confirm', spec, { position: pos, faceHead: true }, 'buildup');
+    if (!m) return;
     let holdStart = 0;
     m.obj.emitter.on('control', (e: ControlEvent) => {
       if (e.controlId === 'deny' && e.phase === 'start') this.events.emit('confirm', { id: c.id, approve: false });
@@ -431,7 +548,7 @@ class HudImpl implements Hud {
     if (at.position) position = new Vector3(...at.position);
     else if (at.targetId && this.targets.has(at.targetId)) {
       const t = this.targets.get(at.targetId)!;
-      if (this.isFar(t)) position = this.armsLength(t, 0.16);
+      if (this.isFar(t)) position = this.armsLength(t, 0.24);
       else {
         const side = spec.anchor.side === 'left' ? -1 : 1;
         position = new Vector3(...t.position).addScaledVector(this.rightOfHead(new Vector3()), side * ((t.sizeM?.[0] ?? 0.25) / 2 + (spec.anchor.offset?.[0] ?? 0.2)));
@@ -445,8 +562,10 @@ class HudImpl implements Hud {
       position.y += Math.sin(pitch) * d;
     }
     const m = this.mount(key, spec, { position, ...(at.yawDeg !== undefined ? { yaw: at.yawDeg } : { faceHead: spec.anchor.faceUser ?? true }) }, existed ? 'diff' : 'buildup', at.targetId, true);
+    if (!m) return;
     if (!m.history) m.history = new SpecHistory(m.spec);
     else m.history.push(m.spec);
+    if (at.targetId && this.menus.has(at.targetId)) this.hideEmbeddedLists(m.obj);
     // a Muse Image skin lights its model chip while it fades in, then marks it done
     if (spec.skin && spec.skin.source !== 'hand') {
       const model = spec.skin.source;
@@ -473,6 +592,12 @@ class HudImpl implements Hud {
 
   setArmed(specId: string, armed: boolean, reason?: string, controlIds?: string[]): void {
     this.objects.get(`spec_${specId}`)?.obj.setArmed(armed, reason, controlIds);
+    if (armed && !this.armedAny) {
+      // ARMED: the controls are the focal point; the work log shrinks to a 3-line ticker (pinch for the full log)
+      this.armedAny = true;
+      this.logExpanded = false;
+      this.renderWorklog();
+    }
   }
 
   setControlValue(specId: string, controlId: string, value: ControlEvent['value']): void {
@@ -516,6 +641,7 @@ class HudImpl implements Hud {
       };
       const pos = this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.6).add(new Vector3(0, 0.1 - i * 0.11, 0));
       const m = this.mount(key, spec, { position: pos, faceHead: true }, 'buildup');
+      if (!m) return;
       m.obj.emitter.on('control', (e: ControlEvent) => {
         if (e.phase !== 'start') return;
         this.events.emit('approve', { pairingId: a.pairingId, approve: e.controlId === 'approve' });
@@ -565,6 +691,7 @@ class HudImpl implements Hud {
     const pos = d.at ? new Vector3(...d.at) : this.objects.get('deck')?.obj.position.clone() ?? this.camera.getWorldPosition(new Vector3()).addScaledVector(this.headForward(new Vector3()), 0.45).add(new Vector3(-0.15, -0.2, 0));
     const existed = this.objects.has('deck');
     const m = this.mount('deck', spec, { position: pos, faceHead: true }, existed ? 'diff' : 'buildup');
+    if (!m) return;
     if (!existed) {
       m.obj.emitter.on('control', (e: ControlEvent) => {
         const key = e.controlId.replace('deck_', '') as HudEvents['deck']['key'];

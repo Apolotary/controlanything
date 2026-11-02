@@ -302,6 +302,63 @@ async function hudDemo(): Promise<void> {
   });
 }
 
+/** The live layout the integrator saw: the ceiling light armed, with every HUD element at once (declutter scene). */
+async function lightScene(): Promise<void> {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  if (current) {
+    wrap.remove(current);
+    current.dispose();
+    current = null;
+  }
+  if (hud) hud.dispose();
+  hud = createHud({ scene, camera, renderer });
+  hud.setDevCursors?.([mouse.cursor]);
+  mouse.setTargets([hud.root]);
+  hud.on('hack', (e) => log(`hack ${e.itemId} on ${e.targetId}`));
+  hud.on('control', (e) => log(`${e.controlId} ${e.phase.padEnd(5)} ${JSON.stringify(e.value)}`));
+  // stand back so the whole layout (overhead light, menus at arm's length, work log) fits the frame
+  camera.position.set(0.1, 1.5, 1.1);
+  controls.target.set(0.1, 1.45, -0.7);
+  controls.update();
+  const circle: [number, number][] = Array.from({ length: 24 }, (_, i) => [Math.cos((i / 24) * Math.PI * 2) * 0.22, Math.sin((i / 24) * Math.PI * 2) * 0.22]);
+  const light = { id: 'light', label: 'CEILING LIGHT', status: 'verified' as const, channel: 'ir' as const, position: [0.5, 1.95, -1.7] as [number, number, number], facing: [0, -0.35, 0.94] as [number, number, number], confirmed: true, sizeM: [0.45, 0.06, 0.45] as [number, number, number], contour: circle };
+  hud.upsertTarget(light);
+  hud.setLocked('light');
+  hud.setModelChips([{ id: 'sam-3.1', state: 'done' }, { id: 'muse-spark-1.3', state: 'done' }, { id: 'muse-voice-transcribe-1.0', state: 'idle' }]);
+  const steps: [string, string, 'ok' | 'running' | 'pending', string][] = [['s1', 'SCAN', 'ok', 'camera says ceiling light'], ['s2', 'IDENTIFY', 'ok', 'Koizumi · learned 7 codes'], ['s3', 'LINK', 'ok', 'seen ✓ · 8 of 8'], ['s4', 'HACK', 'ok', '5 hacks · 2 controls'], ['s5', 'UPLOAD', 'ok', 'armed by pinch'], ['s6', 'ROOM', 'running', 'blackout · breathe to tempo']];
+  for (const [id, title, status, evidence] of steps) hud.logStep({ stepId: id, title, status, evidence, kind: status === 'ok' ? 'proof' : undefined });
+  hud.showHackMenu('light', { title: 'CEILING LIGHT', subtitle: 'HACKS · your devices', items: [
+    { id: 'h_bright', label: 'SET BRIGHTNESS', detail: 'brightness 0-100', kind: 'control', channel: 'ir', status: 'verified', verdict: 'seen' },
+    { id: 'h_warmth', label: 'SHIFT WARMTH', detail: 'step warmer or cooler', kind: 'control', channel: 'ir', status: 'verified', verdict: 'seen' },
+    { id: 'h_full', label: 'TURN FULL ON', detail: 'full bright white light', kind: 'action', channel: 'ir', status: 'verified', verdict: 'seen' },
+    { id: 'h_off', label: 'TURN OFF', detail: 'switch the light off', kind: 'action', channel: 'ir', status: 'verified', verdict: 'seen' },
+    { id: 'h_night', label: 'SET NIGHT GLOW', detail: 'low glow night mode', kind: 'action', channel: 'ir', status: 'verified', verdict: 'seen' },
+  ] });
+  hud.showHackMenu('room:spec_room', { title: 'ROOM', subtitle: 'each room hack asks for a tap when it runs', items: [
+    { id: 'blackout', label: 'BLACKOUT', detail: 'all lights off', kind: 'daemon' },
+    { id: 'breathe', label: 'BREATHE TO TEMPO', detail: 'light follows the synth', kind: 'daemon' },
+  ] });
+  hud.showEvidence({ targetId: 'light', sent: '0x20DF10EF', expect: 'ON', seen: 'brighter', verdict: 'ok' });
+  hud.setUpload({ hackId: 'h_full', label: 'UPLOAD · 5 HACKS', stepsDone: 4, verdict: 'ok' });
+  const liveUrl = '/quest/@fs/Volumes/macbook_ext/Developer/muse_hack2/research/gen3d-live/ceiling-light.hackset.json';
+  let spec: Gen3dSpec | null = liveCache.get('live · ceiling light (muse-spark-1.3)') ?? null;
+  if (!spec) {
+    try {
+      const doc = (await (await fetch(liveUrl)).json()) as { gen3d?: unknown };
+      const v = validateSpec(repairSpec(doc.gen3d ?? doc).spec);
+      spec = v.spec ?? null;
+    } catch {
+      spec = null;
+    }
+  }
+  spec ??= EXAMPLES['ceiling-dimmer']!;
+  hud.renderSpec(spec, { targetId: 'light' });
+  await sleep(2200);
+  hud.setArmed(spec.specId, true, 'seen ✓ · 5 of 7 actions');
+}
+if (params.get('scene') === 'light') setTimeout(() => void lightScene(), 800);
+(window as unknown as { lightScene: unknown }).lightScene = lightScene;
+
 // --- XR (emulated when there is no navigator.xr) ------------------------------------------------------------
 document.getElementById('xr')!.addEventListener('click', () => void enterXR());
 async function enterXR(): Promise<void> {
