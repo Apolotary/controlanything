@@ -7,6 +7,7 @@
  * Synthetic (desktop emulator) and replay sources implement the same interface.
  */
 import type { CameraSourceKind, Intrinsics, Pose } from '../io/v1';
+import { questIntrinsics, scaleIntrinsics } from './projection';
 
 export interface GrabbedFrame {
   /** the caller owns it and must close() it */
@@ -19,6 +20,12 @@ export interface GrabbedFrame {
   headPose?: Pose;
   /** a source that knows its exact intrinsics supplies them */
   intrinsics?: Intrinsics;
+}
+
+/** Optional downscale at grab time (the live detector wants ~416 px, not the full 1280×960 frame). */
+export interface GrabOptions {
+  /** resize so the width is at most this (aspect kept); intrinsics are scaled to match */
+  maxWidth?: number;
 }
 
 export interface CameraInfo {
@@ -57,7 +64,7 @@ export interface CameraSource {
   start(): Promise<CameraInfo>;
   stop(): void;
   /** the most recent frame, or null when none is available yet */
-  grab(): Promise<GrabbedFrame | null>;
+  grab(opts?: GrabOptions): Promise<GrabbedFrame | null>;
 }
 
 export class CameraError extends Error {
@@ -210,17 +217,21 @@ export class LiveCamera implements CameraSource {
     this.stats.polledFps = this.polled.length;
   }
 
-  async grab(): Promise<GrabbedFrame | null> {
+  async grab(opts: GrabOptions = {}): Promise<GrabbedFrame | null> {
     const v = this.element;
     if (!this.running || v.readyState < 2 || !v.videoWidth) return null;
-    const bitmap = await createImageBitmap(v);
+    const resize = resizeFor(v.videoWidth, v.videoHeight, opts.maxWidth);
+    const bitmap = resize ? await createImageBitmap(v, resize) : await createImageBitmap(v);
     const m = this.meta;
     const now = performance.now();
     // Chromium exposes captureTime for camera tracks; otherwise presentation time minus the measured latency.
     // Metadata older than 200 ms means rVFC stalled (e.g. throttled in XR): estimate from now instead.
     const fresh = m && now - this.stats.lastFrameAt < 200;
     const tCapture = fresh ? (m.captureTime ?? m.presentationTime - this.latencyMs) : now - this.latencyMs;
-    return { bitmap, width: bitmap.width, height: bitmap.height, tCapture };
+    const g: GrabbedFrame = { bitmap, width: bitmap.width, height: bitmap.height, tCapture };
+    // a downscaled grab keeps the full-size camera model, scaled (not re-derived from the small size)
+    if (resize) g.intrinsics = scaleIntrinsics(questIntrinsics(v.videoWidth, v.videoHeight), bitmap.width, bitmap.height);
+    return g;
   }
 
   private async listVideoInputs(): Promise<{ label: string; deviceId: string }[]> {
@@ -278,4 +289,10 @@ export class LiveCamera implements CameraSource {
       poll();
     }
   }
+}
+
+/** createImageBitmap resize options for a max width, or null when no resize is needed. */
+export function resizeFor(width: number, height: number, maxWidth?: number): ImageBitmapOptions | null {
+  if (!maxWidth || width <= maxWidth || !width || !height) return null;
+  return { resizeWidth: Math.round(maxWidth), resizeHeight: Math.max(1, Math.round((height * maxWidth) / width)), resizeQuality: 'low' };
 }

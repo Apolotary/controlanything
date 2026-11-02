@@ -25,8 +25,8 @@ import {
   WebGLRenderer,
 } from 'three';
 import type { Intrinsics, Pose } from '../io/v1';
-import type { CameraInfo, CameraSource, CameraStats, GrabbedFrame } from './camera';
-import { cameraPoseFromHead, type PoseLike, projectionFromIntrinsics, QUEST3_1280x960, type WorldRay } from './projection';
+import { type CameraInfo, type CameraSource, type CameraStats, type GrabbedFrame, type GrabOptions, resizeFor } from './camera';
+import { cameraPoseFromHead, type PoseLike, projectionFromIntrinsics, QUEST3_1280x960, scaleIntrinsics, type WorldRay } from './projection';
 
 /** IWER's default headset position; the backdrop is framed for it. */
 export const DEFAULT_HEAD = { position: new Vector3(0, 1.6, 0), quaternion: new Quaternion() };
@@ -220,7 +220,7 @@ export class SyntheticCamera implements CameraSource {
     this.renderer = undefined;
   }
 
-  async grab(): Promise<GrabbedFrame | null> {
+  async grab(opts: GrabOptions = {}): Promise<GrabbedFrame | null> {
     if (!this.renderer) return null;
     const head = this.headPose() ?? DEFAULT_HEAD;
     cameraPoseFromHead(head, this.eye, this.camPose);
@@ -230,13 +230,14 @@ export class SyntheticCamera implements CameraSource {
     this.room.refresh();
     this.renderer.render(this.room.scene, this.cam);
     const tCapture = performance.now();
-    const bitmap = await createImageBitmap(this.element);
+    const resize = resizeFor(this.k.width, this.k.height, opts.maxWidth);
+    const bitmap = resize ? await createImageBitmap(this.element, resize) : await createImageBitmap(this.element);
     this.stats.frames++;
     this.stats.lastFrameAt = tCapture;
     const headPose: Pose = {
       position: { x: head.position.x, y: head.position.y, z: head.position.z },
       orientation: { x: head.quaternion.x, y: head.quaternion.y, z: head.quaternion.z, w: head.quaternion.w },
     };
-    return { bitmap, width: this.k.width, height: this.k.height, tCapture, headPose, intrinsics: { ...this.k } };
+    return { bitmap, width: bitmap.width, height: bitmap.height, tCapture, headPose, intrinsics: resize ? scaleIntrinsics(this.k, bitmap.width, bitmap.height) : { ...this.k } };
   }
 }

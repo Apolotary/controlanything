@@ -15,6 +15,10 @@
  *   hud=debug          force the shell's debug HUD
  *   dominant=left      left-handed: the deck opens over the RIGHT palm
  *   ws=<url>           WebSocket override
+ *   yolo=0|1           live boxes from the on-device YOLOX-nano detector while scanning (default 1)
+ *   yoloep=webgpu|wasm force the detector's execution provider (default: WebGPU when available)
+ *   track=<category>   initial live-box category: everything|electronics|instruments|lights|remotes
+ *   debug=1            in-headset readout of the detector's fps / latency / frame time
  */
 import type { Channel, ControlEvent, HackItem, HudStatus, ModelChip } from '@ce/gen3d';
 import type { AgentStepPayload, PayloadOf, TargetState } from '@ce/protocol';
@@ -53,6 +57,10 @@ import { cameraPoseFromHead, questIntrinsics, worldToPixel } from '../scan/proje
 import { Scanner } from '../scan/scanner';
 import { SyntheticCamera, VirtualRoom } from '../scan/synthetic';
 import { type Target, TargetStore, toHudTarget } from '../scan/targets';
+import { CATEGORIES, type Category, isCategory } from '../scan/yolo/classes';
+import { categoryFromControl, CHIPS_SPEC_ID, chipsSpec } from '../scan/yolo/chips';
+import { LiveDetector } from '../scan/yolo/live';
+import { LiveReadout } from '../scan/yolo/readout';
 import { Mic } from '../voice/mic';
 import { PushToTalk } from '../voice/ptt';
 import { ControlSender } from './controls';
@@ -137,6 +145,10 @@ export class QuestApp {
   ptt!: PushToTalk;
   controls!: ControlSender;
   emulator?: Emulator;
+  /** live boxes (on-device YOLOX-nano): responsiveness only; SAM 3.1 stays the source of truth */
+  live?: LiveDetector;
+  private readout?: LiveReadout;
+  private chipsShown = false;
   room?: VirtualRoom;
   fixture?: SamFixture;
   player?: TakePlayer;
@@ -184,6 +196,10 @@ export class QuestApp {
     }
     await this.setupCamera();
     await this.setupHud();
+    if (this.live && this.params.get('debug') === '1') {
+      this.readout = new LiveReadout();
+      this.scene.add(this.readout);
+    }
     this.setupIo();
     this.setupUi();
     this.renderer.setAnimationLoop((t, f) => this.frame(t, f));
@@ -312,6 +328,78 @@ export class QuestApp {
       this.hud.setDeck({ scanning: on });
       this.recorder.input('scan', { on });
     });
+    this.setupLive();
+  }
+
+  private setupLive(): void {
+    if (this.params.get('yolo') === '0') {
+      this.page.log('live boxes off (?yolo=0): SAM 3.1 scan only');
+      return;
+    }
+    const ep = this.params.get('yoloep');
+    const live = new LiveDetector({
+      camera: () => this.camera,
+      poses: this.poses,
+      hud: () => this.hud,
+      samTargets: () => this.targets.list(),
+      depth: () => this.depthProviders(),
+      handJoints: () => handJointPositions(this.lastFrame),
+      log: (m, l) => this.page.log(m, l),
+      modelUrl: `${import.meta.env.BASE_URL}models/yolox_nano.onnx`,
+      ep: ep === 'wasm' || ep === 'webgpu' ? ep : 'auto',
+    });
+    const track = this.params.get('track');
+    if (isCategory(track)) live.category = track;
+    this.live = live;
+    this.scanner.on('state', ({ on }) => {
+      if (on) {
+        live.start();
+        this.showChips();
+      } else {
+        live.stop();
+        this.hideChips();
+      }
+    });
+    // a SAM outline takes over from the live box on the same object at once
+    this.scanner.on('result', () => live.onSamTargets());
+    // load the model while the user is still on the 2D page, so the first scan has boxes at once
+    setTimeout(() => void live.load().catch(() => undefined), 1500);
+  }
+
+  private showChips(): void {
+    if (!this.live) return;
+    const note = this.live.category === 'lights' ? 'lights: SAM scan only' : undefined;
+    this.hud.renderSpec(chipsSpec(this.live.category, note), {});
+    this.chipsShown = true;
+  }
+
+  private hideChips(): void {
+    if (!this.chipsShown) return;
+    this.hud.removeSpec(CHIPS_SPEC_ID);
+    this.chipsShown = false;
+  }
+
+  setLiveCategory(c: Category): void {
+    if (!this.live) return;
+    this.live.setCategory(c);
+    if (this.chipsShown) this.showChips();
+    this.hud.toast(`Tracking ${CATEGORIES.find((x) => x.id === c)?.label.toLowerCase() ?? c}`);
+    this.recorder.input('track', { category: c });
+  }
+
+  /** `y` key: live boxes on/off for this scan session. */
+  toggleLive(): void {
+    const l = this.live;
+    if (!l) return;
+    if (l.running) {
+      l.stop();
+      this.hideChips();
+      this.page.log('live boxes paused');
+    } else if (this.scanner.active) {
+      l.start();
+      this.showChips();
+      this.page.log('live boxes on');
+    } else this.page.log('live boxes start with the next scan (s)');
   }
 
   private depthProviders(): DepthProvider[] {
@@ -760,6 +848,12 @@ export class QuestApp {
   }
 
   private onControl(e: ControlEvent): void {
+    // the live-box category chips are a local spec: they filter boxes and never reach the server
+    if (e.specId === CHIPS_SPEC_ID) {
+      const c = categoryFromControl(e.controlId);
+      if (c && e.phase === 'start') this.setLiveCategory(c);
+      return;
+    }
     // only controls of specs the server sent drive devices; HUD-internal objects (hack menus, deck) never do
     const ui = this.uiSpecOfGen3d.get(e.specId);
     if (!ui) return;
@@ -925,6 +1019,10 @@ export class QuestApp {
     } else this.hud.update(f);
     this.interact(f, time);
     this.scanner.tick(time);
+    if (this.live) {
+      this.live.tick(time, f.dt * 1000);
+      if (this.readout) this.readout.update(cam as PerspectiveCamera, time, this.liveReadoutLines());
+    }
     this.renderer.render(this.scene, this.desktopCam);
     if (time - this.lastStatusAt > 300) {
       this.lastStatusAt = time;
@@ -1156,6 +1254,13 @@ export class QuestApp {
           // keyboard stand-in for pinch-and-hold (irreversible hacks: printing)
           if (this.pendingArm) this.answerConfirm(this.pendingArm, true, true);
           break;
+        case 'y':
+          this.toggleLive();
+          break;
+        case 'c':
+          // cycle the live-box category chips
+          if (this.live) this.setLiveCategory(CATEGORIES[(CATEGORIES.findIndex((x) => x.id === this.live!.category) + 1) % CATEGORIES.length]!.id);
+          break;
       }
     });
     window.addEventListener('keyup', (e) => {
@@ -1170,6 +1275,17 @@ export class QuestApp {
 
   private lastPreviewFrame = '';
 
+  private liveReadoutLines(): string[] {
+    const l = this.live;
+    if (!l) return [];
+    const s = l.stats;
+    if (s.state !== 'ready') return [`LIVE ${s.state.toUpperCase()}`, (s.lastError ?? '').slice(0, 60)];
+    return [
+      `LIVE yolox-nano · ${s.ep}${s.ep === 'wasm' ? `x${s.threads}` : ''} · ${l.running ? `${s.fps} fps` : 'idle'} · ${s.shown} box · ${l.category}`,
+      `infer ${Math.round(s.inferMs)} ms · lat ${Math.round(s.latencyMs)} ms · every ${s.intervalMs} ms · frame ${s.frameMs.toFixed(1)}/${s.baselineMs.toFixed(1)} ms`,
+    ];
+  }
+
   private updateStatus(): void {
     const s = this.scanner.stats;
     const head = this.lastFrame?.head.position;
@@ -1179,6 +1295,7 @@ export class QuestApp {
       xr: this.session ? `in session${this.emulator ? ' (IWER)' : ''}` : this.emulator ? 'emulator ready' : 'not in XR',
       camera: `${this.camera.kind} · ${this.cameraState}${this.cameraNote ? ` · ${this.cameraNote}` : ''}`,
       'camera fps': this.camera.kind === 'passthrough' ? `${this.camera.stats.fps}${this.camera.stats.captureTime ? ' · captureTime ✓' : ''}` : undefined,
+      'live boxes': this.live ? this.live.summary() : 'off (?yolo=0)',
       scan: `${this.scanner.active ? 'ON' : 'off'} · sent ${s.sent} · results ${s.results} · in flight ${s.inFlight}${s.lastModelId ? ` · ${s.lastModelId} ${s.lastLatencyMs} ms` : ''}${this.fixture ? ' · FIXTURE' : ''}`,
       targets: this.targets.list().map((t) => `${t.label}${t.id === this.lockedId ? '🔒' : ''}`).join(', ') || 'none',
       head: head ? `${head.x.toFixed(2)} ${head.y.toFixed(2)} ${head.z.toFixed(2)}` : '',
