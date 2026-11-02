@@ -6,7 +6,9 @@ export interface SdfTextOptions {
   text: string;
   size?: number;
   color?: string;
-  weight?: 500 | 600;
+  weight?: 400 | 500 | 600;
+  /** Semibold Inter with its native tabular digit glyphs selected in the local font. */
+  tabular?: boolean;
   anchorX?: 'left' | 'center' | 'right';
   anchorY?: 'top' | 'middle' | 'bottom';
   maxWidth?: number;
@@ -17,6 +19,12 @@ export interface SdfTextOptions {
 export type SdfText = Text;
 const headless = typeof document === 'undefined';
 const textMaterial = new MeshBasicMaterial({ color: THEME.color.text, transparent: true, depthWrite: false, toneMapped: false });
+
+// Exact bundled Latin glyph coverage. An unsupported name must never ask Troika's CDN fallback.
+const unsupportedGlyphs = /[^\t\n\r\u0020-\u007e\u00a0-\u00ac\u00ae-\u00ff\u0131\u0152-\u0153\u02bb-\u02bc\u02c6\u02da\u02dc\u0300-\u0301\u0303-\u0304\u0308-\u0309\u0323\u2002\u2009\u200b\u2013-\u2014\u2018-\u201a\u201c-\u201e\u2022\u2026\u2032-\u2033\u2039-\u203a\u2044\u20ac\u2122\u2191\u2193\u2212\ufeff]/gu;
+function localText(text: string): string {
+  return text.normalize('NFC').trimStart().replace(unsupportedGlyphs, '?').slice(0, THEME.limits.textChars);
+}
 
 /** Tests retain a real renderable Mesh and two triangles per glyph, without launching font workers. */
 class HeadlessText extends Mesh<BufferGeometry, MeshBasicMaterial> {
@@ -35,17 +43,17 @@ class HeadlessText extends Mesh<BufferGeometry, MeshBasicMaterial> {
 /** Browser imports are synchronous: every browser label is real SDF text from its first frame. */
 export function makeText(o: SdfTextOptions): SdfText {
   const t = headless ? new HeadlessText() as unknown as Text : new Text();
-  t.text = o.text.slice(0, THEME.limits.textChars);
+  t.text = localText(o.text);
   t.fontSize = o.size ?? THEME.font.body;
   t.color = o.color ?? THEME.color.text;
-  t.font = o.weight === 600 ? THEME.font.semibold : THEME.font.regular;
+  t.font = o.tabular ? THEME.font.tabular : o.weight === 600 ? THEME.font.semibold : o.weight === 500 ? THEME.font.medium : THEME.font.regular;
   t.anchorX = o.anchorX ?? 'left';
   t.anchorY = o.anchorY ?? 'middle';
   t.textAlign = o.align ?? (o.anchorX === 'center' ? 'center' : 'left');
   t.maxWidth = o.singleLine ? Infinity : o.maxWidth ?? Infinity;
   if (o.singleLine) { t.whiteSpace = 'nowrap'; t.userData.lineWidth = o.maxWidth; }
   t.lineHeight = THEME.font.lineHeight;
-  t.letterSpacing = 0;
+  t.letterSpacing = o.tabular ? 0 : THEME.font.letterSpacing;
   t.depthOffset = -1;
   if (!headless) t.material = textMaterial;
   t.renderOrder = THEME.render.text;
@@ -55,7 +63,7 @@ export function makeText(o: SdfTextOptions): SdfText {
   return t;
 }
 export function setText(t: SdfText, text: string, color?: string): void {
-  const next = text.slice(0, THEME.limits.textChars);
+  const next = localText(text);
   if (t.text === next && (!color || t.color === color)) return;
   t.text = next;
   if (color) t.color = color;

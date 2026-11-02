@@ -24,6 +24,7 @@ export class HandFeedback {
   private readonly hoverMaterial = new LineBasicMaterial({ color: 0xe1eee8, depthTest: false, depthWrite: false, toneMapped: false });
   private readonly hovers: Record<Handedness, LineLoop<BufferGeometry, LineBasicMaterial>>;
   private readonly facing = new Vector3();
+  private showHover = true;
   private plate?: Mesh<PlaneGeometry, MeshBasicMaterial>;
   private canvas?: HTMLCanvasElement;
   private context?: CanvasRenderingContext2D;
@@ -74,9 +75,16 @@ export class HandFeedback {
     this.root.add(this.plate);
   }
 
+  setAppearance(appearance: { accent: string; showHover: boolean }): void {
+    this.idle.color.set(appearance.accent);
+    this.pressed.color.set(appearance.accent);
+    this.showHover = appearance.showHover;
+    if (!this.showHover) for (const hover of Object.values(this.hovers)) hover.visible = false;
+  }
+
   setHover(hand: Handedness, target?: HoverTarget): void {
     const hover = this.hovers[hand];
-    hover.visible = Boolean(target);
+    hover.visible = this.showHover && Boolean(target);
     if (!target) return;
     this.facing.copy(target.facing).normalize();
     if (this.facing.lengthSq() === 0) this.facing.copy(FORWARD);
