@@ -131,6 +131,14 @@ describe('payloads', () => {
 });
 
 describe('protocol v1: discovery loop', () => {
+  it('round-trips correlated executor results as a server-only message', () => {
+    const payload = { specId: 'spec', widgetId: 'power', ts: 123, ok: false, detail: 'Executor did not respond' };
+    const parsed = parseMessage(encodeMessage('control.result', payload, { from: 'server', to: 'quest' }));
+    expect(parsed).toMatchObject({ ok: true, message: { type: 'control.result', to: 'quest', payload } });
+    expect(SERVER_ONLY_TYPES).toContain('control.result');
+    expect(DROPPABLE_TYPES).not.toContain('control.result');
+    expect(PayloadSchemas['control.result'].safeParse({ ...payload, ts: undefined }).success).toBe(false);
+  });
   it('has every SPEC §3.1 message type and marks the server-only ones', () => {
     for (const t of [
       'scan.frame', 'scan.result', 'target.select', 'target.cancel', 'target.retry', 'target.status', 'link.request', 'link.result', 'driver.spec', 'driver.status',

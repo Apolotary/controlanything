@@ -89,6 +89,16 @@ export interface ExecRequest {
   dryRun?: boolean;
 }
 
+export type ExecResult = (ok: boolean, detail?: string) => void;
+interface FireOptions {
+  port?: string;
+  cardId?: string;
+  driverId?: string;
+  actionId?: string;
+  lightCap?: boolean;
+  onResult?: ExecResult;
+}
+
 export class Dispatcher {
   private readonly acks = new Map<string, Pending<ExecAckPayload>>();
   private readonly senses = new Map<string, SenseCollector>();
@@ -96,7 +106,7 @@ export class Dispatcher {
   private readonly senseTimeouts = new Map<string, number>();
   private readonly limiters = new Map<string, RateLimiter>();
   private readonly slotWaits = new Set<() => void>();
-  private readonly trailing = new Map<string, { op: ExecOp; opts: { port?: string; cardId?: string; driverId?: string; actionId?: string; lightCap?: boolean }; timer: ReturnType<typeof setTimeout> }>();
+  private readonly trailing = new Map<string, { op: ExecOp; opts: FireOptions; timer: ReturnType<typeof setTimeout> }>();
   private readonly log: (line: string) => void;
   /** every exec sent, for the black-box monitor */
   readonly sent: { execId: string; executorDeviceId: string; op: ExecOp; at: number; ack?: ExecAckPayload }[] = [];
@@ -213,14 +223,18 @@ export class Dispatcher {
    * executor and action and sent when the limiter allows (a trailing edge, so the last knob position always
    * lands). Returns false when authorization is refused or the executor is offline.
    */
-  fire(executorDeviceId: string, op: ExecOp, opts: { port?: string; cardId?: string; driverId?: string; actionId?: string; lightCap?: boolean } = {}): boolean {
-    if (this.o.canExec && !this.o.canExec({ ...opts, executorDeviceId, op })) return false;
+  fire(executorDeviceId: string, op: ExecOp, opts: FireOptions = {}): boolean {
+    if (this.o.canExec && !this.o.canExec({ ...opts, executorDeviceId, op })) {
+      opts.onResult?.(false, 'Control is no longer authorized');
+      return false;
+    }
     const limiter = this.limiter(executorDeviceId, op, Boolean(opts.lightCap));
     // Stop must reach the executor before the caller disarms and clears queued work.
     if (!(op.kind === 'midi' && op.msg === 'panic') && !limiter.take()) {
       const key = `${executorDeviceId}:${opts.cardId ?? ''}:${op.kind}:${opts.actionId ?? (op.kind === 'midi' ? `${op.msg}:${op.channel}:${op.number ?? ''}` : op.kind)}`;
       const existing = this.trailing.get(key);
       if (existing) {
+        existing.opts.onResult?.(false, 'Superseded by a newer command');
         existing.op = op;
         existing.opts = opts;
         return true;
@@ -233,15 +247,35 @@ export class Dispatcher {
       return true;
     }
     const execId = newId('x');
-    this.sent.push({ execId, executorDeviceId, op, at: Date.now() });
+    const record = { execId, executorDeviceId, op, at: Date.now() } as (typeof this.sent)[number];
+    this.sent.push(record);
     if (this.sent.length > 500) this.sent.shift();
+    if (opts.onResult) {
+      const done = (ok: boolean, detail?: string) => {
+        if (!this.acks.delete(execId)) return;
+        clearTimeout(timer);
+        opts.onResult!(ok, detail);
+      };
+      const timer = setTimeout(() => done(false, 'Executor did not respond'), this.o.ackTimeoutMs ?? 3000);
+      this.acks.set(execId, { resolve: (ack) => done(ack.ok, ack.detail ?? ack.error), reject: (error) => done(false, error.message) });
+    }
     if (executorDeviceId === MAC_LOCAL_ID) {
-      void this.o.macLocal?.exec(op).then((r) => {
+      if (!this.o.macLocal) { this.acks.get(execId)?.reject(new ExecError('Mac executor is offline', 'offline')); return false; }
+      void this.o.macLocal.exec(op).then((r) => {
+        record.ack = { execId, ok: r.ok, sentAt: Date.now(), detail: r.detail, error: r.error };
+        this.acks.get(execId)?.resolve(record.ack);
         if (!r.ok) this.log(`[exec] mac-local ${op.kind === 'local' ? op.op : op.kind}: ${r.detail}`);
-      });
+      }).catch((error: unknown) => this.acks.get(execId)?.reject(error instanceof Error ? error : new Error(String(error))));
       return true;
     }
-    return this.o.hub.sendToDevice(executorDeviceId, 'exec.command', { execId, executorDeviceId, op, port: opts.port, cardId: opts.cardId, driverId: opts.driverId, actionId: opts.actionId }) > 0;
+    try {
+      const sent = this.o.hub.sendToDevice(executorDeviceId, 'exec.command', { execId, executorDeviceId, op, port: opts.port, cardId: opts.cardId, driverId: opts.driverId, actionId: opts.actionId }) > 0;
+      if (!sent) this.acks.get(execId)?.reject(new ExecError('Executor is offline', 'offline'));
+      return sent;
+    } catch (error) {
+      this.acks.get(execId)?.reject(error instanceof Error ? error : new Error(String(error)));
+      return false;
+    }
   }
 
   /** Feed an exec.ack from the hub. */
@@ -336,6 +370,7 @@ export class Dispatcher {
       if (cardId !== undefined && queued.opts.cardId !== cardId) continue;
       clearTimeout(queued.timer);
       this.trailing.delete(key);
+      queued.opts.onResult?.(false, 'Command cancelled');
       n++;
     }
     return n;

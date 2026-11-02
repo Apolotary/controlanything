@@ -1,0 +1,73 @@
+{
+  "title": "control.result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "control.result"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "specId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "widgetId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "ts": {
+          "type": "number"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "specId",
+        "widgetId",
+        "ts",
+        "ok"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}
