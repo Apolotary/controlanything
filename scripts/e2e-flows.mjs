@@ -556,8 +556,12 @@ async function run() {
     await screenshot('04a-untagged');
     synthId = await findTarget('synth|keyboard|OP-1');
     await pinch({ targetId: synthId });
-    await waitQuest((id) => !!window.__ce.modes.tags.get(id)?.cardId, synthId);
-    synthCardId = await quest.evaluate((id) => window.__ce.modes.tags.get(id).cardId, synthId);
+    // Re-tagging restores the same saved library record (it may appear under the record's own target id).
+    await waitQuest(() => [...window.__ce.modes.tags.values()].some((t) => /synth|keyboard|op-1/i.test(`${t.name ?? ''} ${t.label}`) && t.cardId));
+    ({ synthId, synthCardId } = await quest.evaluate(() => {
+      const tag = [...window.__ce.modes.tags.values()].find((t) => /synth|keyboard|op-1/i.test(`${t.name ?? ''} ${t.label}`) && t.cardId);
+      return { synthId: tag.targetId, synthCardId: tag.cardId };
+    }));
     await waitQuest((id) => window.__ce.modes.byCard(id)?.category === 'synthesizer', synthCardId);
     assert.equal(await quest.evaluate(() => window.__ce.modes.tags.size), 2);
     assert.equal(await quest.evaluate(() => window.__ce.modes.mode), 'annotate');
@@ -1180,7 +1184,8 @@ async function run() {
     // The emulator has no persistent anchors. A fresh fixture detection must place the saved card.
     await waitQuest((id) => {
       const app = window.__ce, target = app.targets.byCard(id);
-      return app.roomAnchors.states.get(id) === 'located' && target?.method === 'reassociated'
+      // method is the latest placement (later scans overwrite 'reassociated'); identity + a fresh frame are asserted below.
+      return app.roomAnchors.states.get(id) === 'located' && target?.cardId === id && !!target.frameId
         && app.visibleTargets.has(target.id);
     }, cardId);
     const chip = await quest.evaluate((id) => {
