@@ -23,7 +23,7 @@ import { compileHackset, previewHack, rearmSpec, withStatus } from './compile';
 import { issue, type Issue, type Stage } from './issues';
 import { applyEdit, EditSet, syncHackset } from './editPatch';
 import { editMessages, forgeMessages } from './forgePrompt';
-import { ForgeDevice, ForgeDriver, verificationOf, type VerifyState } from './forgeTypes';
+import { ForgeDevice, ForgeDriver, verificationOf, VerifyState } from './forgeTypes';
 import { proposeGestureMap } from '../devices/gestures';
 import { draftIssues, isStepper } from './forgeVerify';
 import { draftAccent, draftToHack, ForgeDraft, type Hack, HackDraft, HACKSET_VERSION, type HackSet } from './hackset';

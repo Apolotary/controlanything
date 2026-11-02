@@ -105,6 +105,8 @@ describe('verified gesture control routing', () => {
       c.spec.gestureMap = proposeGestureMap(driver, c.target.verification);
       expect(c.send('gesture:right_height', 100).fired).toBe(1);
       expect(c.fire).toHaveBeenCalledWith('mac', expect.objectContaining({ kind: 'ir', bytes: [1, 2] }), expect.objectContaining({ dropIfLimited: true }));
+      // The step position advances when the bridge acknowledges the command (master's acknowledged-state rule).
+      ((c.fire.mock.calls[0] as unknown[])[2] as { onResult?: (ok: boolean, detail?: string) => void }).onResult?.(true);
       expect(c.target.stepIndex.level).toBe(3);
       expect(vi.getTimerCount()).toBe(0);
       vi.advanceTimersByTime(5000);
