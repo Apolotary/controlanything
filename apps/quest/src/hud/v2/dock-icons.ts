@@ -1,13 +1,17 @@
-import { BufferGeometry, Color, Float32BufferAttribute, Group, Mesh, MeshBasicMaterial, ShaderMaterial, Vector3 } from 'three';
-import type { HomeState } from '../contract';
+import { BufferGeometry, Color, Float32BufferAttribute, Group, Mesh, MeshBasicMaterial, ShaderMaterial, Vector3, Vector4 } from 'three';
+import type { HomeState, HudFrame } from '../contract';
 import { makeText, setText, type SdfText } from './text';
 import { THEME } from './theme';
-import { DockHold } from './hand-dock';
+import { DockHold, type FingerMenuFinger } from './hand-dock';
 
 type Icon = 'tag' | 'sliders' | 'grid' | 'bulb' | 'plug' | 'stop' | 'exit';
 type Point = readonly [number, number];
-interface ButtonSpec { name: string; label: string; icon: Icon }
+function textOpacity(label: SdfText, opacity: number): void {
+  (label as SdfText & { fillOpacity: number }).fillOpacity = opacity;
+}
+interface ButtonSpec { name: string; label: string; icon: Icon; finger?: FingerMenuFinger }
 const DIAMETER = 0.032, GAP = 0.012, GLYPH_SCALE = 0.009;
+const FINGER_DIAMETER = 0.024;
 const MAX_PARTS = 7; // Six buttons including Exit, and the count badge.
 const EXIT_BUTTON: ButtonSpec = { name: 'exit-ar', label: 'Exit AR (hold)', icon: 'exit' };
 const MODE_BUTTONS: ButtonSpec[] = [
@@ -76,7 +80,7 @@ function iconVertices(icon: Icon): number[] {
 const ICONS = Object.fromEntries(['tag', 'sliders', 'grid', 'bulb', 'plug', 'stop', 'exit'].map((icon) => [icon, iconVertices(icon as Icon)])) as Record<Icon, number[]>;
 const vertexShader = `
   attribute float part;
-  uniform vec3 transforms[${MAX_PARTS}];
+  uniform vec4 transforms[${MAX_PARTS}];
   uniform vec3 states[${MAX_PARTS}];
   uniform float holdProgress, holdPart;
   varying vec2 local;
@@ -84,20 +88,21 @@ const vertexShader = `
   varying float hold;
   void main() {
     int i = int(part);
-    vec3 transform = transforms[i];
+    vec4 transform = transforms[i];
     local = uv * 2.0 - 1.0;
     state = states[i];
     hold = abs(part - holdPart) < 0.5 ? holdProgress : 0.0;
-    vec3 p = vec3(position.xy * transform.z + transform.xy, position.z);
+    vec3 p = position * transform.w + transform.xyz;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   }`;
 
-/** Two batched meshes draw every disc and vector icon; text appears only on demand. */
+/** Two batched meshes draw the icons; finger labels stay visible beside their targets. */
 export class DockIcons extends Group {
   readonly buttons: Group[] = [];
   readonly wrist = new Group();
-  readonly height = DIAMETER;
-  private readonly transforms = Array.from({ length: MAX_PARTS }, () => new Vector3());
+  get height(): number { return this.fingerMenu ? FINGER_DIAMETER : DIAMETER; }
+  fingerMenu = false;
+  private readonly transforms = Array.from({ length: MAX_PARTS }, () => new Vector4());
   private readonly states = Array.from({ length: MAX_PARTS }, () => new Vector3());
   private readonly discGeometry = new BufferGeometry();
   private readonly glyphGeometry = new BufferGeometry();
@@ -109,6 +114,7 @@ export class DockIcons extends Group {
     float selected = step(0.5, state.x);
     float highlight = max(state.y, state.z);
     vec3 fill = mix(plate, accent, selected);
+    fill = mix(fill, accent, highlight * 0.45);
     float fillAlpha = mix(0.84, 0.18, selected);
     fillAlpha = mix(fillAlpha, 0.48, state.z);
     fillAlpha = mix(fillAlpha, 1.0, badge);
@@ -122,12 +128,20 @@ export class DockIcons extends Group {
     vec3 color = (fill * fillAlpha * (1.0 - border) + edge * border) / max(alpha, 0.00001);
     gl_FragColor = vec4(color, alpha * cover * opacity);
   `);
-  private readonly glyphMaterial = this.material('gl_FragColor = vec4(mix(white, accent, step(0.5, state.x)), opacity);');
+  private readonly glyphMaterial = this.material('gl_FragColor = vec4(mix(white, accent, max(step(0.5, state.x), state.z)), opacity);');
   private readonly discs = new Mesh(this.discGeometry, this.discMaterial);
   private readonly glyphs = new Mesh(this.glyphGeometry, this.glyphMaterial);
   private readonly hoverLabel = makeText({ text: '', size: 0.011, anchorX: 'center', singleLine: true, maxWidth: 0.15 });
   private readonly badge = makeText({ text: '', size: 0.007, color: THEME.color.plate, weight: 600, tabular: true, anchorX: 'center', singleLine: true, maxWidth: 0.011 });
   private readonly wristMaterial = new MeshBasicMaterial({ color: THEME.color.text, transparent: true, opacity: 0.6, depthWrite: false, toneMapped: false });
+  private readonly wristLabel = makeText({ text: 'Annotate', size: 0.011, anchorX: 'center', singleLine: true, maxWidth: 0.075 });
+  private readonly fingerHint = makeText({ text: 'Touch your thumb to a finger', size: 0.011, anchorX: 'center', singleLine: true, maxWidth: 0.19 });
+  private hintShown = false;
+  private hintUntil = 0;
+  private session: XRSession | undefined;
+  private readonly fingerPositions = new Map<FingerMenuFinger, Vector3>();
+  private readonly destination = new Vector3();
+  private readonly direction = new Vector3();
   private readonly wristGlyph = new Mesh(new BufferGeometry(), this.wristMaterial);
   private structure = '';
   private wristMode = '';
@@ -147,7 +161,12 @@ export class DockIcons extends Group {
     this.hoverLabel.position.set(0, 0.03, 0.003);
     this.badge.position.z = 0.003;
     this.add(this.discs, this.glyphs, this.hoverLabel, this.badge);
-    this.wrist.add(this.wristGlyph);
+    this.wristLabel.name = 'wrist-mode-label';
+    this.wristLabel.position.set(0, -0.016, 0.002);
+    this.wrist.add(this.wristGlyph, this.wristLabel);
+    this.fingerHint.name = 'finger-menu-hint';
+    this.fingerHint.visible = false;
+    this.add(this.fingerHint);
     this.wristGlyph.scale.setScalar(0.0068);
     this.discGeometry.setAttribute('position', new Float32BufferAttribute(new Float32Array(MAX_PARTS * 18), 3));
     this.discGeometry.setAttribute('uv', new Float32BufferAttribute(new Float32Array(MAX_PARTS * 12), 2));
@@ -176,21 +195,48 @@ export class DockIcons extends Group {
     });
   }
 
-  setState(home: HomeState, canStop: boolean): void {
+  setState(home: HomeState, canStop: boolean, fingerMenu = this.fingerMenu): void {
+    if (fingerMenu !== this.fingerMenu) this.fingerPositions.clear();
+    this.fingerMenu = fingerMenu;
     const stop = home.mode === 'control' && canStop;
-    const structure = `${home.mode}/${stop}`;
+    const structure = `${fingerMenu}/${home.mode}/${stop}/${fingerMenu ? home.filter : ''}`;
     this.taggedCount = home.tagged;
     if (structure !== this.structure) {
       this.structure = structure;
       this.cancelExitHold();
-      for (const button of this.buttons) this.remove(button);
+      const previous = new Map(this.buttons.map((button) => [button.userData.finger, button]));
+      for (const button of this.buttons) {
+        const label = button.children[0] as SdfText | undefined;
+        label?.dispose(); this.remove(button);
+      }
       this.buttons.length = 0;
-      const specs = [...MODE_BUTTONS, ...(home.mode === 'annotate' ? FILTER_BUTTONS : []), ...(stop ? [{ name: 'deck:panic', label: 'Stop everything', icon: 'stop' as const }] : []), EXIT_BUTTON];
+      this.exitButton = undefined;
+      const specs: ButtonSpec[] = fingerMenu ? [
+        { ...MODE_BUTTONS[home.mode === 'annotate' ? 1 : 0]!, finger: 'middle' },
+        ...(home.mode === 'annotate' ? [{
+          name: `filter:${home.filter === 'everything' ? 'lights' : home.filter === 'lights' ? 'electronics' : 'everything'}`,
+          label: home.filter === 'everything' ? 'All' : home.filter === 'lights' ? 'Lights' : 'Electronics',
+          icon: FILTER_BUTTONS.find((spec) => spec.name === `filter:${home.filter}`)!.icon, finger: 'ring' as const,
+        }] : stop ? [{ name: 'deck:panic', label: 'Stop', icon: 'stop' as const, finger: 'ring' as const }] : []),
+        { ...EXIT_BUTTON, label: 'Hold to exit', finger: 'pinky' },
+      ] : [...MODE_BUTTONS, ...(home.mode === 'annotate' ? FILTER_BUTTONS : []), ...(stop ? [{ name: 'deck:panic', label: 'Stop everything', icon: 'stop' as const }] : []), EXIT_BUTTON];
+      for (const finger of this.fingerPositions.keys()) {
+        if (!specs.some((spec) => spec.finger === finger)) this.fingerPositions.delete(finger);
+      }
       for (const [index, spec] of specs.entries()) {
         const button = new Group();
         button.name = spec.name;
         button.position.x = (index - (specs.length - 1) / 2) * (DIAMETER + GAP);
-        button.userData = { dockIcon: true, label: spec.label };
+        button.userData = { dockIcon: true, label: spec.label, finger: spec.finger };
+        if (spec.finger) {
+          const old = previous.get(spec.finger);
+          button.visible = old?.visible ?? false;
+          if (old) { button.position.copy(old.position); button.scale.copy(old.scale); button.userData.near = old.userData.near; }
+          const label = makeText({ text: spec.label, size: 0.008, anchorX: 'center', singleLine: true, maxWidth: 0.062 });
+          label.name = `finger-label:${spec.finger}`;
+          label.position.set(0, 0.022, 0.002);
+          button.add(label);
+        }
         this.buttons.push(button); this.add(button);
         if (spec.name === 'exit-ar') {
           this.exitButton = button;
@@ -201,8 +247,8 @@ export class DockIcons extends Group {
       this.rebuildGeometry(specs);
     }
     for (const button of this.buttons) {
-      button.userData.selected = button.name === `mode-${home.mode}` || button.name === `filter:${home.filter}`;
-      if (button.name === 'mode-control') button.userData.label = home.tagged > 0 ? `Control · ${home.tagged}` : 'Control';
+      button.userData.selected = !fingerMenu && (button.name === `mode-${home.mode}` || button.name === `filter:${home.filter}`);
+      if (!fingerMenu && button.name === 'mode-control') button.userData.label = home.tagged > 0 ? `Control · ${home.tagged}` : 'Control';
     }
     setText(this.badge, home.tagged > 99 ? '99+' : String(home.tagged));
     this.updateFeedback(this.opacity);
@@ -211,14 +257,14 @@ export class DockIcons extends Group {
   private rebuildGeometry(specs: ButtonSpec[]): void {
     const discs: number[] = [], discParts: number[] = [], uv: number[] = [], glyphs: number[] = [], glyphParts: number[] = [];
     for (let index = 0; index <= specs.length; index++) {
-      const radius = index === specs.length ? 0.0055 : DIAMETER / 2;
+      const radius = index === specs.length ? 0.0055 : (this.fingerMenu ? FINGER_DIAMETER : DIAMETER) / 2;
       for (const [x, y] of [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]]) {
         discs.push(x! * radius, y! * radius, index === specs.length ? 0.002 : 0);
         uv.push((x! + 1) / 2, (y! + 1) / 2); discParts.push(index);
       }
       const spec = specs[index];
       if (spec) for (let i = 0; i < ICONS[spec.icon].length; i += 3) {
-        glyphs.push(ICONS[spec.icon][i]! * GLYPH_SCALE, ICONS[spec.icon][i + 1]! * GLYPH_SCALE, 0.001);
+        glyphs.push(ICONS[spec.icon][i]! * GLYPH_SCALE * (this.fingerMenu ? 0.75 : 1), ICONS[spec.icon][i + 1]! * GLYPH_SCALE * (this.fingerMenu ? 0.75 : 1), 0.001);
         glyphParts.push(index);
       }
     }
@@ -240,23 +286,75 @@ export class DockIcons extends Group {
     for (let index = 0; index < this.buttons.length; index++) {
       const button = this.buttons[index]!;
       const { selected, hovered, pressed } = button.userData;
-      this.transforms[index]!.set(button.position.x, button.position.y, button.scale.x);
-      this.states[index]!.set(Number(!!selected), Number(!!hovered), Number(!!pressed));
+      this.transforms[index]!.set(button.position.x, button.position.y, button.position.z, button.visible ? button.scale.x : 0);
+      const label = button.children[0] as SdfText | undefined;
+      if (label) textOpacity(label, this.opacity);
+      this.states[index]!.set(Number(!!selected), Number(!!hovered || !!button.userData.near), Number(!!pressed));
       if (hovered) hover = button;
     }
     const control = this.buttons[1]!;
     const badgeX = control.position.x + 0.012, badgeY = control.position.y + 0.012;
-    this.transforms[this.buttons.length]!.set(badgeX, badgeY, this.taggedCount > 0 ? control.scale.x : 0);
+    this.transforms[this.buttons.length]!.set(badgeX, badgeY, 0, !this.fingerMenu && this.taggedCount > 0 ? control.scale.x : 0);
     this.states[this.buttons.length]!.set(2, 0, 0);
     this.badge.position.set(badgeX, badgeY, 0.003);
-    this.badge.visible = this.taggedCount > 0 && this.opacity > 0;
-    this.hoverLabel.visible = !!hover && this.opacity > 0;
+    this.badge.visible = !this.fingerMenu && this.taggedCount > 0 && this.opacity > 0;
+    this.hoverLabel.visible = !this.fingerMenu && !!hover && this.opacity > 0;
     if (hover) {
       setText(this.hoverLabel, hover.userData.label as string);
       this.hoverLabel.position.x = hover.position.x;
     }
-    (this.hoverLabel as SdfText & { fillOpacity: number }).fillOpacity = this.opacity;
-    (this.badge as SdfText & { fillOpacity: number }).fillOpacity = this.opacity;
+    textOpacity(this.hoverLabel, this.opacity);
+    textOpacity(this.badge, this.opacity);
+  }
+
+  /** Targets remain on the live fingertips, even during a poke or a thumb contact. */
+  updateFingers(frame: HudFrame, side: 'left' | 'right', open: boolean): void {
+    const session = frame.frame?.session;
+    if (session !== this.session) {
+      this.session = session; this.hintShown = false; this.hintUntil = 0;
+    }
+    this.fingerHint.visible = false;
+    if (!this.fingerMenu) return;
+    const hand = frame.hands[side], wrist = hand?.joints.wrist;
+    if (open && !this.hintShown) { this.hintShown = true; this.hintUntil = frame.time + 3000; }
+    this.updateWorldMatrix(true, false);
+    for (const button of this.buttons) {
+      const finger = button.userData.finger as FingerMenuFinger;
+      const tip = hand?.joints[`${finger}-finger-tip`];
+      button.visible = !!tip && !!wrist;
+      if (!tip || !wrist) { this.fingerPositions.delete(finger); continue; }
+      this.direction.subVectors(tip.position, wrist.position).normalize();
+      this.destination.copy(tip.position).addScaledVector(this.direction, 0.02);
+      let position = this.fingerPositions.get(finger);
+      if (!position) { position = this.destination.clone(); this.fingerPositions.set(finger, position); }
+      else position.lerp(this.destination, 1 - Math.exp(-Math.max(0, frame.dt) / 0.08));
+      button.position.copy(position);
+      this.worldToLocal(button.position);
+    }
+    // Lift colliding labels into separate rows; the icons still follow their own fingertips.
+    for (let index = 0; index < this.buttons.length; index++) {
+      const button = this.buttons[index]!, label = button.children[0] as SdfText;
+      if (!button.visible) continue;
+      let y = button.position.y + 0.022;
+      const width = String(button.userData.label).length * 0.005 + 0.004;
+      for (let pass = 0; pass < index; pass++) for (let before = 0; before < index; before++) {
+        const other = this.buttons[before]!;
+        if (!other.visible) continue;
+        const otherLabel = other.children[0] as SdfText;
+        const otherY = other.position.y + otherLabel.position.y * other.scale.y;
+        const otherWidth = String(other.userData.label).length * 0.005 + 0.004;
+        if (Math.abs(button.position.x - other.position.x) < (width + otherWidth) / 2 && Math.abs(y - otherY) < 0.014) y = otherY + 0.014;
+      }
+      label.position.y = (y - button.position.y) / button.scale.y;
+    }
+    if (wrist) {
+      this.fingerHint.position.copy(wrist.position);
+      this.worldToLocal(this.fingerHint.position);
+      this.fingerHint.position.y -= 0.055;
+      this.fingerHint.position.z += 0.004;
+    }
+    this.fingerHint.visible = open && !!wrist && frame.time < this.hintUntil;
+    textOpacity(this.fingerHint, this.opacity);
   }
 
   beginExitHold(time: number): void { this.exitHold.begin(time); }
@@ -278,10 +376,12 @@ export class DockIcons extends Group {
   setWrist(mode: HomeState['mode'], opacity: number): void {
     if (mode !== this.wristMode) {
       this.wristMode = mode;
+      setText(this.wristLabel, mode === 'annotate' ? 'Annotate' : 'Control');
       this.wristGlyph.geometry.setAttribute('position', new Float32BufferAttribute(ICONS[mode === 'annotate' ? 'tag' : 'sliders'], 3));
     }
     this.wrist.visible = opacity > 0;
     this.wristMaterial.opacity = Math.min(0.6, Math.max(0, opacity));
+    textOpacity(this.wristLabel, this.wristMaterial.opacity);
   }
 
   override dispose(): void {

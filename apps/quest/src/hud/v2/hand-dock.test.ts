@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { Group, Quaternion, Vector3 } from 'three';
 import type { HandState, HudFrame } from '../contract';
-import { DockHold, HandDockAnchor } from './hand-dock';
+import { DockHold, FingerTouchDetector, HandDockAnchor, type FingerMenuFinger } from './hand-dock';
 
 function hand(x = -0.2, palmUp = true, palmUpMs = 300): HandState {
   return {
     joints: {
       wrist: { position: new Vector3(x, 1.1, -0.4), quaternion: new Quaternion(), radius: 0.01 },
       'middle-finger-phalanx-proximal': { position: new Vector3(x, 1.1, -0.48), quaternion: new Quaternion(), radius: 0.008 },
+      'thumb-tip': { position: new Vector3(x - 0.08, 1.1, -0.46), quaternion: new Quaternion(), radius: 0.008 },
+      'middle-finger-tip': { position: new Vector3(x, 1.1, -0.56), quaternion: new Quaternion(), radius: 0.008 },
+      'ring-finger-tip': { position: new Vector3(x + 0.04, 1.1, -0.54), quaternion: new Quaternion(), radius: 0.008 },
+      'pinky-finger-tip': { position: new Vector3(x + 0.08, 1.1, -0.51), quaternion: new Quaternion(), radius: 0.008 },
     },
     palmUp, palmUpMs, controller: false,
     pinching: false, justPinched: false, justReleased: false, pinchPoint: new Vector3(),
@@ -53,7 +57,9 @@ describe('HandDockAnchor', () => {
     update(480);
     expect(anchor.opacity).toBe(1);
     expect(anchor.justOpened).toBe(false);
-    expect(wrist.visible).toBe(false);
+    expect(wrist.visible).toBe(true);
+    expect(anchor.wristOpacity).toBe(0.6);
+    expect(wrist.quaternion.angleTo(dock.quaternion)).toBeLessThan(1e-8);
   });
 
   it('waits 300 ms after the palm turns away, then fades out over 180 ms', () => {
@@ -75,18 +81,19 @@ describe('HandDockAnchor', () => {
     expect(anchor.wristOpacity).toBe(0.6);
   });
 
-  it('holds an open dock near the other fingertip, including the row ends, then releases it', () => {
+  it('holds an open menu near the other hand at a menu fingertip, then releases it', () => {
     const { anchor, dock, frame, update } = setup();
     frame.hands.left = hand();
     update(0); update(180);
     const other = hand(0.2);
-    const tip = { position: dock.localToWorld(new Vector3(0.17, 0, 0.04)), quaternion: new Quaternion(), radius: 0.008 };
+    const menuTip = frame.hands.left.joints['pinky-finger-tip']!.position;
+    const tip = { position: menuTip.clone().add(new Vector3(0.04, 0, 0.04)), quaternion: new Quaternion(), radius: 0.008 };
     other.joints['index-finger-tip'] = tip;
     frame.hands.right = other;
     frame.hands.left.palmUp = false;
     update(200); update(1000);
     expect(anchor.open).toBe(true);
-    tip.position.copy(dock.localToWorld(new Vector3(0.25, 0, 0)));
+    tip.position.copy(menuTip).add(new Vector3(0.25, 0, 0));
     update(1100); update(1400); update(1580);
     expect(anchor.open).toBe(false);
     expect(anchor.opacity).toBe(0);
@@ -105,7 +112,7 @@ describe('HandDockAnchor', () => {
     expect(anchor.open).toBe(false);
   });
 
-  it('smooths hand motion with an 80 ms time constant while keeping the row upright', () => {
+  it('smooths hand motion with an 80 ms time constant while keeping the anchor upright', () => {
     const { dock, frame, update } = setup();
     const menuHand = hand(); frame.hands.left = menuHand;
     update(0);
@@ -238,6 +245,148 @@ describe('HandDockAnchor', () => {
     delete frame.pointer;
     update(200);
     expect(anchor.tracked).toBe(true);
+  });
+});
+
+describe('FingerTouchDetector', () => {
+  function setupTouch() {
+    const detector = new FingerTouchDetector(), menuHand = hand();
+    const thumb = menuHand.joints['thumb-tip']!.position;
+    const rest = thumb.clone();
+    const touch = (finger: FingerMenuFinger, distance = 0.01) => {
+      thumb.copy(menuHand.joints[`${finger}-finger-tip`]!.position).add(new Vector3(0, distance, 0));
+    };
+    const release = () => { thumb.copy(rest); };
+    const update = (time: number, open = true) => detector.update(menuHand, open, time);
+    return { detector, menuHand, thumb, touch, release, update };
+  }
+
+  it.each(['middle', 'ring', 'pinky'] as const)('debounces a %s touch and emits exactly one activation per contact', (finger) => {
+    const { touch, update } = setupTouch();
+    expect(update(0).ready).toBe(true);
+    touch(finger);
+    expect(update(10).touching).toBe(false);
+    expect(update(39).justTouched).toBe(false);
+    const pressed = update(40);
+    expect(pressed.finger).toBe(finger);
+    expect(pressed.touching).toBe(true);
+    expect(pressed.justTouched).toBe(true);
+    expect(update(100).justTouched).toBe(false);
+    expect(update(1000).touching).toBe(true);
+  });
+
+  it('uses a wider release distance so contact jitter cannot repeat an action', () => {
+    const { touch, update } = setupTouch();
+    update(0); touch('middle'); update(10);
+    expect(update(40).justTouched).toBe(true);
+    touch('middle', 0.019);
+    expect(update(50).touching).toBe(true);
+    touch('middle', 0.014);
+    expect(update(60).justTouched).toBe(false);
+    touch('middle', 0.023);
+    expect(update(70).touching).toBe(false);
+    touch('middle', 0.014); update(80);
+    expect(update(110).justTouched).toBe(true);
+  });
+
+  it('requires a continuous close touch and highlights only within four centimetres', () => {
+    const { touch, update } = setupTouch();
+    update(0);
+    touch('ring', 0.041);
+    expect(update(10).near.ring).toBe(false);
+    touch('ring', 0.039);
+    expect(update(20).near.ring).toBe(true);
+    touch('ring', 0.016);
+    expect(update(60).touching).toBe(false);
+    touch('ring', 0.014); update(70);
+    touch('ring', 0.016); update(90);
+    touch('ring', 0.014); update(100);
+    expect(update(129).justTouched).toBe(false);
+    expect(update(130).justTouched).toBe(true);
+  });
+
+  it('ignores thumb and index contact entirely', () => {
+    const { menuHand, thumb, update } = setupTouch();
+    menuHand.joints['index-finger-tip'] = { position: thumb.clone(), quaternion: new Quaternion(), radius: 0.008 };
+    menuHand.pinching = menuHand.justPinched = true;
+    update(0);
+    expect(update(100).touching).toBe(false);
+    expect(update(1000).finger).toBeNull();
+  });
+
+  it('requires a 300 ms palm dwell and a fresh release after a touch during opening', () => {
+    const { menuHand, touch, release, update } = setupTouch();
+    menuHand.palmUpMs = 299;
+    expect(update(0).ready).toBe(false);
+    touch('middle'); update(20);
+    menuHand.palmUpMs = 300;
+    expect(update(300).touching).toBe(false);
+    expect(update(400).justTouched).toBe(false);
+    release(); update(420);
+    touch('middle'); update(440);
+    expect(update(470).justTouched).toBe(true);
+  });
+
+  it('cancels an active pinky hold during fast wrist movement and requires release', () => {
+    const { menuHand, touch, release, update } = setupTouch();
+    update(0); touch('pinky'); update(10);
+    expect(update(40).justTouched).toBe(true);
+    menuHand.joints.wrist!.position.x += 0.02;
+    const moved = update(56);
+    expect(moved.touching).toBe(false);
+    expect(moved.finger).toBeNull();
+    expect(moved.ready).toBe(false);
+    expect(update(90).justTouched).toBe(false);
+    expect(update(900).touching).toBe(false);
+    release(); update(920);
+    touch('pinky'); update(940);
+    expect(update(970).justTouched).toBe(true);
+  });
+
+  it('allows wrist movement below the speed limit', () => {
+    const { menuHand, touch, update } = setupTouch();
+    update(0); touch('middle'); update(10);
+    menuHand.joints.wrist!.position.x += 0.01;
+    expect(update(40).justTouched).toBe(true);
+  });
+
+  it.each(['closed', 'palm down', 'tracking lost', 'clock reset'] as const)('cancels after %s without activating a still-held touch on return', (reason) => {
+    const { detector, menuHand, touch, release, update } = setupTouch();
+    update(100); touch('middle'); update(110);
+    expect(update(140).justTouched).toBe(true);
+    if (reason === 'closed') update(160, false);
+    else if (reason === 'palm down') { menuHand.palmUp = false; update(160); menuHand.palmUp = true; }
+    else if (reason === 'tracking lost') detector.update(undefined, true, 160);
+    else update(90);
+    expect(update(200).touching).toBe(false);
+    expect(update(400).justTouched).toBe(false);
+    release(); update(420);
+    touch('middle'); update(440);
+    expect(update(470).justTouched).toBe(true);
+  });
+
+  it('allows a tracked finger when another is missing and disarms the missing finger until release', () => {
+    const { menuHand, touch, release, update } = setupTouch();
+    const ring = menuHand.joints['ring-finger-tip']!;
+    delete menuHand.joints['ring-finger-tip'];
+    update(0); touch('middle'); update(10);
+    expect(update(40).justTouched).toBe(true);
+    release(); update(60);
+    menuHand.joints['ring-finger-tip'] = ring;
+    touch('ring'); update(80);
+    expect(update(200).justTouched).toBe(false);
+    release(); update(220);
+    touch('ring'); update(240);
+    expect(update(270).justTouched).toBe(true);
+    delete menuHand.joints['ring-finger-tip'];
+    expect(update(280).touching).toBe(false);
+  });
+
+  it('never accepts controller poses as finger input', () => {
+    const { menuHand, touch, update } = setupTouch();
+    menuHand.controller = true;
+    update(0); touch('middle'); update(10);
+    expect(update(100).touching).toBe(false);
   });
 });
 

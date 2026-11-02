@@ -34,8 +34,14 @@ async function setup() {
   const source = { handedness: 'right', hand: jointSpaces, targetRaySpace: {}, profiles: ['oculus-hand'] } as unknown as XRInputSource;
   const leftWrist = new Vector3(-0.18, 1.15, -0.4);
   const palmUp = new Quaternion().setFromUnitVectors(new Vector3(0, -1, 0), camera.position.clone().sub(leftWrist).normalize());
-  const leftJoint = {} as XRJointSpace;
-  const leftSource = { handedness: 'left', hand: new Map([['wrist', leftJoint]]), targetRaySpace: {}, profiles: ['oculus-hand'] } as unknown as XRInputSource;
+  const leftJoints = new Map<XRHandJoint, Vector3>([
+    ['wrist', leftWrist], ['thumb-tip', new Vector3(-0.08, 1.16, -0.4)],
+    ['index-finger-tip', new Vector3(-0.14, 1.28, -0.4)], ['middle-finger-tip', new Vector3(-0.18, 1.29, -0.4)],
+    ['ring-finger-tip', new Vector3(-0.215, 1.28, -0.4)], ['pinky-finger-tip', new Vector3(-0.25, 1.25, -0.4)],
+  ]);
+  const leftSpaces = new Map([...leftJoints.keys()].map((name) => [name, {} as XRJointSpace]));
+  const leftPositions = new Map([...leftSpaces].map(([name, space]) => [space, leftJoints.get(name)!]));
+  const leftSource = { handedness: 'left', hand: leftSpaces, targetRaySpace: {}, profiles: ['oculus-hand'] } as unknown as XRInputSource;
   const session = Object.assign(new EventTarget(), { inputSources: [leftSource, source] }) as unknown as XRSession;
   const refSpace = {} as XRReferenceSpace;
   let jointsVisible = true;
@@ -44,7 +50,7 @@ async function setup() {
     session,
     getViewerPose: () => pose(camera.position, camera.quaternion),
     getPose: (space: XRSpace) => space === source.targetRaySpace ? pose(rayOrigin, rayRotation) : null,
-    getJointPose: (space: XRJointSpace) => space === leftJoint ? pose(leftWrist, palmUp)
+    getJointPose: (space: XRJointSpace) => leftPositions.has(space) ? pose(leftPositions.get(space)!, palmUp)
       : jointsVisible ? pose(space === jointSpaces.get('index-finger-tip') ? index : thumb) : null,
   } as unknown as XRFrame;
   const recorder = { input: vi.fn(), pose: vi.fn() };
@@ -82,8 +88,7 @@ async function setup() {
   let time = 0;
   const step = (elapsed = 16) => app.frameInner(time += elapsed, xrFrame);
   step(200); step(320); step(200); // Palm dwell and opening fade expose the real left-hand dock.
-  let chosen: 'annotate' | 'control' = 'control';
-  const button = () => app.hud.root.getObjectByName(`mode-${chosen}`)!;
+  const button = () => app.hud.root.getObjectByName(`mode-${app.modes.mode === 'annotate' ? 'control' : 'annotate'}`)!;
   const point = button().getWorldPosition(new Vector3());
   rayRotation.setFromUnitVectors(new Vector3(0, 0, -1), point.clone().sub(rayOrigin).normalize());
   step(300); // Let the filtered ray reach the newly aimed icon before pinching.
@@ -98,8 +103,7 @@ async function setup() {
   return {
     app, scanner, states, step, button, index, thumb, lock, recorder, send,
     choose: (mode: 'annotate' | 'control') => {
-      chosen = mode;
-      const point = button().getWorldPosition(new Vector3());
+      const point = app.hud.root.getObjectByName(`mode-${mode}`)!.getWorldPosition(new Vector3());
       rayRotation.setFromUnitVectors(new Vector3(0, 0, -1), point.sub(rayOrigin).normalize());
       step(300);
     },

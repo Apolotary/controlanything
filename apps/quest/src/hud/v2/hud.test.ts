@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DoubleSide, Mesh, PerspectiveCamera, Scene, Vector3, Quaternion, type ShaderMaterial, Object3D, type WebGLRenderer } from 'three';
 import { EXAMPLES, type Gen3dSpec } from '@ce/gen3d';
-import type { HandState, HudFrame, HudTarget } from '../contract';
+import type { HandState, HomeState, HudFrame, HudTarget } from '../contract';
 import { HandFeedback } from '../../app/hand-feedback';
 import { createHud, THEME } from './index';
 import { BoxField } from './boxes';
@@ -34,6 +34,40 @@ function setup(mode: 'annotate' | 'control' = 'control') {
     hud.update(frame({ pinchPoint: point, justReleased: true }));
   }
   return { hud, scene, camera, frame, pinch };
+}
+function createMenuHand(): HandState {
+  const positions = {
+    wrist: [-0.2, 1.1, -0.4],
+    'thumb-tip': [-0.1, 1.11, -0.4],
+    'index-finger-tip': [-0.16, 1.23, -0.4],
+    'middle-finger-tip': [-0.2, 1.24, -0.4],
+    'ring-finger-tip': [-0.235, 1.23, -0.4],
+    'pinky-finger-tip': [-0.27, 1.2, -0.4],
+  } as const;
+  return {
+    palmUp: true, palmUpMs: 300, pinching: false, justPinched: false, justReleased: false,
+    pinchPoint: new Vector3(10, 10, 10),
+    ray: { origin: new Vector3(10, 10, 10), dir: new Vector3(0, 0, -1) },
+    joints: Object.fromEntries(Object.entries(positions).map(([name, position]) => [name, {
+      position: new Vector3(...position), quaternion: new Quaternion(), radius: 0.008,
+    }])),
+  };
+}
+function setupFingerMenu(mode: HomeState['mode'] = 'annotate') {
+  const context = setup(mode), hand = createMenuHand();
+  const releasedThumb = hand.joints['thumb-tip']!.position.clone();
+  const update = (elapsed = 16, other?: Partial<HandState>) => {
+    const frame = context.frame(other, elapsed);
+    delete frame.pointer;
+    frame.hands.left = hand;
+    context.hud.update(frame);
+  };
+  const touch = (finger: 'index' | 'middle' | 'ring' | 'pinky' | null, distance = 0) => {
+    hand.joints['thumb-tip']!.position.copy(finger ? hand.joints[`${finger}-finger-tip`]!.position : releasedThumb);
+    hand.joints['thumb-tip']!.position.z += distance;
+  };
+  update(); update(200);
+  return { ...context, hand, update, touch };
 }
 function budget(root: Object3D) {
   let calls = 0, triangles = 0, text = 0;
@@ -423,8 +457,7 @@ describe('HUD button interaction feedback', () => {
 
   it('lets the opposite hand ray-pinch and poke the attached dock while its fingertip keeps it open', () => {
     const { hud, camera, frame } = setup('annotate');
-    const menuHand: HandState = { ...frame({}).hands.right!, palmUp: true, palmUpMs: 300,
-      joints: { wrist: { position: new Vector3(-0.2, 1.1, -0.4), quaternion: new Quaternion(), radius: 0.008 } } };
+    const menuHand = createMenuHand();
     const update = (other?: Partial<HandState>, elapsed = 16) => {
       const f = frame(other, elapsed); delete f.pointer; f.hands.left = menuHand; hud.update(f);
     };
@@ -439,7 +472,7 @@ describe('HUD button interaction feedback', () => {
     menuHand.pinching = menuHand.justPinched = false;
     update({ ray, pinching: true, justPinched: true });
     expect(modes).toEqual(['control']);
-    expect(hud.root.getObjectByName('dock-label')).toMatchObject({ text: 'Control', visible: true });
+    expect(button.getObjectByName('finger-label:middle')).toMatchObject({ text: 'Control', visible: true });
     update({ ray, justReleased: true });
     menuHand.palmUp = false;
     const finger = (z: number) => ({ joints: { 'index-finger-tip': {
@@ -562,6 +595,194 @@ describe('HUD button interaction feedback', () => {
     poke(0.025); poke(-0.005);
     expect(consumed.length).toBeGreaterThan(0);
     expect(hud.root.getObjectByName(name)!.userData.pressed).toBe(true);
+    hud.dispose();
+  });
+});
+
+describe('one-handed finger menu', () => {
+  it('shows the thumb instruction for three seconds only on the first palm opening in a session', () => {
+    const { hud, frame } = setup('annotate'), hand = createMenuHand();
+    const session = {} as XRSession;
+    const update = (elapsed: number) => {
+      const next = frame(undefined, elapsed); delete next.pointer;
+      next.frame = { session } as XRFrame; next.hands.left = hand; hud.update(next);
+    };
+    hand.palmUpMs = 299; update(16);
+    const hint = hud.root.getObjectByName('finger-menu-hint')!;
+    expect(hint.visible).toBe(false);
+    hand.palmUpMs = 300; update(16);
+    expect(hint).toMatchObject({ text: 'Touch your thumb to a finger', visible: true });
+    update(2999); expect(hint.visible).toBe(true);
+    update(1); expect(hint.visible).toBe(false);
+    hand.palmUp = false; update(16); update(300); update(180);
+    hand.palmUp = true; update(16); update(180);
+    expect(hud.root.getObjectByName('hand-dock')!.userData.open).toBe(true);
+    expect(hint.visible).toBe(false);
+    hud.dispose();
+  });
+
+  it('switches mode once per thumb-middle touch across synchronous home updates', () => {
+    const { hud, update, touch } = setupFingerMenu();
+    const modes: string[] = [];
+    hud.on('mode', ({ mode }) => {
+      modes.push(mode);
+      hud.setHome?.({ mode, filter: 'everything', tagged: 0, status: '' });
+    });
+    expect(hud.root.getObjectByName('finger-label:middle')).toMatchObject({ text: 'Control', visible: true });
+    expect(hud.root.getObjectByName('wrist-mode-label')).toMatchObject({ text: 'Annotate', visible: true });
+    expect(hud.root.getObjectByName('mode-annotate')).toBeUndefined();
+    touch('middle'); update(); update(20);
+    expect(modes).toEqual([]);
+    update(10);
+    expect(modes).toEqual(['control']);
+    expect(hud.root.getObjectByName('finger-label:middle')).toMatchObject({ text: 'Annotate', visible: true });
+    expect(hud.root.getObjectByName('wrist-mode-label')).toMatchObject({ text: 'Control', visible: true });
+    update(1000);
+    touch('middle', 0.02); update(50); touch('middle'); update(100);
+    expect(modes).toEqual(['control']);
+    touch(null); update(); touch('middle'); update(); update(30);
+    expect(modes).toEqual(['control', 'annotate']);
+    hud.dispose();
+  });
+
+  it('labels the current filter and cycles All, Lights and Electronics with ring touches', () => {
+    const { hud, update, touch } = setupFingerMenu();
+    const home: HomeState = { mode: 'annotate', filter: 'everything', tagged: 0, status: '' };
+    const filters: string[] = [];
+    hud.setHome?.(home);
+    hud.on('filter', ({ filter }) => { filters.push(filter); home.filter = filter; hud.setHome?.(home); });
+    for (const [label, next] of [['All', 'lights'], ['Lights', 'electronics'], ['Electronics', 'everything']]) {
+      expect(hud.root.getObjectByName('finger-label:ring')).toMatchObject({ text: label, visible: true });
+      expect(hud.root.getObjectByName(`filter:${next}`)?.userData.finger).toBe('ring');
+      touch('ring'); update(); update(30); update(100);
+      expect(filters.at(-1)).toBe(next);
+      touch(null); update();
+    }
+    expect(filters).toEqual(['lights', 'electronics', 'everything']);
+    hud.setHome?.({ ...home, mode: 'control', canStop: false }); update();
+    expect(hud.root.getObjectByName('finger-label:ring')).toBeUndefined();
+    expect(hud.root.getObjectByName('deck:panic')).toBeUndefined();
+    hud.setHome?.({ ...home, mode: 'control', canStop: true }); update();
+    expect(hud.root.getObjectByName('deck:panic')?.userData.finger).toBe('ring');
+    expect(hud.root.getObjectByName('finger-label:ring')).toMatchObject({ text: 'Stop', visible: true });
+    hud.dispose();
+  });
+
+  it('cancels an early pinky release and exits once after a fresh 600 ms hold', () => {
+    const { hud, update, touch } = setupFingerMenu();
+    let exits = 0;
+    hud.on('exit', () => exits++);
+    const exit = () => hud.root.getObjectByName('exit-ar')!;
+    expect(exit().getObjectByName('finger-label:pinky')).toMatchObject({ text: 'Hold to exit', visible: true });
+    touch('pinky'); update(); update(30); update(400);
+    expect(exit().userData.holdProgress).toBeCloseTo(2 / 3);
+    touch(null); update();
+    expect(exit().userData.holdProgress).toBe(0);
+    update(400);
+    expect(exits).toBe(0);
+    touch('pinky'); update(); update(30); update(599);
+    expect(exits).toBe(0);
+    update(1);
+    expect(exits).toBe(1);
+    update(1000);
+    expect(exits).toBe(1);
+    hud.dispose();
+  });
+
+  it('cancels the other hand exit hold when the pinky target loses tracking', () => {
+    const { hud, camera, hand, update } = setupFingerMenu();
+    const button = hud.root.getObjectByName('exit-ar')!;
+    const point = button.getWorldPosition(new Vector3());
+    const ray = { origin: camera.position.clone(), dir: point.sub(camera.position).normalize() };
+    let exits = 0;
+    hud.on('exit', () => exits++);
+    update(16, { ray, pinching: true, justPinched: true });
+    update(200, { ray, pinching: true });
+    expect(button.userData.holdProgress).toBeGreaterThan(0);
+    delete hand.joints['pinky-finger-tip'];
+    update(16, { ray, pinching: true });
+    expect(button.visible).toBe(false);
+    expect(button.userData.holdProgress).toBe(0);
+    update(600, { ray, pinching: true });
+    expect(exits).toBe(0);
+    hud.dispose();
+  });
+
+  it('consumes the menu hand index pinch without activating controls behind the fingers', () => {
+    const { hud, camera, hand, update, touch } = setupFingerMenu('control');
+    hud.upsertTarget(target); hud.setLocked(target.id); hud.renderSpec(spec(), { targetId: target.id }); update(200);
+    const point = hud.root.getObjectByName('control:action0')!.getWorldPosition(new Vector3());
+    hand.ray = { origin: camera.position.clone(), dir: point.sub(camera.position).normalize() };
+    const controls: string[] = [], modes: string[] = [], consumed: string[] = [];
+    hud.on('control', ({ controlId }) => controls.push(controlId));
+    hud.on('mode', ({ mode }) => modes.push(mode));
+    hud.on('consumed', ({ hand, widget }) => consumed.push(`${hand}:${widget}`));
+    touch('index'); hand.pinching = hand.justPinched = true; update();
+    hand.justPinched = false; update(1000);
+    expect(consumed).toContain('left:deck');
+    expect(controls).toEqual([]);
+    expect(modes).toEqual([]);
+    expect(hud.root.getObjectByName('left-reticle')!.visible).toBe(false);
+    hud.dispose();
+  });
+
+  it('grows and brightens a finger target within four centimetres and flashes on touch', () => {
+    const { hud, update, touch } = setupFingerMenu();
+    const button = hud.root.getObjectByName('mode-control')!;
+    const feedback = () => ((hud.root.getObjectByName('dock-discs') as Mesh).material as ShaderMaterial).uniforms.states!.value[0] as Vector3;
+    touch('middle', 0.041); update();
+    expect(button.scale.x).toBe(1);
+    expect(feedback().y).toBe(0);
+    touch('middle', 0.039); update();
+    expect(button.scale.x).toBe(1.15);
+    expect(feedback().y).toBe(1);
+    touch('middle'); update(); update(30);
+    expect(button.userData.pressed).toBe(true);
+    expect(feedback().z).toBe(1);
+    hud.dispose();
+  });
+
+  it('keeps finger targets moving and eases them to two centimetres beyond each tip', () => {
+    const { hud, hand, update } = setupFingerMenu();
+    const button = hud.root.getObjectByName('mode-control')!;
+    const initial = button.getWorldPosition(new Vector3());
+    const other = { joints: { 'index-finger-tip': {
+      position: button.localToWorld(new Vector3(0, 0, 0.02)), quaternion: new Quaternion(), radius: 0.008,
+    } } };
+    update(16, other);
+    for (const joint of Object.values(hand.joints)) joint?.position.add(new Vector3(0.03, 0, 0));
+    update(100, other);
+    expect(button.getWorldPosition(new Vector3()).distanceTo(initial)).toBeGreaterThan(0.005);
+    update(1000, other);
+    const tip = hand.joints['middle-finger-tip']!.position;
+    const beyond = tip.clone().sub(hand.joints.wrist!.position).normalize().multiplyScalar(0.02).add(tip);
+    expect(button.getWorldPosition(new Vector3()).distanceTo(beyond)).toBeLessThan(0.001);
+    hud.dispose();
+  });
+
+  it('gives the other hand a two centimetre poke radius and 1.3 times the icon ray bounds', () => {
+    const { hud, camera, update } = setupFingerMenu();
+    const button = hud.root.getObjectByName('mode-control')!;
+    const modes: string[] = [];
+    hud.on('mode', ({ mode }) => modes.push(mode));
+    const rayAt = (offset: number) => {
+      const point = button.localToWorld(new Vector3(0, offset, 0));
+      return { origin: camera.position.clone(), dir: point.sub(camera.position).normalize() };
+    };
+    update(16, { ray: rayAt(0.0162), pinching: true, justPinched: true });
+    expect(modes).toEqual([]);
+    update(16, { justReleased: true });
+    update(16, { ray: rayAt(0.0155), pinching: true, justPinched: true });
+    expect(modes).toEqual(['control']);
+    update(16, { justReleased: true }); update(200);
+    const poke = (offset: number, z: number) => update(16, {
+      ray: { origin: new Vector3(10, 10, 10), dir: new Vector3(0, 0, -1) },
+      joints: { 'index-finger-tip': { position: button.localToWorld(new Vector3(0, offset, z)), quaternion: new Quaternion(), radius: 0.008 } },
+    });
+    poke(0.021, 0.02); poke(0.021, -0.003);
+    expect(modes).toEqual(['control']);
+    poke(0.019, 0.02); poke(0.019, -0.003);
+    expect(modes).toEqual(['control', 'control']);
     hud.dispose();
   });
 });
