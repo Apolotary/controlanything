@@ -224,7 +224,8 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       // ---------------------------------------------------------------- VERIFY
       d.targets.setState(t, 'verifying', `${driver.actions.length} actions to prove`);
       const camera = pickSensor(d.roster, 'camera', { preferDeviceId: t.detection?.sensorDeviceId });
-      const mic = pickSensor(d.roster, 'mic');
+      // the device that drives it hears it best (the sim synth's own analyser, the Mac's USB audio for a real synth); a companion whose oracle is off would otherwise be preferred
+      const mic = pickSensor(d.roster, 'mic', { preferDeviceId: executor.deviceId });
       const vstep = d.steps.begin('verify', `verifying on the real ${card.name}`, { ...base, kind: 'proof' });
       const summary = await verifyDriver(
         { dispatcher: d.dispatcher, sam: d.sam, heard: d.heard, readVolume: d.readVolume, silentSpeech: d.silentSpeech, log, settleMs: (tt, a) => d.settleMs?.(tt, a.encode.kind === 'ir' ? 'ir' : driver.transport) ?? (driver.transport === 'ir' ? 1500 : 350) },
