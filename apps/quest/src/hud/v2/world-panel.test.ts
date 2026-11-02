@@ -120,3 +120,19 @@ describe('WorldPanel', () => {
     expect(panel.position.x).toBe(2);
   });
 });
+
+it('keeps projected card and home bar rectangles separate while preserving their world anchors after correction', async () => {
+  const { PanelSeparation } = await import('./world-panel');
+  const card = new Group(), bar = new Group();
+  const head = { position: new Vector3(0, 1.6, 0), quaternion: new Quaternion() };
+  card.position.set(0, 1.46, -0.65); bar.position.set(0, 1.3, -0.6);
+  const separation = new PanelSeparation();
+  separation.update(card, bar, head, 0.4, 0.32, 0.48, 0.16);
+  const cardBottom = (card.position.y - head.position.y - 0.16) / 0.65;
+  const barTop = (bar.position.y - head.position.y + 0.08) / 0.6;
+  expect(barTop).toBeLessThan(cardBottom - 0.03);
+  const position = bar.position.clone();
+  head.position.x += 0.04;
+  separation.update(card, bar, head, 0.4, 0.32, 0.48, 0.16);
+  expect(bar.position).toEqual(position);
+});

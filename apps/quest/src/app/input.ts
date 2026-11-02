@@ -447,12 +447,13 @@ export class InputSampler {
 }
 
 /** Every tracked joint position of both hands (for the scan guard that never tags a hand). */
-export function handJointPositions(f: ShellFrame | undefined): Vector3[] {
-  if (!f) return [];
-  const out: Vector3[] = [];
-  for (const h of [f.hands.left, f.hands.right]) {
+export function handJointPositions(f: ShellFrame | undefined, out: Vector3[] = []): Vector3[] {
+  out.length = 0;
+  if (!f) return out;
+  for (const handedness of HANDEDNESSES) {
+    const h = f.hands[handedness];
     if (!h) continue;
-    for (const j of Object.values(h.joints)) if (j) out.push(j.position);
+    for (const name in h.joints) { const joint = h.joints[name as XRHandJoint]; if (joint) out.push(joint.position); }
   }
   return out;
 }

@@ -66,3 +66,12 @@ export const api = {
     return data;
   },
 };
+
+/** Pair a foreign socket destination independently; never probe it with the page's stored token. */
+export function pairingApi(base: string) {
+  return {
+    me: (token: string) => call<{ device: { deviceId: string; name: string; kind: string }; local: boolean }>('GET', '/api/me', { token, base }),
+    pairStart: (req: PairStartRequest) => call<PairStartResponse>('POST', '/api/pair/start', { body: req, base }),
+    pairStatus: (pairingId: string, pollSecret: string) => call<PairStatusResponse>('GET', `/api/pair/status?pairingId=${encodeURIComponent(pairingId)}&pollSecret=${encodeURIComponent(pollSecret)}`, { base }),
+  };
+}

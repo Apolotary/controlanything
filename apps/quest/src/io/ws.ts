@@ -33,6 +33,7 @@ export class WsClient {
   private ws?: WebSocket;
   private backoff = 500;
   private stopped = true;
+  private playback = false;
   private timer?: ReturnType<typeof setTimeout>;
   private readonly handlers = new Map<string, Set<Handler>>();
   private readonly taps = { in: new Set<Handler>(), out: new Set<Handler>() };
@@ -43,13 +44,25 @@ export class WsClient {
   onInvalid: (error: string, raw: string) => void = () => {};
 
   constructor(
-    private readonly url: string,
+    readonly url: string,
     private readonly hello: () => PayloadOf<'hello'>,
   ) {}
 
+  static allowsSavedToken(url: string, loc: Pick<Location, 'origin'> = location): boolean {
+    try {
+      const destination = new URL(url);
+      if (!['ws:', 'wss:'].includes(destination.protocol)) return false;
+      destination.protocol = destination.protocol === 'wss:' ? 'https:' : 'http:';
+      return destination.origin === loc.origin || /^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/i.test(destination.hostname);
+    } catch { return false; }
+  }
+
   static sameOrigin(loc: Location = location): string {
     const override = new URLSearchParams(loc.search).get('ws');
-    if (override) return override;
+    if (override) {
+      try { if (['ws:', 'wss:'].includes(new URL(override).protocol)) return override; } catch { /* use this page */ }
+      console.warn('Invalid socket override; using this page’s server.');
+    }
     return `${loc.protocol === 'https:' ? 'wss' : 'ws'}://${loc.host}/ws`;
   }
 
@@ -100,7 +113,7 @@ export class WsClient {
 
   /** Send a message. Types the protocol package knows are built with makeMessage; v1 types still landing are built the same way. */
   send(type: string, payload: unknown, opts: SendOptions = {}): string | null {
-    if (!this.open) return null;
+    if (this.playback || !this.open) return null;
     if (opts.droppable && this.ws!.bufferedAmount > BACKPRESSURE_BYTES) {
       this.stats.dropped++;
       return null;
@@ -112,6 +125,11 @@ export class WsClient {
     this.stats.bytesOut += json.length;
     for (const fn of this.taps.out) fn(env);
     return env.id;
+  }
+
+  /** Recorded messages remain inspectable, but playback cannot reach devices or mix in live state. */
+  setPlayback(on: boolean): void {
+    this.playback = on;
   }
 
   /** Feed a message as if it had arrived from the server (replay playback). */
@@ -137,6 +155,7 @@ export class WsClient {
       this.setState('open');
     };
     ws.onmessage = (ev) => {
+      if (this.playback) return;
       const text = typeof ev.data === 'string' ? ev.data : '';
       if (!text) return;
       const env = readEnvelope(text);

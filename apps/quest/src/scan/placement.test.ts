@@ -71,14 +71,14 @@ describe('rejectReason (devices only)', () => {
   it('drops walls (over 60 % of the frame)', () => {
     expect(rejectReason(det({ box: [0, 0, 1200, 900] }), record())).toMatch(/60/);
   });
-  it('drops all boxes overlapping tracked joints, including held-device classes', () => {
+  it('keeps held devices when a hand covers only their middle', () => {
     const rec = record();
     // 15 joints projected into the middle of the box
     const p = new Vector3(0, 0, -1).applyQuaternion(rec.cam.quaternion).multiplyScalar(0.5).add(rec.cam.position);
     const joints = Array.from({ length: 15 }, () => p.clone());
     const withHand = record({ handJoints: joints });
-    expect(rejectReason(det({ label: 'electronic device', box: [540, 380, 200, 200] }), withHand)).toMatch(/hand/);
-    expect(rejectReason(det({ label: 'remote control', box: [540, 380, 200, 200] }), withHand)).toMatch(/hand/);
+    expect(rejectReason(det({ label: 'electronic device', box: [540, 380, 200, 200] }), withHand)).toBeNull();
+    expect(rejectReason(det({ label: 'remote control', box: [540, 380, 200, 200] }), withHand)).toBeNull();
   });
   it('keeps an ordinary device', () => {
     expect(rejectReason(det(), record())).toBeNull();

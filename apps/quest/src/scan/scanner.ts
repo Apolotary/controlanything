@@ -70,6 +70,8 @@ export class Scanner extends Emitter<ScannerEvents> {
   private ticking = false;
   private startedAt = 0;
   private generation = 0;
+  private latestCapture = -Infinity;
+  private readonly fixtureFrames = new Set<string>();
 
   constructor(private readonly d: ScannerDeps) {
     super();
@@ -79,6 +81,7 @@ export class Scanner extends Emitter<ScannerEvents> {
     if (this.active && this.purpose === purpose) return;
     this.active = true;
     this.generation++;
+    this.latestCapture = -Infinity;
     this.purpose = purpose;
     this.startedAt = Date.now();
     this.lastSentAt = 0;
@@ -138,11 +141,16 @@ export class Scanner extends Emitter<ScannerEvents> {
     const fx = this.d.fixture?.();
     if (fx) {
       // desktop fixture: recorded SAM boxes re-projected into this synthetic frame, delivered after a real-ish delay
+      // Register the exact fixture IDs and crops before exposing selectable outlines.
+      const dets = projectFixture(fx.fix, fx.room, r.record);
+      const frame = { ...r.payload, fixtureDetections: dets.map((d) => ({ detId: d.detId, label: d.label, prompt: d.prompt ?? d.label, score: d.score, box: d.box })) };
+      if (!this.d.ws.send('scan.frame', frame, { to: 'server', droppable: true })) return;
+      this.fixtureFrames.add(r.payload.frameId);
+      if (this.fixtureFrames.size > 64) this.fixtureFrames.delete(this.fixtureFrames.values().next().value!);
       this.inFlight.set(r.payload.frameId, now);
       this.stats.sent++;
-      const dets = projectFixture(fx.fix, fx.room, r.record);
       const latency = Math.min(fx.fix.wallMs, 1800);
-      this.d.local?.('out', 'scan.frame', r.payload);
+      this.d.local?.('out', 'scan.frame', frame);
       setTimeout(() => {
         const result: ScanResultPayload = {
           frameId: r.payload.frameId,
@@ -154,7 +162,7 @@ export class Scanner extends Emitter<ScannerEvents> {
           latencyMs: latency,
         };
         this.d.local?.('in', 'scan.result', result);
-        void this.onResult(result);
+        void this.onResult(result, true);
       }, latency);
     } else {
       const id = this.d.ws.send('scan.frame', r.payload, { to: 'server', droppable: true });
@@ -170,13 +178,16 @@ export class Scanner extends Emitter<ScannerEvents> {
   }
 
   /** Handle a scan.result (ours, by frameId; results for other senders' frames are ignored). */
-  async onResult(p: ScanResultPayload): Promise<void> {
+  async onResult(p: ScanResultPayload, localFixture = false): Promise<void> {
+    if (this.fixtureFrames.has(p.frameId) && !localFixture) return;
     const rec = this.d.capture().get(p.frameId);
     this.inFlight.delete(p.frameId);
     this.stats.inFlight = this.inFlight.size;
     if (!rec || !this.active || this.purpose !== 'scan') return;
     const capturedGeneration = this.frameGenerations.get(p.frameId);
     if (capturedGeneration !== undefined && capturedGeneration !== this.generation) return;
+    if (rec.tCapture < this.latestCapture) return;
+    this.latestCapture = rec.tCapture;
     const generation = this.generation;
     this.stats.results++;
     this.stats.lastLatencyMs = p.latencyMs;
@@ -202,7 +213,7 @@ export class Scanner extends Emitter<ScannerEvents> {
         continue;
       }
       const pl = await placeDetection(det, rec, this.d.depth());
-      if (!this.active || generation !== this.generation) return;
+      if (!this.active || generation !== this.generation || rec.tCapture < this.latestCapture) return;
       if (!matchesAnnotationFilter(det.label, this.category)) continue;
       if (!inAnnotationRange(pl.position, this.d.headPosition?.() ?? rec.head.position, this.rangeM)) {
         rejected.push({ det, reason: 'outside nearby range' });

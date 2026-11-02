@@ -62,7 +62,7 @@ describe('local Inter SDF text', () => {
     const cmaps = [400, 500, 600].map((weight) => tables(bundled(`inter-latin-${weight}-normal.woff`)).get('cmap')!);
     const text = makeText({ text: '\n\t•  Café — 80%\n日本語 ✓ 🛋️' });
     expect(text.text).toContain('•  Café — 80%');
-    expect(text.text).toContain('?');
+    expect(text.text).not.toContain('?');
     for (const cmap of cmaps) for (const [index, char] of Array.from(text.text).entries()) {
       expect(glyphId(cmap, char) > 0 || (index > 0 && /\s/u.test(char))).toBe(true);
     }
@@ -88,5 +88,15 @@ it('fits a long wrapped sentence inside both its width and height and restores t
   text.textRenderInfo = { blockBounds: [0, -0.02, 0.1, 0] };
   setText(text, 'Connected.');
   expect(text.scale.x).toBe(1);
+  text.dispose();
+});
+
+it('renders remote button English meanings and never substitutes missing CJK glyphs', () => {
+  const text = makeText({ text: 'Press 全灯 (full on) once' });
+  expect(text.text).toBe('Press the "full on" button once');
+  setText(text, '消灯 (off)'); expect(text.text).toBe('off');
+  setText(text, '全灯'); expect(text.text).toBe('full on');
+  setText(text, '名前のない装置'); expect(text.text).toBe('Device');
+  expect(text.text).not.toMatch(/[?\p{Script=Han}]/u);
   text.dispose();
 });

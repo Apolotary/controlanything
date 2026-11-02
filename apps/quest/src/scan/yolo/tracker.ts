@@ -103,8 +103,8 @@ export class BoxTracker {
   }
 
   /** Fade at maxMissMs; a slower sampling cadence may retain invisible identities longer. */
-  age(now: number, retainId?: number, retentionMs = this.opts.maxMissMs): Track[] {
-    const removed: Track[] = [];
+  age(now: number, retainId?: number, retentionMs = this.opts.maxMissMs, removed: Track[] = []): Track[] {
+    removed.length = 0;
     for (const t of this.tracks.values()) {
       t.opacity = t.id === retainId && t.live ? 1 : trackOpacity(t, now, this.opts.maxMissMs);
       if (t.id !== retainId && now - t.lastSeenAt >= Math.max(this.opts.maxMissMs, retentionMs)) {

@@ -23,8 +23,13 @@ const textMaterial = new MeshBasicMaterial({ color: THEME.color.text, transparen
 
 // Exact bundled Latin glyph coverage. An unsupported name must never ask Troika's CDN fallback.
 const unsupportedGlyphs = /[^\t\n\r\u0020-\u007e\u00a0-\u00ac\u00ae-\u00ff\u0131\u0152-\u0153\u02bb-\u02bc\u02c6\u02da\u02dc\u0300-\u0301\u0303-\u0304\u0308-\u0309\u0323\u2002\u2009\u200b\u2013-\u2014\u2018-\u201a\u201c-\u201e\u2022\u2026\u2032-\u2033\u2039-\u203a\u2044\u20ac\u2122\u2191\u2193\u2212\ufeff]/gu;
+const remoteButtonNames: Record<string, string> = { '全灯': 'full on', '消灯': 'off', '常夜灯': 'night light', '明るく': 'brighter', '暗く': 'dimmer', '電源': 'power', '音量': 'volume' };
 function localText(text: string): string {
-  return text.normalize('NFC').trimStart().replace(unsupportedGlyphs, '?').slice(0, THEME.limits.textChars);
+  let translated = text.normalize('NFC')
+    .replace(/Press\s+[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+\s*\(([^)]+)\)\s+once/gu, 'Press the "$1" button once')
+    .replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+\s*\(([^)]+)\)/gu, '$1');
+  translated = translated.replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu, (name) => remoteButtonNames[name] ?? 'Device');
+  return translated.trimStart().replace(unsupportedGlyphs, '').slice(0, THEME.limits.textChars);
 }
 
 /** Tests retain a real renderable Mesh and two triangles per glyph, without launching font workers. */
