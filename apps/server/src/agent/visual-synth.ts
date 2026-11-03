@@ -10,7 +10,7 @@ export const VISUAL_PRESENCE_GRACE_MS = 15_000;
 
 /** What the on-device detector calls the Mac (or its screen). */
 export function isLaptopLabel(label = ''): boolean {
-  return /\b(laptop|computer|macbook|notebook|this mac|mac|monitor|tv|television|display|screen)\b/i.test(label);
+  return /\b(laptop|computer|macbook|notebook|this mac|mac|monitor|tv|television|display|screen|visual[\s-]?synth)\b/i.test(label);
 }
 
 /** An advertised virtual output can be launched even while its renderer is closed. */

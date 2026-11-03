@@ -18,7 +18,7 @@ function available(action: ForgeAction, driver: ForgeDriver, verification?: Veri
 
 function axisCap(action: ForgeAction, driver: ForgeDriver): number {
   const light = action.expect?.sense === 'camera' && ['on', 'off', 'brighter', 'dimmer', 'warmer', 'cooler'].includes(action.expect.effect);
-  return Math.min(30, driver.maxRateHz ?? 30, driver.transport === 'ir' || action.encode?.kind === 'step' ? 2 : light ? 3 : driver.transport === 'local' ? 10 : 30);
+  return Math.min(30, driver.maxRateHz ?? 30, driver.transport === 'ir' || action.encode?.kind === 'step' ? 2 : light ? 3 : driver.transport === 'local' || driver.transport === 'ble' ? 10 : 30);
 }
 
 function continuous(action: ForgeAction): boolean {
@@ -118,6 +118,11 @@ export function proposeGestureMap(driver: ForgeDriver, verification?: Verificati
     posture('R_PINCH', [/\bplay\s*pause\b/]);
     posture('R_POINT', [/\bnext\b/]);
     posture('R_FIST', [/\bprev(?:ious)?\b/]);
+  } else if (driver.transport === 'ble') {
+    // A phone gimbal (DJI Osmo): wrist roll pans, hand height tilts, a right fist recentres.
+    axis('right_roll', [/\bpan\b/, /\byaw\b/], { bipolar: true, maxRateHz: Math.min(10, driver.maxRateHz ?? 10) });
+    axis('right_height', [/\btilt\b/, /\bpitch\b/], { maxRateHz: Math.min(10, driver.maxRateHz ?? 10) });
+    posture('R_FIST', [/\brecenter\b/, /\bcenter\b/]);
   } else {
     axis('right_height', [/\bwarp\b/, /\bcutoff\b/, /\bfilter\b/, /\btimbre\b/, /\bengine param(?:eter)? 1\b/], { curve: 's-curve' });
     // The visual synth's golden path: push/pull plays the water ripples with no extra Ask Muse round-trip.

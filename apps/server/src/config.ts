@@ -66,7 +66,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     publicHost: env.PUBLIC_HOST?.trim() || undefined,
     certDir: join(SERVER_ROOT, '.certs'),
     dataDir: env.CE_DATA_DIR?.trim() || join(SERVER_ROOT, '.data'),
-    staticDirs: { companion: join(REPO_ROOT, 'apps/companion/dist'), quest: join(REPO_ROOT, 'apps/quest/dist'), sim: join(REPO_ROOT, 'apps/sim/dist') },
+    // CE_*_DIST: serve a scratch build (a test server must not rebuild the dist the headset's server serves)
+    staticDirs: { companion: env.CE_COMPANION_DIST?.trim() || join(REPO_ROOT, 'apps/companion/dist'), quest: env.CE_QUEST_DIST?.trim() || join(REPO_ROOT, 'apps/quest/dist'), sim: env.CE_SIM_DIST?.trim() || join(REPO_ROOT, 'apps/sim/dist') },
     trustFirstDevice: env.CE_TRUST_FIRST_DEVICE === '1',
     trustLoopback: env.CE_TRUST_LOOPBACK !== '0',
     consoleApprove: env.CE_CONSOLE_APPROVE !== '0',

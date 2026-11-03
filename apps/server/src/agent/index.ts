@@ -7,7 +7,7 @@
  *   voice.audio / voice.text -> VoiceRelay · gen3d.generate / gen3d.edit -> the forge
  */
 import { dirname, join } from 'node:path';
-import { type DeviceCardPayload, type DeviceInfo, type Vec3, EXPERIMENTAL_TYPE, newId, type TargetCancelPayload, type TargetRetryPayload, type Hack, type MessageType, type PayloadOf, type TargetSelectPayload, type UiSpecPayload, type Mode, type TagAddPayload, type TagsStatePayload, type LibraryStatePayload, type RoomPlacement } from '@ce/protocol';
+import { type DeviceCardPayload, type DeviceInfo, type Driver, type Vec3, EXPERIMENTAL_TYPE, newId, type TargetCancelPayload, type TargetRetryPayload, type Hack, type MessageType, type PayloadOf, type TargetSelectPayload, type UiSpecPayload, type Mode, type TagAddPayload, type TagsStatePayload, type LibraryStatePayload, type RoomPlacement } from '@ce/protocol';
 import type { ServerContext } from '../context';
 import { loadProfiles, type Profiles } from '../devices/profiles';
 import { MidiChartStore } from '../devices/midi-charts';
@@ -97,7 +97,7 @@ export interface Agent {
 export interface AgentOptions {
   /** disable the in-process Mac executor (tests) */
   macLocal?: boolean;
-  settleMs?: (t: Target, transport: 'midi' | 'ir' | 'local') => number;
+  settleMs?: (t: Target, transport: Driver['transport']) => number;
   companionWaitMs?: number;
   phaseTimeoutMs?: Partial<Record<TimedPhase, number>>;
   learnIr?: boolean;
