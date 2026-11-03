@@ -1,10 +1,11 @@
 # Sim room (`apps/sim`)
 
-A virtual room that stands in for the hardware, so the whole ControlAnything loop runs from the repo: a
-photo-real Japanese LED **ceiling light** with its **IR remote**, and a **synth** that takes the same MIDI CC
-numbers as a Teenage Engineering OP-1 Field. The sim pairs with the server like any other client and plays four
-roles at once: IR executor, MIDI executor, camera and audio sensor. The server, the agent and the Meta model calls
-are exactly the same as with real devices; only the transport is simulated.
+A virtual room that stands in for the hardware, so the whole ControlAnything loop runs from the repo: a desk with a
+**laptop** whose screen runs the silent **visual synth** (the golden path), a photo-real Japanese LED **ceiling light**
+with its **IR remote**, and a **synth** that takes the same MIDI CC numbers as a Teenage Engineering OP-1 Field. The
+sim pairs with the server like any other client and plays several roles at once: the paired Mac (visual-synth
+renderer), IR executor, MIDI executor, camera and audio sensor. The server, the agent and the Meta model calls are
+exactly the same as with real devices; only the transport is simulated.
 
 ## Judge path: the whole demo without hardware
 
@@ -12,24 +13,24 @@ are exactly the same as with real devices; only the transport is simulated.
 npm install
 cp .env.example .env     # optional: put MODEL_API_KEY in .env for live Meta models.
                          # Without a key the server runs in FIXTURE mode and replays recorded real responses.
-CE_MAC_SILENT=1 CE_MAC_LOCAL=0 npm run demo:sim -- --fixture
-                         # builds missing apps; starts a silent fixture server
+npm run demo:sim         # builds missing apps; starts a silent server (CE_DEMO=1, CE_MAC_SILENT=1)
 ```
 
-1. Open [the muted sim room](http://localhost:8787/sim/?mute=1&autopress=1). It pairs automatically on localhost. `autopress=1` presses the requested virtual remote button during learning; remove it for manual presses.
-2. Open [the desktop Quest emulator](http://localhost:8787/quest/?emulate=1&camera=sim&mute=1&mic=0) and choose **Enter AR**. Annotate starts automatically. Point at the light and click or press `L` to tag it; Muse Spark identifies it without starting setup.
-3. Switch to **Control** (`M`), select the tagged light, then choose **Set up control**. The server links, learns/researches codes, generates a driver, verifies reactions with the camera and generates controls. Wrong codes produce an honest miss. Tap **Enable controls** (`A`) before moving the control. **Stop** (`X`) cancels setup and disarms controls.
-4. Tag the synth in Annotate and switch to Control to inspect its bridge status. The audio verification path uses the synth's own analyser; the silent browser suites check synth setup eligibility, not its complete audio pipeline.
+1. Open [the muted sim room](http://localhost:8787/sim/?mute=1) first. It pairs automatically on localhost and acts as your Mac.
+2. Open [the desktop Quest emulator](http://localhost:8787/quest/?emulate=1&camera=sim&mute=1&mic=0) and choose **Enter AR**. Click = pinch, right-drag = look.
+3. Click the laptop's box. The setup ring runs on the screen (identify → driver → verify → controls), then two arc dials appear beside the screen and the device card says **Visual synth · On**. Drag a dial and watch the sim's laptop screen change.
+4. Choose **Perform** on the card to drive the dials with tracked hands (left fist = clutch). **Stop** is on the wrist palette (lower right) or the `X` key.
 
-The sim's **SCAN 1 HZ** streams frames for annotation; scanning alone never starts setup. The **AGENT** panel shows each step and model, and **WHAT THE SIM SEES AND DOES** logs IR, MIDI and sensor activity. Model ids, latency and tokens are at `/api/muse/calls`.
+The ceiling light and the OP-1-style synth are still in the room for the IR and MIDI paths (tag them in Annotate, then **Set up**); they are off the golden path.
 
 ```sh
 npm run build
-npm run e2e:judge    # 12 phases, ports 8796/8446
-npm run e2e:flows    # 18 phases, ports 8797/8447
+PORT=8796 npm run e2e:judge     # the golden path above, 8 phases, own muted fixture server
+PORT=8798 npm run e2e:vsynth    # the explicit path (Set up → Enable controls) with a pixel check on the sim laptop
 ```
 
-Both checks require installed Chrome, use muted fixture servers and disable local YOLOX in favour of server fixture detections. Screenshots and diagnostics are saved under `research/screens/v2-flow/` and `research/screens/v2-flows/`. The broader flow check covers untagging, offline/reconnected bridges, mode switching, panel placement, Stop and emulated hand pinch.
+Both checks require installed Chrome, use muted fixture servers and disable local YOLOX in favour of server fixture
+detections. Screenshots and diagnostics go to `research/screens/judge/` and `research/screens/vsynth/`.
 
 `npm run demo:sim -- --fixture` forces fixture mode; `-- --live` forces live calls; `-- --open` opens the pages.
 

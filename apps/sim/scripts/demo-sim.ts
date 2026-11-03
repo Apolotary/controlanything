@@ -69,7 +69,9 @@ async function main(): Promise<void> {
     console.log(c.dim(`starting the server in ${mode.toUpperCase()} mode …`));
     child = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
       cwd: join(ROOT, 'apps/server'),
-      env: { ...process.env, MODEL_MODE: mode, CE_TRUST_FIRST_DEVICE: process.env.CE_TRUST_FIRST_DEVICE ?? '1' },
+      // CE_DEMO=1: the verified, silent visual synth arms itself (no Enable tap). CE_MAC_SILENT=1: the Mac stays quiet.
+      env: { ...process.env, MODEL_MODE: mode, CE_TRUST_FIRST_DEVICE: process.env.CE_TRUST_FIRST_DEVICE ?? '1',
+        CE_DEMO: process.env.CE_DEMO ?? '1', CE_MAC_SILENT: process.env.CE_MAC_SILENT ?? '1', CE_MAC_LOCAL: process.env.CE_MAC_LOCAL ?? '0' },
       stdio: ['inherit', 'pipe', 'inherit'],
     });
     child.stdout?.on('data', (d: Buffer) => process.stdout.write(c.dim(d.toString())));
@@ -94,16 +96,14 @@ async function main(): Promise<void> {
     c.b('ControlAnything · JUDGE PATH (no hardware)'),
     `  models     ${live ? c.cyan('LIVE Meta Model API') + c.dim(' (sam-3.1, muse-spark-1.3, muse-wonder-1.0, …)') : c.volt('FIXTURE') + c.dim(' (recorded real responses, labelled FIXTURE; add MODEL_API_KEY to .env for live)')}`,
     '',
-    `  1  sim room   ${c.cyan(`${BASE}/sim/`)}`,
-    c.dim('             the virtual ceiling light, its IR remote and the synth. Open it FIRST and click once (enables audio).'),
-    c.dim('             It pairs itself (localhost) and becomes the IR + MIDI executor and the camera + audio sensor.'),
-    `  2  headset    ${c.cyan(`${BASE}/quest/`)}`,
-    c.dim('             the Quest app in desktop emulation (IWER): scan, select the light, watch it link, then use the controls.'),
-    `  3  console    ${c.cyan(`${BASE}/companion/`)}  ${c.dim('(optional) agent work log, evidence, approvals')}`,
+    `  1  the Mac    ${c.cyan(`${BASE}/sim/?mute=1`)}`,
+    c.dim('             the sim room stands in for your Mac: it pairs itself (localhost) and its laptop screen runs the'),
+    c.dim('             silent visual synth. Open it FIRST. (Or open the real Mac app, /companion/, which shows the visuals.)'),
+    `  2  headset    ${c.cyan(`${BASE}/quest/?emulate=1&camera=sim&mute=1&mic=0`)}`,
+    c.dim('             the Quest app in desktop emulation (IWER). Click = pinch, right-drag = look.'),
+    c.dim('             Enter AR → click the laptop\'s box → setup ring → arc dials armed → drag a dial → Perform on the card.'),
+    c.dim('             The wrist palette (lower right) has Visual synth · Buddy · Stop · Exit. X = Stop.'),
     '',
-    c.dim('  Without the headset page: press SCAN on the sim; the server runs SAM 3.1 on the sim camera, and the agent'),
-    c.dim('  links the light by trying IR codes while the camera watches (other brands do nothing; the lamp only obeys'),
-    c.dim('  its own synthetic SIM-KZ codes, so it learns them from the virtual remote when the agent asks).'),
     c.dim(`  Replay a recorded real take: ${BASE}/sim/?take=<name>  (takes live in apps/quest/public/takes/)`),
     c.dim(`  Model calls with ids and latency: ${BASE}/api/muse/calls`),
     '',
@@ -111,7 +111,7 @@ async function main(): Promise<void> {
     '',
   ];
   console.log(lines.join('\n'));
-  if (args.has('--open')) for (const p of ['/sim/', '/quest/']) spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [`${BASE}${p}`], { stdio: 'ignore', detached: true }).unref();
+  if (args.has('--open')) for (const p of ['/sim/?mute=1', '/quest/?emulate=1&camera=sim&mute=1&mic=0']) spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [`${BASE}${p}`], { stdio: 'ignore', detached: true }).unref();
   if (!child) return;
   const stop = () => child!.kill('SIGINT');
   process.on('SIGINT', stop);

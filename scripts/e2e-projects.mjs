@@ -153,9 +153,8 @@ try {
   await quest.waitForFunction(()=>window.__ce?.welcome&&window.__ce.ws.open);
   await quest.locator('#btn-enter').click();
   await quest.waitForFunction(()=>window.__ce.renderer.xr.isPresenting);
-  await pinch('menu-toggle');
-  await pinch('menu-tools');
-  await pinch('muse-canvas');
+  // Muse Canvas is a lab feature (headset: ?lab=1 → palette "More (lab)" → Canvas); open it through its HUD event.
+  await quest.evaluate(()=>window.__ce.hud.events.emit('projectsOpen',{}));
   await quest.waitForFunction(()=>window.__ce.hud.root.getObjectByName('project-start')?.visible);
   await frames(10);
   await shot('03-quest-project-panel',quest);

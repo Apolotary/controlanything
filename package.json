@@ -2,7 +2,7 @@
   "name": "controleverything",
   "private": true,
   "version": "0.1.0",
-  "description": "ControlEverything: connect an AI agent to the physical world from a Quest 3 in passthrough.",
+  "description": "ControlAnything: control the devices and software around you from a Meta Quest 3, with Meta's SAM and Muse models.",
   "type": "module",
   "engines": {
     "node": ">=22.12"
@@ -21,10 +21,7 @@
     "smoke": "npm run smoke -w @ce/server",
     "demo:sim": "tsx apps/sim/scripts/demo-sim.ts",
     "e2e:judge": "node scripts/e2e-judge.mjs",
-    "e2e:flows": "node scripts/e2e-flows.mjs",
     "e2e:vsynth": "node scripts/e2e-vsynth.mjs",
-    "e2e:voice": "node scripts/e2e-voice.mjs",
-    "e2e:canvas": "node scripts/e2e-canvas.mjs",
     "e2e:projects": "node scripts/e2e-projects.mjs",
     "e2e:chords": "node scripts/e2e-chords.mjs",
     "e2e:synth-launch": "node scripts/e2e-synth-launch.mjs",

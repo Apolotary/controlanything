@@ -19,6 +19,6 @@ Only matching, verified actions appear. This implementation does not introduce a
 
 `session.test.ts` drives synthetic joints through the engine to protocol `control.event`; `app/selection.test.ts` also exercises the actual app selection/connection gate. Server gesture-route and gesture-queue tests verify execution, re-verification, throttling and absence of trailing commands without sockets.
 
-For the external e2e runner, first run both `npm run e2e:flows` and `npm run e2e:judge` on unused ports. Then check a verified visual synth: Perform → left fist → right height/roll → mapped control events; open left hand → no more events; disconnect or deselect → no events; both outward palms → Stop. The tests can use the synthetic fixtures if IWER cannot express all finger joints.
+`npm run e2e:judge` (on an unused `PORT`) drives the golden path through Perform and both-palms Stop. To check a verified visual synth by hand: Perform → left fist → right height/roll → mapped control events; open left hand → no more events; disconnect or deselect → no events; both outward palms → Stop. The tests can use the synthetic fixtures if IWER cannot express all finger joints.
 
 On Quest 3, check comfortable fist recognition and wrist-roll direction first. Confirm the LIVE badge and `Live · via Mac (USB MIDI)` route appear together, releasing the left hand holds the visual value while lowering the right arm, and re-engaging does not jump. Check Stop and tracking loss next, then inspect frame rate and draw calls with the meters visible. Keep the demo silent.

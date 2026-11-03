@@ -33,6 +33,6 @@ npm run build
 
 Behavior tests cover neutral post-pairing guidance, explicit synth setup, pairing and QR refresh, reload recovery, permissions, standby tabs, navigation, selected-device checks, expanded measurement details, keyboard tabs, truthful connection chips, and Stop. Hardware paths use mocks; these tests do not establish physical synth verification.
 
-Capture Pair before approval, paired Home before USB permission, Home with USB ready and an active check, Details with an expanded failed/successful check and Agent log, and Activity. Capture Home and Details at 1440 and 1024 pixels wide, also with the OS set to light appearance. Run companion phases in `scripts/e2e-flows.mjs` for hotplug, second-tab standby, pairing revisit, and reload recovery.
+Capture Pair before approval, paired Home before USB permission, Home with USB ready and an active check, Details with an expanded failed/successful check and Agent log, and Activity. Capture Home and Details at 1440 and 1024 pixels wide, also with the OS set to light appearance.
 
 The implementation fills the browser viewport; Pair uses a simple title bar before sidebar navigation appears after pairing. Home retains a quiet paired footer; device-specific setup guidance appears when requested. Progress is indeterminate because the server does not publish a measured completion percentage.
