@@ -5,6 +5,7 @@ import { startConsoleApprovals } from './console';
 import { createContext, startServers } from './context';
 import { getAgent } from './agent';
 import { resolveRemoConfig, startRemoBridge } from './devices/remo';
+import { resolveOsmoConfig, startOsmoBridge } from './devices/osmo/bridge';
 
 const envFiles = loadDotEnv();
 const config = loadConfig(process.env);
@@ -58,6 +59,19 @@ const remo = ctx.bound.http
 if (remo) lines.push(`  remo      ${remo.name} at ${remo.remoBase} as ${remo.deviceId} · IR learn: GET only · IR send: ${remo.allowSend ? 'ON (REMO_SEND=1)' : 'OFF until the user approves (REMO_SEND=1)'}`);
 else if (remoConfig.host || remoConfig.discover) lines.push('  remo      not bridged (see the [remo] line above)');
 else lines.push('  remo      off (REMO_HOST=<ip> or CE_REMO=1 bridges a Nature Remo as IR learner + blaster)');
+// a DJI Osmo Mobile gimbal over Bluetooth LE (CE_OSMO=mock|ble|web); opening the link never moves it
+const osmoConfig = resolveOsmoConfig(process.env);
+const osmo = ctx.bound.http && osmoConfig.link
+  ? await startOsmoBridge({
+      config: osmoConfig, serverBase: `http://127.0.0.1:${ctx.bound.http}`, dataDir: config.dataDir, log: ctx.log,
+      register: (name) => ctx.registry.add({ name, kind: 'gimbal', capabilities: ['ble'], canApprove: false }),
+    }).catch((e) => {
+      console.error(`[osmo] bridge not started: ${(e as Error).message}`);
+      return undefined;
+    })
+  : undefined;
+if (osmo) lines.push(`  osmo      ${osmo.name} as ${osmo.deviceId} · link ${osmoConfig.link}${osmoConfig.link === 'web' ? ' (open http://localhost:8799 in Chrome)' : osmoConfig.link === 'mock' ? ' (twin, no Bluetooth)' : ''} · moves only on a command`);
+else lines.push(`  osmo      ${osmoConfig.link ? 'not bridged (see the [osmo] line above)' : 'off (CE_OSMO=mock|ble|web bridges a DJI Osmo Mobile gimbal)'}`);
 for (const w of m.warnings) lines.push(`  warning   ${w}`);
 if (config.consoleApprove) lines.push('  pairing   new requests print here with their code; type "y" to approve, "n" to deny');
 console.log(lines.join('\n'));
@@ -71,6 +85,7 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`\n[server] ${signal}: shutting down`);
   stopConsole();
   remo?.stop();
+  osmo?.stop();
   await servers.close();
   process.exit(0);
 }
