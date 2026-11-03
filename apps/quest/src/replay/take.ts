@@ -3,7 +3,7 @@
  *
  *   <take>/session.jsonl      line 1: {kind:'meta', v:1, take, startedAt, app, device:{kind,name}, camera, space}
  *                             then:   {t, dir:'out'|'in', msg: <the exact protocol envelope>}
- *                                     {t, kind:'pose', head:{position, orientation}}        (10 Hz)
+ *                                     {t, kind:'pose', head, hands, spaceId}                 (up to 30 Hz)
  *                                     {t, kind:'input', input:{type, ...}}
  *   <take>/frames/<frameId>.jpg   JPEGs moved out of scan.frame (and sense.result.frame): payload.jpeg → payload.jpegFile
  *
@@ -23,7 +23,42 @@ export interface TakeMeta {
   camera: { width: number; height: number; fx: number; fy: number; cx: number; cy: number };
   space: 'local-floor';
   notes?: string;
+  /** Optional additions to v1: older takes remain readable. */
+  tracking?: {
+    source: 'webxr' | 'emulator';
+    sampleRateHz: 30;
+    jointConvention: 'webxr-hand-25';
+    units: 'meters';
+    axes: 'right-handed-y-up-negative-z-forward';
+  };
+  video?: RecordedVideo;
+  durationMs?: number;
+  recordingWarnings?: string[];
 }
+
+export interface RecordedVideo {
+  file: 'video.webm' | 'video.mp4';
+  mimeType: string;
+  width: number;
+  height: number;
+  /** Time of MediaRecorder.start relative to the take. This is NOT exposure synchronization. */
+  startOffsetMs: number;
+  durationMs: number;
+  clock: 'performance';
+  alignment: 'approximate';
+  cameraExtrinsics: 'uncalibrated';
+}
+export interface RecordedPose {
+  position: { x: number; y: number; z: number };
+  orientation: { x: number; y: number; z: number; w: number };
+}
+export interface RecordedJoint extends RecordedPose { radius: number }
+export interface RecordedHand {
+  source: 'hand' | 'controller' | 'untracked';
+  joints: Partial<Record<string, RecordedJoint>>;
+  pinching: boolean;
+}
+
 
 export interface MsgLine {
   t: number;
@@ -33,7 +68,10 @@ export interface MsgLine {
 export interface PoseLine {
   t: number;
   kind: 'pose';
-  head: { position: { x: number; y: number; z: number }; orientation: { x: number; y: number; z: number; w: number } };
+  head: RecordedPose | null;
+  hands?: { left: RecordedHand; right: RecordedHand };
+  /** New XR session or reference-space reset increments this; never interpolate across it. */
+  spaceId?: number;
 }
 export interface InputLine {
   t: number;
@@ -47,6 +85,8 @@ export interface Take {
   lines: TakeLine[];
   /** frames/<frameId>.jpg → JPEG bytes (or a URL to fetch lazily) */
   frames: Map<string, Uint8Array | string>;
+  /** Optional synchronized camera recording, bytes from a ZIP or URL beside session.jsonl. */
+  video?: Uint8Array | string;
 }
 
 export const isMsg = (l: TakeLine): l is MsgLine => 'dir' in l;
@@ -123,7 +163,8 @@ export async function loadTake(src: string | Uint8Array): Promise<Take> {
     const { meta, lines } = parseJsonl(new TextDecoder().decode(jsonl.data));
     const frames = new Map<string, Uint8Array | string>();
     for (const e of entries) if (e.name.startsWith(`${prefix}frames/`)) frames.set(e.name.slice(prefix.length), e.data);
-    return { meta, lines, frames };
+    const video = meta.video ? entries.find((e) => e.name === `${prefix}${meta.video!.file}`)?.data : undefined;
+    return { meta, lines, frames, ...(video ? { video } : {}) };
   }
   const res = await fetch(src);
   if (!res.ok) throw new Error(`take ${src}: HTTP ${res.status}`);
@@ -136,7 +177,7 @@ export async function loadTake(src: string | Uint8Array): Promise<Take> {
     const file = (p?.jpegFile ?? (p?.frame as Record<string, unknown> | undefined)?.jpegFile) as string | undefined;
     if (file) frames.set(file, new URL(file, base).toString());
   }
-  return { meta, lines, frames };
+  return { meta, lines, frames, ...(meta.video ? { video: new URL(meta.video.file, base).toString() } : {}) };
 }
 
 export function decodeFrame(b64: string): Uint8Array {

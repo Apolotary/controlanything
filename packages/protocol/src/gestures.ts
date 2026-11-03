@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { Id } from './primitives';
 
-export const GestureAxis = z.enum(['right_height', 'right_roll', 'right_pinch_aperture', 'two_hand_distance']);
+export const GestureAxis = z.enum(['right_height', 'right_depth', 'right_roll', 'right_pinch_aperture', 'two_hand_distance']);
 export type GestureAxis = z.infer<typeof GestureAxis>;
 
 export const GesturePosture = z.enum(['R_FIST', 'R_OPEN_PALM', 'R_POINT', 'R_PINCH']);

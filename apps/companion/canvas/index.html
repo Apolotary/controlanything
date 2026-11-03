@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="frame-src 'self'; object-src 'none'; base-uri 'self'" />
+  <title>Muse Canvas · ControlAnything</title>
+</head>
+<body>
+  <div class="studio-shell">
+    <header class="studio-header"><a id="studio-back" href="/companion/" class="back-link">← Companion</a><span class="brand">ControlAnything <span>/</span> Muse Canvas</span><span id="connection-status" class="connection">Connecting</span></header>
+    <main class="studio-main">
+      <aside class="creation-pane">
+        <div class="eyebrow">FROM IDEA TO INTERACTION</div><h1>Make a canvas.<br /><span>Give it controls.</span></h1>
+        <p id="studio-intro" class="intro">Ask Muse to build a webpage, then use the same controls here and in your headset.</p>
+        <div class="project-picker"><label for="project-select">Your projects</label><div class="picker-row"><select id="project-select"><option value="">New project</option></select><button id="project-new" class="quiet" type="button">New</button></div></div>
+        <label class="prompt-label" for="project-prompt">What would you like to make?</label>
+        <textarea id="project-prompt" maxlength="4000" rows="6" placeholder="A luminous orb that changes shape as I raise my hand. Add a shuffle button and an intensity control."></textarea>
+        <div class="prompt-examples"><button type="button" data-prompt="Make a silent luminous orb with an intensity slider and a shuffle button. Expose intensity as a number action for my right-hand height.">Light sculpture</button><button type="button" data-prompt="Build a beautiful focus timer with start/reset buttons and an adjustable duration. Expose its controls as shared actions.">Focus timer</button><button type="button" data-prompt="Make an interactive color palette with a hue slider and a shuffle button, suitable for controlling with hand height.">Color palette</button></div>
+        <div class="chord-starter"><button id="project-chord-demo" type="button" disabled>Try Chord Garden ♫</button><span>Built-in hand-played chord demo · sound starts only when enabled</span></div>
+        <div class="generation-actions"><button id="project-generate" class="primary" type="button" disabled>Generate with Muse <span>↗</span></button><button id="project-cancel" type="button" hidden>Cancel</button></div>
+        <p id="project-status" role="status" aria-live="polite">Connecting to your companion…</p>
+        <div id="pairing-needed" class="notice" hidden>Open the <a href="/companion/">Mac companion</a> to pair this browser first, then return here.</div>
+        <div class="xr-guide"><span class="guide-mark" aria-hidden="true">✦</span><div><strong id="guide-title">Choose where to use your webpage</strong><p id="guide-copy">In Quest choose <b>Menu → Muse Canvas → Open webpage in headset</b> to view and use the full page there. Or keep this preview visible and use the AR hand controls to change it.</p></div></div>
+        <p class="scope-note">Canvas controls this webpage. Hardware control remains in the device setup flow.</p>
+      </aside>
+      <section class="preview-pane" aria-labelledby="preview-title">
+        <header class="preview-header"><div><div class="eyebrow">LIVE WORKSPACE</div><h2 id="preview-title">Your next idea</h2><p id="project-provenance">A saved project will appear here</p></div><div class="run-actions"><button id="project-expand" type="button" aria-expanded="false" disabled>Expand webpage</button><button id="project-run" class="primary" type="button" disabled>Run preview</button><button id="project-stop" type="button" disabled>Stop</button></div></header>
+        <section id="chord-audio" class="chord-audio" hidden aria-labelledby="chord-audio-title"><div><strong id="chord-audio-title">Give your hands a voice</strong><p id="chord-audio-status" role="status">Run the preview, then enable sound here.</p></div><button id="chord-audio-enable" class="primary" type="button" disabled>Enable sound</button><button id="chord-audio-mute" type="button" hidden>Mute</button></section>
+        <div id="preview-stage" class="preview-stage"><div id="preview-empty" class="preview-empty"><div class="empty-orbit" aria-hidden="true"><i></i><i></i><i></i></div><h3>A webpage you can reach into.</h3><p>Describe an idea. Muse writes its interface and connects a small set of controls.</p><span id="empty-steps">Generate → Review → Run</span></div><div id="preview-frame-host"></div></div>
+        <footer class="preview-footer"><p id="runtime-status" role="status">Preview stopped</p><button id="show-code" type="button" class="quiet" disabled>View code</button></footer>
+        <section id="shared-controls" class="shared-controls" hidden><div class="controls-heading"><h3>Shared controls</h3><span id="shared-controls-hint">Web + Quest · one state</span></div><div id="project-controls"></div></section>
+        <details id="code-details" hidden><summary>Generated source</summary><div class="code-tabs"><button type="button" data-code="html">HTML</button><button type="button" data-code="css">CSS</button><button type="button" data-code="js">JavaScript</button></div><pre id="project-source"></pre></details>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="/src/projects/main.ts"></script>
+</body>
+</html>

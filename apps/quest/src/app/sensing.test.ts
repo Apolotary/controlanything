@@ -45,6 +45,22 @@ describe('headset verification requests', () => {
     expect(send).toHaveBeenCalledWith('sense.result', expect.objectContaining({ senseId: 'sense', kind: 'audio-features', ok: true, audio }), { to: 'server' });
   });
 
+  it('does not infer screen visibility from the virtual instrument UI marker', async () => {
+    const { app, send, sense } = setup();
+    const toast = vi.fn(), view = vi.fn(() => false);
+    Object.assign(app, {
+      camera: {}, virtualCards: new Set(['synth']), lastFrame: {},
+      targetForCard: () => ({ label: 'Visual Synth', position: new Vector3(0, 0, 1) }),
+      inCameraView: view, hud: { toast }, poses: { peakSpeed: () => 0 },
+      capture: { capture: async () => ({ payload: { frameId: 'frame', jpeg: 'AAAA', width: 100, height: 100 }, record: { bytes: 500 } }) },
+      showLastFrame: vi.fn(), page: { log: vi.fn() },
+    });
+    await sense({ kind: 'frame' });
+    expect(view).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith('sense.result', expect.objectContaining({ kind: 'frame', ok: true }), { to: 'server' });
+  });
+
   it('does not listen for another sensor, an untagged device or in Annotate', async () => {
     const { modes, mic, send, sense } = setup();
     await sense({ sensorDeviceId: 'mac' });

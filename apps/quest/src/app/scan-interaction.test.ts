@@ -89,7 +89,24 @@ async function setup() {
   app.setMode('annotate');
   let time = 0;
   const step = (elapsed = 16) => app.frameInner(time += elapsed, xrFrame);
-  step(200); step(320); step(200); // Palm dwell and opening fade expose the real left-hand dock.
+  step(200);
+  const openTools = () => {
+    app.hud.setDeck({ open: true }); step();
+    // Reach the secondary mode choices through the visible More tools button,
+    // using the same XR hand target-ray/select events as the actual frame loop.
+    index.set(0.1, 1.1, -0.15); thumb.copy(index).add(new Vector3(0.06, 0, 0));
+    const tools = app.hud.root.getObjectByName('menu-tools')!;
+    expect(tools.visible).toBe(true);
+    const point = tools.getWorldPosition(new Vector3());
+    rayRotation.setFromUnitVectors(new Vector3(0, 0, -1), point.sub(rayOrigin).normalize());
+    step(300);
+    session.dispatchEvent(Object.assign(new Event('selectstart'), { inputSource: source, frame: xrFrame }));
+    step(); step();
+    session.dispatchEvent(Object.assign(new Event('selectend'), { inputSource: source, frame: xrFrame }));
+    step(); step();
+    expect(app.hud.root.getObjectByName('main-menu')!.userData.toolsOpen).toBe(true);
+  };
+  openTools();
   const button = () => app.hud.root.getObjectByName(`mode-${app.modes.mode === 'annotate' ? 'control' : 'annotate'}`)!;
   const point = button().getWorldPosition(new Vector3());
   rayRotation.setFromUnitVectors(new Vector3(0, 0, -1), point.clone().sub(rayOrigin).normalize());
@@ -105,6 +122,7 @@ async function setup() {
   return {
     app, scanner, states, step, button, index, thumb, lock, recorder, send,
     choose: (mode: 'annotate' | 'control') => {
+      openTools();
       const point = app.hud.root.getObjectByName(`mode-${mode}`)!.getWorldPosition(new Vector3());
       rayRotation.setFromUnitVectors(new Vector3(0, 0, -1), point.sub(rayOrigin).normalize());
       step(300);

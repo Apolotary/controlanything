@@ -4,7 +4,7 @@ How a thing the headset looked at becomes verified, generated controls. Companio
 
 ## 1. Principle
 
-**Annotate first; Control only by request.** Entering AR selects Annotate: local YOLOX-Nano preview boxes plus background SAM device segmentation, All / Lights / Electronics filters, a default 3 m estimated range and a shared six-detection budget. The COCO people class is dropped in the detector worker; server scan prompts and labels also exclude people. Lights come from SAM, since the bundled COCO detector has no lamp class. Pinching sends `tag.add`; Muse Spark identifies the crop and the server persists the tag without starting setup.
+**Annotate first; Control only by request.** Entering AR selects Annotate: local YOLOX-Nano preview boxes plus background SAM device segmentation, All / Electronics filters, a default 3 m estimated range and a three-candidate budget. The COCO people class is dropped in the detector worker; server scan prompts and labels also exclude people. Underlying light/IR support remains available, although there is no separate Lights filter. Pinching sends `tag.add`; Muse Spark identifies the crop and the server persists the tag without starting setup. Estimated positions do not establish scene depth or wall occlusion.
 
 Switching to Control stops annotation scanning and hides untagged detections. `tags.state` reports `ready` (verified, armed, executor online), `setup` (reachable but needs setup) or `offline` (with a connection hint). Only **Set up control** (`control.setup`) starts LINK → LEARN/RESEARCH → DRIVE → VERIFY → FORGE → ARM. It requires Control mode, a tag and an available bridge, including a MIDI port for a synth. The setup request authorizes physical verification; **Enable controls** is a separate confirmation. `target.select` in Annotate only tags/identifies; selecting in Control reopens existing controls, never starts setup.
 
@@ -24,7 +24,7 @@ Switching to Control stops annotation scanning and hides untagged detections. `t
   "needs a companion" ◀───link.request── LINK   executor by capability; USB name + MIDI identity cross-check
                                         LEARN  one press per remote button ──sense.request(ir-capture)──▶ Cardputer IR receiver / sim remote
                                         RESEARCH curated charts + IR library (data/devices), web_search fallback
-                                        DRIVE  muse-spark-1.3 (low → medium repair) → muse-wonder-1.0 → template
+                                        DRIVE  muse-spark-1.3 (low → medium repair) → matched template / missing-data result
                                                validate: allowlists, ranges, rate caps
                                         VERIFY each action once ──exec.command──▶ Mac companion ─Web MIDI─▶ OP-1 Field
   before/after frames ──sense.result──▶        camera oracle (mask vs ring, R/B)      Mac companion ─Web Serial─▶ Cardputer ─IR─▶ ceiling light
@@ -33,7 +33,8 @@ Switching to Control stops annotation scanning and hides untagged detections. `t
   hacks + 3D controls ◀────────ui.spec── FORGE  muse-spark-1.3 → ce.hackset/1 → compile → ce.gen3d/1   DevTerm (print, beep, say, screen)
   Enable controls ◀─arm.request / arm.confirm─▶ ARM   human confirmation (hold for irreversible)         Sim room (all of the above, virtual)
   pinch / twist ────────control.event──▶ CONTROL hack → action → op → exec.command (no model)  ──▶ device reacts
-  push-to-talk PCM ───────voice.audio──▶ muse-voice-transcribe-1.0 → voice.text → scan / undo / panic / hack / edit
+  Ask Muse PCM ──────────voice.audio──▶ muse-voice-transcribe-1.0 → voice.text → selected-device Muse planner
+  voice.confirm ─────────────────────▶ validate proposal → Forge gesture revision → ui.spec
 ```
 
 | Component | Path | Role |
@@ -41,7 +42,7 @@ Switching to Control stops annotation scanning and hides untagged detections. `t
 | Protocol | `packages/protocol` | zod schemas + TS types for every WebSocket message, the Driver, the HackSet, pairing helpers; zod → JSON Schema (`json-schema/*.json`) for the Python and Swift clients and as the Muse `json_schema` response formats. |
 | gen3d | `packages/gen3d` | The `ce.gen3d/1` spec (semantic controls + 3D presentation), archetype expansion, validator/repair, patches, theme. |
 | Server | `apps/server` | One Node process on the Mac: HTTPS/WSS `:8443` + HTTP/WS `:8787`, the hub at `/ws`, pairing, the Meta model adapters (`src/muse/`), the brain (`src/agent/`), the oracles (`src/oracle/`), SCAN (`src/scan/`), the forge (`src/gen3d/`), voice relay (`src/voice/`), curated device data (`data/devices/`), static hosting of `/quest/`, `/companion/`, `/sim/`. |
-| Quest app | `apps/quest` | WebXR app: camera capture with pose history, on-device YOLOX worker, SAM scans in Annotate, a mode/filter bar, tagged outlines and one selected control card. Inter SDF text via troika-three-text; poke and ray/pinch input; world-placed panels with gentle follow. Logs and evidence are in Details. IWER provides desktop emulation; record/replay is available. |
+| Quest app | `apps/quest` | WebXR app: camera capture with pose history, on-device YOLOX worker, SAM scans in Annotate, a mode/filter bar, tagged outlines and one selected control card. Inter SDF text via troika-three-text; poke and ray/pinch input; stable open panels with explicit left-palm/controller recall. Logs and evidence are in Details. IWER provides desktop emulation; record/replay is available. |
 | Mac workbench | `apps/companion` | Owner/approver UI; executors for MIDI (Web MIDI) and the Cardputer (Web Serial JSON lines); the audio oracle (synth USB audio or mic); the agent view (steps with model ids, driver, evidence, links, daemons). One tab executes (Web Locks), others stand by. |
 | Cardputer firmware | `firmware/cardputer` | IR node: raw / NEC / AEHA transmit at ≤ 4 frames/s, IR learning through a Grove IR receiver, pairing screen, hack menu on physical keys, serial protocol v1. |
 | iPhone | `apps/iphone` | SwiftUI client: pairing, 2D controls and hack lists, handheld scanner / second verification camera, local executor (torch, haptics, screen, say, beep). |
@@ -64,7 +65,8 @@ Every message is one envelope: `{ v: 1, type, id, ts, from, to?, payload }`. The
 | Verdicts | `verify.result` | An `Evidence` record: sent op, expected effect, observed metric with before/after/delta/threshold, pass, attempt, note. |
 | Consent | `arm.request`, `arm.confirm`, `arm.result` | One tap before the first drive; `hold: true` for irreversible drivers; requests expire (120 s). |
 | Controls | `ui.spec`, `ui.partial`, `control.event`, `daemon.status`, `device.signal` | `ui.spec` = `{ specId, cardId, driverId, rev, gen3d, hackset, check }`; `ui.partial` streams items as the model finishes them; `control.event` = `{ widgetId, value, phase: start | move | end, ts, specId }`. |
-| Voice | `voice.audio` (PCM16 chunks), `voice.text` (transcript + routed intent) | Typed text takes the same route. |
+| Voice | `voice.audio` (PCM16 chunks), `voice.text` (transcript + addressed assistant state), `voice.confirm`, `voice.cancel` | Typed text takes the same route. Setup requests use the existing Quest setup flow; gesture proposals require explicit acceptance. |
+| Object games | `canvas.request`, `canvas.get`, `canvas.cancel`, `canvas.restore`, `canvas.action`, `canvas.state` | Muse authors bounded choice-game data. The server owns revisions and play state; Quest and Mac share previews, scores and explicit Play. No device execution. |
 
 HTTP views: `GET /api/agent/targets[/:cardId]`, `/api/agent/scan/latest`, `/api/agent/steps`, `/api/agent/exec`, `/api/agent/profiles`, `/api/muse/calls`; `POST /api/agent/select`, `/api/agent/arm`, `/api/agent/panic`; pairing under `/api/pair/*`; `GET /api/health`.
 
@@ -101,8 +103,8 @@ Stop → cancel pending work, disarm controls, stop automations
 | IDENTIFY `identify.ts` | Crop (detail high) + whole frame (detail low) → `DeviceCard` via `json_schema`: name, maker/model (`unknown` unless legible text supports it), category, protocols, companion need, evidence, follow-ups. | `muse-spark-1.3`, effort low |
 | LINK `link.ts`, `executors.ts` | Executor by capability (midi / ir / local) from presence. USB: port name against the chart's hint, then the MIDI identity request (`F0 7E 7F 06 01 F7`) against the maker Spark read → `confirmed` / `consistent` / `mismatch` ("wrong device, refused") / `unknown` (a generic non-commercial id is inconclusive, not a mismatch). No executor → `link.request` with suggested clients, state `needs-companion`. | none |
 | LEARN `learn.ts` | For unknown remotes: `sense.request ir-capture` per button (全灯, 消灯, 明るく, 暗く, 常夜灯, 暖色, 白色), one press each; the capture becomes a `LearnedCode` with the button as a *hypothesis* label; the learn window closes 700 ms after the first captured press. Stored next to the curated data as `<device>.learned.json`. | none |
-| RESEARCH `research.ts` | Curated charts and the IR library (`data/devices/`, with provenance) and the learned codes form the brief; `web_search` only when they have nothing. | `muse-spark-1.3` + `web_search` (fallback) |
-| DRIVE `drive.ts` | `DriverDraft` via `json_schema` from the brief; validated; issues fed back. Writers in order: Spark low → Spark medium (repair) → Wonder low (token cap 4000, 60 s timeout, whitespace-loop guard) → curated template, labelled "no Meta model wrote it". | `muse-spark-1.3`, `muse-wonder-1.0` |
+| RESEARCH `research.ts` | Curated charts, explicitly reviewed per-instrument MIDI charts, the IR library and learned codes form the brief. Reviewed charts bind to exact card/maker/model and carry a manual citation, channel and CC ranges; importing one stores knowledge without commands or arming. Sourced web prose is cached for seven days but cannot create an executable CC allowlist. Explicit setup rerun refreshes research. See [MIDI charts](MIDI-CHARTS.md). | `muse-spark-1.3` + `web_search` (fallback) |
+| DRIVE `drive.ts` | `DriverDraft` via `json_schema` from the brief; validated; issues fed back. Production setup permits two attempts: Spark low → Spark medium repair. A matching curated template may be used with its source disclosed; unavailable device knowledge must remain unavailable. The writer module also contains a third Wonder attempt for callers/benchmarks that allow it, but the production setup's two-attempt cap never reaches it. | `muse-spark-1.3` in production; Wonder writer available separately |
 | VERIFY `verify.ts` | Each action once, for real, visible-first (off, on, dimmer, brighter, colour, night last; the lamp is relit before brightness probes). Camera: a verify frame before and after (SAM re-finds the outline on the before frame), settle time for IR lamps (~3 s fade). Audio: a note held while sweeping the CC; feature windows before/after. Two consecutive confirmations make a pass. IR library candidates are cycled (bounded); every miss is a `verify.result` with `pass: false`. | `sam-3.1` (outline only) |
 | FORGE `../gen3d/forge.ts` | Hack set (`ce.hackset/1`) bound to verified `actionId`s via `json_schema`, streamed; deterministic checks (schema → bindings → geometry → safety); ≤ 2 repairs at medium effort; compiled to `ce.gen3d/1`. Controls bound to unverified actions are `armed: false`. | `muse-spark-1.3`, effort low |
 | SKIN `../gen3d/skin.ts` | Optional device-inspired panel texture, generated alongside controls and published without delaying arming; `GEN3D_SKIN=0` disables it. | `muse-image-1.0` |
@@ -132,9 +134,11 @@ Control { id, kind: continuous | stepped | toggle | trigger | xy, label (≤ 16)
 Binding { action /* driver actionId, or midi.cc | midi.note | ir.send | sim.* */, driverId?, channel?, cc?, note?, args? }
 ```
 
-A control bound to an unverified action has `armed: false`: it renders as a dim wire ghost with the reason on a plate, can be touched, but no event leaves the client. Events: `ControlEvent { controlId, value, phase: start | move | end, ts, specId }`.
+A control bound to an unverified action has `armed: false`; the current main Quest card omits unavailable actions and blocks their events. Lower-level gen3d renderers can represent them as disabled controls. Events: `ControlEvent { controlId, value, phase: start | move | end, ts, specId }`.
 
 **(b) 3D presentation layer** (the Quest renders it): `Part { kind: group | primitive | archetype | text | path, shape, dims, archetype, params, controlId, text, path, transform, material, visibleWhen, parentId }`. Primitives: box, cylinder, sphere, torus, capsule, cone, ring, plane, lathe, extrude. Materials: `solid | holo | wire | glass | glitch` with glow, fresnel, scanlines, flicker ≤ 3 Hz. Behaviours (`rotate | slide | press | toggle | pull | xy | grab`) and feedback (`glow | arc-fill | readout | tick | particles | beam-pulse | scale-pop | color-shift | glitch`) target parts by role. Anchors: `device | floating | surface | hand | world` (the ceiling light's controls float at 0.9 m, below the horizon; desk devices dock beside the device).
+
+The schema and lower-level gen3d renderer are broader than the current main Quest card. That card keeps one continuous control and up to three buttons in a stable panel, honoring slider, knob and lever archetypes with horizontal, angular and vertical input respectively. It does not promise arbitrary meshes, ring layouts or a fully generated XY shape. A shape-edit acceptance check must show the rendered before/after control and use it, not merely compare JSON.
 
 **Archetypes** (one part expands to parts + behaviours + feedback, as pure data): controls `knob`, `fader`, `lever`, `button`, `toggle`, `dimmer-ring`, `pull-cord`, `xy-orb`, `pads`, `keys`, `wheel`; HUD `outline`, `tag`, `brackets`, `twin`, `sweep-plane`, `reticle`, `ping-line`, `link-matrix`, `oracle-strip`, `hack-list`, `queue-strip`, `upload-bar`, `daemon-link`, `deck`, `model-chips`, `worklog`, `ir-waveform-card`, `remote-chips`, `handle`.
 
@@ -147,13 +151,15 @@ A control bound to an unverified action has `armed: false`: it renders as a dim 
 | Layer | What is recorded | How it replays |
 |---|---|---|
 | Model calls | `MUSE_RECORD=1` in live mode writes `apps/server/fixtures/recorded/<key>.json`: model id, `recordedAt`, latency, token usage, the answer text. Never the prompt, the frame or the key. | Fixture mode (no `MODEL_API_KEY`, or `MODEL_MODE=fixture`) replays them; a recorded answer wins over the canned FIXTURE for the same key; results say `source: "fixture"` with `recordedFrom: <model id>`, and every HUD labels them `FIXTURE`. SAM fixtures: exact recorded frame > sim-room ground truth by pose > same-size recording > canned scene. |
-| Headset takes | `Recorder` in the Quest app: `session.jsonl` (head poses, every message in and out, inputs) + `frames/*.jpg`. | `playback` (poses drive the view, recorded messages re-dispatched at their times, no server) or `pipeline` (recorded frames become the camera against the live server, so SAM, Spark and the oracles re-run on the footage). The sim's player (`/sim/?take=<name>`) re-sends the recorded messages headlessly and diffs the answers. |
+| Headset takes | Opt-in `Recorder` in the Quest app: `session.jsonl` (up to 30 Hz head/25-joint hand poses, tracking gaps and reference-space boundaries, messages and inputs), `frames/*.jpg`, and video-only passthrough `video.webm`/`video.mp4` when supported. A bounded take ZIP preserves source and approximate clock alignment. | `/companion/tracking/` reviews video and spatial poses on one timeline and exports validated telemetry plus allowlisted interaction metadata; it never executes recorded commands. Existing `playback` and `pipeline` replay modes remain available; the sim player re-sends recorded messages and compares answers. See [tracking review](TRACKING-REVIEW.md). |
 | Agent runs | `GET /api/agent/steps` (work log with model ids), `/api/agent/exec` (every op and ack), `/api/agent/targets` (state, card, link, driver, verification, evidence), `/api/muse/calls` (every model call). | Tests replay the committed gen3d recordings through the current checks and require them to reach armed controls when the evidence passes. |
 | Learned codes | `apps/server/data/devices/<device>.learned.json`: capture timings, the hypothesis, the label the camera assigned, the evidence. | The sim lamp obeys exactly those codes once they exist, so the real remote's codes drive the virtual room too. |
 
 `npm test` covers the workspace suites (protocol, gen3d, oracles, codecs, the agent end to end over the real hub in sim mode, DevTerm contract tests against the JSON Schemas, Cardputer host tests separately). The muted Chrome checks `npm run e2e:judge` (12 phases) and `npm run e2e:flows` (18 phases) exercise the two-mode desktop flow; see the [judge path](../README.md#judge-path-no-hardware).
 
-## 8. Measured numbers (Nov 2, 2026, live Meta Model API)
+## 8. Historical component measurements (Nov 2, 2026, live Meta Model API)
+
+These are separate component runs, mostly against rendered/simulated inputs. They are not a measured total setup latency, a continuous live-headset demonstration, or physical hardware acceptance. Model/output validity is scoped to the cited runs rather than a guarantee for future requests.
 
 | What | Number | Where measured |
 |---|---|---|
@@ -170,4 +176,31 @@ A control bound to an unverified action has `armed: false`: it renders as a dim 
 | Voice (Muse Voice Transcribe, batch WAV) | 2.6 s for a 2.45 s utterance, exact transcript | probe |
 | Control loop | server side < 1 ms per `control.event`; budget 50 ms on the LAN | `agent/control.ts` |
 
-Real-hardware figures (Cardputer → KOIZUMI light from standing height, OP-1 Field CC response, Quest camera frames inside an `immersive-ar` session) are added here after the Nov 2 hardware session; until then they are unverified.
+The real headset session observed Ask Muse speech and OP-1 MIDI port discovery, but did not demonstrate successful physical instrument control. The user confirmed the instrument is an OP-1 Field on November 3; firmware and physical effects remain unverified. Cardputer/IR effects and the revised real-headset interaction flow also need acceptance. Use [DEMO-ACCEPTANCE.md](DEMO-ACCEPTANCE.md) to record the next run and retain its actual model/source labels, timing and effect evidence.
+
+## Object canvas
+
+`packages/protocol/src/canvas.ts` validates the game format (1–6 rounds, 2–3 choices, bounded text and scores, unique IDs) and contains its deterministic reducer. `apps/server/src/canvas/` generates drafts through Muse Spark and maintains atomic local `canvas-history.json` beside the device library: 64 objects, eight revisions each. Restore creates a new revision; generation and restore always return to preview. Starting or restarting is an explicit user action. Play state is shared in memory and returns to preview after server restart.
+
+Canvas is independent of Forge, drivers and physical executors. A tagged object in Control mode may have no control connection. Only authorized owners/local clients can mutate the shared game; server-only `canvas.state` carries the authoritative result. Request IDs deduplicate actions, base revisions reject stale edits, and exact round IDs plus reducer phases prevent double scoring. Generation is scoped to the requesting client and object and is cancelled on selection/mode changes, disconnect or removal. Forget removes its history.
+
+Quest's selected card provides Make a game, preview, Play, choices, feedback and restore. Ask Muse routes game creation/edits before the hardware offline gate; game undo cannot invoke physical undo. The companion places Object games below setup and Devices, with an explicit Open Canvas entry and contextual opening for newly started games; Hide Canvas persists through subsequent status updates. It renders the same document with a prompt box and revision restore. Both render plain data without scripts, audio or extra animation loops. Closed XR panels stay closed on Mac updates and reload current state when reopened. Ordinary-object recognition includes books in All and never invents unread content or a hardware connection.
+
+## Interaction retrieval
+
+The saved library remains the source of truth for completed device interfaces. `agent/interaction-references.ts` selects up to three bounded descriptive examples from active, enabled, visible versions, ranked by maker/model, category and compatible action labels. Forge generation and editing receive these as untrusted reference data; examples contain no executor or action IDs and never transfer verification. Request/current controls take priority, and the ordinary schema and binding checks still run.
+
+`knowledge/interactions.ts` stores only gesture mappings accepted through Ask Muse's Apply flow. Exact reuse requires the same card, normalized request, complete hardware contract and live/fixture source, plus current verification. A fresh proposal is issued without planning/mapping calls only when it preserves current bindings; confirmation and Perform remain separate. Related compatible memories ground new mapping requests. Entries persist atomically (128 maximum), tolerate corrupt files, and are purged by Forget. Restoring an existing library device still restores its UI and gesture map without regeneration.
+
+`research/cache.ts` wraps web search with exact-question, endpoint/model/instructions/effort isolation, seven-day expiry and explicit refresh. Only nonempty live results with HTTP(S) citations qualify. Fixture responses, failed calls and uncited answers are never cached. Cached results preserve original model, citations and research timestamp; physical verification is always independent. Both stores live beside `library.json`; tests can keep them in memory.
+
+
+## Headset test follow-up
+
+The direct virtual-instrument route is `target.select { virtual: "visual-synth", requestId }` followed by a sender-addressed `target.select.result`. The server requires Control mode and an online companion/sim with the explicit `ce-visual-synth` output. A stable card is bound to that executor and the requesting headset's camera; selection does not execute setup or arm controls. The client places a UI marker and a screen-aiming guide, not a fabricated object detection. Verification uses the centered camera region and freezes idle visual animation while testing commands, then restores it.
+
+The Mac companion launches its visuals with an owner identifier. A low-frequency, same-origin renderer heartbeat advertises the virtual output only while that owner's display is visible. A closed or hidden renderer cannot acknowledge a successful virtual command. Sim fixtures retain their independent renderer path.
+
+Both detectors share a three-candidate annotation budget. Per-frame overlaps are suppressed before placement; separate visible boxes cannot be merged solely because their estimated 3D positions are close. A selection pinch does not confirm depth, and an estimated YOLO pose cannot drag an already measured target. Stale estimated tags fade in Find devices, while the selected Control card stays mounted when the user looks away. This reduces stale labels; it is not room-mesh occlusion or proof of object-detection accuracy.
+
+Hand feedback uses pooled joint instances and bone segments, with pinch and target feedback. Open menus, cards and the Ask Muse workspace stay fixed while being used; an explicit raised left palm/controller recall and Bring panels here recover their placement. Unverified actions are hidden from the main control card, and Ready requires a verified displayed action. Silent local Mac commands are unavailable instead of appearing to succeed.

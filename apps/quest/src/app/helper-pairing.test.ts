@@ -1,7 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { PayloadOf } from '@ce/protocol';
 import { QuestApp } from './app';
 import { ModeState } from './modes';
 import { HelperOnboarding } from './onboarding';
+import { Emitter } from './emitter';
+import { VoiceAssistant } from '../voice/assistant';
+import type { PttEvents, PushToTalk } from '../voice/ptt';
+
+afterEach(() => vi.useRealTimers());
 
 function setup(mode: 'annotate' | 'control' = 'annotate') {
   const app = Object.create(QuestApp.prototype) as QuestApp;
@@ -13,10 +19,11 @@ function setup(mode: 'annotate' | 'control' = 'annotate') {
   const frame = { payload: { frameId: 'helper-qr', purpose: 'pair' } };
   const capture = vi.fn(async () => frame);
   const send = vi.fn(() => 'pair-request');
-  const hud = { showApprovals: vi.fn(), showHelperPairing: vi.fn(), toast: vi.fn() };
+  const hud = { showApprovals: vi.fn(), showHelperPairing: vi.fn(), setOnboarding: vi.fn(), toast: vi.fn() };
   Object.assign(app, {
     onboarding, modes, capture: { capture }, ws: { send }, hud,
     startCamera: vi.fn(async () => {}), page: { log: vi.fn() },
+    loadHelper: vi.fn(async () => {}),
     pairingUntil: 0, pairCapturing: false, lastPairFrame: 0, pairCodeRequest: null,
   });
   const refresh = () => Reflect.get(app, 'refreshHelper').call(app) as void;
@@ -28,6 +35,44 @@ function setup(mode: 'annotate' | 'control' = 'annotate') {
 }
 
 describe('helper pairing in the Quest app', () => {
+  it.each(['thinking', 'proposal'] as const)('explicit helper navigation cancels a %s Muse request and ignores its late setup reply', (state) => {
+    vi.useFakeTimers();
+    const { app, skip } = setup();
+    skip();
+    const ptt = Object.assign(new Emitter<PttEvents>(), { cancel: vi.fn() });
+    const send = vi.fn((_type: string, _payload: unknown) => true), setupControl = vi.fn(() => true), render = vi.fn();
+    const assistant = new VoiceAssistant({ ptt: ptt as unknown as PushToTalk,
+      selected: () => ({ targetId: 'target', cardId: 'card' }), identity: () => 'quest',
+      microphoneError: () => undefined, send, setup: setupControl, render });
+    Object.assign(app, { assistant });
+    assistant.sendText('Connect this device and map my hand height.');
+    const request = send.mock.calls.findLast(([type]) => type === 'voice.text')![1] as PayloadOf<'voice.text'>;
+    const reply = { ...request, recipientId: 'quest', assistant: { state, text: 'Review this request.',
+      ...(state === 'proposal' ? { proposalId: 'proposal' } : {}) } };
+    assistant.receive(reply);
+    expect(assistant.view?.state).toBe(state);
+
+    app.openHelper();
+    expect(assistant.view).toBeUndefined();
+    expect(send).toHaveBeenLastCalledWith('voice.cancel', expect.objectContaining({ cardId: 'card', utteranceId: request.utteranceId }));
+    skip();
+    assistant.receive({ ...reply, assistant: { state: 'setup', text: 'Set up this device.' } });
+    expect(assistant.view).toBeUndefined();
+    expect(setupControl).not.toHaveBeenCalled();
+  });
+
+  it('opens helper pairing from the menu without a selected device or Control mode', () => {
+    const { app, onboarding, modes, hud, skip } = setup();
+    skip();
+    expect(hud.setOnboarding).toHaveBeenLastCalledWith(expect.objectContaining({ step: 'tag' }));
+    app.openHelper();
+    expect(modes.mode).toBe('annotate');
+    expect(onboarding.scanning).toBe(true);
+    expect(hud.showHelperPairing).toHaveBeenLastCalledWith({ urls: ['http://localhost:8797/pair'], pairedName: undefined });
+    expect(hud.showApprovals).toHaveBeenLastCalledWith([]);
+    expect(hud.setOnboarding).toHaveBeenLastCalledWith(null);
+  });
+
   it.each(['annotate', 'control'] as const)('captures at most twice a second in %s, including after 30 seconds', async (mode) => {
     const { onboarding, capture, captureAt, send, frame } = setup(mode);
     for (const time of [0, 499, 500, 999, 1000, 30_001, 300_000]) {
@@ -105,5 +150,17 @@ describe('helper pairing in the Quest app', () => {
     onboarding.leave();
     submit('K7Q4M2');
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe('headset identity repair completion', () => {
+  it.each(['pairing superseded', 'server unavailable'])('handles a rejected %s repair without changing identity or restarting', async (message) => {
+    const app = Object.create(QuestApp.prototype) as QuestApp;
+    const identity = { deviceId: 'current' }, log = vi.fn(), restart = vi.fn();
+    Object.assign(app, { identity, pairing: { repair: vi.fn().mockRejectedValue(new Error(message)) }, ws: { restart }, page: { log } });
+    await expect(Reflect.get(app, 'repairPairing').call(app)).resolves.toBeUndefined();
+    expect(Reflect.get(app, 'identity')).toBe(identity); expect(restart).not.toHaveBeenCalled();
+    if (message === 'pairing superseded') expect(log).not.toHaveBeenCalled();
+    else expect(log).toHaveBeenCalledWith('pairing failed: server unavailable', 'warn');
   });
 });

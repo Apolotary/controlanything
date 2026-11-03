@@ -1,0 +1,7 @@
+.visual-launcher { position: fixed; inset: 0; z-index: 2000; background: #050911; color: #f4f7fb; overflow: hidden; }
+.visual-launcher > canvas { display: block; width: 100%; height: 100%; }
+.visual-launcher-toolbar { position: absolute; top: 18px; left: 22px; right: 22px; display: flex; align-items: center; justify-content: space-between; gap: 20px; font-size: 15px; }
+.visual-launcher-toolbar strong { flex: 1; }
+.visual-launcher-toolbar button { border: 1px solid #ffffff52; border-radius: 20px; background: #0d1526cc; color: white; padding: 10px 18px; font: inherit; cursor: pointer; }
+.visual-launcher-toolbar button:focus-visible { outline: 3px solid #58c7ff; outline-offset: 3px; }
+.visual-launcher-status { position: absolute; bottom: 20px; left: 22px; right: 22px; text-align: center; padding: 10px 16px; border-radius: 12px; background: #0d1526cc; font-size: 15px; }

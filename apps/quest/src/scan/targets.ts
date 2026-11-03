@@ -18,7 +18,7 @@ export interface Target {
   normal?: Vector3;
   facing: Vector3;
   confirmed: boolean;
-  /** The user confirmed this device's anchor; matching detections may continue tracking it. */
+  /** The user selected this device; this does not measure or confirm its depth. */
   refined: boolean;
   method: string;
   sizeM: [number, number, number];
@@ -38,10 +38,10 @@ export interface Target {
   lastSeenAt: number;
 }
 
-const GENERIC = /^(electronic device|electronics|device|object|gadget)$/i;
+const GENERIC = /^(electronic device|unidentified device|unknown device|electronics|device|object|gadget)$/i;
+export const isGenericLabel = (label: string): boolean => !label.trim() || GENERIC.test(label.trim().replace(/\s+/g, ' '));
 const SHORT: [RegExp, string][] = [
   [/ceiling light/i, 'Ceiling light'],
-  [/^electronic device$/i, 'Device'],
   [/synthesizer/i, 'Synth'],
   [/air conditioner/i, 'Air conditioner'],
   [/device with screen and keyboard/i, 'Pocket computer'],
@@ -49,8 +49,8 @@ const SHORT: [RegExp, string][] = [
 
 export function displayLabel(label: string): string {
   label = label.trim().replace(/\s+/g, ' ').toLowerCase();
+  if (isGenericLabel(label)) return 'Unidentified device';
   for (const [re, s] of SHORT) if (re.test(label)) return s;
-  if (!label) return 'Device';
   const short = label.length <= 22 ? label : `${label.slice(0, 21).trimEnd()}…`;
   return short.charAt(0).toUpperCase() + short.slice(1);
 }
@@ -81,25 +81,28 @@ export class TargetStore {
 
   /** Merge a placed detection into an existing target or create one. */
   upsert(det: Det, pl: Placement, frameId: string, modelId?: string, now = Date.now()): { target: Target; created: boolean } {
-    const existing = this.match(det, pl);
+    const existing = this.match(det, pl, frameId);
     if (existing) {
       const t = existing;
-      if (GENERIC.test(t.label) && !GENERIC.test(det.label)) {
+      if (isGenericLabel(t.label) && !isGenericLabel(det.label)) {
         t.label = det.label;
         t.prompt = det.prompt ?? det.label;
       }
       t.score = Math.max(t.score * 0.9, det.score);
-      if (pl.confirmed && !t.confirmed && !t.refined) {
+      if (pl.confirmed && !t.confirmed) {
         t.position.copy(pl.position);
         t.confirmed = true;
         t.method = pl.method;
-      } else if (pl.confirmed === t.confirmed || t.refined) {
+      } else if (pl.confirmed === t.confirmed) {
         t.position.lerp(pl.position, EMA);
       }
       t.facing.lerp(pl.facing, EMA).normalize();
       if (pl.normal) t.normal = pl.normal.clone();
-      t.sizeM = pl.sizeM;
-      if (pl.contour) t.contour = pl.contour;
+      // A guessed depth must not resize or drift an already measured placement.
+      if (pl.confirmed === t.confirmed) {
+        t.sizeM = pl.sizeM;
+        if (pl.contour) t.contour = pl.contour;
+      }
       if (det.deviceId) t.deviceId = det.deviceId;
       if (det.cardId) t.cardId = det.cardId;
       if (modelId) t.modelId = modelId;
@@ -137,13 +140,11 @@ export class TargetStore {
     return { target: t, created: true };
   }
 
-  /** Confirm the existing device anchor; a hand ray point must not move it toward the user. */
+  /** Select the existing anchor; a pinch measures neither the device position nor its depth. */
   refine(id: string, _point: Vector3): Target | undefined {
     const t = this.targets.get(id);
     if (!t) return undefined;
-    t.confirmed = true;
     t.refined = true;
-    t.method = 'pinch';
     return t;
   }
 
@@ -173,19 +174,22 @@ export class TargetStore {
     return removed;
   }
 
-  private match(det: Det, pl: Placement): Target | undefined {
+  private match(det: Det, pl: Placement, frameId: string): Target | undefined {
     let best: Target | undefined;
     let bestD = Infinity;
     for (const t of this.targets.values()) {
       if (det.cardId && t.cardId === det.cardId) return t;
       if (det.cardId && t.cardId && t.cardId !== det.cardId) continue;
       if (det.deviceId && t.deviceId === det.deviceId) return t;
+      if (det.deviceId && t.deviceId && t.deviceId !== det.deviceId) continue;
+      // Distinct boxes in one capture are separate objects; proximity cannot collapse adjacent devices.
+      if (frameId && t.frameId === frameId && t.detId !== det.detId) continue;
       const d = t.position.distanceTo(pl.position);
       const size = Math.max(...t.sizeM, ...pl.sizeM, 0.1);
       // depth guesses are uncertain along the ray: be more tolerant for unconfirmed placements
       const slack = pl.confirmed && t.confirmed ? 0 : 0.25 * pl.depth;
       const sameLabel = norm(t.label) === norm(det.label) || norm(t.prompt ?? '') === norm(det.prompt ?? det.label);
-      const generic = GENERIC.test(det.label) || GENERIC.test(t.label);
+      const generic = isGenericLabel(det.label) || isGenericLabel(t.label);
       const tol = sameLabel ? Math.max(0.3, 0.6 * size, slack) : generic ? Math.max(0.15, 0.4 * size, slack * 0.6) : -1;
       if (d <= tol && d < bestD) {
         best = t;

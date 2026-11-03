@@ -5,4 +5,5 @@ body { margin: 0; overflow: hidden; }
 #caption { position: fixed; left: 18px; bottom: 16px; display: grid; gap: 3px; padding: 8px 11px; border-radius: 7px; background: rgb(12 16 20 / 58%); pointer-events: none; }
 #caption span { font-weight: 550; letter-spacing: 0.01em; }
 #last-change { color: rgb(255 255 255 / 72%); font-size: 11px; }
+#setup-guide { max-width: 440px; margin: 5px 0 0; color: rgb(255 255 255 / 82%); font-size: 12px; line-height: 1.5; }
 .unavailable #caption { max-width: 420px; }

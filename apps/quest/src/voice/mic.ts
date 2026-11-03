@@ -26,14 +26,14 @@ class CePcmTap extends AudioWorkletProcessor {
     this.levelCount = 0;
     this.blocks = 0;
     this.port.onmessage = (e) => {
-      if (e.data === 'start') { this.active = true; this.n = 0; }
+      if (e.data === 'start' || e.data.type === 'start') { this.active = true; this.n = 0; this.captureId = e.data.captureId; }
       else if (e.data === 'stop') { this.flush(true); this.active = false; }
     };
   }
   flush(final) {
     const out = this.chunk.slice(0, this.n);
     this.n = 0;
-    this.port.postMessage({ type: 'pcm', pcm: out.buffer, final }, [out.buffer]);
+    this.port.postMessage({ type: 'pcm', pcm: out.buffer, final, captureId: this.captureId }, [out.buffer]);
   }
   process(inputs) {
     const ch = inputs[0] && inputs[0][0];
@@ -70,7 +70,8 @@ registerProcessor('ce-pcm-tap', CePcmTap);
 
 export interface MicEvents extends Record<string, unknown> {
   level: number;
-  chunk: { pcm: Int16Array; final: boolean };
+  chunk: { pcm: Int16Array; final: boolean; captureId?: string };
+  stopped: { reason: string };
 }
 
 export class Mic extends Emitter<MicEvents> {
@@ -125,9 +126,9 @@ export class Mic extends Emitter<MicEvents> {
     }
     const src = this.ctx.createMediaStreamSource(this.stream);
     this.node = new AudioWorkletNode(this.ctx, 'ce-pcm-tap', { processorOptions: { targetRate: TARGET_RATE } });
-    this.node.port.onmessage = (e: MessageEvent<{ type: string; pcm?: ArrayBuffer; final?: boolean; rms?: number }>) => {
+    this.node.port.onmessage = (e: MessageEvent<{ type: string; pcm?: ArrayBuffer; final?: boolean; rms?: number; captureId?: string }>) => {
       if (e.data.type === 'level') this.emit('level', e.data.rms ?? 0);
-      else if (e.data.type === 'pcm' && e.data.pcm) this.emit('chunk', { pcm: new Int16Array(e.data.pcm), final: Boolean(e.data.final) });
+      else if (e.data.type === 'pcm' && e.data.pcm) this.emit('chunk', { pcm: new Int16Array(e.data.pcm), final: Boolean(e.data.final), ...(e.data.captureId ? { captureId: e.data.captureId } : {}) });
     };
     src.connect(this.node);
     // keep the graph pulling without making a sound
@@ -147,9 +148,9 @@ export class Mic extends Emitter<MicEvents> {
     return wireFeatures(await this.oracle.measure(durationMs, offsetMs));
   }
 
-  start(): void {
+  start(captureId?: string): void {
     void this.ctx?.resume();
-    this.node?.port.postMessage('start');
+    this.node?.port.postMessage(captureId ? { type: 'start', captureId } : 'start');
   }
 
   stop(): void {
@@ -157,6 +158,7 @@ export class Mic extends Emitter<MicEvents> {
   }
 
   close(): void {
+    const wasReady = this.ready;
     this.ready = false;
     void this.oracle.stop();
     if (this.node) this.node.port.onmessage = null;
@@ -166,5 +168,6 @@ export class Mic extends Emitter<MicEvents> {
     this.stream = undefined;
     void this.ctx?.close();
     this.ctx = undefined;
+    if (wasReady) this.emit('stopped', { reason: 'Microphone input stopped. Enable Camera + mic again before recording.' });
   }
 }

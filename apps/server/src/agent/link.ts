@@ -9,6 +9,7 @@ import { makerMatches, parseIdentityReply, portMatches } from '../devices/midi';
 import type { MidiProfile } from '../devices/profiles';
 import type { Dispatcher } from './dispatch';
 import { type ExecutorPick, pickExecutor, type Roster } from './executors';
+import { virtualScreenExecutor, visualSynthCompanions } from './visual-synth';
 
 export type LinkCapability = 'midi' | 'ir' | 'local';
 
@@ -38,11 +39,17 @@ export async function tryLink(
   opts: { linkId: string; profile?: MidiProfile; preferDeviceId?: string; signal?: AbortSignal; probeIdentity?: boolean } ,
 ): Promise<LinkOutcome> {
   const portHint = opts.profile?.usb?.portNameHint;
+  const virtualExecutor = virtualScreenExecutor(card);
+  const virtualDevice = virtualExecutor ? visualSynthCompanions(deps.roster.devices()).find((device) => device.deviceId === virtualExecutor) : undefined;
+  if (virtualExecutor && !virtualDevice) return { result: { linkId: opts.linkId, cardId: card.cardId, verdict: 'none', evidence: [], reason: 'The selected Mac visual synth is not connected. Reopen its companion and visuals.' } };
   const simulated = opts.profile?.id === VISUAL_SYNTH_ID && card.source === 'fixture'
     ? deps.roster.devices().filter((device) => device.online && device.kind === 'sim' && device.ports?.some((port) => port.kind === 'midi-out' && portHint && portMatches(port, portHint))) : [];
   const explicitlyLinked = deps.roster.devices().some((device) => device.deviceId === opts.preferDeviceId && device.online && device.ports?.some((port) => portHint && portMatches(port, portHint)));
   const preferDeviceId = !explicitlyLinked && simulated.length === 1 ? simulated[0].deviceId : opts.preferDeviceId;
-  const pick = pickExecutor(deps.roster, cap, { portHint, preferDeviceId });
+  const pick = virtualDevice
+    ? { deviceId: virtualDevice.deviceId, name: virtualDevice.name, kind: virtualDevice.kind,
+      port: virtualDevice.ports!.find((port) => port.id === 'ce-visual-synth' && port.kind === 'midi-out') }
+    : pickExecutor(deps.roster, cap, { portHint, preferDeviceId });
   const base: LinkResultPayload = { linkId: opts.linkId, cardId: card.cardId, verdict: 'none', evidence: [] };
   if (!pick) return { result: { ...base, reason: `no online client with "${cap}"` } };
   if (cap === 'midi' && !pick.port) return { result: { ...base, reason: 'connect the instrument and select a unique MIDI output in the Mac app' } };

@@ -245,11 +245,15 @@ async function observeOnce(deps: VerifyDeps, t: Target, driver: Driver, a: Drive
     if (!poly) {
       const r = await refreshPolygon(deps.sam, t, before.jpeg, before.width, before.height, o.signal, before.pose);
       poly = r.polygon;
-      o.onStep?.(r.fresh ? `outline re-found by ${r.model}` : 'outline from the scan frame', `${poly.length} points`);
+      o.onStep?.(r.fresh ? `outline re-found by ${r.model}` : t.detection ? 'outline from the scan frame' : 'User-aimed center of the camera; no detected outline', `${poly.length} points`);
     }
     // A repeatable baseline prevents a pattern already selected from producing a false miss.
     // Only this repo's silent virtual instrument supports these preparation commands.
     if (isVisualSynthPort(exec.port) && op.kind === 'midi') {
+      // Continuous animation is not evidence that a command worked. Freeze this repo's virtual
+      // instrument before taking its baseline; the loop restores defaults after verification.
+      await d.exec(exec.deviceId, { kind: 'midi', msg: 'cc', channel: 1, number: 1, value: 0 },
+        { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: `${a.actionId}:freeze-animation`, waitForSlot: true, signal: o.signal });
       const baseline: ExecOp | undefined = op.msg === 'pc' && op.number !== undefined
         ? { ...op, number: (op.number + 1) % 3 }
         : op.msg === 'cc' && typeof op.value === 'number'
@@ -285,7 +289,8 @@ async function observeOnce(deps: VerifyDeps, t: Target, driver: Driver, a: Drive
   if (sense === 'audio') {
     if (!o.micDeviceId) throw new ExecError('no microphone sensor online', 'offline');
     // a CC sweep is only audible while something sounds: hold a note through the before/after windows
-    const holdsNote = op.kind === 'midi' && op.msg !== 'note' && op.msg !== 'panic';
+    // A reviewed CC-only chart does not authorize a generated note. The wearer supplies the sound.
+    const holdsNote = op.kind === 'midi' && op.msg !== 'note' && op.msg !== 'panic' && !t.research?.profile?.reviewedChart;
     if (holdsNote) {
       const noteAction = driver.actions.find((x) => x.encode.kind === 'midi' && x.encode.msg === 'note');
       const noteOp: ExecOp = noteAction && noteAction.encode.kind === 'midi' ? { ...noteAction.encode, durationMs: 3000 } : { kind: 'midi', msg: 'note', channel: (op as { channel: number }).channel, number: 60, velocity: 100, durationMs: 3000 };

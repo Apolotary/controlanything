@@ -56,10 +56,20 @@ describe('guided forge publishing', () => {
     }));
     expect(hub.broadcast).toHaveBeenNthCalledWith(2, 'ui.partial', {
       specId: 'spec_light', cardId: 'light', runId: 'run-light', seq: 0,
-      control: item.control, hack: item.hack, part: item.part, hackItem: item.hackItem,
+      control: { ...item.control, armed: false }, hack: { ...item.hack, status: 'locked' }, part: item.part, hackItem: { ...item.hackItem, status: 'locked' },
     });
     emit({ type: 'spec', uiSpec: spec });
     expect(hub.broadcast).toHaveBeenLastCalledWith('ui.spec', spec);
+  });
+
+  it('marks streamed controls usable only when their actual driver commands passed', () => {
+    const { hub, target, emit } = setup();
+    target!.driver!.actions = [{ actionId: 'off', label: 'Off', kind: 'trigger', encode: { kind: 'local', op: 'volume', arg: 0 } }];
+    target!.verification.off = 'pass';
+    emit({ type: 'progress', progress: { ...progress, item } });
+    expect(hub.broadcast).toHaveBeenLastCalledWith('ui.partial', expect.objectContaining({
+      control: { ...item.control, armed: true }, hack: { ...item.hack, status: 'verified' }, hackItem: { ...item.hackItem, status: 'verified' },
+    }));
   });
 
   it.each(['abort', 'failed'] as const)('drops internal spec, progress and partial publishes after %s', (reason) => {

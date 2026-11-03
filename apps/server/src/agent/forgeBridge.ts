@@ -3,6 +3,7 @@ import { toAgentStep } from '../gen3d/routes';
 import type { Hub } from '../hub';
 import { stepGuidance } from './guidance';
 import type { TargetStore } from './targets';
+import { currentControlSpec, hackVerified } from './control-readiness';
 
 /** Forward current controls and progress, including skins that finish after discovery. */
 export function subscribeForge(
@@ -16,9 +17,10 @@ export function subscribeForge(
     if (event.type === 'spec') {
       const target = targets.get(event.uiSpec.cardId);
       if (target && (target.state === 'failed' || target.abort?.signal.aborted || target.driver?.driverId !== event.uiSpec.driverId)) return;
-      onSpec?.(event.uiSpec, forge.snapshot?.(event.uiSpec.specId));
+      const spec = target ? currentControlSpec(event.uiSpec, target) : event.uiSpec;
+      onSpec?.(spec, forge.snapshot?.(event.uiSpec.specId));
       if (!allowed(event.uiSpec.cardId)) return;
-      hub.broadcast('ui.spec', event.uiSpec);
+      hub.broadcast('ui.spec', spec);
       return;
     }
 
@@ -32,11 +34,13 @@ export function subscribeForge(
     hub.broadcast('agent.step', { ...stepGuidance(progress.phase, progress.status), ...toAgentStep(progress) });
     const item = progress.item;
     if (item) {
+      const verified = target ? hackVerified(target, item.hack) : undefined;
       hub.broadcast('ui.partial', {
         specId: forge.specIdFor(progress.cardId), cardId: progress.cardId, runId: progress.runId,
-        seq: item.seq, control: item.control, hack: item.hack,
+        seq: item.seq, control: verified === undefined ? item.control : { ...item.control, armed: verified },
+        hack: verified === undefined ? item.hack : { ...item.hack, status: verified ? 'verified' : 'locked' },
         ...(item.part ? { part: item.part } : {}),
-        ...(item.hackItem ? { hackItem: item.hackItem } : {}),
+        ...(item.hackItem ? { hackItem: verified === undefined ? item.hackItem : { ...item.hackItem, status: verified ? 'verified' : 'locked' } } : {}),
       });
     }
   });

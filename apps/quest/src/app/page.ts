@@ -23,10 +23,22 @@ export class Page {
   private readonly frameMsg = $<HTMLParagraphElement>('frame-msg');
   private lines: string[] = [];
 
+  presentation(emulator: boolean): void {
+    document.body.dataset.layout = emulator ? 'emulator' : 'launcher';
+    const diagnostics = $<HTMLDetailsElement>('developer-tools');
+    if (diagnostics) diagnostics.open = emulator;
+    window.dispatchEvent(new Event('resize'));
+  }
+
   badge(id: 'b-mode' | 'b-ws', text: string, cls: '' | 'ok' | 'warn' | 'bad' = ''): void {
     const el = $(id);
     el.textContent = text;
     el.className = `badge ${cls}`;
+  }
+
+  recordStatus(text: string): void {
+    const el = document.getElementById('recording-status');
+    if (el) el.textContent = text;
   }
 
   xrMessage(text: string): void {
@@ -56,7 +68,7 @@ export class Page {
     card.hidden = !p;
     if (!p) return;
     $('pair-code').textContent = p.display;
-    $('pair-msg').textContent = p.message ?? 'Approve it on the Mac companion, or type y in the server terminal.';
+    $('pair-msg').textContent = p.message ?? 'Approve this headset on your Mac companion.';
     void QRCode.toCanvas($<HTMLCanvasElement>('pair-qr'), p.qr, { margin: 1, width: 140 });
   }
 

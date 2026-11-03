@@ -28,7 +28,7 @@ export const DRIVE_SYSTEM =
   'every action has a short label, a kind (set = continuous, trigger = one shot, toggle), an `expect` (what a camera or microphone should observe: camera brighter/dimmer/on/off/warmer/cooler, audio louder/quieter/tone-up/tone-down/any, ack, none) and an inverseActionId where an undo exists. ' +
   'IR codes are named by ref ("lib:<brand>/ch<n>/<key>" from the brief, or "learned:<id>"), never invented; the server fills bytes and timings. ' +
   'For a dimmable light with brighter/dimmer triggers also add one "set" action with range {"min":0,"max":100,"step":10} whose encode is {"kind":"step","upActionId":...,"downActionId":...,"steps":10}. ' +
-  'For a synth prefer the parameters the brief marks as best for a demo: 4-8 "set" actions on the most audible CCs plus one note trigger. Never send SysEx other than the identity request, never tempo/record/randomize controls. ' +
+  'For a synth prefer the parameters the brief marks as best for a demo: 4-8 "set" actions on the most audible CCs plus one note trigger. MIDI CC action ranges are actual wire values (usually 0-127), never normalized UI ranges. Exception: a reviewed CC-only chart permits only its listed CCs, channel and value ranges, with audio effect verification; do not add notes, program changes or other message types. Never send SysEx other than the identity request, never tempo/record/randomize controls. ' +
   'For a silent visual instrument follow its chart instead: camera verification only, no notes, exactly Warp plus three pattern triggers, and include the CC action range and curve from the chart. ' +
   'provenance: cite the brief\'s sources. Keep it to at most 12 actions.';
 
@@ -44,6 +44,12 @@ export interface DriveResult {
 }
 
 export function driveMessages(card: DeviceCardPayload, research: Research, transport: Driver['transport'], executorKind: string | undefined, repair?: { draft: DriverDraft; issues: string }): ChatMessage[] {
+  const visualContract = transport === 'midi' && research.profile?.id === VISUAL_SYNTH_ID
+    ? [
+      'This is the known silent ControlAnything Visual Synth. Its protocol takes precedence over general synth suggestions and the other CCs listed in the research chart.',
+      'Return exactly these five actions: cc71, cc21, pattern0, pattern1, pattern2. Preserve each actionId, kind, encode, range, curve and expect exactly as specified below. Do not rename IDs, add controls, add notes, use audio verification, or replace program changes with CC messages.',
+      `Required visual synth actions: ${JSON.stringify(visualSynthDraft(card.cardId, []).actions)}`,
+    ].join('\n') : '';
   const msgs: ChatMessage[] = [
     { role: 'system', content: DRIVE_SYSTEM },
     {
@@ -53,6 +59,7 @@ export function driveMessages(card: DeviceCardPayload, research: Research, trans
         card.notes ? `Notes: ${card.notes}` : '',
         'Research brief:',
         research.brief,
+        visualContract,
         `Write the DriverDraft JSON (cardId "${card.cardId}", transport "${transport}").`,
       ]
         .filter(Boolean)
@@ -137,7 +144,7 @@ export async function drive(
     }
     throwIfCancelled(opts.signal);
     const draft = postProcess(res.data, card.cardId, transport);
-    const validation = validateDriver(draft, ids, vctx);
+    const validation = validateDriver(draft, ids, { ...vctx, expectedTransport: transport });
     const model = res.recordedFrom ?? res.model;
     last = { draft, validation, model, effort: step.effort, latencyMs: Date.now() - started, attempts: attempt, source: res.source, recordedFrom: res.recordedFrom };
     opts.onAttempt?.({ attempt, model, effort: step.effort, ok: validation.ok, issues: formatIssues(validation.issues), latencyMs: Date.now() - t0 });
@@ -195,11 +202,12 @@ export function templateMidiDraft(card: DeviceCardPayload, profile: MidiProfile,
     for (let c = a; c <= Math.min(b, a + 3); c++) if (!ccs.includes(c) && research.allowedCcs?.has(c)) ccs.push(c);
   }
   const picked = ccs.slice(0, 6);
+  const channel = profile.reviewedChart?.channel ?? 1;
   const actions: DriverDraft['actions'] = picked.map((cc) => {
     const p = profile.parameters.find((x) => x.cc === cc);
-    return { actionId: `cc${cc}`, label: (p?.name ?? `CC ${cc}`).split('/')[0].trim().slice(0, 40), kind: 'set', range: { min: 0, max: 127, step: 1 }, encode: { kind: 'midi', msg: 'cc', channel: 1, number: cc, value: '$value' }, expect: { sense: 'audio', effect: 'any' } };
+    return { actionId: `cc${cc}`, label: (p?.name ?? `CC ${cc}`).split('/')[0].trim().slice(0, 40), kind: 'set', range: { min: p?.range?.[0] ?? 0, max: p?.range?.[1] ?? 127, step: 1 }, encode: { kind: 'midi', msg: 'cc', channel, number: cc, value: '$value' }, expect: { sense: 'audio', effect: 'any' } };
   });
-  actions.push({ actionId: 'note', label: 'Play a note', kind: 'trigger', encode: { kind: 'midi', msg: 'note', channel: 1, number: 60, velocity: 100, durationMs: 600 }, expect: { sense: 'audio', effect: 'louder' } });
+  if (!profile.reviewedChart) actions.push({ actionId: 'note', label: 'Play a note', kind: 'trigger', encode: { kind: 'midi', msg: 'note', channel: 1, number: 60, velocity: 100, durationMs: 600 }, expect: { sense: 'audio', effect: 'louder' } });
   return { cardId: card.cardId, name: `${card.name} (template)`, transport: 'midi', provenance: research.provenance, actions, notes: 'FIXTURE/template driver built from the stored chart; no Meta model wrote it' };
 }
 

@@ -6,17 +6,26 @@
  *   exec.ack / sense.result -> Dispatcher · arm.confirm -> ArmService · control.event / panic -> ControlRouter
  *   voice.audio / voice.text -> VoiceRelay · gen3d.generate / gen3d.edit -> the forge
  */
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { type DeviceCardPayload, EXPERIMENTAL_TYPE, newId, type TargetCancelPayload, type TargetRetryPayload, type Hack, type MessageType, type PayloadOf, type TargetSelectPayload, type UiSpecPayload, type Mode, type TagAddPayload, type TagsStatePayload, type LibraryStatePayload, type RoomPlacement } from '@ce/protocol';
 import type { ServerContext } from '../context';
 import { loadProfiles, type Profiles } from '../devices/profiles';
+import { MidiChartStore } from '../devices/midi-charts';
 import { getForge } from '../gen3d';
 import type { Forge } from '../gen3d/forge';
 import type { HubMessageEvent } from '../hub';
 import { createMuseChat, type FixtureMuse, type MuseChat } from '../muse/adapter';
 import { createWebSearcher } from '../research/websearch';
+import { InteractionMemory } from '../knowledge/interactions';
+import { CanvasStore } from '../canvas/store';
+import { CanvasService, registerCanvasFixture } from '../canvas/service';
 import { createSam, type Sam } from '../scan/sam';
-import { VoiceRelay } from '../voice/relay';
+import { VoiceRelay, type VoiceActions } from '../voice/relay';
+import { DeviceAssistant, registerAssistantFixtures } from '../voice/assistant';
+import { visualSynthCard, visualSynthCompanions, visualSynthHosts, virtualScreenExecutor, VIRTUAL_SCREEN_GUIDANCE } from './visual-synth';
+import { currentControlSpec, verifiedControlCount } from './control-readiness';
+import { IdentityCorrections } from './identity-correction';
+import { ConnectedPeripherals, GENERAL_ASSISTANT_CARD } from './connected-peripheral';
 import { ArmService } from './arm';
 import { BLACKOUT_ID, BREATHE_DAEMON_ID, BREATHE_ID, buildRoomSpec, ComboRunner, ROOM_CARD_ID, ROOM_SPEC_ID } from './combos';
 import { ControlRouter } from './control';
@@ -31,6 +40,7 @@ import { runLoop } from './loop';
 import { CANCELLED_GUIDANCE, type TimedPhase } from './guidance';
 import { subscribeForge } from './forgeBridge';
 import { restoreSavedForge } from './restoreForge';
+import { visualSynthNeedsUpgrade } from '../devices/visualSynth';
 import { detachRouteBridge } from '../gen3d/routes';
 import { MacLocalExecutor } from './maclocal';
 import { loadRecordedSpeech } from './recordedSpeech';
@@ -38,6 +48,7 @@ import { ScanService } from './scan';
 import { StepLog } from './steps';
 import { TargetStore } from './targets';
 import { TagStore, evaluateConnection, tagCapability, tagSnapshot } from './tags';
+import { interactionReferences } from './interaction-references';
 import { helperPairUrls } from '../net';
 import type { Target } from './types';
 
@@ -59,6 +70,8 @@ export interface Agent {
   /** rebuild and broadcast the room spec now */
   publishRoom(): UiSpecPayload | undefined;
   profiles: Profiles;
+  midiCharts: MidiChartStore;
+  invalidateMidiChart(cardId: string): void;
   sam: Sam;
   roster: Roster;
   forge(): Forge | undefined;
@@ -113,38 +126,79 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   if (muse.mode === 'fixture' && 'register' in muse) {
     (muse as FixtureMuse).register('device_card', fixtureDeviceCard as never);
     (muse as FixtureMuse).register('driver_draft', fixtureDriverDraft as never);
+    registerAssistantFixtures(muse as FixtureMuse);
+    registerCanvasFixture(muse as FixtureMuse);
   }
   const wonder: MuseChat | undefined = muse.mode === 'live' ? createMuseChat({ ...ctx.config.muse, model: WONDER_MODEL }, { callLog: ctx.calls, log }) : undefined;
   const sam = createSam(ctx.config.muse, { callLog: ctx.calls, log });
-  const web = createWebSearcher(ctx.config.muse, { callLog: ctx.calls });
+  const knowledgeDir = opts.tagsFile ? dirname(opts.tagsFile) : ctx.config.dataDir;
+  const web = createWebSearcher(ctx.config.muse, { callLog: ctx.calls,
+    cacheFile: opts.tagsFile === null ? undefined : join(knowledgeDir, 'research-cache.json') });
+  const memory = new InteractionMemory(opts.tagsFile === null ? undefined : join(knowledgeDir, 'interaction-memory.json'));
+  for (const warning of memory.warnings) log(`[memory] ${warning}`);
   const profiles = loadProfiles();
+  const midiCharts = new MidiChartStore(opts.tagsFile === null ? undefined : join(knowledgeDir, 'reviewed-midi-charts.json'));
+  for (const warning of midiCharts.warnings) log(`[midi-charts] ${warning}`);
   const macEnabled = opts.macLocal ?? (process.platform === 'darwin' && !process.env.VITEST && process.env.CE_MAC_LOCAL !== '0');
   // CE_MAC_SILENT=1: this Mac must stay silent; nothing audible runs and a recorded clip stands in for its voice
   const macLocal = new MacLocalExecutor(undefined, macEnabled, process.env.CE_MAC_SILENT === '1');
   const silentSpeech = macLocal.silent ? loadRecordedSpeech(undefined, log) : undefined;
   if (macLocal.silent) log('[silent] CE_MAC_SILENT=1: say / Music are not run and the volume is kept in memory; acks and evidence say so');
   // a sensor whose last reply timed out (a dead headset tab) yields to a healthy one for ~30 s
-  const roster: Roster = { devices: () => hub.devices(), macLocal: macLocal.available,
+  const roster: Roster = { devices: () => hub.devices(), macLocal: macLocal.available, silentLocal: macLocal.silent,
     helperUrl: () => helperPairUrls(ctx.bound.http ?? ctx.config.http.port)[0], unhealthy: (id) => dispatcher.unhealthy(id) };
   const steps = new StepLog(hub, log);
   const targets = new TargetStore(hub, log);
   const tags = new TagStore(opts.tagsFile === null ? undefined : opts.tagsFile ?? join(ctx.config.dataDir, 'library.json'));
   for (const warning of tags.loadWarnings) log(`[library] ${warning}`);
   let mode: Mode = 'annotate';
+  const canvasStore = new CanvasStore(opts.tagsFile === null ? undefined : join(knowledgeDir, 'canvas-history.json'));
+  for (const warning of canvasStore.warnings) log(`[canvas] ${warning}`);
+  const canvas = new CanvasService({ muse, store: canvasStore, log,
+    object: (cardId) => {
+      const target = targets.get(cardId);
+      if (mode !== 'control' || !tags.has(cardId) || !target) return;
+      return { name: target.card?.name ?? target.detection?.label ?? tags.get(cardId)?.label ?? 'Tagged object', category: target.card?.category,
+        visibleText: target.card?.visibleText, evidence: target.card?.evidence, source: target.card?.source, modelId: target.card?.modelId };
+    },
+    broadcast: (state) => hub.broadcast('canvas.state', state),
+    send: (sender, state) => hub.sendToDevice(sender, 'canvas.state', state),
+  });
   const setups = new Set<string>();
-  for (const tag of tags.list()) targets.create({ ...tag, state: tag.armed ? 'armed' : tag.card ? 'identified' : 'scanned' });
+  const identityCorrections = new IdentityCorrections();
+  const connectedPeripherals = new ConnectedPeripherals();
+  const needsReviewedMidiChart = (t: Target) => (t.identityCorrection?.firmware === 'unknown' || t.cardId.startsWith('connected-op1-field-')) && !!t.card && !midiCharts.profile(t.card);
+  const reviewedChartHint = 'Firmware is not confirmed. On the Mac, open Details and review an incoming MIDI chart before setting up controls.';
+  const midiPermissionsCurrent = (t: Pick<Target, 'cardId' | 'card' | 'research'>) => midiCharts.isCurrent(t.cardId, t.card, t.research?.profile);
+  // Keep old versions as history, but never restore their execution authority after a chart change.
+  const restoreTarget = (saved: Parameters<TargetStore['create']>[0] & { cardId: string }) => {
+    const t = targets.create(saved);
+    if (!midiPermissionsCurrent(t)) {
+      tags.setEnabled(t.cardId, false);
+      t.armed = false; t.verification = {}; t.evidence = []; t.driver = undefined; t.specId = undefined; t.controlCount = undefined;
+      t.research = undefined; t.state = t.card ? 'identified' : 'scanned';
+      t.sentence = 'MIDI chart changed'; t.hint = 'Set up control again to verify the current reviewed controls'; t.action = 'retry';
+    }
+    if (visualSynthNeedsUpgrade(t.driver)) {
+      tags.setEnabled(t.cardId, false); t.armed = false;
+      t.state = 'identified'; t.sentence = 'Visual controls update available';
+      t.hint = 'Set up control to add forward/back Water ripples'; t.action = 'retry';
+    }
+    return t;
+  };
+  for (const tag of tags.list()) restoreTarget({ ...tag, state: tag.armed ? 'armed' : tag.card ? 'identified' : 'scanned' });
   const connected = (t: Target) => tags.has(t.cardId) && evaluateConnection(t, roster).connection !== 'offline';
-  const canControl = (t: Target) => mode === 'control' && tags.has(t.cardId) && Boolean(t.specId && usableSpec(deviceSpec(t.specId))) && evaluateConnection(t, roster).connection === 'ready';
+  const canControl = (t: Target) => midiPermissionsCurrent(t) && mode === 'control' && tags.has(t.cardId) && Boolean(t.specId && verifiedControlCount(deviceSpec(t.specId), t)) && evaluateConnection(t, roster).connection === 'ready';
   const dispatcher = new Dispatcher({ hub, macLocal, log, canExec: (request) => {
     const t = request.cardId ? targets.get(request.cardId) : undefined;
     if (request.op.kind === 'midi' && request.op.msg === 'panic') return t?.driver?.executor.deviceId === request.executorDeviceId;
-    if (!t || mode !== 'control' || !connected(t) || !t.driver) return false;
+    if (!t || !midiPermissionsCurrent(t) || mode !== 'control' || !connected(t) || !t.driver) return false;
     if (t.driver.executor.deviceId !== request.executorDeviceId || (request.port && t.driver.executor.port !== request.port)) return false;
     if (request.driverId && request.driverId !== t.driver.driverId) return false;
     if (canControl(t)) return (request.op.kind === 'midi' && request.op.msg === 'panic') || Boolean(request.actionId && t.verification[request.actionId] === 'pass');
     return setups.has(t.cardId) && t.state === 'verifying' && Boolean(t.abort && !t.abort.signal.aborted);
   } });
-  const arm = new ArmService({ hub, targets, steps, log, canArm: (t) => mode === 'control' && connected(t) && setups.has(t.cardId) });
+  const arm = new ArmService({ hub, targets, steps, log, canArm: (t) => midiPermissionsCurrent(t) && mode === 'control' && connected(t) && setups.has(t.cardId) });
   // Own the broadcast bridge so cancelled discovery runs cannot publish stale controls.
   const sharedForge = opts.forge ? undefined : getForge(ctx, { broadcast: false });
   const forge = opts.forge ?? (() => sharedForge);
@@ -160,7 +214,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       ...(skin ? { skinRefs: [tags.putAsset(skin.bytes, 'webp', skin.mime)] } : {}),
     };
   };
+  let assistant: DeviceAssistant | undefined;
   const activeForge = forge();
+  activeForge?.setReferences?.((query) => interactionReferences(tags.library(), query));
   const unsubscribeForge = activeForge?.subscribe ? subscribeForge(activeForge, hub, targets, (cardId) => {
     const t = targets.get(cardId);
     if (!t) return !tags.get(cardId); // Standalone HTTP samples have no saved device intent.
@@ -184,11 +240,18 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     return [forge()?.get(specId), tags.list().find((t) => t.uiSpec?.specId === specId)?.uiSpec]
       .find((spec) => spec && spec.driverId === targets.get(spec.cardId ?? '')?.driver?.driverId);
   };
-  const usableSpec = (spec?: UiSpecPayload): boolean => Boolean(spec?.widgets?.length || spec?.gen3d?.controls.length || spec?.hackset?.hacks.length);
   const specs = {
     get: (specId: string) => (specId === ROOM_SPEC_ID ? room : deviceSpec(specId)),
     list: () => [...new Map([...(forge()?.list() ?? []), ...tags.list().flatMap((t) => t.uiSpec ? [t.uiSpec] : [])].filter((spec) => deviceSpec(spec.specId)).map((spec) => [spec.specId, spec])).values(), ...(room ? [room] : [])],
   };
+  targets.setStatusProjection((target, status) => {
+    if (!['armed', 'controlling', 'forged'].includes(target.state)) return status;
+    const connection = evaluateConnection(target, roster);
+    if (connection.connection === 'offline') return { ...status, sentence: 'Controls unavailable', hint: connection.hint, detail: 'offline' };
+    const count = verifiedControlCount(target.specId ? deviceSpec(target.specId) : undefined, target);
+    return count ? { ...status, sentence: `${count} verified control${count === 1 ? '' : 's'}${target.armed ? ' enabled' : ' · choose Enable'}` }
+      : { ...status, sentence: 'No displayed controls have passed verification', hint: 'Set up control again, or choose Try visual synth from Menu.' };
+  });
   const heard = (line: string, wav: Uint8Array, signal?: AbortSignal) => hearBack({ transcriber: ctx.transcriber, recordDir: ctx.config.muse.recordDir, replayDir: ctx.config.muse.replayDir, log }, line, wav, signal);
   // room hacks: daemons start after a tap, combos run with a tap of their own
   const onRoomHack = (hack: Hack, spec: UiSpecPayload, value: number | boolean, from?: string) => {
@@ -244,56 +307,154 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       .filter((t) => t.specId)
       .sort((x, y) => y.since - x.since)[0];
   };
-  const voice = new VoiceRelay({
-    hub,
-    transcriber: ctx.transcriber,
-    log,
-    actions: {
-      panic: (reason) => {
-        panic(reason);
-      },
-      undo: (cardId) => {
-        // the newest thing that happened: a room combo or a device hack
-        const t = latestSpecTarget(cardId);
-        const comboAt = combos.lastRun?.startedAt ?? 0;
-        if (comboAt && (!t || comboAt > t.since)) {
-          void combos.undo();
-          return true;
-        }
-        return t ? control.undo(t).ok : false;
-      },
-      hack: (text, cardId) => {
-        const lower0 = text.toLowerCase();
-        if (room?.hackset) {
-          const blackout = room.hackset.hacks.find((h) => h.id === BLACKOUT_ID);
-          const breathe = room.hackset.hacks.find((h) => h.id === BREATHE_ID);
-          if (blackout && /black ?out|lights out everything|everything off/.test(lower0)) return onRoomHack(blackout, room, true, 'voice').ok;
-          if (breathe && /breath/.test(lower0)) {
-            if (/stop|pause|kill|end/.test(lower0)) return onRoomHack(breathe, room, false, 'voice').ok;
-            const bpm = /(\d{2,3})\s*(bpm|beats)?/.exec(lower0);
-            return onRoomHack(breathe, room, bpm ? Number(bpm[1]) : true, 'voice').ok;
-          }
-        }
-        const t = latestSpecTarget(cardId);
-        const spec = t?.specId ? specs.get(t.specId) : undefined;
-        if (!t || !spec?.hackset) return false;
-        const lower = text.toLowerCase();
-        const hack = spec.hackset.hacks.find((h) => lower.includes(h.name.toLowerCase()) || lower.includes(h.id.toLowerCase()));
-        if (!hack) return false;
-        const m = /(\d{1,3})\s*(%|percent)?/.exec(lower);
-        return control.runHack(t, hack.id, m ? Number(m[1]) : undefined).ok;
-      },
-      edit: async (instruction, specId) => {
-        const t = targets.list().find((t) => t.specId === specId);
-        if (!t || !canControl(t)) return false;
-        const f = forge();
-        if (!f || !specId) return false;
-        const r = await f.edit({ specId, instruction });
-        return r.ok;
-      },
-      scan: () => steps.note('scan', 'scan requested by voice', { kind: 'proof' }),
-      specFor: (cardId) => latestSpecTarget(cardId)?.specId,
+  const voiceActions: VoiceActions = {
+    panic: (reason) => {
+      panic(reason);
     },
+    undo: (cardId) => {
+      // the newest thing that happened: a room combo or a device hack
+      const t = latestSpecTarget(cardId);
+      const comboAt = combos.lastRun?.startedAt ?? 0;
+      if (!cardId && comboAt && (!t || comboAt > t.since)) {
+        void combos.undo();
+        return true;
+      }
+      return t ? control.undo(t).ok : false;
+    },
+    hack: (text, cardId) => {
+      const lower0 = text.toLowerCase();
+      if (!cardId && room?.hackset) {
+        const blackout = room.hackset.hacks.find((h) => h.id === BLACKOUT_ID);
+        const breathe = room.hackset.hacks.find((h) => h.id === BREATHE_ID);
+        if (blackout && /black ?out|lights out everything|everything off/.test(lower0)) return onRoomHack(blackout, room, true, 'voice').ok;
+        if (breathe && /breath/.test(lower0)) {
+          if (/stop|pause|kill|end/.test(lower0)) return onRoomHack(breathe, room, false, 'voice').ok;
+          const bpm = /(\d{2,3})\s*(bpm|beats)?/.exec(lower0);
+          return onRoomHack(breathe, room, bpm ? Number(bpm[1]) : true, 'voice').ok;
+        }
+      }
+      const t = latestSpecTarget(cardId);
+      const spec = t?.specId ? specs.get(t.specId) : undefined;
+      if (!t || !spec?.hackset) return false;
+      const lower = text.toLowerCase();
+      const hack = spec.hackset.hacks.find((h) => lower.includes(h.name.toLowerCase()) || lower.includes(h.id.toLowerCase()));
+      if (!hack) return false;
+      const m = /(\d{1,3})\s*(%|percent)?/.exec(lower);
+      return control.runHack(t, hack.id, m ? Number(m[1]) : undefined).ok;
+    },
+    edit: async (instruction, specId, cardId, signal) => {
+      const t = targets.list().find((t) => t.specId === specId);
+      if (!t || (cardId && t.cardId !== cardId) || !canControl(t)) return false;
+      const f = forge();
+      if (!f || !specId) return false;
+      const r = await f.edit({ specId, instruction, signal });
+      return r.ok;
+    },
+    scan: () => steps.note('scan', 'scan requested by voice', { kind: 'proof' }),
+    specFor: (cardId) => latestSpecTarget(cardId)?.specId,
+    canvasFor: (cardId) => !!cardId && !!canvas.document(cardId),
+  };
+  assistant = new DeviceAssistant({
+    muse, forge, log, memory, web,
+    broadcast: (payload) => hub.broadcast('voice.text', payload),
+    device: (cardId) => {
+      const t = targets.get(cardId);
+      if (!t || !tags.has(cardId)) return undefined;
+      let connection = evaluateConnection(t, roster);
+      const spec = t.specId ? specs.get(t.specId) : undefined;
+      if (connection.connection === 'ready' && !verifiedControlCount(spec, t)) connection = { connection: 'setup', hint: 'Set up control to verify the displayed actions.' };
+      return { cardId, identityRevision: t.identityRevision ?? 0, name: t.card?.name ?? t.detection?.label ?? tags.get(cardId)?.label ?? cardId, mode,
+        ...connection, armed: t.armed, setupRunning: setups.has(cardId), protocols: t.card?.protocols,
+        ...(needsReviewedMidiChart(t) ? { setupBlocked: reviewedChartHint } : {}),
+        identity: t.card ? { maker: t.card.maker, model: t.card.model, category: t.card.category,
+          confidence: t.card.confidence, visibleText: t.card.visibleText, evidence: t.card.evidence, notes: t.card.notes } : undefined,
+        driver: t.driver, verification: t.verification, spec,
+        canvas: canvas.document(cardId) ? { title: canvas.document(cardId)!.spec.title, revision: canvas.document(cardId)!.revision } : undefined };
+    },
+    edit: (text, specId, cardId, signal) => voiceActions.edit(text, specId, cardId, signal),
+    command: (text, cardId) => voiceActions.hack(text, cardId),
+    canvas: (prompt, cardId, sender, requestId, signal) => canvas.isSelected(sender, cardId)
+      ? canvas.request(sender, { cardId, requestId, prompt, baseRevision: canvas.document(cardId)?.revision }, signal) : Promise.resolve(false),
+    connectedDevices: () => hub.devices().filter((d) => d.online && d.role === 'companion').slice(0, 12)
+      .map((d) => ({ name: d.name, ports: (d.ports ?? []).filter((p) => p.state === 'connected').slice(0, 16).map((p) => `${p.name} (${p.kind})`) })),
+    proposePeripheral: async (text, cardId, sender, signal) => {
+      if (signal.aborted) return { ok: false, text: 'The instrument request was cancelled.' };
+      const host = cardId === GENERAL_ASSISTANT_CARD ? undefined : targets.get(cardId);
+      if (cardId !== GENERAL_ASSISTANT_CARD && (!host || !tags.has(cardId))) return { ok: false, text: 'The host is no longer tagged. Select it and ask again.' };
+      const result = connectedPeripherals.propose(host, cardId, text, sender, hub.devices());
+      if (!result.ok) return result;
+      signal.addEventListener('abort', () => connectedPeripherals.cancel(sender, cardId), { once: true });
+      return { ok: true, ...result.proposal };
+    },
+    confirmPeripheral: (proposalId, cardId, sender, accept) => {
+      const host = cardId === GENERAL_ASSISTANT_CARD ? undefined : targets.get(cardId);
+      if (cardId !== GENERAL_ASSISTANT_CARD && (!host || !tags.has(cardId))) return { ok: false, text: 'The host is no longer tagged. Review the instrument again.' };
+      const result = connectedPeripherals.confirm(host, { proposalId, cardId, sender, accept }, hub.devices());
+      if (!result.ok || result.dismissed) return result;
+      let target = targets.get(result.card.cardId);
+      if (target?.armed || target?.armId || target?.abort && !target.abort.signal.aborted) return { ok: false, text: 'Stop the instrument controls and finish setup before selecting it again.' };
+      if (!tags.has(result.card.cardId) && tags.library().length >= 64) return { ok: false, text: 'Your saved device list is full. Forget an unused device, then choose the instrument again.' };
+      const created = !target;
+      if (!target) target = targets.create({ cardId: result.card.cardId, card: result.card, state: 'identified', selectedBy: sender,
+        selection: { preferDeviceId: result.port.deviceId, userText: 'Owner-confirmed OP-1 Field connected to the paired Mac. Firmware and physical controls remain unverified.' },
+        sentence: 'OP-1 Field selected', hint: 'Review the incoming MIDI chart in Mac Details, then set up and verify controls.' });
+      try { tags.add(target, 'OP-1 Field'); }
+      catch (error) {
+        if (created) targets.remove(target.cardId);
+        log(`[peripheral] save failed: ${(error as Error).message}`);
+        return { ok: false, text: 'The connected instrument could not be saved. No controls were started.' };
+      }
+      target.selectedBy = sender;
+      canvas.select(sender, target.cardId);
+      hub.broadcast('device.card', target.card!); publishTags();
+      hub.broadcast('target.status', targets.status(target));
+      return { ok: true, selectedCardId: target.cardId,
+        text: 'OP-1 Field selected as a separate connected instrument; the laptop is unchanged. Controls are off. Confirm firmware and review its incoming MIDI chart in Mac Details, then choose Set up control and verify the effect. Ask for your gesture mapping after enabling the verified controls.' };
+    },
+    proposeIdentity: async (text, cardId, sender, signal) => {
+      const target = targets.get(cardId);
+      if (signal.aborted || !target || !tags.has(cardId)) return { ok: false, text: 'Select a tagged object before correcting its identity.' };
+      const result = identityCorrections.propose(target, text, sender, hub.devices());
+      if (!result.ok) return { ok: false, text: result.reason };
+      signal.addEventListener('abort', () => identityCorrections.cancel(sender, cardId), { once: true });
+      return { ok: true, proposalId: result.proposal.proposalId, text: result.proposal.summary, summary: result.proposal.reviewLines };
+    },
+    confirmIdentity: (proposalId, cardId, sender, accept) => {
+      // Only the owner/local voice.confirm message route reaches this callback. The review
+      // itself binds sender, card, runtime state and the current physical MIDI output.
+      const target = targets.get(cardId);
+      if (!target || !tags.has(cardId)) return { ok: false, text: 'This object is no longer tagged. Review its identity again.' };
+      const result = identityCorrections.confirm(target, { proposalId, cardId, sender, accept, canApprove: true }, hub.devices());
+      if (result.status !== 'confirmed') return { ok: result.status === 'dismissed', text: result.reason };
+      let saved;
+      try {
+        // Commit first: a disk failure must not leave live identity and durable controls disagreeing.
+        saved = tags.correctIdentity({ ...target, ...result.patch }, result.audit);
+        if (!saved) return { ok: false, text: 'The saved object is unavailable. No identity or controls were changed.' };
+      } catch (error) {
+        log(`[identity] save failed: ${(error as Error).message}`);
+        return { ok: false, text: 'The correction could not be saved. No identity or controls were changed; please review it again.' };
+      }
+      Object.assign(target, result.patch, { identityRevision: saved.identityRevision, identityCorrection: saved.identityCorrection });
+      // Live authority must cross the same boundary even if optional cache cleanup fails.
+      const cleanup = (name: string, fn: () => unknown) => { try { fn(); } catch (error) { log(`[identity] ${name} cleanup failed: ${(error as Error).message}`); } };
+      cleanup('identification', () => identifying.get(cardId)?.abort()); identifying.delete(cardId); tagIdentity.delete(cardId);
+      cleanup('canvas', () => canvas.invalidate(cardId)); cleanup('voice', () => voice.invalidate(cardId));
+      cleanup('assistant', () => assistant?.invalidate(cardId)); cleanup('combos', () => combos.cancel(cardId));
+      cleanup('controls', () => control.cancel(target)); setups.delete(cardId);
+      for (const version of tags.library().find((record) => record.cardId === cardId)?.versions ?? []) cleanup('old interface', () => forge()?.forget?.(version.specId));
+      cleanup('interaction memory', () => memory.forget(cardId));
+      hub.broadcast('device.card', target.card!);
+      hub.broadcast('target.status', targets.status(target));
+      publishTags();
+      return { ok: true, text: 'Identity corrected to OP-1 Field. Old controls were cleared and controls remain off. Firmware and physical control are not verified. Review an incoming MIDI chart in Mac Details before a new setup.' };
+    },
+  });
+  const voice = new VoiceRelay({ hub, transcriber: ctx.transcriber, log,
+    actions: { ...voiceActions, workspaceIssue: (input) => assistant!.workspaceIssue(input), assist: (input, sender) => {
+      if (input.cardId && tags.has(input.cardId)) canvas.select(sender, input.cardId);
+      return assistant!.ask(input, sender);
+    } },
   });
 
   const restoreVolume = async (value: number, signal: AbortSignal) => {
@@ -301,15 +462,18 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     const result = await macLocal.exec({ kind: 'local', op: 'volume', arg: value });
     if (!result.ok) throw new Error(result.detail ?? 'volume restoration failed');
   };
-  const loopDeps = { hub, targets, steps, dispatcher, roster, sam, spark: muse, wonder, web, profiles, forge, arm, heard, readVolume: () => macLocal.currentVolume(), restoreVolume, silentSpeech, log, companionWaitMs: opts.companionWaitMs, phaseTimeoutMs: opts.phaseTimeoutMs, settleMs: opts.settleMs, learnIr: opts.learnIr };
+  const loopDeps = { hub, targets, steps, dispatcher, roster, sam, spark: muse, wonder, web, profiles, midiCharts, forge, arm, heard, readVolume: () => macLocal.currentVolume(), restoreVolume, silentSpeech, log, companionWaitMs: opts.companionWaitMs, phaseTimeoutMs: opts.phaseTimeoutMs, settleMs: opts.settleMs, learnIr: opts.learnIr };
 
   const tagsState = (): TagsStatePayload => ({ tags: tags.list().flatMap((tag) => {
     const target = targets.get(tag.cardId);
     if (!target) return [];
     const snapshot = tagSnapshot(tag, target, roster);
-    if (snapshot.connection === 'ready' && (!target.specId || !usableSpec(deviceSpec(target.specId)))) {
+    if (snapshot.connection === 'ready' && (!target.specId || !verifiedControlCount(deviceSpec(target.specId), target))) {
       snapshot.connection = 'setup';
-      snapshot.hint = 'Set up control for this device';
+      snapshot.hint = 'Displayed controls have not passed verification. Set up control to check them.';
+    }
+    if (snapshot.connection !== 'offline' && needsReviewedMidiChart(target)) {
+      snapshot.connection = 'setup'; snapshot.hint = reviewedChartHint;
     }
     return [snapshot];
   }) });
@@ -326,6 +490,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const publishTags = () => {
     hub.broadcast('library.state', libraryState());
     hub.broadcast('tags.state', tagsState());
+    assistant?.refresh();
   };
   const unsubscribeTags = targets.onChange((t) => {
     if (!tags.has(t.cardId)) return;
@@ -334,6 +499,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     publishTags();
   });
   const stop = (t: Target, reason = 'cancelled') => {
+    canvas.invalidate(t.cardId);
+    voice.invalidate(t.cardId);
+    assistant?.invalidate(t.cardId);
     combos.cancel(t.cardId);
     setups.delete(t.cardId);
     t.abort?.abort(new Error(reason));
@@ -343,6 +511,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     targets.setState(t, 'failed', reason, CANCELLED_GUIDANCE);
   };
   const panic = (reason = 'panic', cardId?: string) => {
+    canvas.invalidate(cardId);
+    voice.invalidate(cardId);
+    assistant?.invalidate(cardId);
     combos.cancel(cardId);
     daemons.stopAll(reason);
     for (const record of tags.library()) if (!cardId || record.cardId === cardId) tags.setEnabled(record.cardId, false);
@@ -354,6 +525,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   };
   const setMode = (next: Mode) => {
     if (mode === next) return;
+    voice.invalidate();
+    assistant?.invalidate();
+    canvas.invalidate();
     mode = next;
     if (mode === 'annotate') {
       combos.cancel();
@@ -403,7 +577,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     let t = savedId ? targets.get(savedId) : undefined;
     const saved = savedId ? tags.get(savedId) : undefined;
     if (p.cardId && !saved) return undefined;
-    if (!t && saved) t = targets.create({ ...saved, state: saved.armed ? 'armed' : saved.card ? 'identified' : 'scanned' });
+    if (!t && saved) t = restoreTarget({ ...saved, state: saved.armed ? 'armed' : saved.card ? 'identified' : 'scanned' });
     if (!t && match?.cardId) t = targets.get(match.cardId);
     const detection = frame ? scan.tagDetection(frame.frame.frameId, p.detId ?? match?.detId, p.label) : undefined;
     if (!t && detection) t = targets.list().find((known) => known.detection?.sensorDeviceId === detection.sensorDeviceId && known.detection.detId === detection.detId);
@@ -418,6 +592,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     return t;
   };
   const removeTag = (cardId: string): boolean => {
+    canvas.invalidate(cardId);
+    voice.invalidate(cardId);
+    assistant?.invalidate(cardId);
     if (!tags.has(cardId)) return false;
     identifying.get(cardId)?.abort();
     identifying.delete(cardId);
@@ -438,12 +615,16 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     const specIds = new Set(tags.library().find((record) => record.cardId === cardId)?.versions.map((version) => version.specId));
     for (const specId of specIds) forge()?.forget?.(specId);
     tags.forget(cardId);
+    memory.forget(cardId);
+    canvas.forget(cardId);
     targets.remove(cardId);
     publishTags();
     return true;
   };
   const restoreVersion = (cardId: string, versionId: string): boolean => {
-    if (!tags.library().some((record) => record.cardId === cardId && record.versions.some((version) => version.versionId === versionId))) return false;
+    if (!tags.canRestoreVersion(cardId, versionId)) return false;
+    voice.invalidate(cardId);
+    assistant?.invalidate(cardId);
     const previous = targets.get(cardId);
     if (previous) {
       setups.delete(cardId);
@@ -455,7 +636,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (!saved) return false;
     restoreSavedForge(forge(), saved, log);
     if (tags.has(cardId)) {
-      const target = targets.create({ ...saved, state: saved.armed ? 'armed' : saved.card ? 'identified' : 'scanned' });
+      const target = restoreTarget({ ...saved, state: saved.armed ? 'armed' : saved.card ? 'identified' : 'scanned' });
       if (mode === 'control') showControls(target);
     }
     publishTags();
@@ -478,11 +659,12 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       ? hub.sendToDevice(deviceId, type, payload) : hub.broadcast(type, payload);
     if (t.card) send('device.card', t.card);
     if (t.link) send('link.result', t.link);
+    if (!midiPermissionsCurrent(t)) return;
     if (t.driver) send('driver.spec', t.driver);
     for (const evidence of t.evidence) send('verify.result', evidence);
     if (t.specId) {
       const spec = specs.get(t.specId);
-      if (spec) send('ui.spec', spec);
+      if (spec) send('ui.spec', currentControlSpec(spec, t));
     }
     if (t.driver) send('driver.status', { driverId: t.driver.driverId, cardId: t.cardId, phase: t.armed ? 'armed' : 'disarmed', actions: t.driver.actions.map((a) => ({ actionId: a.actionId, verified: t.verification[a.actionId] ?? 'untested' })), modelId: t.driver.modelId });
   };
@@ -496,6 +678,13 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       state.tags = state.tags.map((tag) => tag.cardId === cardId ? { ...tag, connection: 'offline', hint, action } : tag);
       hub.sendToDevice(from.deviceId, 'tags.state', state);
       steps.note('link', hint, { cardId, kind: 'proof', status: 'fail', sentence: hint, hint, action });
+      return undefined;
+    }
+    if (needsReviewedMidiChart(t)) {
+      t.hint = reviewedChartHint;
+      // A rejected setup must terminate the requesting client's busy state. No run or device command started.
+      hub.sendToDevice(from.deviceId, 'target.status', { ...targets.status(t), state: 'failed', sentence: 'Review the MIDI chart first', detail: reviewedChartHint, hint: reviewedChartHint, action: 'retry' });
+      steps.note('research', reviewedChartHint, { cardId, kind: 'proof', status: 'fail', sentence: 'Review the MIDI chart first', hint: reviewedChartHint });
       return undefined;
     }
     if (t.abort && !t.abort.signal.aborted) return t;
@@ -514,7 +703,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     t.runId = newId('run-');
     setups.add(t.cardId);
     // A completed setup that was declined only needs a fresh ARM confirmation.
-    if (!rerun && t.specId && t.driver && Object.values(t.verification).includes('pass') && specs.get(t.specId)) {
+    if (!rerun && !visualSynthNeedsUpgrade(t.driver) && midiPermissionsCurrent(t) && t.specId && t.driver && verifiedControlCount(specs.get(t.specId), t) > 0) {
       const abort = new AbortController();
       t.abort = abort;
       showControls(t, from.deviceId);
@@ -541,7 +730,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     t.armed = false;
     t.lastError = undefined;
     const runId = t.runId;
-    void runLoop(loopDeps, t, { ...t.selection, identified: tagIdentity.get(t.cardId) }).finally(() => {
+    void runLoop(loopDeps, t, { ...t.selection, identified: tagIdentity.get(t.cardId), refreshResearch: rerun }).finally(() => {
       if (targets.get(t.cardId) === t && t.runId === runId) {
         setups.delete(t.cardId);
         const spec = t.specId ? specs.get(t.specId) : undefined;
@@ -550,7 +739,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         const saved = tags.get(t.cardId);
         if (!t.armed && saved?.uiSpec) {
           restoreSavedForge(forge(), saved, log);
-          targets.create({ ...saved, state: saved.armed ? 'armed' : 'forged' });
+          restoreTarget({ ...saved, state: saved.armed ? 'armed' : 'forged' });
         }
         publishTags();
       }
@@ -571,6 +760,59 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     return setup(t.cardId, from);
   };
   const select = (p: TargetSelectPayload, from: { deviceId: string; name?: string }): Target | undefined => {
+    if (p.cardId && tags.has(p.cardId)) canvas.select(from.deviceId, p.cardId);
+    if (p.virtual === 'visual-synth') {
+      const reply = (ok: boolean, cardId?: string, reason?: string) => {
+        if (p.requestId) hub.sendToDevice(from.deviceId, 'target.select.result', { requestId: p.requestId, ok, cardId, reason });
+      };
+      if (mode !== 'control') { reply(false, undefined, 'Choose Use devices, then Try visual synth.'); return; }
+      const candidates = visualSynthCompanions(hub.devices());
+      const executor = p.deviceId ? candidates.find((device) => device.deviceId === p.deviceId) : candidates.length === 1 ? candidates[0] : undefined;
+      if (!executor) {
+        const hosts = visualSynthHosts(hub.devices());
+        const previousOwners = new Set(targets.list()
+          .filter((target) => tags.has(target.cardId) && target.selectedBy === from.deviceId)
+          .map((target) => virtualScreenExecutor(target.card)).filter((id) => hosts.some((host) => host.deviceId === id)));
+        // selectedBy is session-local. On restart, recover only a unique saved
+        // visual target whose explicit owner and preferred connection agree.
+        const savedVisualTags = tags.list().filter((tag) => virtualScreenExecutor(tag.card));
+        const savedOwners = new Set(savedVisualTags.map((tag) => virtualScreenExecutor(tag.card)));
+        if (savedVisualTags.some((tag) => tag.selection?.preferDeviceId !== virtualScreenExecutor(tag.card))) savedOwners.clear();
+        const rememberedOwners = previousOwners.size ? previousOwners : savedOwners;
+        const remembered = rememberedOwners.size === 1 ? hosts.find((host) => rememberedOwners.has(host.deviceId)) : undefined;
+        const host = p.deviceId ? hosts.find((device) => device.deviceId === p.deviceId) : hosts.length === 1 ? hosts[0] : remembered;
+        if (host && p.requestId) {
+          hub.sendToDevice(host.deviceId, 'visual.open', { requestId: p.requestId });
+          // The existing Quest presence recovery retries selection after a real
+          // visible renderer advertises its port. Opening itself is not Ready.
+          reply(false, undefined, 'Waiting for the Mac visuals to open in your paired companion. Bring that browser tab to the front; selection will continue automatically.');
+          return;
+        }
+        reply(false, undefined, candidates.length > 1 && !p.deviceId
+          ? 'More than one Mac has visuals open. Keep only the screen you want open, then try again.'
+          : hosts.length > 1 && !p.deviceId ? 'More than one paired companion can open visuals. Keep only the Mac companion you want connected, then try again.'
+          : 'Open your paired Mac companion in Chrome, keep that tab visible, then choose Try visual synth again.');
+        return;
+      }
+      const card = visualSynthCard(executor);
+      const saved = tags.get(card.cardId);
+      if (!saved && tags.library().length >= 64) { reply(false, undefined, 'Your device library is full. Forget an unused device, then try again.'); return; }
+      let target = targets.get(card.cardId);
+      if (!target) target = targets.create({ ...(saved ?? {}), cardId: card.cardId, card, selectedBy: from.deviceId,
+        state: saved?.armed ? 'armed' : 'identified' });
+      target.card = card;
+      canvas.select(from.deviceId, target.cardId);
+      target.selectedBy = from.deviceId;
+      target.selection = { preferDeviceId: executor.deviceId, userText: 'Use the built-in silent visual synth on this Mac screen.' };
+      // A known software instrument has no fabricated physical detection or image crop.
+      target.detection = undefined;
+      tags.add(target, 'Visual synth', p.position);
+      hub.broadcast('device.card', card);
+      publishTags();
+      if (target.specId) showControls(target, from.deviceId);
+      reply(true, card.cardId, VIRTUAL_SCREEN_GUIDANCE);
+      return target;
+    }
     if (mode === 'control') {
       const existing = p.cardId ? targets.get(p.cardId) : undefined;
       if (!existing || !tags.has(existing.cardId)) return undefined;
@@ -595,6 +837,11 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     return addTag({ targetId: existing?.cardId, frameId: p.frameId, detId: p.detId, label: existing?.card?.name.slice(0, 80) ?? existing?.detection?.label ?? det!.label }, from);
   };
   const unsubscribePresence = hub.onPresence((presence) => {
+    if (presence.deviceId && !hub.devices().some((device) => device.deviceId === presence.deviceId && device.online)) {
+      assistant?.disconnect(presence.deviceId);
+      voice.disconnect(presence.deviceId);
+      canvas.disconnect(presence.deviceId);
+    }
     if (presence.deviceId && (presence.reason === 'join' || presence.reason === 'update')) hub.sendToDevice(presence.deviceId, 'mode.state', { mode });
     for (const t of targets.list()) {
       if (!tags.has(t.cardId) || connected(t)) continue;
@@ -603,6 +850,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     }
     publishTags();
     if (presence.reason === 'join' && presence.deviceId) {
+      for (const state of canvas.snapshots()) if (tags.has(state.cardId)) hub.sendToDevice(presence.deviceId, 'canvas.state', state);
       for (const t of targets.list()) {
         if (!tags.has(t.cardId)) continue;
         if (mode === 'control') {
@@ -618,11 +866,31 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (EXPERIMENTAL_TYPE.test(e.message.type)) return;
     const m = e.message as AgentMessage;
     const from = { deviceId: e.device.deviceId, name: e.device.name, canApprove: e.device.canApprove, local: e.connection.local };
-    if (['mode.set', 'tag.add', 'tag.remove', 'library.place', 'library.forget', 'library.restore', 'library.rename', 'control.setup', 'target.select', 'target.retry'].includes(m.type) && !from.canApprove && !from.local) {
+    if (m.type.startsWith('canvas.') && !from.canApprove && !from.local) {
+      if ('cardId' in m.payload) hub.sendToDevice(from.deviceId, 'canvas.state', { cardId: String(m.payload.cardId),
+        ...('requestId' in m.payload ? { requestId: String(m.payload.requestId) } : {}), status: 'error', message: 'Only an owner may create or play shared canvas games.' });
+      return;
+    }
+    if (['mode.set', 'tag.add', 'tag.remove', 'library.place', 'library.forget', 'library.restore', 'library.rename', 'control.setup', 'target.select', 'target.retry', 'voice.confirm'].includes(m.type) && !from.canApprove && !from.local) {
       hub.sendToDevice(from.deviceId, 'log', { level: 'error', code: 'forbidden', message: 'Only an owner may tag or set up devices.' });
       return;
     }
     switch (m.type) {
+      case 'canvas.get':
+        canvas.get(from.deviceId, m.payload.cardId);
+        return;
+      case 'canvas.request':
+        void canvas.request(from.deviceId, m.payload);
+        return;
+      case 'canvas.cancel':
+        canvas.cancel(from.deviceId, m.payload.cardId, m.payload.requestId);
+        return;
+      case 'canvas.restore':
+        canvas.restore(from.deviceId, m.payload);
+        return;
+      case 'canvas.action':
+        canvas.action(from.deviceId, m.payload);
+        return;
       case 'mode.set':
         setMode(m.payload.mode);
         return;
@@ -682,10 +950,19 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       case 'device.signal':
         daemons.onSignal(m.payload, from.deviceId);
         return;
+      case 'voice.cancel':
+        voice.cancel(from.deviceId, m.payload.cardId, m.payload.utteranceId);
+        assistant?.cancel(from.deviceId, m.payload.cardId, m.payload.utteranceId);
+        return;
+      case 'voice.confirm':
+        assistant?.confirm(m.payload, from.deviceId);
+        return;
       case 'voice.audio':
+        if (!from.canApprove && !from.local) return;
         void voice.onAudio(m.payload, from.deviceId);
         return;
       case 'voice.text':
+        if (!from.canApprove && !from.local) return;
         void voice.onText(m.payload, from.deviceId);
         return;
       case 'gen3d.generate': {
@@ -723,6 +1000,20 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     roomSpec: () => room,
     publishRoom,
     profiles,
+    midiCharts,
+    invalidateMidiChart(cardId) {
+      const t = targets.get(cardId);
+      tags.setEnabled(cardId, false);
+      if (!t) return;
+      // The import route refuses active/armed targets; this only clears local saved authority.
+      canvas.invalidate(cardId); voice.invalidate(cardId); assistant?.invalidate(cardId);
+      t.armed = false; t.driver = undefined; t.specId = undefined; t.controlCount = undefined;
+      t.research = undefined; t.verification = {}; t.evidence = [];
+      targets.setState(t, 'identified', 'reviewed MIDI chart changed', {
+        sentence: 'Reviewed MIDI chart saved', hint: 'Set up control again to verify the current reviewed controls', action: 'retry',
+      });
+      publishTags();
+    },
     sam,
     roster,
     forge,
@@ -742,6 +1033,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     setup,
     panic,
     close: () => {
+      canvas.invalidate();
+      voice.invalidate();
+      assistant?.invalidate();
       unsubscribe();
       unsubscribePresence();
       unsubscribeTags();

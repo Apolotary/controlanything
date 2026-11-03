@@ -35,7 +35,7 @@ describe('HandFeedback', () => {
     const right = feedback.root.getObjectByName('fingertip-right') as Mesh<SphereGeometry, MeshBasicMaterial>;
     feedback.update(frame(0, { left: hand(), right: hand() }), diagnostics, 8);
     expect(createElement).not.toHaveBeenCalled();
-    expect(feedback.root.children).toHaveLength(4);
+    expect(feedback.root.getObjectByName('hand-debug')).toBeUndefined();
     expect(left.geometry).toBe(right.geometry);
     expect(left.material).toBe(right.material);
     expect((left.material as MeshBasicMaterial).depthTest).toBe(true);
@@ -62,11 +62,15 @@ describe('HandFeedback', () => {
     expect(new Vector3(0, 0, 1).applyQuaternion(left.quaternion).y).toBeCloseTo(1);
     feedback.setHover('left');
     expect(left.visible).toBe(false);
+    feedback.setHover('right', { position: new Vector3(0, 0, -1), facing: new Vector3(0, 0, 1), sizeM: [0.3, 0.2, 0.1] });
+    feedback.update(frame(0), diagnostics, 8);
+    expect(right.visible).toBe(false);
     feedback.dispose();
   });
 
   it('brightens both pinching fingertips with one material and hides lost joints immediately', () => {
     const feedback = new HandFeedback(false);
+    feedback.setAppearance({ accent: '#12cdab', showHover: false });
     const left = feedback.root.getObjectByName('fingertip-left') as Mesh<SphereGeometry, MeshBasicMaterial>;
     const right = feedback.root.getObjectByName('fingertip-right') as Mesh<SphereGeometry, MeshBasicMaterial>;
     const idle = left.material;
@@ -74,6 +78,7 @@ describe('HandFeedback', () => {
     expect(left.material).toBe(right.material);
     expect(left.material).not.toBe(idle);
     expect(left.material.color.getHex()).toBe(0xffffff);
+    expect(idle.color.getHex()).toBe(0x12cdab);
     feedback.update(frame(20, { left: { ...hand(true), joints: {} }, right: hand() }), diagnostics, 8);
     expect(left.visible).toBe(false);
     expect(right.material).toBe(idle);
@@ -95,7 +100,7 @@ describe('HandFeedback', () => {
     const materialDispose = vi.spyOn(material, 'dispose');
     const textureDispose = vi.spyOn(material.map!, 'dispose');
     feedback.update(frame(0, { left: hand(true) }), diagnostics, 17);
-    expect(feedback.root.children).toHaveLength(5);
+    expect(feedback.root.getObjectByName('hand-debug')).toBe(plate);
     expect(fillText).toHaveBeenCalledTimes(5);
     expect(fillText.mock.calls.map(([text]) => text)).toEqual([
       'Hands   FPS --   calls 17',

@@ -60,7 +60,8 @@ function setup() {
       cardId: id, card: { ...card, cardId: id }, state, selectedBy: owner.deviceId,
       ...(state === 'forged' ? { driver: { ...driver, cardId: id }, specId: `spec-${id}`, verification: { off: 'pass' as const } } : {}),
     });
-    if (state === 'forged') specs.set(`spec-${id}`, { specId: `spec-${id}`, cardId: id, driverId: driver.driverId, rev: 1 });
+    if (state === 'forged') specs.set(`spec-${id}`, { specId: `spec-${id}`, cardId: id, driverId: driver.driverId, rev: 1,
+      widgets: [{ id: 'off', kind: 'button', label: 'Off', binding: { action: 'off' } }] });
     agent.addTag({ targetId: id, label: 'Ceiling light' }, owner);
     return target;
   };

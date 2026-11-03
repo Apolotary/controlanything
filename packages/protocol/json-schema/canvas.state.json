@@ -1,0 +1,289 @@
+{
+  "title": "canvas.state",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "canvas.state"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "cardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "generating",
+            "ready",
+            "error"
+          ]
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "document": {
+          "type": "object",
+          "properties": {
+            "canvasId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "cardId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "spec": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "intro": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 400
+                },
+                "objectUse": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "rounds": {
+                  "minItems": 1,
+                  "maxItems": 6,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 32,
+                        "pattern": "^[a-zA-Z0-9_-]+$"
+                      },
+                      "prompt": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 240
+                      },
+                      "choices": {
+                        "minItems": 2,
+                        "maxItems": 3,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 32,
+                              "pattern": "^[a-zA-Z0-9_-]+$"
+                            },
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "points": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 3
+                            },
+                            "feedback": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 160
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "label",
+                            "points",
+                            "feedback"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "prompt",
+                      "choices"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "ending": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 240
+                }
+              },
+              "required": [
+                "title",
+                "intro",
+                "objectUse",
+                "rounds",
+                "ending"
+              ],
+              "additionalProperties": false
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "live",
+                "fixture"
+              ]
+            },
+            "modelId": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "prompt": {
+              "type": "string",
+              "maxLength": 1000
+            },
+            "history": {
+              "maxItems": 8,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 80
+                  }
+                },
+                "required": [
+                  "revision",
+                  "title"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "updatedAt": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "canvasId",
+            "cardId",
+            "revision",
+            "spec",
+            "source",
+            "prompt",
+            "history",
+            "updatedAt"
+          ],
+          "additionalProperties": false
+        },
+        "game": {
+          "type": "object",
+          "properties": {
+            "phase": {
+              "type": "string",
+              "enum": [
+                "preview",
+                "playing",
+                "feedback",
+                "finished"
+              ]
+            },
+            "roundIndex": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5
+            },
+            "score": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18
+            },
+            "maxScore": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18
+            },
+            "choiceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "pattern": "^[a-zA-Z0-9_-]+$"
+            },
+            "feedback": {
+              "type": "string",
+              "maxLength": 240
+            }
+          },
+          "required": [
+            "phase",
+            "roundIndex",
+            "score",
+            "maxScore"
+          ],
+          "additionalProperties": false
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 300
+        }
+      },
+      "required": [
+        "cardId",
+        "status"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

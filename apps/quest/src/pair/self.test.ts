@@ -44,6 +44,13 @@ function fakeApi(o: { me?: () => Promise<unknown>; starts: PairStartResponse[]; 
 
 const sleep = async () => {};
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
 describe('PairingFlow (device-code)', () => {
   it('over adb reverse the server approves on the spot', async () => {
     const store = memStore();
@@ -91,5 +98,56 @@ describe('PairingFlow (device-code)', () => {
     const id = await flow.ensure();
     expect(id.deviceId).toBe('q');
     expect(flow.state).toMatchObject({ kind: 'paired', verified: false });
+  });
+
+  it.each(['approved', 'revoked', 'offline'] as const)('ignores a superseded identity check returning %s after Repair', async (outcome) => {
+    const store = memStore(), pending = deferred<unknown>();
+    store.setItem('ce.device', JSON.stringify({ deviceId: 'old', deviceToken: 'old-token', kind: 'quest', name: 'Quest' }));
+    const api = fakeApi({ me: () => pending.promise, starts: [start({ status: 'approved', deviceId: 'new', deviceToken: 'new-token' })] });
+    const flow = new PairingFlow({ name: 'Quest 3', capabilities: [], store, api, sleep });
+    const states: PairState[] = []; flow.on('state', state => states.push(state));
+    const stale = expect(flow.ensure()).rejects.toThrow('pairing superseded');
+    const current = await flow.repair(), stateCount = states.length;
+    if (outcome === 'approved') pending.resolve({});
+    else pending.reject(outcome === 'revoked' ? new ApiError(401, 'unauthorized', 'revoked') : new TypeError('offline'));
+    await stale;
+    expect(flow.identity).toEqual(current); expect(flow.identity?.deviceId).toBe('new');
+    expect(JSON.parse(store.data['ce.device']).deviceId).toBe('new');
+    expect(states).toHaveLength(stateCount); expect(api.calls).toEqual(['me', 'start']);
+  });
+
+  it.each(['approved', 'pending', 'failed'] as const)('ignores a superseded pairing start returning %s after Repair', async (outcome) => {
+    const store = memStore(), pending = deferred<PairStartResponse>();
+    const api = fakeApi({ starts: [start({ status: 'approved', deviceId: 'new', deviceToken: 'new-token' })] });
+    const nextStart = api.pairStart; let first = true;
+    api.pairStart = req => { if (!first) return nextStart(req); first = false; return pending.promise; };
+    const flow = new PairingFlow({ name: 'Quest 3', capabilities: [], store, api, sleep });
+    const states: PairState[] = []; flow.on('state', state => states.push(state));
+    const stale = expect(flow.ensure()).rejects.toThrow('pairing superseded');
+    const current = await flow.repair(), stateCount = states.length;
+    if (outcome === 'failed') pending.reject(new TypeError('offline'));
+    else pending.resolve(start(outcome === 'approved' ? { status: 'approved', deviceId: 'old', deviceToken: 'old-token' } : {}));
+    await stale;
+    expect(flow.identity).toEqual(current); expect(flow.identity?.deviceId).toBe('new');
+    expect(JSON.parse(store.data['ce.device']).deviceId).toBe('new');
+    expect(states).toHaveLength(stateCount); expect(api.calls).toEqual(['start']);
+  });
+
+  it.each(['approved', 'denied', 'failed'] as const)('ignores a superseded pairing poll returning %s after Repair', async (outcome) => {
+    const store = memStore(), pending = deferred<PairStatusResponse>(), polling = deferred<void>();
+    const api = fakeApi({ starts: [start(), start({ status: 'approved', deviceId: 'new', deviceToken: 'new-token' })] });
+    api.pairStatus = () => { polling.resolve(); return pending.promise; };
+    const flow = new PairingFlow({ name: 'Quest 3', capabilities: [], store, api, sleep });
+    const states: PairState[] = []; flow.on('state', state => states.push(state));
+    const stale = expect(flow.ensure()).rejects.toThrow('pairing superseded');
+    await polling.promise;
+    const current = await flow.repair(), stateCount = states.length;
+    if (outcome === 'failed') pending.reject(new ApiError(404, 'not_found', 'old pairing gone'));
+    else pending.resolve({ pairingId: 'p1', expiresAt: Date.now() + 1000, status: outcome,
+      ...(outcome === 'approved' ? { deviceId: 'old', deviceToken: 'old-token' } : {}) });
+    await stale;
+    expect(flow.identity).toEqual(current); expect(flow.identity?.deviceId).toBe('new');
+    expect(JSON.parse(store.data['ce.device']).deviceId).toBe('new');
+    expect(states).toHaveLength(stateCount); expect(api.calls).toEqual(['start', 'start']);
   });
 });

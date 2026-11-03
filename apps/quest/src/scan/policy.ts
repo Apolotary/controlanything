@@ -20,15 +20,16 @@ const PEOPLE = /\b(person|people|human|man|woman|men|women|child|kid|face|head|b
 const LIGHTS = /\b(light|lamp|bulb|lighting|luminaire)s?\b/i;
 const ELECTRONICS = /\b(tv|television|screen|monitor|laptop|computer|macbook|mac|cell phone|phone|remote|keyboard|synthesizer|synth|mouse|speaker|electronic device|electronics|cardputer)s?\b/i;
 const APPLIANCES = /\b(air conditioner|air conditioning|ac|fan|microwave|oven|toaster|fridge|refrigerator|clock|hair dryer|hair drier|printer|projector)s?\b/i;
+const PLAY_OBJECTS = /\b(book|cup|mug|bottle|ball)s?\b/i;
 
-/** All devices still means devices: unrelated scenery and people are never annotation targets. */
+/** All includes a small set of everyday game objects; people and scenery remain excluded. */
 export function matchesAnnotationFilter(label: string, category: Category = 'everything'): boolean {
   if (PEOPLE.test(label)) return false;
   if (category === 'lights') return LIGHTS.test(label);
   if (category === 'instruments') return /\b(keyboard|synthesizer|synth)s?\b/i.test(label);
   if (category === 'remotes') return /\b(remote|phone|cardputer)s?\b/i.test(label);
   if (category === 'electronics') return !LIGHTS.test(label) && ELECTRONICS.test(label);
-  return ELECTRONICS.test(label) || LIGHTS.test(label) || APPLIANCES.test(label);
+  return ELECTRONICS.test(label) || LIGHTS.test(label) || APPLIANCES.test(label) || PLAY_OBJECTS.test(label);
 }
 
 /** Invalid query values use the nearby-device default. */

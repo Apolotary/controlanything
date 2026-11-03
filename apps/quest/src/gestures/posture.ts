@@ -2,6 +2,7 @@ import type { ShellHand } from '../app/hud-contract';
 
 export type HandPosture = 'unknown' | 'fist' | 'open_palm' | 'point' | 'pinch';
 const dwell: Record<HandPosture, number> = { unknown: 0, fist: 45, open_palm: 60, point: 80, pinch: 22 };
+type PostureHand = Pick<ShellHand, 'joints'> & { controller?: boolean };
 
 /** Scale-normalized joint classifier. Hysteresis holds a pose, dwell admits a new one. */
 export class PostureDetector {
@@ -19,7 +20,7 @@ export class PostureDetector {
     this.since = this.previousTime = -Infinity;
   }
 
-  update(hand: ShellHand | undefined, timeMs: number): HandPosture {
+  update(hand: PostureHand | undefined, timeMs: number): HandPosture {
     if (timeMs < this.previousTime || timeMs - this.previousTime > 150) this.reset();
     this.previousTime = timeMs;
     this.raw = this.classify(hand);
@@ -43,7 +44,7 @@ export class PostureDetector {
     return this.posture;
   }
 
-  private classify(hand: ShellHand | undefined): HandPosture {
+  private classify(hand: PostureHand | undefined): HandPosture {
     this.tracked = this.extended = false;
     if (!hand || hand.controller) return 'unknown';
     const j = hand.joints;

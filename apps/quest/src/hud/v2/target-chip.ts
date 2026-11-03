@@ -6,7 +6,7 @@ type ChipTarget = Pick<HudTarget, 'label' | 'tagged' | 'identifying' | 'busy' | 
 export function targetChipLabel(target: ChipTarget, mode: AppMode, hovered = false): string {
   const rawName = target.label.trim();
   const name = rawName.length > 18 ? `${rawName.slice(0, 17).trimEnd()}…` : rawName;
-  if (!target.tagged) return name;
+  if (!target.tagged) return hovered ? `${name} · Pinch to tag` : name;
   if (target.locating) return `${name} · Locating…`;
   if (mode === 'annotate') {
     if (hovered) return 'Pinch to untag';

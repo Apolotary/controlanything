@@ -1,10 +1,9 @@
 /**
  * COCO-80 classes of the bundled YOLOX detector and what the annotation layer does with them.
  *
- * Only device-like classes ever leave the worker. "person" (class 0) is never boxed, labelled or tracked:
+ * Device and a few everyday game-object classes leave the worker. "person" (class 0) is never boxed, labelled or tracked:
  * an anchor whose best class is "person" is dropped before its coordinates are decoded.
- * Everything else (cups, chairs, plants…)
- * is ignored: the live layer shows devices, nothing else.
+ * Furniture, plants and unrelated scenery remain ignored.
  */
 
 export const COCO_CLASSES = [
@@ -44,6 +43,9 @@ export interface DeviceClass {
  * says so; it exists so one chip set drives both layers.
  */
 export const DEVICE_CLASSES: DeviceClass[] = [
+  { cls: 32, label: 'Ball', categories: [], sizeM: 0.22 },
+  { cls: 39, label: 'Bottle', categories: [], sizeM: 0.25 },
+  { cls: 41, label: 'Cup', categories: [], sizeM: 0.10 },
   { cls: 62, label: 'Screen', categories: ['electronics'], sizeM: 0.7 },
   { cls: 63, label: 'Laptop', categories: ['electronics'], sizeM: 0.32 },
   { cls: 64, label: 'Mouse', categories: ['electronics'], sizeM: 0.1 },
@@ -54,6 +56,7 @@ export const DEVICE_CLASSES: DeviceClass[] = [
   { cls: 69, label: 'Oven', categories: [], sizeM: 0.6 },
   { cls: 70, label: 'Toaster', categories: [], sizeM: 0.3 },
   { cls: 72, label: 'Fridge', categories: [], sizeM: 1.7 },
+  { cls: 73, label: 'Book', categories: [], sizeM: 0.24 },
   { cls: 74, label: 'Clock', categories: [], sizeM: 0.3 },
   { cls: 78, label: 'Hair dryer', categories: [], sizeM: 0.25 },
 ];

@@ -17,6 +17,16 @@ import {
 } from './index';
 
 describe('envelope', () => {
+  it('correlates explicit visual-synth selection and reserves its result for the server', () => {
+    const request = makeMessage('target.select', { virtual: 'visual-synth', requestId: 'choose-screen', deviceId: 'mac', position: { x: 0, y: 1.3, z: -1 } });
+    expect(parseMessage(request).ok).toBe(true);
+    expect(parseMessage(makeMessage('target.select.result', { requestId: 'choose-screen', ok: true, cardId: 'visual-screen' })).ok).toBe(true);
+    expect(parseMessage(makeMessage('target.select.result', { requestId: 'choose-screen', ok: false, reason: 'Open the Mac companion' })).ok).toBe(true);
+    expect(SERVER_ONLY_TYPES).toContain('target.select.result');
+    expect(SERVER_ONLY_TYPES).toContain('visual.open');
+    expect(parseMessage(makeMessage('visual.open', { requestId: 'choose-screen' }, { from: 'server', to: 'mac' })).ok).toBe(true);
+    expect(PayloadSchemas['target.select'].safeParse({ virtual: 'arbitrary-network-device' }).success).toBe(false);
+  });
   it('exports every registered message in the discriminated union', () => {
     expect(Message.options.map((schema) => schema.shape.type.value).sort()).toEqual(Object.keys(MessageSchemas).sort());
     for (const message of [
@@ -250,6 +260,46 @@ describe('protocol v1: discovery loop', () => {
     const r = PayloadSchemas['ui.spec'].safeParse(v1);
     expect(r.success, JSON.stringify(r.success ? '' : r.error.issues.slice(0, 3))).toBe(true);
     expect(PayloadSchemas['ui.spec'].safeParse({ ...v1, hackset: { ...SAMPLE_HACKSET, hacks: [{ ...SAMPLE_HACKSET.hacks[0], max_rate_hz: 5 }] } }).success).toBe(false);
+  });
+
+  it('preserves sourced object details and identity-review type in assistant messages', () => {
+    const objectInfo = { title: 'Example book', identityStatus: 'uncertain' as const, identityNote: 'Edition not confirmed',
+      description: { value: 'Illustrated reference book', sourceIds: ['s1'] },
+      dimensions: { value: null, sourceIds: [] }, weight: { value: null, sourceIds: [] }, price: null,
+      sources: [{ id: 's1', title: 'Publisher', url: 'https://publisher.example/book', excerpt: 'Illustrated reference book' }],
+      researchedAt: 123, cached: false, source: 'fixture' as const };
+    const info = { text: 'Inspect this object', final: true, cardId: 'book', recipientId: 'quest', intent: 'inspect' as const,
+      assistant: { state: 'reply' as const, text: 'Edition not confirmed; weight and price unknown.', objectInfo } };
+    expect(Message.parse(makeMessage('voice.text', info)).payload).toEqual(info);
+    const review = { ...info, intent: 'identity' as const, assistant: { state: 'proposal' as const,
+      text: 'Review this identity correction.', proposalId: 'identity-1', proposalKind: 'identity' as const } };
+    expect(Message.parse(makeMessage('voice.text', review)).payload).toEqual(review);
+    for (const url of ['javascript:alert(1)', 'file:///private/book', 'data:text/html,book']) {
+      expect(PayloadSchemas['voice.text'].safeParse({ ...info, assistant: { ...info.assistant,
+        objectInfo: { ...objectInfo, sources: [{ ...objectInfo.sources[0], url }] } } }).success).toBe(false);
+    }
+    for (const invalid of [
+      { description: { value: 'Unsupported claim', sourceIds: [] } },
+      { weight: { value: '1 kg', sourceIds: ['absent'] } },
+      { sources: [objectInfo.sources[0], objectInfo.sources[0]] },
+      { dimensions: { value: null, sourceIds: ['s1'] } },
+    ]) {
+      expect(PayloadSchemas['voice.text'].safeParse({ ...info, assistant: { ...info.assistant,
+        objectInfo: { ...objectInfo, ...invalid } } }).success).toBe(false);
+    }
+  });
+
+  it('round-trips addressed assistant proposals and validates explicit decision/cancellation messages', () => {
+    const payload = { utteranceId: 'voice-1', text: 'map hand height to filter', final: true, cardId: 'synth', recipientId: 'quest',
+      intent: 'gesture' as const, assistant: { state: 'proposal' as const, text: 'Review the mapping', proposalId: 'gesture-1', mapping: ['Hand height → Filter (0–127)'] } };
+    const parsed = Message.parse(makeMessage('voice.text', payload));
+    expect(parsed.payload).toEqual(payload);
+    expect(Message.parse(makeMessage('voice.confirm', { cardId: 'synth', proposalId: 'gesture-1', accept: true })).type).toBe('voice.confirm');
+    expect(Message.parse(makeMessage('voice.cancel', { cardId: 'synth', utteranceId: 'voice-1' })).type).toBe('voice.cancel');
+    expect(PayloadSchemas['voice.confirm'].safeParse({ cardId: 'synth', accept: true }).success).toBe(false);
+    expect(PayloadSchemas['voice.confirm'].safeParse({ cardId: 'synth', proposalId: 'gesture-1', accept: 'yes' }).success).toBe(false);
+    expect(PayloadSchemas['voice.cancel'].safeParse({ utteranceId: 'voice-1' }).success).toBe(false);
+    expect(PayloadSchemas['voice.text'].safeParse({ ...payload, assistant: { state: 'execute', text: 'go' } }).success).toBe(false);
   });
 
   it('voice, arm and panic payloads', () => {

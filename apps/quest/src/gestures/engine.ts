@@ -16,6 +16,7 @@ export interface GestureAxisState {
 }
 export interface GestureState {
   engaged: boolean;
+  trackingLost: boolean;
   /** One-frame pulse. The caller routes it through the application's existing panic path. */
   stopped: boolean;
   axes: GestureAxisState[];
@@ -53,6 +54,11 @@ export class GestureEngine {
   private readonly palm = new Vector3();
   private readonly headToHand = new Vector3();
   private readonly rollReference = new Quaternion();
+  private readonly depthForward = new Vector3(0, 0, -1);
+  private readonly depthHead = new Vector3();
+  private readonly depthOffset = new Vector3();
+  private readonly depthCandidate = new Vector3();
+  private depthTracked = false;
   private readonly relativeRotation = new Quaternion();
   private lastRoll = 0;
   private roll = 0;
@@ -76,7 +82,7 @@ export class GestureEngine {
       };
     });
     this.postureTimes = new Float64Array(map.postures.length).fill(-Infinity);
-    this.state = { engaged: false, stopped: false, axes: this.axes.map((axis) => axis.view), leftPosture: 'unknown', rightPosture: 'unknown' };
+    this.state = { engaged: false, trackingLost: false, stopped: false, axes: this.axes.map((axis) => axis.view), leftPosture: 'unknown', rightPosture: 'unknown' };
   }
 
   /** Perform off/on clears panic inhibition and dwell; ratcheted values remain frozen. */
@@ -84,6 +90,7 @@ export class GestureEngine {
     this.freeze();
     this.left.reset(); this.right.reset();
     this.state.stopped = false;
+    this.state.trackingLost = false;
     this.state.leftPosture = this.state.rightPosture = this.previousRight = 'unknown';
     this.heldAtEngage = 'unknown';
     this.inhibited = false;
@@ -103,8 +110,13 @@ export class GestureEngine {
     this.state.rightPosture = this.right.update(rh, timeMs);
     const hasRight = this.samplePose(rh, this.rightPose);
     const hasLeft = this.samplePose(lh, this.leftPose);
+    this.depthTracked = finitePosition(frame.head.position) && finiteQuaternion(frame.head.quaternion);
+    if (this.depthTracked) this.depthHead.copy(frame.head.position);
     this.updatePanic(frame, timeMs);
     const controller = controllerEngaged && rh?.controller === true;
+    this.state.trackingLost = !hasRight || (!rh?.controller && (!hasLeft || !this.left.tracked));
+    if (this.map.postures.length && !this.right.tracked) this.state.trackingLost = true;
+    for (const axis of this.axes) if (!Number.isFinite(this.rawAxis(axis.binding.axis, rh, hasLeft))) this.state.trackingLost = true;
     const wantsEngage = !this.inhibited && hasRight && (controller || (this.left.posture === 'fist' && this.left.raw === 'fist'));
     if (!wantsEngage) {
       this.freeze();
@@ -113,6 +125,12 @@ export class GestureEngine {
     }
     if (!this.state.engaged) {
       this.state.engaged = true;
+      // Freeze a horizontal body-forward direction at clutch pickup. Looking around
+      // does not steer the axis, and moving head+hand together cancels translation.
+      if (this.depthTracked) {
+        this.depthCandidate.copy(forward).applyQuaternion(frame.head.quaternion); this.depthCandidate.y = 0;
+        if (this.depthCandidate.lengthSq() > .01) this.depthForward.copy(this.depthCandidate).normalize();
+      }
       this.rollReference.copy(this.rightPose.quaternion).invert();
       this.lastRoll = this.roll = 0;
       for (let index = 0; index < this.axes.length; index++) {
@@ -200,6 +218,7 @@ export class GestureEngine {
   private rawAxis(axis: GestureAxis, right: ShellHand | undefined, hasLeft: boolean): number {
     switch (axis) {
       case 'right_height': return this.rightPose.position.y / 0.45;
+      case 'right_depth': return this.depthTracked ? this.depthOffset.subVectors(this.rightPose.position, this.depthHead).dot(this.depthForward) / .4 : NaN;
       case 'right_roll': return this.roll / (2 * Math.PI / 3);
       case 'right_pinch_aperture': {
         const thumb = right?.joints['thumb-tip'], index = right?.joints['index-finger-tip'];

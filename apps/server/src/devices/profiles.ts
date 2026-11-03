@@ -37,6 +37,8 @@ export interface MidiProfile {
   parameters: MidiParameter[];
   unsafeMessages?: string[];
   demo?: { bestParameters?: string[]; visualFeedback?: string; audibleFeedback?: string; risks?: string[]; setup?: string[] };
+  /** Imported permissions are scoped to this exact reviewed object, channel and revision. */
+  reviewedChart?: { cardId: string; revision: number; channel: number; reviewedAt: number; reviewedBy: string };
 }
 
 export interface IrCandidate {
@@ -175,12 +177,16 @@ export function matchMidiProfile(profiles: Profiles, card: { maker: string; mode
   const text = `${card.maker} ${card.model} ${card.name}`.toLowerCase();
   const rules: [RegExp, string][] = [
     [/controlanything visual synth|visual synth/, 'controlanything-visual-synth'],
-    [/op-?1/, 'op-1-field'],
+    [/\bop-?1\s+field\b/, 'op-1-field'],
     [/ep-?133|k\.?o\.? ?ii|k\.o\. 2/, 'ep-133'],
     [/\bmove\b/, 'ableton-move'],
     [/kastle/, 'kastle-2-wave-bard'],
   ];
-  for (const [re, id] of rules) if (re.test(text) && profiles.midi.has(id)) return profiles.midi.get(id);
+  for (const [re, id] of rules) {
+    // A display name or USB label cannot upgrade an ambiguous/original OP-1 to the Field model.
+    if (id === 'op-1-field' && !re.test(card.model.toLowerCase())) continue;
+    if (re.test(text) && profiles.midi.has(id)) return profiles.midi.get(id);
+  }
   return undefined;
 }
 
@@ -191,6 +197,7 @@ export function midiBrief(profile: MidiProfile, maxParams = 40): string {
     profile.channels?.receive ? `Channels: ${profile.channels.receive}` : '',
     profile.usb?.portNameHint ? `USB MIDI port name contains "${profile.usb.portNameHint}".` : '',
     profile.sense ? `Verification sensor: ${profile.sense}.` : '',
+    profile.reviewedChart ? `Reviewed CC-only subset, revision ${profile.reviewedChart.revision}, channel ${profile.reviewedChart.channel}. Do not generate note, program, panic or SysEx actions. Keep each action range within its cited CC range. The wearer must play a sound for audio verification.` : '',
     'Incoming CC chart (cc: parameter [range]):',
     ...profile.parameters
       .filter((p) => typeof p.cc === 'number')

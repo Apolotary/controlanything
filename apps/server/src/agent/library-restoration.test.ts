@@ -196,7 +196,13 @@ describe('complete saved device restoration', () => {
     restored.online([bridge]);
     expect(restored.agent.tagsState().tags[0].connection).toBe('ready');
     restored.agent.setMode('control');
-    expect(restored.of('ui.spec').find((spec) => spec.specId === target.specId)).toEqual(expectedSpec);
+    // Layout/history remains byte-for-byte restored, while wire availability reflects
+    // current verification. A saved "uploading" warmth action is still unverified.
+    const expectedPublished = structuredClone(expectedSpec);
+    expectedPublished.gen3d.state = { ...expectedPublished.gen3d.state, armed: true, reason: '4/5 displayed controls verified' };
+    expectedPublished.hackset.hacks.find((hack) => hack.id === 'h_warm')!.status = 'locked';
+    expect(restored.of('ui.spec').find((spec) => spec.specId === target.specId)).toEqual(expectedPublished);
+    expect(digest(restored.forge.get(target.specId))).toBe(expectedHash);
     expect(restored.of('verify.result')).toEqual(expect.arrayContaining([evidence]));
     expect(restored.commands).toEqual([]);
     expect(restored.ctx.calls.list()).toEqual([]);

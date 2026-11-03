@@ -13,41 +13,53 @@ const initial: CompanionInput = {
 const target = (state: TargetStatusPayload['state']): TargetStatusPayload => ({ cardId: 'synth', runId: 'run-2', state, since: 0, executorDeviceId: 'mac' });
 
 describe('companion first-run state', () => {
-  it('walks pairing, USB permission, cable, setup and enable controls without starting work', () => {
+  it('ends pairing with explicit visual-demo steps without requesting USB access', () => {
     expect(companionView({ ...initial, connected: false, authenticated: false, pairing: true })).toMatchObject({ stage: 'pairing', title: 'Pair with your headset', next: 'Scan this QR code with your Quest 3, or enter the code in your headset.', enableMidi: false });
     expect(companionView({ ...initial, devices: [] })).toMatchObject({ stage: 'headset', title: 'Pair with your headset' });
-    expect(companionView(initial)).toMatchObject({ stage: 'midi-permission', headset: 'Connected to Quest 3', enableMidi: true });
-    expect(companionView({ ...initial, midiEnabled: true })).toMatchObject({ stage: 'usb', title: 'Plug in a synth (USB)', enableMidi: false });
-    expect(companionView({ ...initial, midiEnabled: true, ports: [usb] })).toMatchObject({ stage: 'setup', title: 'Set it up from the headset', synth: 'OP-1 Field on USB' });
-    expect(companionView({ ...initial, ports: [usb], activity: setupActivity('OP-1 Field', target('verifying')) })).toMatchObject({ stage: 'working', title: 'Setting up your synth' });
-    expect(companionView({ ...initial, ports: [usb], activity: setupActivity('OP-1 Field', target('armed')) })).toMatchObject({ stage: 'ready', title: 'Your controls are ready' });
+    for (const overrides of [{}, { midiEnabled: true }, { midiSupported: false }, { leader: false }, { ports: [usb] }, { activity: setupActivity('OP-1 Field', target('armed')) }]) {
+      const view = companionView({ ...initial, ...overrides });
+      expect(view).toMatchObject({ stage: 'paired', title: 'Paired with Quest 3', enableMidi: false });
+      expect(view.next).toContain('opens here automatically');
+      expect(view.next).toContain('Menu → Try visual synth');
+      expect(view.next).toContain('set up and enable controls in Quest');
+      expect(view.next).not.toMatch(/USB|MIDI/);
+    }
   });
 
-  it('returns to the cable step on unplug, even if the synth was ready', () => {
-    expect(companionView({ ...initial, midiEnabled: true, activity: setupActivity('OP-1 Field', target('armed')) })).toMatchObject({ stage: 'usb', synth: 'Plug in a synth (USB)' });
+  it('offers permission, cable and setup help only after a requested synth setup', () => {
+    const requested = { ...initial, midiSetupRequested: true };
+    expect(companionView(requested)).toMatchObject({ stage: 'midi-permission', headset: 'Connected to Quest 3', enableMidi: true });
+    expect(companionView({ ...requested, midiEnabled: true })).toMatchObject({ stage: 'usb', title: 'Plug in a synth (USB)', enableMidi: false });
+    expect(companionView({ ...requested, midiEnabled: true, ports: [usb] })).toMatchObject({ stage: 'setup', title: 'Set it up from the headset', synth: 'OP-1 Field on USB' });
+    expect(companionView({ ...requested, ports: [usb], activity: setupActivity('OP-1 Field', target('verifying')) })).toMatchObject({ stage: 'working', title: 'Setting up your synth' });
+    expect(companionView({ ...requested, ports: [usb], activity: setupActivity('OP-1 Field', target('armed')) })).toMatchObject({ stage: 'ready', title: 'Your controls are ready' });
+  });
+
+  it('returns to the cable step on unplug during a requested setup', () => {
+    expect(companionView({ ...initial, midiSetupRequested: true, midiEnabled: true, activity: setupActivity('OP-1 Field', target('armed')) })).toMatchObject({ stage: 'usb', synth: 'Plug in a synth (USB)' });
   });
 
   it('retains saved pairing through server and headset reconnection', () => {
-    expect(companionView({ ...initial, connected: false })).toMatchObject({ stage: 'connecting', enableMidi: false });
+    expect(companionView({ ...initial, connected: false })).toMatchObject({ stage: 'connecting', headset: 'Waiting for your headset', enableMidi: false });
     expect(companionView({ ...initial, devices: [{ ...quest, online: false }] })).toMatchObject({ stage: 'headset', title: 'Waiting for Quest 3', headset: 'Waiting for your headset' });
     expect(companionView({ ...initial, devices: [], headsetPaired: true })).toMatchObject({ stage: 'headset', title: 'Waiting for Quest 3' });
-    expect(companionView({ ...initial, midiEnabled: true, ports: [usb] }).stage).toBe('setup');
+    expect(companionView({ ...initial, midiEnabled: true, ports: [usb] }).stage).toBe('paired');
   });
 
-  it('explains unsupported browsers and a standby tab without offering a broken button', () => {
-    expect(companionView({ ...initial, midiSupported: false })).toMatchObject({ title: 'Open this page in Chrome', enableMidi: false });
-    expect(companionView({ ...initial, leader: false })).toMatchObject({ stage: 'usb', enableMidi: false, next: 'Keep the first companion tab open; it connects your USB devices.' });
+  it('explains unsupported browsers and standby tabs when USB setup is requested', () => {
+    expect(companionView({ ...initial, midiSetupRequested: true, midiSupported: false })).toMatchObject({ title: 'Open this page in Chrome', enableMidi: false });
+    expect(companionView({ ...initial, midiSetupRequested: true, leader: false })).toMatchObject({ stage: 'usb', enableMidi: false, next: 'Keep the first companion tab open; it connects your USB devices.' });
   });
 });
 
 describe('ports belonging to this Mac', () => {
   it('shows current local outputs for the executor and filters inputs and disconnected ports', () => {
-    expect(companionPorts('mac', [], [usb, { ...usb, id: 'input', kind: 'midi-in' }, { ...usb, id: 'gone', state: 'disconnected' }], true)).toEqual([usb]);
+    expect(companionPorts('mac', [], [usb, { ...usb, id: 'ce-visual-synth', name: 'ControlAnything Visual Synth' }, { ...usb, id: 'input', kind: 'midi-in' }, { ...usb, id: 'gone', state: 'disconnected' }], true)).toEqual([usb]);
   });
 
   it('shows the first tab’s ports in another tab with the same saved identity', () => {
     expect(companionPorts('mac', [device('mac', 'mac', [usb])], [], false)).toEqual([usb]);
-    expect(companionView({ ...initial, ports: [usb], leader: false }).stage).toBe('setup');
+    expect(companionView({ ...initial, ports: [usb], leader: false }).stage).toBe('paired');
   });
 
   it('does not borrow another Mac or simulator’s ports or revive stale own ports', () => {

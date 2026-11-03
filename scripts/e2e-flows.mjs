@@ -218,8 +218,14 @@ async function helperPaired() {
   assert(pairedName, 'The success card must identify the paired laptop');
   await waitQuest(() => !window.__ce.onboarding.visible && !window.__ce.onboarding.scanning, undefined, 5000);
   await companion.waitForFunction(() => document.querySelector('#paired-summary')?.textContent.includes('Paired with Quest 3')
-    && document.querySelector('#paired-summary')?.textContent.includes('You can leave this page open; the headset uses it to reach your devices.'));
+    && document.querySelector('#paired-summary')?.textContent.includes('Start with Open visuals below, then choose Menu → Try visual synth in Quest.'));
   await companion.locator('#paired-summary').waitFor({ state: 'visible' });
+  assert.equal(await companion.locator('#onboarding-title').textContent(), 'Paired with Quest 3');
+  assert.equal(await companion.locator('#onboarding-next').textContent(), 'Start with Open visuals below, then choose Menu → Try visual synth in Quest. Set up and enable controls there.');
+  assert.equal(await companion.locator('#enable-midi').isVisible(), false, 'Pairing must not request USB MIDI permission');
+  assert.equal(await companion.locator('#connection-steps').isVisible(), false, 'Pairing must not expose synth connection steps');
+  assert.equal(await companion.evaluate(() => sessionStorage.getItem('ce.flows.midi.allowed')), null,
+    'Pairing must not call requestMIDIAccess');
   return pairedName;
 }
 
@@ -264,7 +270,9 @@ async function phase(name, action, capture = true) {
   console.log(`PASS ${name} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
 }
 
-async function pinch({ targetId, nodeName, turn = false, holdMs = 0 }) {
+// UI panels now remain at the shared anchor when the wearer looks at an object.
+// Model a deliberate look at named controls; target-visibility tests keep their prior behavior.
+async function pinch({ targetId, nodeName, turn = !!nodeName, holdMs = 0 }) {
   await renderedFrames();
   if (targetId && !turn) await waitQuest((id) => {
     const app = window.__ce;
@@ -296,7 +304,7 @@ async function pinch({ targetId, nodeName, turn = false, holdMs = 0 }) {
   }, { targetId, nodeName, turn });
   if (turn) {
     await elapsedFrames(300); // Ready rings expand after looking at them for 250 ms.
-    return pinch({ targetId, nodeName, holdMs });
+    return pinch({ targetId, nodeName, holdMs, turn: false });
   }
   await quest.mouse.move(point.x, point.y);
   await quest.mouse.down();
@@ -309,6 +317,32 @@ async function pinch({ targetId, nodeName, turn = false, holdMs = 0 }) {
   await renderedFrames();
 }
 
+async function openMenu() {
+  if (await quest.evaluate(() => window.__ce.hud.root.getObjectByName('main-menu')?.visible)) return;
+  await pinch({ nodeName: 'menu-toggle', turn: true });
+  await waitQuest(() => window.__ce.hud.root.getObjectByName('main-menu')?.visible
+    && window.__ce.hud.deck.userData.open);
+}
+
+async function menuAction(nodeName, options = {}) {
+  await openMenu();
+  const route = await quest.evaluate(nodeName => {
+    const menu = window.__ce.hud.root.getObjectByName('main-menu'), node = menu.getObjectByName(nodeName);
+    if (!node?.userData.menuButton) throw new Error(`Unknown menu action: ${nodeName}`);
+    let visible = true;
+    for (let owner = node; owner; owner = owner.parent) if (!owner.visible) visible = false;
+    return visible ? null : menu.userData.toolsOpen ? 'menu-tools-back' : 'menu-tools';
+  }, nodeName);
+  if (route) await pinch({ nodeName: route, turn: true });
+  await waitQuest(nodeName => {
+    let node = window.__ce.hud.root.getObjectByName(nodeName);
+    if (!node) return false;
+    for (; node; node = node.parent) if (!node.visible) return false;
+    return true;
+  }, nodeName);
+  await pinch({ nodeName, turn: true, ...options });
+}
+
 async function target() {
   const result = await json(`/api/agent/targets/${encodeURIComponent(cardId)}`);
   assert.notEqual(result.state, 'failed', `Agent failed: ${JSON.stringify(result)}`);
@@ -316,29 +350,66 @@ async function target() {
 }
 
 async function assertDockIcons(mode, canStop = false) {
-  const state = await quest.evaluate(() => {
-    const { hud } = window.__ce;
-    const dock = hud.root.getObjectByName('hand-dock');
-    if (!dock) throw new Error('Hand dock is missing');
-    const icons = [];
-    dock.traverse((node) => {
-      if (!/^(mode-(annotate|control)|filter:(everything|lights|electronics)|deck:panic|exit-ar)$/.test(node.name)) return;
-      for (let current = node; current; current = current.parent) if (!current.visible) return;
-      icons.push(node.name);
-    });
-    return { icons: icons.sort(), anchor: dock.userData.anchor,
-      oldBar: !!hud.root.getObjectByName('home-bar'), oldHint: !!hud.root.getObjectByName('home-hint'),
-      close: !!hud.root.getObjectByName('deck-close') };
+  const pose = await quest.evaluate(() => {
+    const head = window.__ce.emulator.head();
+    return { position: head.position.toArray(), quaternion: head.quaternion.toArray() };
   });
-  const expected = ['mode-annotate', 'mode-control', 'exit-ar'];
-  if (mode === 'annotate') expected.push('filter:everything', 'filter:lights', 'filter:electronics');
+  assert.equal(await quest.evaluate(() => window.__ce.hud.root.getObjectByName('main-menu')?.visible), false,
+    'Menu choices must stay closed until the user opens Menu');
+  await openMenu();
+  const menuState = () => quest.evaluate(() => {
+    const { hud } = window.__ce, menu = hud.root.getObjectByName('main-menu'), choices = [];
+    menu.traverse(node => {
+      if (!node.userData.menuButton) return;
+      for (let owner = node; owner; owner = owner.parent) if (!owner.visible) return;
+      choices.push(node.name);
+    });
+    return { choices: choices.sort(), hasLights: !!hud.root.getObjectByName('filter:lights'), anchor: hud.deck.userData.anchor,
+      mode: window.__ce.modes.mode, menuOpen: hud.deck.userData.open };
+  });
+  const primary = await menuState();
+  const expectedPrimary = ['visual-synth', 'ask-muse-general', 'menu-tools', 'exit-ar', 'menu-close'];
+  if (canStop) expectedPrimary.push('deck:panic');
+  assert.deepEqual(primary.choices, expectedPrimary.sort(), 'Primary menu must emphasize the synth and retain immediate Stop');
+  await pinch({ nodeName: 'menu-tools', turn: true });
+  const state = await menuState();
+  const expected = ['menu-tools-back', 'muse-canvas', 'mode-annotate', mode === 'annotate' ? 'mode-control' : 'change-device',
+    'identify-area', 'helper-pair', 'menu-recenter', 'exit-ar', 'menu-close'];
+  if (mode === 'annotate' && !canStop) expected.push('filter:everything', 'filter:electronics');
   if (canStop) expected.push('deck:panic');
-  assert.deepEqual(state.icons, expected.sort(), `${mode} dock must expose only its available actions`);
-  assert.equal(state.anchor, 'fallback', 'Mouse emulator input must use the fallback dock');
-  assert.equal(state.oldBar || state.oldHint || state.close, false, 'The old bar, permanent hint, and Close button must be removed');
+  assert.deepEqual(state.choices, expected.sort(), `${mode} secondary menu must expose only its available actions`);
+  assert.equal(state.hasLights, false, 'Menu must omit the unsupported Lights-only detector filter');
+  assert.equal(state.anchor, 'world', 'Mouse emulator input must use the world-locked Menu pill');
+  assert.equal(state.mode, mode, 'Opening Menu must preserve the current mode');
+  assert.equal(state.menuOpen, true);
+  await quest.evaluate(() => {
+    const app = window.__ce;
+    app.emulator.lookAt(app.hud.root.getObjectByName('main-menu').getWorldPosition(app.desktopCam.position.clone()));
+  });
+  await renderedFrames();
+  await screenshot(`${currentPhase}-menu-open`);
+  if (mode === 'annotate') {
+    await menuAction('filter:electronics');
+    await waitQuest(() => window.__ce.filter === 'electronics' && !window.__ce.hud.root.getObjectByName('main-menu')?.visible);
+    await openMenu();
+    await menuAction('filter:everything');
+    await waitQuest(() => window.__ce.filter === 'everything');
+  } else await pinch({ nodeName: 'menu-close', turn: true });
+  await waitQuest(() => !window.__ce.hud.root.getObjectByName('main-menu')?.visible);
+  await quest.evaluate((pose) => {
+    const app = window.__ce, head = app.emulator.head();
+    app.emulator.setHead(head.position.fromArray(pose.position), head.quaternion.fromArray(pose.quaternion));
+  }, pose);
+  await renderedFrames();
 }
 
 async function findTarget(pattern) {
+  await waitQuest(pattern => window.__ce.targets.list().some(t => new RegExp(pattern, 'i').test(t.label)), pattern);
+  await quest.evaluate(pattern => {
+    const app = window.__ce;
+    const intended = app.targets.list().find(t => new RegExp(pattern, 'i').test(t.label));
+    app.emulator.lookAt(intended.position);
+  }, pattern);
   await waitQuest((pattern) => {
     const app = window.__ce;
     return app.targets.list().some((t) => new RegExp(pattern, 'i').test(t.label) && app.visibleTargets.has(t.id)
@@ -385,35 +456,25 @@ async function panelState() {
         upright: head.position.clone().set(0, 1, 0).applyQuaternion(rotation).y, depth: -center.z, bounds,
         inView: points.every((p) => p.front && Math.abs(p.x) < 1 && Math.abs(p.y) < 1) };
     };
-    const nodes = {};
-    app.hud.root.traverse((node) => {
-      for (let p = node; p; p = p.parent) if (!p.visible) return;
-      nodes[node.uuid] = { name: node.name || node.type, position: node.getWorldPosition(head.position.clone()).toArray() };
-    });
     const dock = app.hud.deck;
     const { width, height, anchor } = dock.userData;
-    if (!(width > 0) || height !== 0.032) throw new Error(`Invalid dock dimensions: ${width} x ${height}`);
-    return { card: describe(app.hud.card, 0.4, 0.32), dock: { ...describe(dock, width, height), anchor }, nodes };
+    if (!(width > 0) || !(height >= 0.045)) throw new Error(`Invalid dock dimensions: ${width} x ${height}`);
+    return { card: describe(app.hud.card, 0.4, 0.32), dock: { ...describe(dock, width, height), anchor } };
   });
 }
 
-function assertLocked(before, after, description, allNodes = false) {
-  for (const key of ['card', 'dock']) {
+function assertLocked(before, after, description, panels = ['card', 'dock']) {
+  for (const key of panels) {
     assert(Math.hypot(...before[key].position.map((v, i) => v - after[key].position[i])) < 1e-5,
       `${description}: ${key} world position moved`);
     const dot = Math.abs(before[key].rotation.reduce((s, v, i) => s + v * after[key].rotation[i], 0));
     assert(1 - dot < 1e-6, `${description}: ${key} rotated with the head`);
   }
-  if (allNodes) for (const [id, node] of Object.entries(before.nodes)) {
-    assert(after.nodes[id], `${description}: visible HUD node disappeared: ${node.name}`);
-    assert(Math.hypot(...node.position.map((v, i) => v - after.nodes[id].position[i])) < 1e-5,
-      `${description}: HUD node follows the head: ${node.name}`);
-  }
 }
 
 function assertSeparated(state, comfortable = false) {
   const { card, dock } = state;
-  assert.equal(dock.anchor, 'fallback', 'Positioning checks must exercise the fallback dock');
+  assert.equal(dock.anchor, 'world', 'Positioning checks must exercise the world-locked Menu pill');
   if (comfortable) for (const [name, panel] of Object.entries({ card, dock })) {
     assert(panel.inView, `${name} did not return fully into view`);
     assert(panel.distance >= 0.5 && panel.distance <= 1, `${name} distance ${panel.distance} m`);
@@ -423,8 +484,13 @@ function assertSeparated(state, comfortable = false) {
   if (!card.inView || !dock.inView) return;
   const a = card.bounds, b = dock.bounds;
   assert(a.right <= b.left || b.right <= a.left || a.top <= b.bottom || b.top <= a.bottom,
-    `Card overlaps fallback dock in screen space: ${JSON.stringify({ a, b })}`);
-  assert(Math.abs(card.depth - dock.depth) >= 0.01, `Panel depth gap is under 1 cm: ${card.depth} / ${dock.depth}`);
+    `Card overlaps Menu launcher in screen space: ${JSON.stringify({ a, b })}`);
+  // The shared workspace deliberately uses one plane. Its vertical navigation slot,
+  // screen-space separation and explicit render layers replace the old depth offset.
+  const slotDistance = Math.hypot(...card.position.map((value, index) => value - dock.position[index]));
+  assert(slotDistance >= .2 && slotDistance <= .45, `Menu must stay in its shared workspace slot: ${slotDistance}`);
+  const aligned = Math.abs(card.rotation.reduce((sum, value, index) => sum + value * dock.rotation[index], 0));
+  assert(1 - aligned < 1e-6, 'Card and Menu must share the workspace orientation');
 }
 
 async function run() {
@@ -486,8 +552,21 @@ async function run() {
       && window.__ce.targets.list().some((t) => /ceiling (light|lamp)/i.test(t.label)));
     assert(await quest.evaluate(() => window.__flowsRequests.some((e) => e.type === 'mode.set' && e.payload.mode === 'annotate')),
       'Entering AR explicitly starts in Annotate');
+    assert.equal(await quest.evaluate(() => window.__ce.onboarding.guide(window.__ce.modes.tags.size)?.step), 'tag',
+      'With a helper connected, onboarding must explain tagging first');
+    await quest.evaluate(() => window.__ce.ws.inject({ v: 1, id: 'flows-stale-mode', ts: Date.now(), from: 'server',
+      type: 'mode.state', payload: { mode: 'control' } }));
+    await renderedFrames();
+    assert.equal(await quest.evaluate(() => window.__ce.modes.mode), 'annotate',
+      'A stale server mode echo must not switch the user into Control');
     await assertDockIcons('annotate');
     targetId = await quest.evaluate(() => window.__ce.targets.list().find((t) => /ceiling (light|lamp)/i.test(t.label)).id);
+    // Discovery displays only the three best nearby candidates. Face the intended light
+    // instead of relying on a stale renderer label left over from before the menu/filter test.
+    await quest.evaluate(id => window.__ce.emulator.lookAt(window.__ce.targets.get(id).position), targetId);
+    await waitQuest(id => window.__ce.visibleTargets.has(id) && window.__ce.hud.targets.has(id)
+      && Date.now() - (window.__ce.observed.get(id)?.at ?? 0) < 200, targetId);
+    await renderedFrames();
     // Where the head looks while tagging: the FIXTURE verify outline is the tag frame's box, so verify must see the same view.
     tagGaze = await quest.evaluate(() => {
       const head = window.__ce.lastFrame.head;
@@ -524,6 +603,8 @@ async function run() {
     await pinch({ targetId });
     await waitQuest((id) => window.__ce.modes.tags.has(id) && window.__ce.modes.tags.get(id).cardId, targetId);
     cardId = await quest.evaluate((id) => window.__ce.modes.tags.get(id).cardId, targetId);
+    assert.equal(await quest.evaluate(() => window.__ce.onboarding.guide(window.__ce.modes.tags.size)?.step), 'use',
+      'The first tag must explain how to choose Use devices from Menu');
     assert(await quest.evaluate((id) => window.__flowsRequests.some((e) => e.type === 'tag.add' && e.payload.targetId === id), targetId),
       'Pinching an annotation must tag the device');
   });
@@ -572,8 +653,12 @@ async function run() {
     assert.equal(await sim.evaluate(() => window.ceSim.lamp().power), 'off');
   });
   await phase('05-control-mode', async () => {
-    await pinch({ nodeName: 'mode-control', turn: true });
+    await menuAction('mode-control');
     await waitQuest(() => window.__ce.modes.mode === 'control' && !window.__ce.scanner.active);
+    assert.equal(await quest.evaluate(() => window.__ce.onboarding.guide(window.__ce.modes.tags.size)), null,
+      'Choosing Use devices explicitly completes this session’s guide');
+    assert.equal(await quest.evaluate(() => window.__ce.hud.card.visible || !!window.__ce.lockedId), false,
+      'Changing mode alone must not open any device card');
     await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'setup', cardId);
     await assertDockIcons('control');
     assert.equal(await quest.evaluate(() => window.__flowsRequests.some((e) => e.type === 'control.setup')), false,
@@ -617,7 +702,7 @@ async function run() {
     assert.equal(await quest.evaluate(() => window.__flowsEvents.some((e) => e.type === 'agent.step')), false);
   });
   await phase('06b-helper-pair-by-code', async () => {
-    await pinch({ nodeName: 'control-pair' });
+    await menuAction('helper-pair');
     await waitQuest(() => window.__ce.onboarding.visible && window.__ce.onboarding.scanning);
     await openCompanion();
     const code = await companion.locator('#self-code').innerText();
@@ -653,11 +738,14 @@ async function run() {
     await companionScreenshot('06c-companion-connected-no-usb');
   }, false);
   await phase('06d-companion-usb-hotplug', async () => {
-    await companion.locator('#enable-midi').click();
+    await companion.locator('#details-open').click();
+    await companion.locator('#bridge-midi').click();
+    await companion.locator('#details-close').click();
     await assertSynthConnection(synthCardId, 'setup', () => companion.evaluate(() => window.__flowsMidi.connect(true)));
     await companion.waitForFunction(() => document.querySelector('#synth-status')?.textContent.includes('OP-1 Field on USB'));
     await waitQuest(() => !!window.__ce.hud.root.getObjectByName('control-setup'));
-    assert.equal(await companion.locator('#onboarding-title').innerText(), 'Set it up from the headset');
+    assert.equal(await companion.locator('#onboarding-title').textContent(), 'Paired with Quest 3');
+    assert.equal(await companion.locator('#enable-midi').isVisible(), false, 'Connecting MIDI must not replace neutral onboarding with a synth setup prompt');
     assert.equal(await quest.evaluate(() => window.__flowsRequests.some((e) => e.type === 'control.setup')), false,
       'Plugging in USB must not start setup');
     await companionScreenshot('06d-companion-usb-ready');
@@ -684,6 +772,30 @@ async function run() {
     await companion.evaluate(() => window.__flowsMidi.connect(false));
     await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'offline', synthCardId);
   });
+  await phase('06g-companion-visual-renderer-presence', async () => {
+    const owner = await companion.evaluate(() => JSON.parse(localStorage.getItem('ce.device')).deviceId);
+    const portState = async (state) => waitQuest(({ owner, state }) => window.__flowsEvents.findLast(event => event.type === 'presence')?.payload.devices
+      .find(device => device.deviceId === owner)?.ports?.some(port => port.id === 'ce-visual-synth' && port.state === state), { owner, state });
+    await portState('disconnected');
+    const before = (await json('/api/agent/exec')).sent.length;
+    const [visuals] = await Promise.all([
+      companionContext.waitForEvent('page'),
+      companion.getByRole('button', { name: 'Open visuals', exact: true }).first().click(),
+    ]);
+    watchPage(visuals, 'companion-visuals');
+    try {
+      await visuals.waitForURL('**/vsynth/**');
+      await visuals.locator('#visuals').waitFor({ state: 'visible' });
+      assert.equal(new URL(visuals.url()).searchParams.get('owner'), owner, 'Open visuals must carry its paired companion identity');
+      assert.equal(await visuals.evaluate(() => document.visibilityState), 'visible');
+      await portState('connected');
+      assert.equal(await visuals.locator('body.unavailable').count(), 0);
+      await visuals.screenshot({ path: join(SCREENS, '06g-companion-owned-visuals.png') });
+    } finally { await visuals.close(); }
+    await portState('disconnected');
+    assert.equal((await json('/api/agent/exec')).sent.length, before, 'Opening and closing visuals must not send device commands or enable hand control');
+    await quest.bringToFront();
+  }, false);
   await phase('07-synth-bridge-restored', async () => {
     await sim.evaluate(() => window.ceSimDebug.device.conn.start());
     await sim.waitForFunction(() => window.ceSimDebug.device.conn.open);
@@ -708,6 +820,8 @@ async function run() {
     await waitQuest(() => !!window.__ce.hud.root.getObjectByName('control-setup'));
   });
   await phase('08-set-up-light', async () => {
+    await menuAction('change-device');
+    await waitQuest(() => !window.__ce.lockedId);
     await pinch({ targetId, turn: true });
     await pinch({ nodeName: 'control-setup' });
     await waitQuest((id) => window.__flowsRequests.some((e) => e.type === 'control.setup' && e.payload.cardId === id), cardId);
@@ -780,7 +894,7 @@ async function run() {
 
   await phase('14-armed-mode-round-trip', async () => {
     const setupCount = await quest.evaluate(() => window.__flowsRequests.filter((e) => e.type === 'control.setup').length);
-    await pinch({ nodeName: 'mode-annotate', turn: true });
+    await menuAction('mode-annotate');
     await waitQuest(() => window.__ce.modes.mode === 'annotate' && window.__ce.scanner.active
       && !window.__ce.hud.card.visible && !window.__ce.hud.modal.visible && !window.__ce.lockedId);
     await assertDockIcons('annotate');
@@ -794,7 +908,7 @@ async function run() {
       && window.__ce.scanner.stats.results > before.results, scans);
     assert.equal(await quest.evaluate(() => window.__ce.hud.card.visible), false);
     await screenshot('14a-annotate-card-closed');
-    await pinch({ nodeName: 'mode-control', turn: true });
+    await menuAction('mode-control');
     await waitQuest((id) => window.__ce.modes.mode === 'control' && !window.__ce.scanner.active
       && window.__ce.modes.byCard(id)?.connection === 'ready', cardId);
     await assertDockIcons('control', true);
@@ -817,13 +931,15 @@ async function run() {
       for (const hand of Object.values(app.emulator.device.hands)) hand.connected = false;
     });
     try {
-      // Establish a common forward anchor through normal lazy follow, not by moving HUD nodes.
-      await yaw(100); await elapsedFrames(2200);
-      await yaw(0); await elapsedFrames(2200);
+      // Explicit user recovery establishes the workspace. Open cards must then stay
+      // in the world; recovery requires a deliberate raised-palm gesture.
+      await yaw(0);
+      await menuAction('menu-recenter');
+      await waitQuest(() => !window.__ce.hud.root.getObjectByName('main-menu')?.visible);
+      await yaw(0); await renderedFrames();
       const initial = await panelState();
       assertSeparated(initial, true);
-      assert(initial.dock.bounds.left + initial.dock.bounds.right < 0
-        && initial.dock.bounds.bottom + initial.dock.bounds.top < 0, 'Fallback dock must sit in the lower-left view');
+      assert(initial.dock.position[1] > initial.card.position[1] + 0.2, 'Menu launcher must sit above the card in easy view');
       for (let frame = 0; frame < 30; frame++) {
         await yaw(2 * Math.sin(frame / 29 * Math.PI));
         const state = await panelState();
@@ -831,7 +947,7 @@ async function run() {
         assertSeparated(state);
       }
       await yaw(20);
-      await elapsedFrames(2200); // Longer than the 1.5 s lazy-follow delay: still no movement.
+      await elapsedFrames(2200);
       const smallTurn = await panelState();
       assertLocked(initial, smallTurn, '20 degree turn');
       assertSeparated(smallTurn);
@@ -842,15 +958,49 @@ async function run() {
       do {
         last = await panelState();
         const now = await quest.evaluate(() => window.__ce.lastFrame.time);
-        if (now - start < 1000) assertLocked(smallTurn, last, 'lazy-follow delay');
+        assertLocked(smallTurn, last, '100 degree turn preserves the open card', ['card']);
+        if (now - start < 1000) assertLocked(smallTurn, last, 'launcher recovery delay', ['dock']);
         assertSeparated(last);
         if (now - start >= 2300) break;
         await renderedFrames();
       } while (true);
-      assertSeparated(last, true);
-      for (const key of ['card', 'dock']) assert(Math.hypot(...initial[key].position.map((v, i) => v - last[key].position[i])) > 0.2,
-        `${key} must recenter after a sustained 100 degree turn`);
-      await writeFile(join(SCREENS, 'positioning.json'), JSON.stringify({ initial, smallTurn, followed: last }, null, 2));
+      assertLocked(smallTurn, last, 'Launcher must not jump automatically after looking away', ['dock']);
+      // Recover through actual tracked hand posture, without turning back toward the old launcher.
+      await quest.evaluate(async () => {
+        const app = window.__ce, remote = app.emulator.device.remote, head = app.emulator.head();
+        app.input.mouseAsHand = false;
+        await remote.dispatch('set_input_mode', { mode: 'hand' });
+        await remote.dispatch('set_connected', { device: 'hand-right', connected: false });
+        await remote.dispatch('set_connected', { device: 'hand-left', connected: true });
+        await remote.dispatch('set_hand_pose', { device: 'hand-left', poseId: 'open' });
+        await remote.dispatch('set_select_value', { device: 'hand-left', value: 0 });
+        const wrist = head.position.clone().add(head.position.clone().set(-0.18, -0.25, -0.4).applyQuaternion(head.quaternion));
+        const palm = head.position.clone().sub(wrist).normalize();
+        const fingers = head.position.clone().set(0, 1, 0).applyQuaternion(head.quaternion);
+        fingers.addScaledVector(palm, -fingers.dot(palm)).normalize();
+        const xyz = v => ({ x: v.x, y: v.y, z: v.z });
+        await remote.dispatch('set_transform', { device: 'hand-left', anchor: 'wrist', position: xyz(wrist),
+          orientation: { fingers: xyz(fingers), palm: xyz(palm) } });
+      });
+      await waitQuest(() => window.__ce.hud.root.getObjectByName('main-menu')?.visible);
+      await quest.evaluate(async () => {
+        const app = window.__ce, remote = app.emulator.device.remote;
+        await remote.dispatch('set_connected', { device: 'hand-left', connected: false });
+        await remote.dispatch('set_input_mode', { mode: 'controller' }); app.input.mouseAsHand = true;
+      });
+      await menuAction('menu-recenter');
+      await waitQuest(() => !window.__ce.hud.root.getObjectByName('main-menu')?.visible);
+      await renderedFrames();
+      const recovered = await panelState();
+      assertSeparated(recovered, true);
+      assert(Math.hypot(...initial.card.position.map((value, i) => value - recovered.card.position[i])) > 0.2,
+        'Recenter panels must move the card into the new workspace');
+      // Looking at an actual visible control confirms the recovered workspace can be used.
+      await pinch({ nodeName: 'device-lock', turn: true });
+      await waitQuest(() => window.__ce.hud.card.userData.pinned === true);
+      await pinch({ nodeName: 'device-lock' });
+      await waitQuest(() => window.__ce.hud.card.userData.pinned === false);
+      await writeFile(join(SCREENS, 'positioning.json'), JSON.stringify({ initial, smallTurn, turnedAway: last, recovered }, null, 2));
     } finally {
       await quest.evaluate(() => { window.__ce.input.mouseAsHand = true; });
     }
@@ -889,15 +1039,19 @@ async function run() {
     await waitQuest(() => window.__ce.hud.card.userData.pinned === false);
     await pinch({ nodeName: 'device-lock' });
     await waitQuest(() => window.__ce.hud.card.userData.pinned === true);
+    await menuAction('change-device');
+    await waitQuest(() => !window.__ce.lockedId);
     await pinch({ targetId: synthId, turn: true });
     await waitQuest((id) => window.__ce.lockedId === id && window.__ce.hud.card.userData.pinned === false, synthId);
+    await menuAction('change-device');
+    await waitQuest(() => !window.__ce.lockedId);
     await pinch({ targetId, turn: true });
     await waitQuest((id) => window.__ce.lockedId === id && window.__ce.hud.card.userData.pinned === false, targetId);
   });
 
   await phase('16-stop-disarms-and-blocks-ir', async () => {
     assert.equal((await target()).armed, true);
-    await pinch({ nodeName: 'deck:panic', turn: true });
+    await menuAction('deck:panic');
     await waitQuest(() => window.__flowsEvents.some((e) => e.type === 'panic')
       && !window.__ce.hud.card.visible && !window.__ce.hud.modal.visible && !window.__ce.lockedId
       && window.__ce.armedCards.size === 0);
@@ -928,16 +1082,13 @@ async function run() {
   const handMethods = await quest.evaluate(() => window.__ce.emulator?.device.remote?.listMethods?.().map((m) => m.method) ?? []);
   const needed = ['set_input_mode', 'set_connected', 'set_hand_pose', 'set_transform', 'look_at', 'set_select_value', 'get_hand_state'];
   if (!needed.every((method) => handMethods.includes(method))) {
-    console.log(`SKIP 17-emulated-finger-menu: IWER lacks hand input methods (${needed.filter((m) => !handMethods.includes(m)).join(', ')})`);
-  } else await phase('17-emulated-finger-menu', async () => {
-    // Bring the fallback dock into view, then hand tracking must take over without a mouse click.
+    console.log(`SKIP 17-emulated-explicit-menu: IWER lacks hand input methods (${needed.filter((m) => !handMethods.includes(m)).join(', ')})`);
+  } else await phase('17-emulated-explicit-menu', async () => {
     await quest.evaluate(() => {
       const app = window.__ce;
-      const head = app.emulator.head();
-      const direction = app.hud.deck.getWorldPosition(head.position.clone()).sub(head.position);
-      const up = head.position.clone().set(0, 1, 0);
-      app.emulator.setHead(head.position, head.quaternion.setFromAxisAngle(up, Math.atan2(-direction.x, -direction.z)));
+      app.emulator.lookAt(app.hud.deck.getWorldPosition(app.desktopCam.position.clone()));
       app.input.mouseAsHand = false;
+      app.input.pointer.inside = app.input.pointer.down = app.input.pointer.latched = false;
       window.__flowsHandEvents = [];
       app.hud.on('consumed', (e) => window.__flowsHandEvents.push(e));
     });
@@ -946,6 +1097,35 @@ async function run() {
       const poses = window.__ce.emulator.device.hands.left.poseIds ?? [];
       return poses.includes('open') && poses.includes('pinch-middle');
     });
+    const handPinch = async (nodeName, hand = 'right') => {
+      await quest.evaluate(async ({ nodeName, hand }) => {
+        const app = window.__ce, remote = app.emulator.device.remote, device = `hand-${hand}`;
+        const other = `hand-${hand === 'right' ? 'left' : 'right'}`;
+        const head = app.emulator.head();
+        const position = head.position.clone().add(head.position.clone().set(hand === 'right' ? 0.15 : -0.15, -0.2, -0.2).applyQuaternion(head.quaternion));
+        const button = app.hud.root.getObjectByName(nodeName);
+        if (!button) throw new Error(`Menu button is missing: ${nodeName}`);
+        for (let node = button; node; node = node.parent) if (!node.visible) throw new Error(`Menu button is hidden: ${nodeName}`);
+        const target = button.getWorldPosition(position.clone());
+        await remote.dispatch('set_select_value', { device, value: 0 });
+        await remote.dispatch('set_connected', { device: other, connected: false });
+        await remote.dispatch('set_connected', { device, connected: true });
+        await remote.dispatch('set_hand_pose', { device, poseId: 'default' });
+        await remote.dispatch('set_transform', { device, position: { x: position.x, y: position.y, z: position.z } });
+        await remote.dispatch('look_at', { device, target: { x: target.x, y: target.y, z: target.z } });
+      }, { nodeName, hand });
+      await waitQuest((hand) => window.__ce.lastFrame.hands[hand]?.joints['index-finger-tip']
+        && !window.__ce.lastFrame.hands[hand].controller && !window.__ce.lastFrame.hands[hand].pinching, hand);
+      await elapsedFrames(200);
+      await quest.evaluate((hand) => window.__ce.emulator.device.remote.dispatch('set_select_value', { device: `hand-${hand}`, value: 1, duration: 0.15 }), hand);
+      await waitQuest((hand) => window.__ce.lastFrame.hands[hand]?.pinching, hand);
+      await renderedFrames();
+      const state = await quest.evaluate((hand) => window.__ce.emulator.device.remote.dispatch('get_hand_state', { device: `hand-${hand}`, joints: 'all' }), hand);
+      assert(state.connected && state.pressed && Object.keys(state.joints ?? {}).length >= 25,
+        'Menu interaction must come from tracked XR joints');
+      await quest.evaluate((hand) => window.__ce.emulator.device.remote.dispatch('set_select_value', { device: `hand-${hand}`, value: 0 }), hand);
+      await waitQuest((hand) => !window.__ce.lastFrame.hands[hand]?.pinching, hand);
+    };
     try {
       await quest.evaluate(async (hasFingerPose) => {
         const app = window.__ce, remote = app.emulator.device.remote;
@@ -956,7 +1136,10 @@ async function run() {
           await remote.dispatch('set_select_value', { device, value: 0 });
         }
         const head = app.emulator.head();
+        // Finger-chord regression uses a lowered hand. A raised open palm held for 650 ms
+        // deliberately recalls Menu; that gesture must not be mistaken for this test.
         const wrist = head.position.clone().add(head.position.clone().set(-0.18, -0.25, -0.4).applyQuaternion(head.quaternion));
+        wrist.y = head.position.y - 0.55;
         const palm = head.position.clone().sub(wrist).normalize();
         const fingers = head.position.clone().set(0, 1, 0).applyQuaternion(head.quaternion);
         fingers.addScaledVector(palm, -fingers.dot(palm)).normalize();
@@ -964,101 +1147,43 @@ async function run() {
         await remote.dispatch('set_transform', { device: 'hand-left', anchor: 'wrist', position: xyz(wrist),
           orientation: { fingers: xyz(fingers), palm: xyz(palm) } });
       }, hasFingerPose);
-      await waitQuest(() => window.__ce.lastFrame.hands.left?.palmUpMs >= 300
-        && window.__ce.hud.deck.userData.anchor === 'left' && window.__ce.hud.deck.userData.open);
-      await elapsedFrames(250); // Complete opening and observe released fingers before any touch.
-      const menu = await quest.evaluate(() => {
-        const app = window.__ce, fingers = [];
-        app.hud.deck.traverse((node) => {
-          if (!node.userData.finger) return;
-          for (let parent = node; parent; parent = parent.parent) if (!parent.visible) return;
-          const label = node.getObjectByName(`finger-label:${node.userData.finger}`);
-          fingers.push({ finger: node.userData.finger, name: node.name, label: label?.text, visible: label?.visible });
-        });
-        return { mode: app.modes.mode, fingers, wrist: app.hud.root.getObjectByName('wrist-mode-label')?.text };
-      });
-      assert.equal(menu.mode, 'control');
-      assert.equal(menu.wrist, 'Control', 'Current mode must stay readable at the wrist');
-      assert.deepEqual(menu.fingers.map((finger) => finger.finger).sort(), ['middle', 'pinky'], 'Stop must hide when no device can move');
-      assert(menu.fingers.every((finger) => finger.label && finger.visible), 'Finger labels must be visible without hover');
-      assert.equal(menu.fingers.find((finger) => finger.finger === 'middle')?.label, 'Annotate');
-
+      await waitQuest(() => window.__ce.lastFrame.hands.left?.palmUpMs >= 300);
+      const sent = await quest.evaluate(() => window.__flowsRequests.length);
       if (hasFingerPose) {
-        const sent = await quest.evaluate(() => window.__flowsRequests.length);
-        // IWER's per-finger pose blends drive XR joints; select stays released throughout.
         await quest.evaluate(() => window.__ce.emulator.device.remote.dispatch('set_hand_pose', {
           device: 'hand-left', poseId: 'open', fingers: { thumb: 'pinch-middle', middle: 'pinch-middle' }, duration: 0.25,
         }));
-        await waitQuest((sent) => window.__ce.modes.mode === 'annotate' && window.__ce.scanner.active
-          && window.__flowsRequests.slice(sent).some((event) => event.type === 'mode.set' && event.payload.mode === 'annotate'), sent);
-        await elapsedFrames(800); // A held thumb touch must not toggle the mode back.
-        const touch = await quest.evaluate(async (sent) => {
-          const app = window.__ce, joints = app.lastFrame.hands.left.joints;
-          return { mode: app.modes.mode, requests: window.__flowsRequests.slice(sent).filter((event) => event.type === 'mode.set'),
-            middleDistance: joints['thumb-tip'].position.distanceTo(joints['middle-finger-tip'].position),
-            indexDistance: joints['thumb-tip'].position.distanceTo(joints['index-finger-tip'].position),
-            hand: await app.emulator.device.remote.dispatch('get_hand_state', { device: 'hand-left', joints: 'all' }) };
-        }, sent);
-        assert.equal(touch.mode, 'annotate');
-        assert.equal(touch.requests.length, 1, 'One held thumb-middle touch must switch mode exactly once');
-        assert(touch.middleDistance < 0.015 && touch.indexDistance > 0.035, 'Only the middle fingertip must touch the thumb');
-        assert(touch.hand.connected && !touch.hand.pressed && Object.keys(touch.hand.joints ?? {}).length >= 25,
-          'Finger activation must use tracked joints with index select released');
-        await writeFile(join(SCREENS, 'finger-touch-input.json'), JSON.stringify(touch, null, 2));
+        await waitQuest(() => {
+          const joints = window.__ce.lastFrame.hands.left.joints;
+          return joints['thumb-tip'].position.distanceTo(joints['middle-finger-tip'].position) < 0.015;
+        });
+        await elapsedFrames(800);
+        assert.equal(await quest.evaluate(() => window.__ce.modes.mode), 'control',
+          'A relaxed thumb-middle touch must never change mode');
+        assert.equal(await quest.evaluate((sent) => window.__flowsRequests.slice(sent).filter((event) => event.type === 'mode.set').length, sent), 0,
+          'Finger chords must not send mode changes');
         await quest.evaluate(() => window.__ce.emulator.device.remote.dispatch('set_hand_pose', {
           device: 'hand-left', poseId: 'open', duration: 0.25,
         }));
-        await waitQuest(() => {
-          const joints = window.__ce.lastFrame.hands.left.joints;
-          return joints['thumb-tip'].position.distanceTo(joints['middle-finger-tip'].position) > 0.04;
-        });
-        await elapsedFrames(250);
-        assert.equal(await quest.evaluate((sent) => window.__flowsRequests.slice(sent).filter((event) => event.type === 'mode.set').length, sent), 1,
-          'Releasing the finger touch must not activate again');
-      } else {
-        console.log('SKIP thumb-middle pose: this IWER build lacks per-finger touch poses; retaining other-hand fallback coverage');
-      }
-
-      const fallbackMode = await quest.evaluate(async () => {
-        const app = window.__ce, remote = app.emulator.device.remote, device = 'hand-right';
-        const nextMode = app.modes.mode === 'annotate' ? 'control' : 'annotate';
-        const head = app.emulator.head();
-        const position = head.position.clone().add(head.position.clone().set(0.15, -0.2, -0.2).applyQuaternion(head.quaternion));
-        let button;
-        app.hud.deck.traverse((node) => { if (node.userData.finger === 'middle' && node.visible) button = node; });
-        if (!button) throw new Error('Middle-finger mode target is missing');
-        const target = button.getWorldPosition(position.clone());
-        await remote.dispatch('set_connected', { device, connected: true });
-        await remote.dispatch('set_hand_pose', { device, poseId: 'default' });
-        await remote.dispatch('set_transform', { device, position: { x: position.x, y: position.y, z: position.z } });
-        await remote.dispatch('look_at', { device, target: { x: target.x, y: target.y, z: target.z } });
-        return nextMode;
-      });
-      await waitQuest(() => window.__ce.lastFrame.hands.right?.joints['index-finger-tip']
-        && !window.__ce.lastFrame.hands.right.controller && !window.__ce.lastFrame.hands.right.pinching);
-      const sent = await quest.evaluate(() => window.__flowsRequests.length);
-      await quest.evaluate(() => window.__ce.emulator.device.remote.dispatch('set_select_value', { device: 'hand-right', value: 1, duration: 0.15 }));
-      await waitQuest(() => window.__ce.lastFrame.hands.right?.pinching);
-      await waitQuest(({ sent, fallbackMode }) => window.__ce.modes.mode === fallbackMode
-        && window.__flowsHandEvents.some((event) => event.hand === 'right' && event.widget === 'deck')
-        && window.__flowsRequests.slice(sent).some((event) => event.type === 'mode.set' && event.payload.mode === fallbackMode), { sent, fallbackMode });
-      const hand = await quest.evaluate(() => window.__ce.emulator.device.remote.dispatch('get_hand_state', { device: 'hand-right', joints: 'all' }));
-      assert(hand.connected && hand.pressed && Object.keys(hand.joints ?? {}).length >= 25, 'Fallback pinch must come from the other tracked XR hand');
-      await writeFile(join(SCREENS, 'hand-input.json'), JSON.stringify(hand, null, 2));
-      // Disconnect the interacting hand so it cannot hold the menu open while the left palm turns away.
-      await quest.evaluate(async () => {
-        const app = window.__ce, remote = app.emulator.device.remote;
-        await remote.dispatch('set_select_value', { device: 'hand-right', value: 0 });
-        await remote.dispatch('set_connected', { device: 'hand-right', connected: false });
-        const hand = await remote.dispatch('get_hand_state', { device: 'hand-left' });
-        await remote.dispatch('set_transform', { device: 'hand-left', anchor: 'wrist', position: hand.anchors.wrist,
-          orientation: { fingers: hand.axes.fingers,
-            palm: { x: -hand.axes.palm.x, y: -hand.axes.palm.y, z: -hand.axes.palm.z } } });
-      });
-      await waitQuest(() => !window.__ce.lastFrame.hands.left?.palmUp
-        && window.__ce.hud.deck.userData.anchor === 'left' && !window.__ce.hud.deck.userData.open);
-      await elapsedFrames(250);
-      assert.equal(await quest.evaluate(() => window.__ce.hud.deck.visible), false, 'Palm-away menu must finish hiding');
+      } else console.log('SKIP thumb-middle pose: this IWER build lacks per-finger touch poses');
+      assert.equal(await quest.evaluate(() => window.__ce.hud.root.getObjectByName('main-menu')?.visible), false,
+        'A lowered palm and finger chords must not open Menu; raised deliberate recall is a separate gesture');
+      assert.equal(await quest.evaluate(() => window.__ce.hud.deck.userData.anchor), 'world',
+        'The Menu pill must stay world-locked while hands move');
+      await handPinch('menu-toggle');
+      await waitQuest(() => window.__ce.hud.root.getObjectByName('main-menu')?.visible);
+      assert.equal(await quest.evaluate(() => window.__ce.modes.mode), 'control', 'Opening Menu must not change mode');
+      await screenshot('17a-explicit-menu');
+      await handPinch('menu-tools'); await handPinch('mode-annotate');
+      await waitQuest(() => window.__ce.modes.mode === 'annotate' && window.__ce.scanner.active
+        && !window.__ce.hud.root.getObjectByName('main-menu')?.visible);
+      await handPinch('menu-toggle', 'left');
+      await waitQuest(() => window.__ce.hud.root.getObjectByName('main-menu')?.visible);
+      await handPinch('menu-tools', 'left'); await handPinch('mode-control', 'left');
+      await waitQuest(() => window.__ce.modes.mode === 'control' && !window.__ce.scanner.active
+        && !window.__ce.hud.root.getObjectByName('main-menu')?.visible);
+      const modes = await quest.evaluate((sent) => window.__flowsRequests.slice(sent).filter((event) => event.type === 'mode.set').map((event) => event.payload.mode), sent);
+      assert.deepEqual(modes, ['annotate', 'control'], 'Only explicit menu choices may change modes, using either hand');
     } finally {
       await quest.evaluate(async () => {
         const app = window.__ce;
@@ -1104,8 +1229,12 @@ async function run() {
   };
   await phase('18-companion-reload', async () => {
     // Phase 16 deliberately stopped controls. Explicitly enable the saved setup before testing recovery.
-    if (await quest.evaluate(() => window.__ce.modes.mode !== 'control')) await pinch({ nodeName: 'mode-control', turn: true });
-    await pinch({ targetId, turn: true });
+    if (await quest.evaluate(() => window.__ce.modes.mode !== 'control')) await menuAction('mode-control');
+    if (await quest.evaluate(id => window.__ce.lockedId !== id, targetId)) {
+      await menuAction('change-device');
+      await waitQuest(() => !window.__ce.lockedId);
+      await pinch({ targetId, turn: true });
+    }
     await pinch({ nodeName: 'control-setup' });
     await waitQuest(() => window.__ce.pendingArm && window.__ce.hud.confirm);
     await pinch({ nodeName: 'confirm-yes' });
@@ -1148,6 +1277,8 @@ async function run() {
     await waitQuest(() => window.__ce?.welcome && window.__ce.ws.open);
     assert(await storedIdentity(quest) === questIdentity, 'Quest reload must keep its saved identity');
     assert.equal(newPairRequests, 0, 'Quest reload must not begin another pairing');
+    assert.equal(await quest.evaluate(() => window.__ce.hud.card.visible || !!window.__ce.lockedId), false,
+      'Restored devices must remain chips until explicitly selected');
     await companion.waitForFunction(() => document.querySelector('#headset-status')?.textContent.includes('Connected to Quest'));
     await companionScreenshot('19-companion-quest-reloaded');
     await assertSavedSetup();
@@ -1197,9 +1328,11 @@ async function run() {
     assert(chip.frameId, 'Fallback placement must come from a new detection');
     assert(chip.shown && chip.shown.every((coordinate, axis) => Math.abs(coordinate - chip.position[axis]) <= 0.001),
       'The saved chip must be drawn at its freshly observed place (millimetre display precision)');
-    await pinch({ nodeName: 'mode-control', turn: true });
+    await menuAction('mode-control');
     await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'ready', cardId);
     await assertSavedSetup();
+    assert.equal(await quest.evaluate(() => window.__ce.hud.card.visible || !!window.__ce.lockedId), false,
+      'Entering Control after restart must not reopen a restored device card');
     assert((await json('/api/muse/calls')).calls.every((call) => call.format === 'segmentation'),
       'Only the explicit fallback scan may run; restoring controls must not identify, research or generate again');
     assert.equal((await json('/api/agent/exec')).sent.length, 0, 'Rendering restored controls must not send physical commands');
@@ -1212,16 +1345,156 @@ async function run() {
     await quest.locator('#btn-enter').click();
     await waitQuest(() => window.__ce.renderer.xr.isPresenting);
     // A plain tap (~200 ms incl. the harness's 100 ms polling) is an unambiguous early release of the 600 ms hold.
-    await pinch({ nodeName: 'exit-ar', turn: true });
+    await menuAction('exit-ar');
     assert.equal(await quest.evaluate(() => window.__ce.renderer.xr.isPresenting), true, 'An early release must cancel Exit');
     await waitQuest(() => window.__ce.hud.root.getObjectByName('exit-ar')?.userData.holdProgress === 0);
-    await pinch({ nodeName: 'exit-ar', holdMs: 650 });
+    await menuAction('exit-ar', { holdMs: 650 });
     await waitQuest(() => !window.__ce.renderer.xr.isPresenting);
     const enter = quest.locator('#btn-enter');
     assert(await enter.isVisible() && await enter.isEnabled(), 'Enter AR must be immediately pressable after Exit');
     const bounds = await enter.boundingBox();
     assert(bounds && bounds.width >= 160 && bounds.height >= 48, 'Enter AR needs a large return target');
     await quest.screenshot({ path: join(SCREENS, '21-exit-ar-ready-to-return.png') });
+  }, false);
+
+  await phase('22-general-muse-full-conversation', async () => {
+    await quest.evaluate(() => {
+      const app = window.__ce;
+      window.__round3Requests = [];
+      app.ws.tap('out', ({ type, payload }) => window.__round3Requests.push({ type, payload: type === 'scan.frame'
+        ? { frameId: payload.frameId, purpose: payload.purpose, width: payload.width, height: payload.height,
+          detections: payload.fixtureDetections?.map(d => ({ label: d.label, box: d.box })) } : payload }));
+      // Exercise the real microphone button wiring without opening a physical microphone.
+      window.__round3Mic = { prepare: app.mic.prepare, start: app.mic.start, stop: app.mic.stop, ready: app.mic.ready, param: app.params.get('mic') };
+      app.params.delete('mic'); app.mic.ready = true;
+      app.mic.prepare = async () => {}; app.mic.start = () => {}; app.mic.stop = () => {};
+    });
+    try {
+      await quest.locator('#btn-enter').click();
+      await waitQuest(() => window.__ce.renderer.xr.isPresenting && window.__ce.cameraState === 'on');
+      await menuAction('ask-muse-general');
+      await waitQuest(() => window.__ce.assistant.view?.targetId === 'muse-general'
+        && window.__ce.assistant.view?.state === 'listening'
+        && window.__ce.hud.root.getObjectByName('assistant-panel')?.visible);
+      assert.equal(await quest.evaluate(() => window.__ce.hud.root.getObjectByName('assistant-title')?.text), 'Ask Muse');
+      const request = 'Please explain how I can create a webpage in this headset, then return to AR to identify an object. '
+        + 'I need the complete explanation to stay readable while I move my head, with an obvious next step and no automatic hardware control. '.repeat(5);
+      assert.equal(await quest.evaluate(text => window.__ce.assistant.sendGeneralText(text), request), true);
+      await waitQuest(() => window.__ce.assistant.view?.state === 'reply');
+      const reply = await quest.evaluate(() => window.__ce.assistant.view.text);
+      assert.match(reply, /headset browser/i); assert.match(reply, /FIXTURE/);
+      await pinch({ nodeName: 'assistant-read', turn: true });
+      const retained = { request: [], reply: [] };
+      const count = await quest.evaluate(() => window.__ce.hud.root.getObjectByName('assistant-panel').userData.readingPages);
+      assert(count >= 3, 'The long transcript must expose multiple readable pages');
+      for (let page = 0; page < count; page++) {
+        const shown = await quest.evaluate(() => ({ label: window.__ce.hud.root.getObjectByName('assistant-status').text,
+          text: window.__ce.hud.root.getObjectByName('object-info-detail').text }));
+        assert(!shown.text.includes('…') && shown.text.length <= 280, 'A reading page must not truncate text or exceed its glyph budget');
+        retained[shown.label.startsWith('Your full request') ? 'request' : 'reply'].push(shown.text);
+        if (page < count - 1) await pinch({ nodeName: 'object-info-sources', turn: true });
+      }
+      const normalize = text => text.replace(/\s+/g, '');
+      assert.equal(normalize(retained.request.join('')), normalize(request));
+      assert.equal(normalize(retained.reply.join('')), normalize(reply));
+      await screenshot('22a-complete-muse-response');
+      await pinch({ nodeName: 'object-info-close', turn: true });
+      await waitQuest(() => window.__ce.hud.root.getObjectByName('assistant-dismiss')?.visible);
+      await pinch({ nodeName: 'assistant-dismiss', turn: true });
+      await waitQuest(() => !window.__ce.hud.root.getObjectByName('assistant-panel')?.visible);
+      assert.equal(await quest.evaluate(() => window.__round3Requests.some(e => ['control.event', 'control.setup', 'arm.confirm', 'voice.audio'].includes(e.type))), false,
+        'A general question must not send hardware commands, start setup, or capture microphone audio');
+    } finally {
+      await quest.evaluate(() => {
+        const app = window.__ce, saved = window.__round3Mic; app.assistant.cancel();
+        app.mic.prepare = saved.prepare; app.mic.start = saved.start; app.mic.stop = saved.stop; app.mic.ready = saved.ready;
+        if (saved.param === null) app.params.delete('mic'); else app.params.set('mic', saved.param);
+      });
+    }
+  }, false);
+
+  await phase('23-manual-region-identification', async () => {
+    await menuAction('mode-annotate');
+    await waitQuest(() => window.__ce.scanner.active && window.__round3Requests.some(e => e.type === 'scan.frame' && e.payload.purpose === 'scan'));
+    const fullFrame = await quest.evaluate(() => window.__round3Requests.findLast(e => e.type === 'scan.frame' && e.payload.purpose === 'scan').payload);
+    const intended = await quest.evaluate(() => window.__ce.targets.list().find(t => /ceiling (light|lamp)/i.test(t.label))?.position.toArray());
+    assert(intended, 'The fixture room must supply an actual visible object for the cropped scan');
+    await menuAction('identify-area');
+    await waitQuest(() => window.__ce.manualRegion?.active && !window.__ce.scanner.active && !window.__ce.onboarding.visible);
+    const baseline = await quest.evaluate(() => window.__round3Requests.length);
+    assert.equal(await quest.evaluate(() => window.__ce.visibleTargets.size), 0, 'Old tags must not compete with manual region selection');
+    await quest.evaluate(async point => {
+      const app = window.__ce, remote = app.emulator.device.remote;
+      app.emulator.lookAt(app.desktopCam.position.clone().fromArray(point));
+      app.input.mouseAsHand = false; app.input.pointer.inside = app.input.pointer.down = app.input.pointer.latched = false;
+      await remote.dispatch('set_input_mode', { mode: 'hand' });
+      await remote.dispatch('set_connected', { device: 'hand-left', connected: false });
+      await remote.dispatch('set_connected', { device: 'hand-right', connected: true });
+      await remote.dispatch('set_hand_pose', { device: 'hand-right', poseId: 'default' });
+      await remote.dispatch('set_select_value', { device: 'hand-right', value: 0 });
+    }, intended);
+    try {
+      const corner = async (u, v) => {
+        await renderedFrames();
+        await quest.evaluate(async ({ u, v }) => {
+          const app = window.__ce, selector = app.manualRegion, remote = app.emulator.device.remote, head = app.emulator.head();
+          const k = selector.k;
+          const target = head.position.clone().set((u * k.width - k.cx) / k.fx, -(v * k.height - k.cy) / k.fy, -1)
+            .applyQuaternion(selector.root.quaternion).add(selector.root.position);
+          const wrist = head.position.clone().add(head.position.clone().set(0.15, -0.2, -0.2).applyQuaternion(head.quaternion));
+          await remote.dispatch('set_select_value', { device: 'hand-right', value: 0 });
+          await remote.dispatch('set_transform', { device: 'hand-right', position: { x: wrist.x, y: wrist.y, z: wrist.z } });
+          await remote.dispatch('look_at', { device: 'hand-right', target: { x: target.x, y: target.y, z: target.z } });
+        }, { u, v });
+        await waitQuest(() => !!window.__ce.lastFrame.hands.right?.joints['index-finger-tip'] && !window.__ce.lastFrame.hands.right.pinching);
+        await elapsedFrames(250);
+        await quest.evaluate(() => window.__ce.emulator.device.remote.dispatch('set_select_value', { device: 'hand-right', value: 1, duration: 0.15 }));
+        await waitQuest(() => window.__ce.lastFrame.hands.right?.pinching);
+        await renderedFrames();
+        await quest.evaluate(() => window.__ce.emulator.device.remote.dispatch('set_select_value', { device: 'hand-right', value: 0 }));
+        await waitQuest(() => !window.__ce.lastFrame.hands.right?.pinching);
+      };
+      await corner(0.22, 0.14);
+      await waitQuest(() => window.__ce.manualRegion?.anchor?.length === 2);
+      await screenshot('23a-hand-outlined-first-corner');
+      await corner(0.78, 0.78);
+      await waitQuest(() => !window.__ce.manualRegion.active && !window.__ce.manualScanPending && !window.__ce.scanner.active
+        && window.__ce.manualFocusIds?.size > 0 && window.__ce.visibleTargets.size > 0);
+      const result = await quest.evaluate(baseline => {
+        const app = window.__ce;
+        const renderedIds = []; app.hud.root.traverseVisible(node => { if (node.name.startsWith('target-label:')) renderedIds.push(node.name.slice('target-label:'.length)); });
+        const frames = window.__round3Requests.slice(baseline).filter(e => e.type === 'scan.frame');
+        const frame = frames.find(e => app.capture.get(e.payload.frameId)?.region);
+        return { frames: frames.map(e => e.payload), selected: frame?.payload,
+          region: frame && app.capture.get(frame.payload.frameId).region,
+          focus: [...app.manualFocusIds], visible: [...app.visibleTargets], renderedIds, mountedIds: [...app.mountedTargets],
+          commands: window.__round3Requests.slice(baseline).filter(e => ['tag.add', 'control.setup', 'control.event', 'arm.confirm'].includes(e.type)) };
+      }, baseline);
+      assert.equal(result.frames.length, 1, 'Two corner pinches must issue exactly one scan');
+      assert(result.selected && result.region, 'The real scanner must retain the selected crop in its captured-frame record');
+      assert(result.selected.width < fullFrame.width && result.selected.height < fullFrame.height, 'The transmitted JPEG dimensions must be cropped, not just a full-view overlay');
+      assert(result.selected.detections?.length > 0, 'The selected fixture area must produce actual fixture detections');
+      assert(result.visible.every(id => result.focus.includes(id)), 'Only results from the chosen area may be interactive');
+      assert(result.renderedIds.length > 0 && result.renderedIds.every(id => result.focus.includes(id)), 'The actual rendered scene must show only region results, including labels previously hidden behind Menu');
+      assert(result.mountedIds.every(id => result.focus.includes(id)), 'No out-of-region target may remain mounted to reappear after Menu closes');
+      assert.deepEqual(result.commands, [], 'Region identification must not tag or enable/control a device automatically');
+      await screenshot('23b-region-limited-fixture-results');
+      await elapsedFrames(1800);
+      assert.equal(await quest.evaluate(baseline => window.__round3Requests.slice(baseline).filter(e => e.type === 'scan.frame').length, baseline), 1,
+        'Whole-view scanning must remain paused after the one-shot result');
+      await writeFile(join(SCREENS, '23-manual-region-evidence.json'), JSON.stringify({ source: 'fixture', fullFrame, ...result }, null, 2));
+    } finally {
+      await quest.evaluate(async () => {
+        const app = window.__ce, remote = app.emulator.device.remote;
+        await remote.dispatch('set_select_value', { device: 'hand-right', value: 0 });
+        await remote.dispatch('set_connected', { device: 'hand-right', connected: false });
+        await remote.dispatch('set_input_mode', { mode: 'controller' }); app.input.mouseAsHand = true;
+      });
+    }
+    await menuAction('identify-area'); await waitQuest(() => window.__ce.manualRegion.active);
+    await openMenu(); await waitQuest(() => !window.__ce.manualRegion.active && !window.__ce.manualScanPending);
+    await pinch({ nodeName: 'exit-ar', turn: true, holdMs: 650 });
+    await waitQuest(() => !window.__ce.renderer.xr.isPresenting);
   }, false);
 }
 

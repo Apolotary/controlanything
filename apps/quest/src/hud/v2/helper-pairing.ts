@@ -49,6 +49,8 @@ export class HelperPairingCard extends Group {
     this.check = new Mesh(this.checkGeometry, this.pulseMaterial);
     this.check.name = 'helper-pairing-check'; this.check.position.set(0, 0.045, THEME.panel.depth);
     this.check.renderOrder = THEME.render.text;
+    const step = makeText({ text: '1 of 3 · Pair or skip', size: 0.012, anchorX: 'center', color: THEME.color.muted });
+    step.name = 'helper-pairing-step'; step.position.set(0, -0.158, THEME.panel.depth); this.add(step);
     this.typeCode = this.button(surfaces, 'helper-type-code', 'Type code', -0.105);
     this.skip = this.button(surfaces, 'helper-skip', 'Skip for now', 0.105);
     this.add(surfaces.create(this.width, this.height), this.heading, this.body, this.url, this.alternative, this.status, this.pulse, this.check, this.typeCode, this.skip);

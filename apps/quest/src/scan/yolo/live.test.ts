@@ -48,6 +48,35 @@ function setup(field?: BoxField, handJoints: Vector3[] = []) {
 }
 
 describe('live selection and SAM handover', () => {
+  it('retains a recognized live class when a generic SAM outline takes over', () => {
+    const { live, targets, views, sam } = setup();
+    live.apply([detection], frame, 0);
+    live.apply([detection], frame, 150);
+    const generic = { ...sam(), label: 'electronic device', prompt: 'electronic device' };
+    targets.push(generic);
+    live.onSamTargets();
+    expect(views.get(generic.id)?.label).toBe('Laptop');
+    expect(generic.label).toBe('Laptop');
+    expect(generic.prompt).toBe('electronic device'); // original SAM query provenance remains intact
+    live.dispose();
+  });
+
+  it('preserves saved identities and measured SAM depth when live tracking has only a size estimate', () => {
+    const { live, targets, sam } = setup();
+    live.apply([detection], frame, 0);
+    live.apply([detection], frame, 150);
+    const measured = { ...sam(), label: 'electronic device', cardId: 'saved', confirmed: true };
+    measured.position.z -= 0.15;
+    const original = measured.position.clone(), size = [...measured.sizeM];
+    targets.push(measured);
+    live.apply([detection], frame, 300);
+    expect(measured.label).toBe('electronic device');
+    expect(measured.position.equals(original)).toBe(true);
+    expect(measured.sizeM).toEqual(size);
+    expect(measured.lastSeenAt).toBeGreaterThan(0);
+    live.dispose();
+  });
+
   it('defaults to all device classes, including appliances', () => {
     const { live, views } = setup();
     expect(live.category).toBe('everything');

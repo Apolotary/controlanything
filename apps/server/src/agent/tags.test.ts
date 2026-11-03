@@ -107,6 +107,25 @@ describe('tag connection evaluation', () => {
     expect(evaluateConnection(target(), { devices: () => [device({ ports })], macLocal: false })).toEqual({ connection: 'offline', hint: 'Plug the synth into your Mac' });
   });
 
+  it('never asks a HID typing keyboard to connect as a musical instrument', () => {
+    const typing = target('other');
+    typing.card!.name = 'Compact backlit USB keyboard'; typing.card!.protocols = ['hid'];
+    expect(tagCapability(typing)).toBeUndefined();
+    expect(evaluateConnection(typing, { devices: () => [device()], macLocal: false })).toEqual({
+      connection: 'offline', hint: 'This is a typing keyboard. This demo does not control HID keyboards; choose Try visual synth from Menu.',
+    });
+    typing.card!.category = 'midi-controller';
+    expect(tagCapability(typing)).toBeUndefined(); // Explicit HID evidence wins over a noisy category.
+    typing.card!.protocols = ['midi'];
+    expect(tagCapability(typing)).toBe('midi');
+  });
+
+  it('says the silent Mac executor cannot provide real audio or playback', () => {
+    const laptop = target('computer');
+    const status = evaluateConnection(laptop, { devices: () => [device()], macLocal: true, silentLocal: true });
+    expect(status).toEqual({ connection: 'offline', hint: 'Mac audio is disabled in this demo. Playback and speech do not run. Choose Try visual synth from Menu.' });
+  });
+
   it('asks for the cable without a pairing action while the companion has no MIDI permission or is a standby', () => {
     expect(evaluateConnection(target(), { devices: () => [device({ capabilities: [], ports: [] })], macLocal: false })).toEqual({
       connection: 'offline', hint: 'Plug the synth into your Mac',

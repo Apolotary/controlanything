@@ -59,8 +59,9 @@ describe('visual instrument camera verification', () => {
     expect(result.evidence.pass).toBe(true);
     expect(result.evidence.observed).toMatchObject({ sense: 'camera', sensorDeviceId: 'quest' });
     expect(result.evidence.note).toContain('confirmed 2x');
-    expect(h.sent).toHaveLength(2);
-    expect(h.sent[0]).not.toEqual(h.sent[1]);
+    expect(h.sent).toHaveLength(3);
+    expect(h.sent[0]).toEqual({ kind: 'midi', msg: 'cc', channel: 1, number: 1, value: 0 });
+    expect(h.sent[1]).not.toEqual(h.sent[2]);
     expect(h.sensorKinds).toEqual(['frame', 'frame', 'frame', 'frame']);
     expect(h.segment).not.toHaveBeenCalled();
   });
@@ -77,5 +78,15 @@ describe('visual instrument camera verification', () => {
     const pending = verifyOnce({ dispatcher: h.dispatcher, sam: h.sam, settleMs: () => 0 }, h.target, h.driver, h.driver.actions[0], 1, { cameraDeviceId: 'quest' });
     await vi.runAllTimersAsync();
     expect((await pending).evidence).toMatchObject({ pass: false, observed: { sense: 'camera', delta: 0 } });
+  });
+
+  it('uses an explicitly aimed screen region without inventing a detector result', async () => {
+    const h = harness(true); h.target.detection = undefined;
+    const onStep = vi.fn();
+    const pending = verifyOnce({ dispatcher: h.dispatcher, sam: h.sam, settleMs: () => 0 }, h.target, h.driver, h.driver.actions[0], 1, { cameraDeviceId: 'quest', onStep });
+    await vi.runAllTimersAsync();
+    expect((await pending).evidence.pass).toBe(true);
+    expect(h.segment).not.toHaveBeenCalled();
+    expect(onStep).toHaveBeenCalledWith('User-aimed center of the camera; no detected outline', expect.any(String));
   });
 });

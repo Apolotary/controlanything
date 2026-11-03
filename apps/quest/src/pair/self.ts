@@ -62,8 +62,10 @@ export class PairingFlow extends Emitter<{ state: PairState }> {
     if (existing) {
       try {
         await this.api.me(existing.deviceToken);
+        this.assertCurrent(gen);
         return this.paired(existing, true);
       } catch (e) {
+        this.assertCurrent(gen);
         if (e instanceof ApiError && e.status === 401) {
           clearIdentity(this.store);
         } else {
@@ -84,16 +86,18 @@ export class PairingFlow extends Emitter<{ state: PairState }> {
   private async pair(gen: number): Promise<Identity> {
     let backoff = 1000;
     for (;;) {
-      if (gen !== this.generation) throw new Error('pairing superseded');
+      this.assertCurrent(gen);
       let start: PairStartResponse;
       try {
         start = await this.api.pairStart({ name: this.o.name, kind: 'quest', capabilities: this.o.capabilities });
       } catch (e) {
+        this.assertCurrent(gen);
         this.set({ kind: 'offline', message: `Server unreachable (${(e as Error).message}); retrying…` });
         await this.sleep(backoff);
         backoff = Math.min(backoff * 2, 8000);
         continue;
       }
+      this.assertCurrent(gen);
       backoff = 1000;
       if (start.status === 'approved' && start.deviceId && start.deviceToken) {
         return this.save(start.deviceId, start.deviceToken);
@@ -108,14 +112,16 @@ export class PairingFlow extends Emitter<{ state: PairState }> {
   private async poll(gen: number, start: PairStartResponse): Promise<Identity | null> {
     for (;;) {
       await this.sleep(this.o.pollMs ?? 1500);
-      if (gen !== this.generation) throw new Error('pairing superseded');
+      this.assertCurrent(gen);
       let s: PairStatusResponse;
       try {
         s = await this.api.pairStatus(start.pairingId, start.pollSecret);
       } catch (e) {
+        this.assertCurrent(gen);
         if (e instanceof ApiError && e.status === 404) return null;
         continue; // transient network error: keep polling
       }
+      this.assertCurrent(gen);
       if (s.status === 'approved' && s.deviceId && s.deviceToken) return this.save(s.deviceId, s.deviceToken);
       if (s.status === 'approved') return null; // token already taken by another reader: start over
       if (s.status === 'denied') {
@@ -125,6 +131,11 @@ export class PairingFlow extends Emitter<{ state: PairState }> {
       }
       if (s.status === 'expired' || Date.now() > start.expiresAt + 2000) return null;
     }
+  }
+
+  /** Repair owns all subsequent identity/storage/UI writes, even across an older pending fetch. */
+  private assertCurrent(gen: number): void {
+    if (gen !== this.generation) throw new Error('pairing superseded');
   }
 
   private save(deviceId: string, deviceToken: string): Identity {

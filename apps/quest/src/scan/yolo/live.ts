@@ -20,7 +20,7 @@ import type { DepthProvider } from '../placement';
 import type { PoseRing } from '../poses';
 import { ANNOTATION_MIN_SCORE, ANNOTATION_RANGE_M, inAnnotationRange } from '../policy';
 import { cameraPoseFromHead, pixelToRay, type PoseLike, questIntrinsics, scaleIntrinsics, worldToPixel } from '../projection';
-import { toHudTarget, type Target } from '../targets';
+import { isGenericLabel, toHudTarget, type Target } from '../targets';
 import { allowedClasses, type Category, CATEGORIES, deviceClass } from './classes';
 import type { Box } from './prep';
 import type { WorkerDet, WorkerIn, WorkerOut, YoloEp } from './protocol';
@@ -436,6 +436,7 @@ export class LiveDetector {
         if (!a.claimedBy) this.stats.handedOver++;
         a.claimedBy = claim;
         this.hide(t.id);
+        this.refineSamLabel(claim, sam, t);
         this.trackSam(claim, sam, a, t.misses === 0);
         this.showSam(claim, sam);
         if (t.id === this.picked) {
@@ -472,6 +473,8 @@ export class LiveDetector {
       if (!a.claimedBy) this.stats.handedOver++;
       a.claimedBy = claim;
       this.hide(id);
+      const track = this.tracker.get(id);
+      if (track) this.refineSamLabel(claim, sam, track);
       this.showSam(claim, sam);
       if (id === this.picked) pickedBy = claim;
     }
@@ -550,11 +553,22 @@ export class LiveDetector {
     if (!observed) return;
     const target = targets.find((t) => t.id === id);
     if (!target) return;
-    target.position.lerp(anchor.position, 0.35);
+    // A size prior is useful for an estimate, but cannot replace measured surface depth.
+    if (!target.confirmed || anchor.hit) {
+      target.position.lerp(anchor.position, 0.35);
+      target.sizeM = anchor.sizeM;
+    }
     target.facing.lerp(anchor.facing, 0.35).normalize();
-    target.sizeM = anchor.sizeM;
     target.lastSeenAt = Date.now();
     this.d.onTargetTracked?.(target);
+  }
+
+  private refineSamLabel(id: string, targets: Target[], track: Track): void {
+    const target = targets.find((t) => t.id === id);
+    const label = deviceClass(track.cls)?.label;
+    // Keep SAM's outline/provenance, but do not discard the live detector's recognized class for
+    // "electronic device". Saved user identities and specific model labels remain authoritative.
+    if (target && !target.cardId && track.misses === 0 && label && isGenericLabel(target.label)) target.label = label;
   }
 
   private candidateInRange(det: WorkerDet, fr: Pick<PendingFrame, 'cam' | 'k'>): boolean {

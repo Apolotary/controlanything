@@ -1,12 +1,18 @@
-import { Camera, Group, Matrix4, Mesh, MeshBasicMaterial, Object3D, PlaneGeometry, Quaternion, Scene, Shape, ShapeGeometry, Vector3, type WebGLRenderer } from 'three';
+import { BufferGeometry, Camera, Group, LineBasicMaterial, LineSegments, Matrix4, Mesh, MeshBasicMaterial, Object3D, PlaneGeometry, Quaternion, Scene, Shape, ShapeGeometry, Vector3, type WebGLRenderer } from 'three';
 import { applyPatch, type Control, type ControlEvent, type Gen3dSpec, type HackItem, type ModelChip, type Patch } from '@ce/gen3d';
+import type { SetupProgressView } from '@ce/protocol';
 import { Emitter } from '../../gen3d/events';
 import { handCursor, newCursor, type Cursor } from '../../gen3d/interact';
-import type { AgentStepLike, ConfirmRequest, DeviceState, HomeState, EvidenceState, HelperPairingView, Hud, HudEvents, HudFrame, HudTarget, PingLine, UploadState } from '../contract';
-import { homeHint } from '../home';
+import { PostureDetector } from '../../gestures/posture';
+import type { AgentStepLike, AssistantView, CanvasView, ConfirmRequest, DeviceState, HomeState, EvidenceState, HelperPairingView, OnboardingView, Hud, HudEvents, HudFrame, HudTarget, PingLine, UploadState, ProjectView, ProjectUiCommand } from '../contract';
 import { controlPower, isBrightness } from './control-state';
+import { cardControlShape, controlFraction, controlValue, DIAL_DIAMETER, LEVER_TRAVEL } from './control-shape';
 import { PairCodeEntry, PAIR_CODE_KEYS } from './pair-code';
 import { HelperPairingCard, HELPER_PAIRING_TARGET } from './helper-pairing';
+import { AssistantPanel, configureAssistantRenderer } from './assistant-panel';
+import { SetupProgress } from './setup-progress';
+import { CanvasPanel } from './canvas-panel';
+import { ProjectPanel } from './project-panel';
 import { targetChipLabel } from './target-chip';
 import { BoxField } from './boxes';
 import { makeText, setText, type SdfText } from './text';
@@ -15,11 +21,11 @@ import { GlassSurfaces } from './surface';
 import { PinchReticles } from './reticle';
 import { unfoldEase } from './motion';
 import { TargetTether } from './tether';
-import { PanelSeparation, WorldPanel } from './world-panel';
-import { DockIcons } from './dock-icons';
-import { FingerTouchDetector, HandDockAnchor } from './hand-dock';
+import { WorldPanel } from './world-panel';
+import { WorkspaceAnchor } from './workspace-anchor';
+import { MainMenu } from './main-menu';
 import { PinchTargetHistory, expandedRayBounds, rayTargetWithinAngle } from '../../app/precision';
-import { CardPlacement, EdgePlacement, angularScale } from './comfort';
+import { EdgePlacement } from './comfort';
 import { acceptsCommandResult, commandTimedOut, commandSubtitle, routeLabel, type CommandState } from './command-state';
 export { whenSdfReady } from './text';
 export { THEME } from './theme';
@@ -44,6 +50,7 @@ interface Widget {
   end?: () => void;
   lastMove: number;
   button?: boolean;
+  drag?: boolean;
 }
 interface Capture {
   widget: Widget | null;
@@ -68,6 +75,7 @@ function visible(object: Object3D | null): boolean {
 }
 
 export function createHud(ctx: { scene: Scene; camera: Camera; renderer: WebGLRenderer; nonDominant?: 'left' | 'right' }): Hud {
+  configureAssistantRenderer(ctx.renderer);
   return new LeanHud(ctx.scene, ctx.camera, ctx.nonDominant);
 }
 
@@ -75,6 +83,7 @@ export function createHud(ctx: { scene: Scene; camera: Camera; renderer: WebGLRe
 export class LeanHud implements Hud {
   readonly root = new Group();
   readonly boxes = new BoxField();
+  private readonly annotationLayer = new Group();
   private readonly events = new Emitter<HudEvents>();
   private readonly targets = new Map<string, HudTarget>();
   private readonly labels = new Map<string, Group>();
@@ -94,6 +103,23 @@ export class LeanHud implements Hud {
   private readonly surfaces = new GlassSurfaces();
   private readonly helperPairing = new HelperPairingCard(this.surfaces);
   private helperPairingView: HelperPairingView | null = null;
+  private readonly assistant = new AssistantPanel(this.surfaces);
+  private assistantView: AssistantView | null = null;
+  private readonly assistantTalk: Widget;
+  private readonly canvasPanel = new CanvasPanel(this.surfaces);
+  private canvasView: CanvasView | null = null;
+  private readonly projectPanel = new ProjectPanel(this.surfaces);
+  private projectView: ProjectView | null = null;
+  private readonly workspaceAnchor = new WorkspaceAnchor();
+  private readonly canvasLaunch: Widget;
+  private readonly inspectLaunch: Widget;
+  private readonly visualSelection = new Group();
+  private readonly visualSelectionTitle = makeText({ text: 'Visual synth', size: THEME.font.title, weight: 600, maxWidth: 0.38 });
+  private readonly visualSelectionBody = makeText({ text: '', size: THEME.font.body, maxWidth: 0.38, maxHeight: 0.15, anchorY: 'top' });
+  private readonly visualSelectionRetry: Widget;
+  private readonly setupProgress = new SetupProgress(this.surfaces);
+  private setupProgressView: SetupProgressView | null = null;
+  private setupProgressTarget: string | null = null;
   private readonly trackGeometry = new PlaneGeometry(1, 1);
   private readonly reticles = new PinchReticles();
   private readonly reticlePoints = [new Vector3(), new Vector3()];
@@ -107,9 +133,8 @@ export class LeanHud implements Hud {
   private controlsStarted = -Infinity;
   private controlsSignature = '';
   private readonly card = new Group();
+  private readonly cardPlate: Mesh;
   private pinned = false;
-  private cardScale = 1;
-  private readonly comfort = new CardPlacement();
   private readonly edgePlacement = new EdgePlacement();
   private readonly edge = new Group();
   private readonly edgeText = makeText({ text: '', size: THEME.font.detail, maxWidth: 0.25, singleLine: true });
@@ -119,20 +144,24 @@ export class LeanHud implements Hud {
   private readonly controls = new Group();
   private readonly details = new Group();
   private readonly modal = new Group();
-  private readonly deck = new DockIcons();
-  private readonly handDock: HandDockAnchor;
-  private readonly fingerTouch = new FingerTouchDetector();
-  private fingerCapture: Widget | null = null;
-  private readonly suppressedHands = new Set<string>();
+  private readonly modalLayer = new Group();
+  private readonly deck = new MainMenu(this.surfaces);
+  private palmRecallLatched = false;
+  private palmRecallSince: number | null = null;
+  private readonly menuPosture = new PostureDetector();
   private home: HomeState = { mode: 'annotate', filter: 'everything', tagged: 0, status: 'Pinch a device to tag it' };
   private deviceState: DeviceState | null = null;
-  private readonly dockHint = makeText({ text: '', size: 0.012, anchorX: 'center', maxWidth: 0.24 });
-  private hintUntil = 0;
   private readonly coach = new Group();
-  private coached = false;
-  private coachUntil = 0;
-  private readonly coachPlacement = new WorldPanel({ distance: 0.65, height: -0.1 });
+  private onboarding: OnboardingView | null = null;
+  private readonly coachTitle = makeText({ text: '', size: THEME.font.title, weight: 600, anchorX: 'center', maxWidth: 0.38 });
+  private readonly coachBody = makeText({ text: '', size: THEME.font.body, anchorX: 'center', maxWidth: 0.38, maxHeight: 0.07 });
+  private readonly coachStep = makeText({ text: '', size: THEME.font.detail, color: THEME.color.muted, anchorX: 'center', maxWidth: 0.38 });
+  private readonly coachPlacement = new WorldPanel({ distance: 0.75, height: 0.15 });
   private readonly notice = new Group();
+  private readonly screenGuide = new Group();
+  private readonly screenGuideGeometry = new BufferGeometry();
+  private readonly screenGuideMaterial = new LineBasicMaterial({ color: THEME.color.accent, transparent: true, opacity: 0.8, depthTest: false, toneMapped: false });
+  private readonly screenGuideText = makeText({ text: '', size: THEME.font.body, anchorX: 'center', maxWidth: 0.49, maxHeight: 0.065 });
   private readonly heading = makeText({ text: 'Look at a device', size: THEME.font.title, weight: 600, singleLine: true, maxWidth: THEME.card.width - THEME.card.padding * 2 - THEME.card.chipWidth - 0.055 });
   private readonly status = makeText({ text: '', color: THEME.color.muted, maxWidth: THEME.control.width, maxHeight: 0.055, anchorY: 'top', singleLine: true });
   private readonly detailText = makeText({ text: '', size: THEME.font.detail, maxWidth: THEME.panel.textWidth, anchorY: 'top' });
@@ -166,17 +195,11 @@ export class LeanHud implements Hud {
   private readonly tetherStart = new Vector3();
   private readonly tetherEnd = new Vector3();
   private readonly previousTip = new Vector3();
-  private readonly idlePlacement = new WorldPanel({ distance: THEME.card.distance, height: THEME.panel.headY });
-  private readonly dockPlacement = new WorldPanel({ distance: THEME.card.dockDistance, height: THEME.panel.headY });
-  private readonly modalPlacement = new WorldPanel({ height: -0.06 });
-  private readonly panelSeparation = new PanelSeparation();
-  private readonly deckPlacement = new WorldPanel({ distance: 0.6, height: -0.4, lateral: -0.24 });
   private readonly headPose = { position: this.head, quaternion: this.headQuaternion };
   private readonly noticePlacement = new WorldPanel({ height: THEME.panel.toastY });
-  private placementKey = '';
   private hasFrame = false;
-  constructor(scene: Scene, private readonly camera: Camera, nonDominant: 'left' | 'right' = 'left') {
-    this.handDock = new HandDockAnchor(nonDominant);
+  private inputSurface = '';
+  constructor(scene: Scene, private readonly camera: Camera, _nonDominant: 'left' | 'right' = 'left') {
     this.root.name = 'hud-v2';
     this.card.name = 'device-card';
     this.edge.name = 'device-edge-pill';
@@ -186,7 +209,7 @@ export class LeanHud implements Hud {
     this.arrowGeometry = new ShapeGeometry(arrow);
     this.edgeArrow = new Mesh(this.arrowGeometry, this.materials.accent);
     this.edgeArrow.name = 'edge-direction'; this.edgeArrow.position.set(-0.132, 0, THEME.panel.depth);
-    this.edgeText.position.set(-0.11, 0, THEME.panel.depth);
+    this.edgeText.name = 'workspace-recovery-label'; this.edgeText.position.set(-0.11, 0, THEME.panel.depth);
     this.edge.add(this.plate(0.31, 0.044), this.edgeText, this.edgeArrow);
     this.edge.visible = false;
     this.root.add(this.edge);
@@ -199,25 +222,95 @@ export class LeanHud implements Hud {
     this.details.name = 'details-panel';
     this.modal.name = 'confirmation-panel';
     this.deck.name = 'hand-dock';
-    this.deck.wrist.name = 'wrist-mode';
-    this.coach.name = 'hand-menu-coach';
+    this.coach.name = 'onboarding-guide';
     this.notice.name = 'notice';
-    this.root.add(this.boxes, this.card, this.modal, this.deck, this.deck.wrist, this.coach, this.notice, this.reticles, this.tether);
+    this.screenGuide.name = 'visual-synth-screen-guide'; this.screenGuide.visible = false;
+    const guidePoints: Vector3[] = [];
+    for (const x of [-1, 1]) for (const y of [-1, 1]) {
+      guidePoints.push(new Vector3(x * 0.25, y * 0.15, 0), new Vector3(x * 0.20, y * 0.15, 0),
+        new Vector3(x * 0.25, y * 0.15, 0), new Vector3(x * 0.25, y * 0.10, 0));
+    }
+    this.screenGuideGeometry.setFromPoints(guidePoints);
+    const guideCorners = new LineSegments(this.screenGuideGeometry, this.screenGuideMaterial); guideCorners.renderOrder = THEME.render.text;
+    this.screenGuideText.name = 'visual-synth-screen-instruction'; this.screenGuideText.position.y = -0.20;
+    this.screenGuide.add(guideCorners, this.screenGuideText); this.root.add(this.screenGuide);
+    this.modalLayer.add(this.modal);
+    this.annotationLayer.name = 'device-annotations';
+    this.annotationLayer.add(this.boxes);
+    this.root.add(this.annotationLayer, this.card, this.modalLayer, this.deck, this.deck.panel, this.coach, this.notice, this.reticles, this.tether);
     this.root.add(this.helperPairing);
+    this.root.add(this.assistant);
+    this.root.add(this.projectPanel);
+    this.widgets.push({ group: this.projectPanel.hitArea, w: this.projectPanel.width, h: this.projectPanel.height, kind: 'handle', start: () => {}, lastMove: 0 });
+    for (const group of this.projectPanel.buttons) this.widgets.push({ group, w: group.userData.width, h: group.userData.height, kind: 'handle', button: true, lastMove: 0,
+      start: () => this.events.emit('projectsCommand', { command: group.userData.command as ProjectUiCommand,
+        ...(typeof group.userData.actionId === 'string' ? { actionId: group.userData.actionId } : {}) }) });
+    this.visualSelection.name = 'visual-synth-selection'; this.visualSelection.visible = false;
+    this.visualSelectionTitle.name = 'visual-synth-selection-title'; this.visualSelectionTitle.position.set(-0.19, 0.13, THEME.panel.depth);
+    this.visualSelectionBody.name = 'visual-synth-selection-message'; this.visualSelectionBody.position.set(-0.19, 0.075, THEME.panel.depth);
+    this.visualSelection.add(this.plate(0.44, 0.36), this.visualSelectionTitle, this.visualSelectionBody);
+    this.root.add(this.visualSelection);
+    this.widgets.push({ group: this.visualSelection, w: 0.44, h: 0.36, kind: 'handle', start: () => {}, lastMove: 0 });
+    this.visualSelectionRetry = this.button(this.visualSelection, 'visual-synth-retry', 'Retry', 0, -0.12, 0.22, 'handle', () => this.events.emit('visualSynth', {}));
+    this.widgets.push({ group: this.assistant, w: this.assistant.width, h: this.assistant.height, kind: 'handle', start: () => {}, lastMove: 0 });
+    for (const group of [this.assistant.apply, this.assistant.dismiss]) this.widgets.push({
+      group, w: this.assistant.buttonWidth, h: this.assistant.buttonHeight, kind: 'handle', button: true, lastMove: 0,
+      start: () => {
+        const view = this.assistantView;
+        if (!view || (view.targetId !== 'muse-general' && view.targetId !== this.locked)) return;
+        if (view.state === 'proposal' && view.proposalId) this.events.emit('assistantConfirm', { targetId: view.targetId, proposalId: view.proposalId, accept: group === this.assistant.apply });
+        else if (group === this.assistant.dismiss) this.events.emit('assistantDismiss', { targetId: view.targetId });
+      },
+    });
+    this.widgets.push({ group: this.assistant.send, w: this.assistant.buttonWidth, h: this.assistant.buttonHeight, kind: 'handle', button: true, lastMove: 0,
+      start: () => { if (this.assistantView?.state === 'listening') this.events.emit('assistantTalk', { targetId: this.assistantView.targetId }); } });
+    this.widgets.push({ group: this.assistant.read, w: 0.30, h: this.assistant.buttonHeight, kind: 'handle', button: true, lastMove: 0, start: () => this.assistant.openFullText() });
+    this.widgets.push({ group: this.assistant.sources, w: 0.12, h: this.assistant.buttonHeight, kind: 'handle', button: true, lastMove: 0,
+      start: () => this.assistant.nextInformationPage() });
+    this.widgets.push({ group: this.assistant.infoBack, w: 0.12, h: this.assistant.buttonHeight, kind: 'handle', button: true, lastMove: 0,
+      start: () => this.assistant.previousInformationPage() });
+    this.widgets.push({ group: this.assistant.infoClose, w: 0.12, h: this.assistant.buttonHeight, kind: 'handle', button: true, lastMove: 0,
+      start: () => { if (!this.assistant.closeReadingPage() && this.assistantView) this.events.emit('assistantDismiss', { targetId: this.assistantView.targetId }); } });
     this.widgets.push({ group: this.helperPairing, w: this.helperPairing.width, h: this.helperPairing.height, kind: 'handle', start: () => {}, lastMove: 0 });
     for (const group of [this.helperPairing.typeCode, this.helperPairing.skip]) this.widgets.push({
       group, w: this.helperPairing.buttonWidth, h: THEME.control.buttonHeight, kind: 'handle', button: true, lastMove: 0,
       start: () => group === this.helperPairing.typeCode ? this.openPairCode(HELPER_PAIRING_TARGET) : this.events.emit('helperSkip', {}),
     });
-    this.dockHint.name = 'dock-hint';
-    this.dockHint.position.set(0, -0.048, THEME.panel.depth);
-    this.dockHint.visible = false;
-    this.deck.add(this.dockHint);
-    const coachText = makeText({ text: `Turn your ${nonDominant} palm toward you for the menu`, size: THEME.font.body, anchorX: 'center', maxWidth: 0.34 });
-    this.coach.add(this.plate(0.38, 0.075), coachText);
-    coachText.position.z = THEME.panel.depth;
+    this.coach.add(this.plate(0.43, 0.19), this.coachTitle, this.coachBody, this.coachStep);
+    this.coachTitle.name = 'onboarding-title'; this.coachTitle.position.set(0, 0.048, THEME.panel.depth);
+    this.coachBody.name = 'onboarding-message'; this.coachBody.position.set(0, -0.005, THEME.panel.depth);
+    this.coachStep.name = 'onboarding-step'; this.coachStep.position.set(0, -0.068, THEME.panel.depth);
     this.coach.visible = false;
-    this.card.add(this.plate(THEME.card.width, THEME.card.height), this.heading, this.status, this.controls, this.details, this.verdict, this.progress);
+    this.widgets.push({ group: this.deck.panel, w: this.deck.panelWidth, h: this.deck.panelHeight, kind: 'deck', start: () => {}, lastMove: 0 });
+    this.cardPlate = this.plate(THEME.card.width, THEME.card.height);
+    this.card.add(this.cardPlate, this.setupProgress, this.canvasPanel, this.heading, this.status, this.controls, this.details, this.verdict, this.progress);
+    this.widgets.push({ group: this.canvasPanel.hitArea, w: this.canvasPanel.width, h: this.canvasPanel.height, kind: 'handle', start: () => {}, lastMove: 0 });
+    for (const group of this.canvasPanel.buttons) this.widgets.push({ group, w: group.userData.width, h: group.userData.height, kind: 'handle', button: true, lastMove: 0,
+      start: () => {
+        if (!this.hasCanvas() || !this.locked) return;
+        const state = this.canvasView!.state, document = state.document;
+        if (group === this.canvasPanel.close) { this.events.emit('canvasClose', { targetId: this.locked }); return; }
+        if (group.userData.canvasAction === 'retry') { this.events.emit('canvasCreate', { targetId: this.locked }); return; }
+        if (state.status !== 'ready' || !document) return;
+        if (group === this.canvasPanel.previous) this.events.emit('canvasRestore', { targetId: this.locked, revision: group.userData.revision, baseRevision: document.revision });
+        else this.events.emit('canvasAction', { targetId: this.locked, revision: document.revision, action: group.userData.canvasAction,
+          ...(group.userData.roundId ? { roundId: group.userData.roundId } : {}), ...(group.userData.choiceId ? { choiceId: group.userData.choiceId } : {}) });
+      } });
+    this.widgets.push({ group: this.setupProgress.hitArea, w: this.setupProgress.width, h: this.setupProgress.height, kind: 'handle', start: () => {}, lastMove: 0 });
+    this.widgets.push({ group: this.setupProgress.action, w: this.setupProgress.actionWidth, h: THEME.control.buttonHeight, kind: 'handle', button: true, lastMove: 0,
+      start: () => {
+        if (!this.hasSetupProgress() || !this.locked) return;
+        this.events.emit(this.setupWorking() ? 'cancel' : 'setup', { targetId: this.locked });
+      } });
+    this.assistantTalk = this.button(this.card, 'assistant-talk', 'Ask Muse', 0, 0.202, 0.17, 'handle', () => {
+      if (this.home.mode === 'control' && this.selected()?.tagged && this.locked) this.events.emit('assistantTalk', { targetId: this.locked });
+    });
+    this.inspectLaunch = this.button(this.card, 'object-inspect', 'About this object', -0.105, -0.202, 0.20, 'handle', () => {
+      if (this.card.visible && this.selected()?.tagged && this.locked) this.events.emit('inspectObject', { targetId: this.locked });
+    });
+    this.canvasLaunch = this.button(this.card, 'canvas-create', 'Make a game', 0.105, -0.202, 0.19, 'handle', () => {
+      if (this.card.visible && this.selected()?.tagged && !this.deviceState?.busy && !this.hasCanvas() && this.locked) this.events.emit('canvasCreate', { targetId: this.locked });
+    });
     this.heading.position.set(-THEME.card.width / 2 + THEME.card.padding, THEME.card.titleY, THEME.panel.depth);
     this.status.position.set(this.heading.position.x, THEME.card.statusY, THEME.panel.depth);
     this.details.position.z = THEME.panel.depth;
@@ -258,6 +351,11 @@ export class LeanHud implements Hud {
     this.camera.getWorldQuaternion(this.headQuaternion);
     this.refreshHome();
     this.refreshCard();
+    this.dragHandle(this.card, 'device-drag', 0.26, 0.151);
+    this.dragHandle(this.assistant, 'assistant-drag', 0.38, 0.23);
+    this.dragHandle(this.deck.panel, 'menu-title-drag', 0.27, 0.324, -0.05, 0.05);
+    this.dragHandle(this.deck.panel, 'menu-drag', 0.39, 0.26, 0, 0.05, 0.052);
+    this.dragHandle(this.projectPanel, 'project-drag', 0.37, 0.28);
     this.place();
   }
   on<K extends keyof HudEvents>(key: K, fn: (e: HudEvents[K]) => void): () => void { return this.events.on(key, fn); }
@@ -313,17 +411,26 @@ export class LeanHud implements Hud {
     }
     return last;
   }
-  private isArmed(m: Mounted, control: Control): boolean { return this.home.mode === 'control' && !!this.selected()?.tagged && this.selectedConnection() === 'ready' && !this.deviceState?.busy && m.armed && (control.armed ?? true); }
+  private isArmed(m: Mounted, control: Control): boolean { return this.home.mode === 'control' && !!this.selected()?.tagged && this.selectedConnection() === 'ready' && !this.deviceState?.busy && m.armed && control.armed === true; }
   private selectedConnection(): DeviceState['connection'] { return this.deviceState?.targetId === this.locked ? this.deviceState.connection : this.selected()?.connection ?? 'unknown'; }
+  private setupWorking(): boolean { return !!this.setupProgressView && (this.setupProgressView.working || !!this.deviceState?.busy); }
+  private hasCanvas(): boolean { return !!this.canvasView && this.canvasView.targetId === this.locked && this.home.mode === 'control'; }
+  private hasSetupProgress(): boolean {
+    return !this.hasCanvas() && !!this.setupProgressView && this.setupProgressTarget === this.locked && this.home.mode === 'control'
+      && !(this.selectedConnection() === 'offline' && (this.deviceState?.action === 'open-companion' || this.deviceState?.action === 'pair-device'))
+      && !this.deviceState?.handControl && (this.setupWorking() || this.selectedConnection() !== 'ready');
+  }
   private refreshStatus(): void {
     const target = this.selected(), m = this.mounted();
     const failed = this.evidence?.verdict === 'fail' || this.upload?.verdict === 'fail' || target?.status === 'failed' || target?.status === 'no-reaction';
     const pending = this.evidence?.verdict === 'pending' || this.upload?.verdict === 'pending';
-    const verified = !failed && !pending && (this.evidence?.verdict === 'ok' || this.upload?.verdict === 'ok' || target?.status === 'verified' || target?.status === 'controlled');
+    const verified = !failed && !pending && !!m?.spec.controls.length && m.spec.controls.every((control) => control.armed === true)
+      && m.spec.controls.some((control) => this.isArmed(m, control));
     const state = this.deviceState?.targetId === this.locked ? this.deviceState : null;
     const connection = this.selectedConnection();
     const text = state?.pairingSeconds ? `Look at the companion's QR code · ${state.pairingSeconds}s` : state?.busy ? state.sentence ?? 'Setting up control…' : connection === 'offline' ? state?.hint ?? 'Connect a companion to control this device.' : connection === 'unknown' ? 'Waiting for connection status…' : connection === 'setup' ? state?.hint ?? 'Set up control for this device.' : m?.armed ? 'Ready to control' : 'Confirm to enable controls';
     let subtitle = text;
+    let mappingStatus = false;
     if (state?.busy) subtitle = commandSubtitle(undefined, '', '', state.sentence ?? text);
     else if (m?.armed && connection === 'ready') {
       let current = m.power === undefined ? 'Ready' : m.power ? 'On' : 'Off';
@@ -332,19 +439,42 @@ export class LeanHud implements Hud {
         if (isBrightness(c) && typeof value === 'number') { current += ` · ${Math.round(value)} %`; break; }
       }
       subtitle = commandSubtitle(m.command?.phase, routeLabel(m.spec.device?.transport, target?.channel), current);
+      if (!m.command && m.spec.controls.some((control) => control.armed !== true)) {
+        subtitle = m.spec.controls.some((control) => this.isArmed(m, control)) ? 'Only verified controls shown' : 'No verified controls available';
+      }
+      // A validated Perform map can use the available controls while other actions remain unverified.
       if (state?.handControl && state.performAvailable && m.command?.phase !== 'fail') {
         subtitle = `${state.performingLive ? 'Live · ' : ''}${state.performanceRoute ?? routeLabel(m.spec.device?.transport, target?.channel)}`;
       }
+      if (state?.silentVisual && !m.command) subtitle = state.handControl
+        ? state.performingLive ? 'Live gestures · silent visuals' : 'Paused · hold left fist to engage'
+        : state.performAvailable ? 'Gestures ready · choose Perform' : 'Silent visuals · set up gestures first';
+      if (state?.mappingSummary && state.performAvailable && !state.handControl && m.command?.phase !== 'sending' && m.command?.phase !== 'fail') {
+        mappingStatus = true;
+        const outcome = state.mappingOutcome;
+        const result = outcome === 'working' ? 'New mapping pending'
+          : outcome === 'review' ? 'Review new mapping before Apply'
+            : outcome === 'failed' ? 'Latest result unconfirmed'
+              : outcome === 'cancelled' ? 'Request cancelled; saved map shown'
+                : outcome === 'unchanged' ? 'Latest request not applied'
+                  : outcome === 'applied' ? 'Mapping applied; choose Perform' : state.silentVisual ? 'Choose Perform · silent visuals' : 'Choose Perform';
+        subtitle = `${state.mappingSummary}\n${result}`;
+      }
     }
     const routeLine = connection === 'ready' || !!state?.busy;
-    this.status.whiteSpace = routeLine ? 'nowrap' : 'normal';
-    this.status.maxWidth = routeLine ? Infinity : THEME.control.width;
-    this.status.userData.lineWidth = routeLine ? THEME.control.width : undefined;
-    this.status.userData.fitHeight = routeLine ? 0.055 : 0.105;
+    // Preserve the two deliberate mapping lines. Fit their measured block between
+    // the title and the first control's label/value, rather than wrapping over it.
+    const singleLine = routeLine;
+    this.status.whiteSpace = singleLine ? 'nowrap' : 'normal';
+    this.status.maxWidth = singleLine ? Infinity : THEME.control.width;
+    this.status.userData.lineWidth = singleLine ? THEME.control.width : undefined;
+    this.status.position.y = mappingStatus ? THEME.card.titleY - THEME.font.title * THEME.font.lineHeight / 2 - 0.012 : THEME.card.statusY;
+    this.status.userData.fitHeight = mappingStatus
+      ? this.status.position.y - (THEME.card.mainY + THEME.control.labelOffset + THEME.font.title * THEME.font.lineHeight / 2) - 0.008
+      : routeLine ? 0.055 : 0.105;
     setText(this.status, subtitle.slice(0, 200));
-    setText(this.edgeText, `${title(target?.label ?? '', 18)} · ${state?.busy ? 'Testing…' : m?.command?.phase === 'sending' ? 'Sending…' : this.pinned ? 'Locked' : 'Ready'}`);
-    this.status.visible = !this.details.visible;
-    this.verdict.visible = verified;
+    this.status.visible = !this.details.visible && !this.hasSetupProgress() && !this.hasCanvas();
+    this.verdict.visible = verified && !this.hasSetupProgress() && !this.hasCanvas();
     this.progress.visible = false;
     const steps = this.upload?.steps?.length ?? 0;
     const amount = failed ? 0 : verified ? 1 : steps ? Math.min(1, this.upload!.stepsDone / steps) : pending ? 0.5 : 0.12;
@@ -353,15 +483,27 @@ export class LeanHud implements Hud {
     this.progressFill.scale.set(THEME.control.width * amount, THEME.card.progressHeight, 1);
     this.progressFill.position.x = (amount - 1) * THEME.control.width / 2;
   }
+  private primaryContinuous(m: Mounted): Control | undefined {
+    const controls = m.spec.controls.filter(c => this.isArmed(m, c) && c.kind !== 'trigger' && c.kind !== 'toggle');
+    const state = this.deviceState?.targetId === m.targetId ? this.deviceState : null;
+    // Only the applied, validated map supplies this ID; request/proposal wording is not a binding.
+    return (state?.performAvailable && state.mappingActionId
+      ? controls.find(c => c.binding?.action === state.mappingActionId) : undefined) ?? controls[0];
+  }
+  private otherContinuous(m: Mounted): Control | undefined {
+    const main = this.primaryContinuous(m);
+    return m.spec.controls.find(c => c !== main && this.isArmed(m, c) && c.kind !== 'trigger' && c.kind !== 'toggle');
+  }
   private refreshCard(): void {
     const target = this.selected(), m = this.mounted();
     const menu = this.menus.get(this.locked ?? this.menuTarget ?? '');
-    this.card.visible = this.home.mode === 'control' && !!target?.tagged && !this.modal.visible && !this.helperPairingView;
-    setText(this.heading, title(target?.label ?? menu?.title ?? m?.spec.title ?? 'Look at a device', 24));
+    this.card.visible = this.home.mode === 'control' && !!target?.tagged && !this.modal.visible && !this.helperPairingView && !this.deck.panel.visible;
+    const deviceTitle = target?.label ?? menu?.title ?? m?.spec.title ?? 'Look at a device';
+    setText(this.heading, /^ControlAnything Visual Synth$/i.test(deviceTitle) ? 'Visual synth' : title(deviceTitle, 24));
     this.details.visible = this.detailsOpen && this.card.visible && this.selectedConnection() === 'ready' && !this.deviceState?.busy;
     this.refreshStatus();
-    this.refreshHomeHint();
-    const signature = `${this.locked}/${m?.spec.specId}/${m?.armed}/${m?.spec.controls.filter((c) => this.isArmed(m, c)).map((c) => c.id).join(',')}/${menu?.items.map((item) => item.id).join(',')}`;
+    this.refreshHome();
+    const signature = `${this.locked}/${m?.spec.specId}/${m?.armed}/${m?.spec.controls.filter((c) => this.isArmed(m, c)).map((c) => c.id).join(',')}/${menu?.items.map((item) => item.id).join(',')}/${this.deviceState?.mappingActionId}`;
     if (signature !== this.controlsSignature) { this.controlsStarted = this.time; this.controlsSignature = signature; }
     this.clear(this.controls);
     if (!this.card.visible) return;
@@ -376,7 +518,8 @@ export class LeanHud implements Hud {
     lockIcon.position.z = THEME.panel.depth; lock.group.add(lockIcon);
     const state = this.deviceState?.targetId === this.locked ? this.deviceState : null;
     const connection = this.selectedConnection();
-    if (state?.busy) {
+    if (this.hasSetupProgress() || this.hasCanvas()) { this.details.visible = false; return; }
+    if (state?.busy && !(connection === 'offline' && (state.action === 'open-companion' || state.action === 'pair-device'))) {
       this.button(this.controls, 'control-cancel', 'Cancel', 0, THEME.card.buttonsY, 0.16, 'handle', () => this.events.emit('cancel', { targetId: target!.id }));
       return;
     }
@@ -395,23 +538,32 @@ export class LeanHud implements Hud {
       }
       return;
     }
-    this.button(this.controls, 'details-toggle', this.detailsOpen ? 'Close details' : 'Details', 0, THEME.card.detailsY, THEME.control.buttonWidth * 1.5, 'handle', () => {
+    if (state?.handControl && m?.armed && state.performAvailable) {
+      const stop = this.button(this.controls, 'hand-control', 'Stop hands', 0, THEME.card.buttonsY, 0.26, 'handle',
+        () => this.events.emit('handControl', { targetId: target!.id, enabled: false }));
+      this.selectButton(stop.group, true, 0.26);
+      this.details.visible = false;
+      return;
+    }
+    this.button(this.controls, 'details-toggle', this.detailsOpen ? 'Close details' : 'Details', 0, THEME.card.detailsY, 0.15, 'handle', () => {
       this.detailsOpen = !this.detailsOpen;
       this.details.visible = this.detailsOpen;
       this.refreshDetails();
       this.refreshCard();
     });
     if (this.detailsOpen) {
+      const other = m && this.otherContinuous(m);
+      if (m && other) this.mainControl(m, other, 0.025);
+      this.refreshDetails();
       this.button(this.controls, 'device-forget', 'Forget device', 0, THEME.card.buttonsY, 0.18, 'handle', () => this.events.emit('forget', { targetId: target!.id }));
       return;
     }
     if (m) this.refreshCommandUi(m);
-    let main: Control | undefined;
+    const main = m ? this.primaryContinuous(m) : undefined;
     const buttons: Control[] = [];
     if (m) for (const c of m.spec.controls) {
       if (!this.isArmed(m, c)) continue;
-      if (!main && c.kind !== 'trigger' && c.kind !== 'toggle') main = c;
-      else if (c.kind === 'trigger' || c.kind === 'toggle') buttons.push(c);
+      if (c.kind === 'trigger' || c.kind === 'toggle') buttons.push(c);
     }
     const presetOrder = (c: Control) => {
       const action = c.binding?.action.split('.').at(-1) ?? '';
@@ -423,14 +575,19 @@ export class LeanHud implements Hud {
     buttons.splice(3);
     if (m && main) this.mainControl(m, main);
     if (m?.command?.phase !== 'fail' && m?.armed && state?.performAvailable) {
-      const perform = this.button(this.controls, 'hand-control', state.handControl ? 'Perform on' : 'Perform', -0.075, THEME.card.detailsY, 0.19, 'handle', () => this.events.emit('handControl', { targetId: target!.id, enabled: !state.handControl }));
+      const perform = this.button(this.controls, 'hand-control', state.handControl ? 'Stop hands' : 'Perform', -0.075, THEME.card.detailsY, 0.19, 'handle', () => this.events.emit('handControl', { targetId: target!.id, enabled: !state.handControl }));
       this.selectButton(perform.group, !!state.handControl, 0.19);
       const details = this.controls.getObjectByName('details-toggle');
-      if (details) { details.position.x = 0.13; details.scale.x = 0.6; }
+      if (details) details.position.x = 0.115;
+    } else if (m?.armed && state && !state.performAvailable && m.spec.controls.some((control) => this.isArmed(m, control))) {
+      const setup = this.button(this.controls, 'gesture-setup', 'Set up gestures', -0.075, THEME.card.detailsY, 0.21, 'handle', () => this.events.emit('gestureSetup', { targetId: target!.id }));
+      setup.group.userData.primary = true;
+      const details = this.controls.getObjectByName('details-toggle');
+      if (details) details.position.x = 0.115;
     }
     if (m && buttons.length) buttons.forEach((c, index) => this.controlButton(m, c, index, buttons.length));
     else if (menu && m?.armed) {
-      const shown = menu.items.filter((item) => item.kind !== 'control' && item.status !== 'locked').slice(0, 3);
+      const shown = menu.items.filter((item) => item.kind !== 'control' && item.status === 'verified').slice(0, 3);
       shown.forEach((item, index) => {
         const widget = this.button(this.controls, `action:${item.id}`, this.actionLabel(item.label), (index - (shown.length - 1) / 2) * (THEME.control.buttonWidth + THEME.control.buttonGap), THEME.card.buttonsY, THEME.control.buttonWidth, 'hack', () => {
           this.selectedAction = item.id;
@@ -484,35 +641,43 @@ export class LeanHud implements Hud {
       if (thumb) this.positionThumb(m, control, thumb);
     }
   }
-  private mainControl(m: Mounted, c: Control): void {
+  private mainControl(m: Mounted, c: Control, y: number = THEME.card.mainY): void {
+    const shape = cardControlShape(m.spec, c);
+    const shaped = shape !== 'slider';
     const group = new Group();
     group.name = `main-control:${c.id}`;
     group.userData.controlId = c.id;
-    group.position.y = THEME.card.mainY;
-    const track = this.surfaces.create(THEME.control.width, THEME.control.height, 'button', true);
+    group.userData.archetype = shape;
+    group.userData.knob = shape === 'knob';
+    group.position.y = y;
+    const track = this.surfaces.create(shape === 'knob' ? DIAL_DIAMETER : shape === 'lever' ? 0.030 : THEME.control.width,
+      shaped ? DIAL_DIAMETER : THEME.control.height, 'button', shape !== 'lever');
     track.name = 'button-plate';
     const fill = this.surfaces.create(THEME.control.width, THEME.control.height, 'selected', true);
     fill.name = 'slider-fill'; fill.position.z = THEME.panel.depth;
     const valueText = makeText({ text: '', size: THEME.font.title, color: THEME.color.accent, weight: 600, tabular: true, anchorX: 'right', singleLine: true, maxWidth: THEME.control.width / 3 });
     valueText.name = 'control-value';
-    valueText.position.set(THEME.control.width / 2, THEME.control.labelOffset, THEME.panel.depth);
+    valueText.position.set(THEME.control.width / 2, shaped ? 0 : THEME.control.labelOffset, THEME.panel.depth);
     group.add(valueText);
     const thumb = new Mesh(this.trackGeometry, this.materials.accent);
     thumb.name = 'value';
-    thumb.scale.set(THEME.surface.stroke * 2, THEME.control.height - THEME.card.radius, 1);
+    thumb.scale.set(shape === 'knob' ? 0.003 : shape === 'lever' ? 0.034 : THEME.surface.stroke * 2,
+      shape === 'knob' ? 0.010 : shape === 'lever' ? 0.009 : THEME.control.height - THEME.card.radius, 1);
     thumb.position.z = THEME.panel.depth * 2;
-    const label = makeText({ text: title(c.label), size: THEME.font.label, weight: 500, singleLine: true, maxWidth: THEME.control.width * 2 / 3 });
+    const label = makeText({ text: title(c.label), size: THEME.font.label, weight: 500, singleLine: true, maxWidth: THEME.control.width * (shaped ? .36 : 2 / 3) });
     label.name = 'control-label';
-    label.position.set(-THEME.control.width / 2, THEME.control.labelOffset, THEME.panel.depth);
+    label.position.set(-THEME.control.width / 2, shaped ? 0 : THEME.control.labelOffset, THEME.panel.depth);
     group.add(label);
     thumb.renderOrder = THEME.render.plates + 1;
-    group.add(track, fill, thumb);
+    group.add(track, thumb);
+    if (!shaped) group.add(fill);
     this.controls.add(group);
     const update = (point: Vector3) => {
       const previous = m.values.get(c.id);
       const range = c.range ?? { min: 0, max: 1 };
-      let value = range.min + Math.min(1, Math.max(0, point.x / THEME.control.width + 0.5)) * (range.max - range.min);
-      if (range.step) value = Math.min(range.max, Math.max(range.min, range.min + Math.round((value - range.min) / range.step) * range.step));
+      const previousValue = typeof previous === 'number' ? previous : typeof previous === 'object' ? previous.x : Number(c.default ?? range.min);
+      const previousFraction = Math.max(0, Math.min(1, (previousValue - range.min) / (range.max - range.min || 1)));
+      const value = controlValue(controlFraction(shape, point, previousFraction), range);
       if (c.kind === 'xy') {
         const yr = c.yRange ?? range;
         const y = yr.min + Math.min(1, Math.max(0, point.y / THEME.control.height + 0.5)) * (yr.max - yr.min);
@@ -521,7 +686,7 @@ export class LeanHud implements Hud {
       if (isBrightness(c) && previous !== m.values.get(c.id)) m.power = true;
       this.positionThumb(m, c, thumb);
     };
-    const widget: Widget = { group, w: THEME.control.width, h: THEME.control.height, kind: 'control', lastMove: 0, start: (p) => { update(p); this.emitControl(m, c, 'start'); }, move: (p) => { update(p); this.emitControl(m, c, 'move'); }, end: () => this.emitControl(m, c, 'end') };
+    const widget: Widget = { group, w: shaped ? DIAL_DIAMETER : THEME.control.width, h: shaped ? DIAL_DIAMETER : THEME.control.height, kind: 'control', lastMove: 0, start: (p) => { update(p); this.emitControl(m, c, 'start'); }, move: (p) => { update(p); this.emitControl(m, c, 'move'); }, end: () => this.emitControl(m, c, 'end') };
     this.widgets.push(widget);
     this.positionThumb(m, c, thumb);
   }
@@ -533,10 +698,12 @@ export class LeanHud implements Hud {
     const group = thumb.parent;
     const off = m.power === false && isBrightness(c);
     if (group?.userData.knob) {
-      const angle = (0.75 - 1.5 * fraction) * Math.PI;
-      const radius = THEME.control.knobDiameter / 2 - THEME.control.knobTick;
-      thumb.position.set(Math.sin(angle) * radius, Math.cos(angle) * radius, THEME.panel.depth);
+      const angle = (-0.75 + 1.5 * fraction) * Math.PI;
+      const radius = DIAL_DIAMETER / 2 - 0.009;
+      thumb.position.set(Math.sin(angle) * radius, Math.cos(angle) * radius, THEME.panel.depth * 2);
       thumb.rotation.z = -angle;
+    } else if (group?.userData.archetype === 'lever') {
+      thumb.position.set(0, (fraction - .5) * LEVER_TRAVEL, THEME.panel.depth * 2);
     }
     const fill = group?.getObjectByName('slider-fill') as Mesh | undefined;
     if (fill) {
@@ -551,6 +718,8 @@ export class LeanHud implements Hud {
     if (valueText) setText(valueText, off ? 'Off' : `${Number(x.toFixed(2))}${unit}`, off ? THEME.color.muted : THEME.color.accent);
   }
   private emitHack(m: Mounted, hack: NonNullable<CommandState['hack']>): void {
+    if (!m.armed || this.home.mode !== 'control' || !this.selected()?.tagged || this.selectedConnection() !== 'ready'
+      || this.deviceState?.busy || this.menus.get(hack.targetId)?.items.find((item) => item.id === hack.itemId)?.status !== 'verified') return;
     const ts = Date.now();
     m.command = { controlId: hack.itemId, value: true, ts, phase: 'sending', at: this.time * 1000, hack };
     this.refreshCommandUi(m); this.events.emit('hack', { ...hack, ts });
@@ -564,7 +733,10 @@ export class LeanHud implements Hud {
   }
   private refreshCommandUi(m: Mounted): void {
     if (this.mounted() !== m) return;
-    const failed = m.command?.phase === 'fail';
+    const canRetry = m.command?.hack
+      ? this.menus.get(m.command.hack.targetId)?.items.find((item) => item.id === m.command!.hack!.itemId)?.status === 'verified'
+      : !!m.command && m.spec.controls.some((control) => control.id === m.command!.controlId && this.isArmed(m, control));
+    const failed = m.command?.phase === 'fail' && canRetry;
     const retry = this.controls.getObjectByName('command-retry');
     if (retry) retry.visible = failed;
     else if (failed && !this.detailsOpen) {
@@ -587,10 +759,10 @@ export class LeanHud implements Hud {
     this.refreshCommandUi(m);
   }
   setScanning(on: boolean, _info?: { modelId?: string }): void { if (this.scanning === on) return; this.scanning = on; this.refreshCard(); }
-  isTargetVisible(id: string): boolean { return this.boxes.isVisible(id); }
+  isTargetVisible(id: string): boolean { return (this.annotationLayer.visible || this.home.mode === 'control' && id === this.locked) && this.boxes.isVisible(id); }
   getTargetAim(id: string, out: { position: Vector3; size: number }): boolean {
     const box = this.boxes.boxes.get(id);
-    if (!box || !this.boxes.isVisible(id)) return false;
+    if (!box || !this.annotationLayer.visible || !this.isTargetVisible(id)) return false;
     // The device body stays aimable even when tagged (only its chip is drawn): people pinch the object itself.
     // The chip above it is its own pinchable widget ('selectTarget').
     out.position.copy(box.center); out.size = Math.max(box.w, box.h);
@@ -612,13 +784,13 @@ export class LeanHud implements Hud {
   }
   private refreshTargetLabel(t: HudTarget): void {
     let label = this.labels.get(t.id);
-    if (!label) { label = new Group(); label.name = `target-label:${t.id}`; this.labels.set(t.id, label); this.root.add(label); }
+    if (!label) { label = new Group(); label.name = `target-label:${t.id}`; this.labels.set(t.id, label); this.annotationLayer.add(label); }
     this.clear(label);
     // Untag only after an explicit selection: on hover the (distance-scaled) chip can cover the device, so a pinch aimed
     // at the device would otherwise remove its tag by accident.
     const removable = this.home.mode === 'annotate' && t.tagged && this.locked === t.id;
     const state = this.deviceState?.targetId === t.id ? this.deviceState : null;
-    const text = targetChipLabel({ ...t, ...(state ? { connection: state.connection, busy: state.busy } : {}) }, this.home.mode, !!removable);
+    const text = targetChipLabel({ ...t, ...(state ? { connection: state.connection, busy: state.busy } : {}) }, this.home.mode, !!removable || (!t.tagged && this.candidate === t.id));
     const width = Math.max(0.09, Math.ceil((text.length * THEME.font.label * 0.56 + THEME.box.labelPadding * 3) * 100) / 100);
     if (removable) {
       this.button(label, `tag-remove:${t.id}`, text, width / 2, 0, width, 'handle', () => this.events.emit('tagRemove', { targetId: t.id }));
@@ -645,7 +817,7 @@ export class LeanHud implements Hud {
   removeTarget(id: string): void {
     this.targets.delete(id); this.boxes.remove(id);
     const label = this.labels.get(id); if (label) { label.removeFromParent(); this.clear(label); this.labels.delete(id); }
-    if (this.locked === id) { this.locked = null; this.pinned = false; this.card.userData.pinned = false; this.refreshCard(); }
+    if (this.locked === id) { this.locked = null; this.setAssistant(null); this.setSetupProgress(null); this.setCanvas(null); this.pinned = false; this.card.userData.pinned = false; this.refreshCard(); }
   }
   clearTargets(): void { for (const id of this.targets.keys()) this.removeTarget(id); }
   setCandidate(id: string | null): void {
@@ -655,6 +827,7 @@ export class LeanHud implements Hud {
     if (id && this.targets.has(id)) this.refreshTargetLabel(this.targets.get(id)!);
   }
   setLocked(id: string | null): void {
+    if (id !== this.locked) { this.setAssistant(null); this.setSetupProgress(null); this.setCanvas(null); }
     if (id !== this.locked && this.codeEntry && this.codeTarget !== HELPER_PAIRING_TARGET) this.closePairCode();
     const old = this.locked; this.locked = id;
     if (old !== id) { this.pinned = false; this.card.userData.pinned = false; this.evidence = null; this.upload = null; this.selectedAction = null; this.unfoldStarted = this.time; }
@@ -676,6 +849,7 @@ export class LeanHud implements Hud {
   private refreshDetails(): void {
     if (!this.detailsOpen) return;
     const lines: string[] = [];
+    for (const control of this.mounted()?.spec.controls ?? []) if (control.armed !== true) lines.push(`${control.label}: not verified`);
     for (const log of this.logs.values()) lines.push(`${title(log.title, 34)} · ${log.status}${log.detail ? `\n${log.detail.slice(0, 72)}` : ''}`);
     for (const evidence of this.history) lines.push(`${evidence.verdict === 'ok' ? 'Observed' : 'Not observed'}: ${evidence.seen}`);
     if (this.upload?.modelId) lines.push(this.upload.modelId);
@@ -687,7 +861,11 @@ export class LeanHud implements Hud {
       for (const word of words) { if ((current + ' ' + word).trim().length > 34) { if (current) wrapped.push(current); current = word.slice(0, 34); } else current = (current + ' ' + word).trim(); }
       if (current) wrapped.push(current);
     }
-    setText(this.detailText, wrapped.slice(-THEME.panel.detailLines).join('\n') || 'No activity yet.');
+    const mounted = this.mounted(), manual = !!mounted && !!this.otherContinuous(mounted);
+    this.detailText.position.y = manual ? -0.019 : 0.06;
+    if (manual) this.detailText.userData.fitHeight = 0.025;
+    else delete this.detailText.userData.fitHeight;
+    setText(this.detailText, wrapped.slice(manual ? -1 : -THEME.panel.detailLines).join('\n') || (manual ? 'Manual control · your hand map is unchanged' : 'No activity yet.'));
   }
   renderSpec(spec: Gen3dSpec, at: { targetId?: string; position?: [number, number, number]; yawDeg?: number }): void {
     const previous = this.specs.get(spec.specId);
@@ -721,14 +899,17 @@ export class LeanHud implements Hud {
   }
   showConfirm(confirm: ConfirmRequest | null): void {
     if (confirm && this.home.mode !== 'control' && confirm.kind !== 'forget' && confirm.kind !== 'place') return;
+    if (confirm) this.interruptAssistantInput();
     if (!confirm && this.codeTarget === HELPER_PAIRING_TARGET) { this.confirm = null; return; }
     this.confirm = confirm; this.clear(this.modal); this.modal.visible = !!confirm; if (!confirm) {
       if (this.approvals.length) this.showApprovals(this.approvals);
       else if (this.pairing) this.showPairing(this.pairing);
+      this.refreshCard(); this.place();
       return;
     }
     this.modal.add(this.plate(THEME.panel.width, 0.32));
-    this.label(this.modal, title(confirm.title), 0.105, THEME.font.title);
+    const heading = makeText({ text: confirm.title, size: THEME.font.title, weight: 600, anchorX: 'center', maxWidth: THEME.panel.textWidth, maxHeight: 0.06 });
+    heading.name = 'confirmation-title'; heading.position.set(0, 0.105, THEME.panel.depth); this.modal.add(heading);
     const summary = makeText({ text: (confirm.summary ?? (confirm.hold ? 'Hold to confirm.' : 'Confirm this action.')).slice(0, 200), size: THEME.font.label, anchorX: 'center', anchorY: 'top', maxWidth: THEME.panel.textWidth, maxHeight: 0.11 });
     summary.name = 'confirmation-summary'; summary.position.set(0, 0.05, THEME.panel.depth); this.modal.add(summary);
     const arm = confirm.kind === 'arm';
@@ -745,6 +926,7 @@ export class LeanHud implements Hud {
     this.place();
   }
   showPairing(pair: { display: string; qr: string; message?: string } | null): void {
+    if (pair) this.interruptAssistantInput();
     this.pairing = pair;
     if (this.codeEntry) return;
     if (this.confirm) return;
@@ -756,12 +938,14 @@ export class LeanHud implements Hud {
     this.label(this.modal, pair.message ?? 'Enter this code on the Mac.', -THEME.panel.row, THEME.font.label); this.place();
   }
   showHelperPairing(view: HelperPairingView | null): void {
+    if (view) this.interruptAssistantInput();
     this.helperPairingView = view;
     this.helperPairing.setState(view);
     if ((!view || view.pairedName) && this.codeTarget === HELPER_PAIRING_TARGET) this.closePairCode();
     this.refreshCard(); this.place();
   }
   showApprovals(list: { pairingId: string; name: string; kind: string; display: string }[]): void {
+    if (list.length) this.interruptAssistantInput();
     this.approvals = list;
     if (this.codeEntry) return;
     if (this.confirm) return;
@@ -780,6 +964,9 @@ export class LeanHud implements Hud {
     const modeChanged = this.home.mode !== state.mode;
     this.home = { ...state };
     if (modeChanged) {
+      this.setAssistant(null);
+      this.setSetupProgress(null);
+      this.setCanvas(null);
       const helperKeyboard = this.codeTarget === HELPER_PAIRING_TARGET;
       if (!helperKeyboard) { this.codeEntry = null; this.codeTarget = null; }
       this.detailsOpen = false; this.details.visible = false;
@@ -790,15 +977,16 @@ export class LeanHud implements Hud {
       this.refreshCard();
     }
     this.refreshHome();
-    if (modeChanged) this.showDockHint();
+    if (modeChanged) this.setMenuOpen(false);
     this.place();
   }
   setDeviceState(state: DeviceState | null): void {
     const previous = this.deviceState;
     if (previous === state) return;
-    const sameContent = previous && state && previous.targetId === state.targetId && previous.connection === state.connection && previous.hint === state.hint && previous.action === state.action && previous.busy === state.busy && previous.sentence === state.sentence && previous.handControl === state.handControl && previous.performAvailable === state.performAvailable;
+    const sameContent = previous && state && previous.targetId === state.targetId && previous.connection === state.connection && previous.hint === state.hint && previous.action === state.action && previous.busy === state.busy && previous.sentence === state.sentence && previous.handControl === state.handControl && previous.performAvailable === state.performAvailable && previous.screenGuide === state.screenGuide && previous.canvasReady === state.canvasReady && previous.silentVisual === state.silentVisual && previous.mappingSummary === state.mappingSummary && previous.mappingActionId === state.mappingActionId && previous.mappingOutcome === state.mappingOutcome;
     if (sameContent && previous.pairingSeconds === state.pairingSeconds && previous.performingLive === state.performingLive && previous.performanceRoute === state.performanceRoute) return;
     this.deviceState = state;
+    this.setupProgress.setWorking(this.setupWorking());
     if (sameContent && !!previous.pairingSeconds === !!state.pairingSeconds) { this.refreshStatus(); return; }
     if (this.codeEntry && this.codeTarget !== HELPER_PAIRING_TARGET && (!state || state.targetId !== previous?.targetId || state.connection !== 'offline' || !state.action)) this.closePairCode();
     const current = state ? this.targets.get(state.targetId) : undefined;
@@ -810,6 +998,26 @@ export class LeanHud implements Hud {
     }
     this.refreshCard();
     this.syncHome();
+  }
+  setSetupProgress(view: SetupProgressView | null): void {
+    if (view && (this.home.mode !== 'control' || !this.locked || !this.selected()?.tagged)) return;
+    const wasVisible = this.hasSetupProgress();
+    this.setupProgressView = view;
+    this.setupProgressTarget = view ? this.locked : null;
+    this.setupProgress.setState(view, this.setupWorking());
+    if (wasVisible !== this.hasSetupProgress()) this.refreshCard();
+    this.place();
+  }
+  setCanvas(view: CanvasView | null): void {
+    if (view && (view.targetId !== this.locked || this.home.mode !== 'control' || !this.selected()?.tagged)) return;
+    const wasOpen = this.hasCanvas();
+    if (view && !wasOpen) for (const capture of this.captures.values()) {
+      // Opening a local game must not finish a captured hardware drag and send its last command.
+      capture.widget = null; capture.mode = null; capture.hasTip = false; capture.history.reset();
+    }
+    this.canvasView = view; this.canvasPanel.setState(view);
+    if (wasOpen !== this.hasCanvas()) this.refreshCard();
+    this.place();
   }
   private openPairCode(targetId = this.locked): void {
     if (!targetId) return;
@@ -831,6 +1039,7 @@ export class LeanHud implements Hud {
   private drawPairCode(): void {
     const entry = this.codeEntry;
     if (!entry) return;
+    this.interruptAssistantInput();
     this.clear(this.modal); this.modal.visible = true; this.card.visible = false;
     this.modal.add(this.plate(0.48, 0.48));
     this.label(this.modal, this.codeTarget === HELPER_PAIRING_TARGET ? 'Code shown on your laptop' : this.deviceState?.action === 'open-companion' ? 'Code shown on your Mac' : 'Code shown on the device', 0.205, THEME.font.label);
@@ -853,52 +1062,106 @@ export class LeanHud implements Hud {
     return this.home.mode === 'control' && (this.home.canStop ?? (!!this.deviceState?.busy || [...this.specs.values()].some((m) => m.armed && m.spec.controls.some((c) => c.armed !== false))));
   }
   private syncHome(): void { this.refreshHome(); }
-  private refreshHomeHint(): void {
-    setText(this.dockHint, homeHint(this.home.mode, this.home.tagged, !!this.selected()?.tagged));
-    this.dockHint.visible = !this.deck.fingerMenu && !!this.dockHint.text && this.time < this.hintUntil;
+  setOnboarding(view: OnboardingView | null): void {
+    if (view && !this.onboarding) this.coachPlacement.reset();
+    this.onboarding = view;
+    if (view) {
+      setText(this.coachTitle, view.title); setText(this.coachBody, view.message);
+      setText(this.coachStep, view.step === 'tag' ? '2 of 3 · Find a device' : '3 of 3 · Choose when to use it');
+      this.coach.userData.step = view.step;
+    }
+    this.place();
   }
-  private showDockHint(): void {
-    this.hintUntil = this.time + 2.5;
-    this.refreshHomeHint();
+  setAssistant(view: AssistantView | null): void {
+    if (view && view.targetId !== 'muse-general' && (view.targetId !== this.locked || this.home.mode !== 'control' || !this.selected()?.tagged || this.onboarding)) return;
+    this.assistantView = view ? { ...view, targetLabel: view.targetId === 'muse-general' ? 'Ask Muse' : this.selected()?.label, mapping: view.mapping ? [...view.mapping] : undefined } : null;
+    this.assistant.setState(this.assistantView);
+    const talk = this.assistantTalk.group;
+    talk.userData.disabled = view?.state === 'thinking';
+    talk.userData.selected = view?.state === 'listening';
+    const label = talk.children.find((child) => 'sync' in child) as SdfText;
+    setText(label, view?.state === 'listening' ? 'Send' : view?.state === 'thinking' ? 'Thinking…' : 'Ask Muse', view?.state === 'listening' ? THEME.color.accent : THEME.color.text);
+    this.place();
+  }
+  private setMenuOpen(open: boolean): void {
+    if (open && this.projectView) this.events.emit('projectsPause', {});
+    if (open) this.interruptAssistantInput();
+    if (open && !this.deck.panel.visible) { this.events.emit('menuOpened', {}); }
+    this.deck.setOpen(open);
+    this.place();
+    for (const capture of this.captures.values()) {
+      if (capture.widget && !visible(capture.widget.group)) this.releaseDockCapture(capture);
+    }
+  }
+  recenter(): void {
+    this.pinned = false; this.card.userData.pinned = false;
+    this.workspaceAnchor.reset(); this.coachPlacement.reset();
+    for (const capture of this.captures.values()) if (capture.widget) this.releaseDockCapture(capture);
+    this.place();
+  }
+  private interruptAssistantInput(): void {
+    const view = this.assistantView;
+    if (view && (view.state === 'idle' || view.state === 'listening')) this.events.emit('assistantDismiss', { targetId: view.targetId });
   }
   private releaseDockCapture(capture: Capture): void {
     const widget = capture.widget;
     capture.widget = null; capture.mode = null; capture.pokeBlocked = false; capture.hasTip = false;
-    widget?.end?.();
+    capture.wasPinching = true; capture.history.reset();
+    if (widget?.kind === 'control' || widget?.kind === 'deck') widget.end?.();
+  }
+  cancelInteractions(): void {
+    for (const capture of this.captures.values()) {
+      capture.widget = null; capture.mode = null; capture.pokeBlocked = false; capture.hasTip = false;
+      capture.wasPinching = true; capture.history.reset();
+    }
+    this.pressUntil.clear(); this.deck.cancelExitHold();
   }
   private refreshHome(): void {
-    this.deck.setState(this.home, this.canStop(), this.handDock.source === 'hand');
-    this.deck.userData.width = this.deck.width;
-    this.deck.userData.height = this.deck.height;
-    // Keep captures across count/filter updates, releasing only icons that actually disappeared.
-    for (let i = this.widgets.length - 1; i >= 0; i--) {
-      const widget = this.widgets[i]!;
-      if (!widget.group.userData.dockIcon || this.deck.buttons.includes(widget.group)) continue;
-      for (const capture of this.captures.values()) if (capture.widget === widget) {
-        this.releaseDockCapture(capture);
-      }
-      if (this.fingerCapture === widget) { this.fingerCapture = null; widget.end?.(); }
-      this.widgets.splice(i, 1);
+    this.deck.setState(this.home, this.canStop());
+    for (const capture of this.captures.values()) {
+      if (capture.widget?.kind === 'deck' && !visible(capture.widget.group)) this.releaseDockCapture(capture);
     }
     for (const group of this.deck.buttons) {
       if (this.widgets.some((widget) => widget.group === group)) continue;
       const start = () => {
-        if (group.name === 'mode-annotate' || group.name === 'mode-control') {
+        if (group.name === 'menu-toggle') this.setMenuOpen(!this.deck.panel.visible);
+        else if (group.name === 'menu-close') this.setMenuOpen(false);
+        else if (group.name === 'menu-tools' || group.name === 'menu-tools-back') { this.deck.setTools(group.name === 'menu-tools'); this.place(); }
+        else if (group.name === 'mode-annotate' || group.name === 'mode-control') {
+          this.setMenuOpen(false);
           this.events.emit('mode', { mode: group.name === 'mode-annotate' ? 'annotate' : 'control' });
         } else if (group.name.startsWith('filter:')) {
+          this.setMenuOpen(false);
           this.events.emit('filter', { filter: group.name.slice(7) as HomeState['filter'] });
+        } else if (group.name === 'helper-pair') {
+          this.setMenuOpen(false); this.events.emit('helperPair', {});
+        } else if (group.name === 'visual-synth') {
+          this.setMenuOpen(false); this.events.emit('visualSynth', {});
+        } else if (group.name === 'ask-muse-general') {
+          this.setMenuOpen(false); this.events.emit('askMuseGeneral', {});
+        } else if (group.name === 'identify-area') {
+          this.setMenuOpen(false); this.events.emit('identifyArea', {});
+        } else if (group.name === 'muse-canvas') {
+          this.setMenuOpen(false); this.events.emit('projectsOpen', {});
+        } else if (group.name === 'change-device') {
+          this.setMenuOpen(false); this.events.emit('changeDevice', {});
+        } else if (group.name === 'menu-recenter') {
+          this.recenter(); this.setMenuOpen(false);
         } else if (group.name === 'exit-ar') this.deck.beginExitHold(this.time * 1000);
         else this.events.emit('deck', { key: 'panic', phase: 'press' });
       };
-      this.widgets.push({ group, w: this.deck.height, h: this.deck.height, kind: 'deck', start,
-        end: group.name === 'exit-ar' ? () => this.deck.cancelExitHold() : group.name === 'deck:panic' ? () => this.events.emit('deck', { key: 'panic', phase: 'release' }) : undefined,
+      this.widgets.push({ group, w: group.userData.width, h: group.userData.height, kind: 'deck', start,
+        end: group.name === 'exit-ar' ? () => this.deck.cancelExitHold() : group.name === 'deck:panic' ? () => { this.events.emit('deck', { key: 'panic', phase: 'release' }); this.setMenuOpen(false); } : undefined,
         button: true, lastMove: 0 });
     }
-    this.refreshHomeHint();
-    this.deck.updateFeedback(this.handDock.opacity);
   }
-  // Kept for the shared HUD interface; v2 visibility comes entirely from the current hand frame.
-  setDeck(_d: { open?: boolean; scanning?: boolean; daemons?: boolean; at?: [number, number, number] }): void {}
+  setDeck(d: { open?: boolean; scanning?: boolean; daemons?: boolean; at?: [number, number, number] }): void {
+    if (d.open !== undefined) this.setMenuOpen(d.open);
+  }
+  setProjects(view: ProjectView | null): void {
+    this.projectView = view; this.projectPanel.setState(view); this.place();
+    for (const capture of this.captures.values()) if (capture.widget && !visible(capture.widget.group)) this.releaseDockCapture(capture);
+  }
   toast(text: string, _level?: 'info' | 'ok' | 'warn' | 'error'): void { setText(this.noticeText, text.slice(0, 72)); if (!this.notice.visible) this.noticePlacement.reset(); this.notice.visible = true; this.noticeUntil = this.time + 3; this.place(); }
   private face(object: Object3D): void {
     this.boxes.facingQuaternion(this.head, object.position, this.facing); object.quaternion.copy(this.facing);
@@ -919,56 +1182,153 @@ export class LeanHud implements Hud {
     this.tetherEnd.set(x, y, 0).applyQuaternion(this.card.quaternion).add(this.card.position);
     this.tether.update(this.tetherStart, this.tetherEnd, this.head);
   }
+  presentationSnapshot(): { surface: 'menu' | 'device' | 'assistant' | 'project' | 'inspect'; stage: 'choose' | 'prepare' | 'building' | 'review' | 'ready' | 'perform' } {
+    if (this.deck.panel.visible) return { surface: 'menu', stage: 'choose' };
+    if (this.modal.visible) return { surface: 'device', stage: 'review' };
+    if (this.projectView) return { surface: 'project', stage: this.projectView.running ? 'perform' : this.projectView.ready ? 'ready' : 'prepare' };
+    if (this.assistant.visible && this.assistantView) {
+      const view = this.assistantView;
+      return { surface: view.objectInfo ? 'inspect' : 'assistant', stage: view.state === 'thinking' || view.state === 'setup' ? 'building'
+        : view.state === 'proposal' ? 'review' : view.state === 'applied' ? 'ready' : 'prepare' };
+    }
+    if (this.deviceState?.handControl) return { surface: 'device', stage: 'perform' };
+    if (this.setupWorking() || this.deviceState?.busy) return { surface: 'device', stage: 'building' };
+    if (this.deviceState?.performAvailable && this.mounted()?.armed) return { surface: 'device', stage: 'ready' };
+    return { surface: 'device', stage: this.home.mode === 'control' && !!this.selected()?.tagged ? 'prepare' : 'choose' };
+  }
+  private assistantNeedsFocus(): boolean {
+    return this.assistant.visible && !!this.assistantView && ['listening', 'thinking', 'setup', 'proposal'].includes(this.assistantView.state);
+  }
   private place(): void {
     if (!this.hasFrame) return;
+    if (this.projectView?.running && (this.modal.visible || this.helperPairingView || this.deck.panel.visible)) this.events.emit('projectsPause', {});
+    this.modalLayer.visible = !this.deck.panel.visible;
+    this.deck.visible = !this.deck.panel.visible && !this.deviceState?.handControl && !this.projectView?.running;
     const target = this.selected(), m = this.mounted();
-    this.card.visible = this.home.mode === 'control' && !!target?.tagged && !this.modal.visible && !this.helperPairingView;
-    this.helperPairing.visible = !!this.helperPairingView && !this.modal.visible;
+    const workspace = this.home.mode === 'control' && !!target?.tagged;
+    const selection = this.home.mode === 'control' ? this.home.visualSynthSelection : undefined;
+    const available = !this.modal.visible && !this.helperPairingView && !this.deck.panel.visible && !selection && !this.projectView;
+    // One foreground task at a time. The device's physical anchor remains unchanged.
+    const generalConversation = this.assistantView?.targetId === 'muse-general';
+    this.assistant.visible = available && (generalConversation || workspace && !this.onboarding && this.assistantView?.targetId === target?.id
+      && (!this.setupWorking() || this.assistantView.state !== 'setup'));
+    this.card.visible = workspace && available && !this.assistant.visible;
+    // Tag/use coaching is nonblocking: the wearer may keep finding devices before switching modes.
+    // Only an actual foreground workspace/menu/dialog suppresses annotation targets.
+    this.annotationLayer.visible = !this.deck.panel.visible && !this.modal.visible && !this.helperPairingView && !workspace && !selection && !this.projectView && !this.assistant.visible;
+    this.visualSelection.visible = !!selection && !this.deck.panel.visible && !this.modal.visible && !this.helperPairingView && !this.projectView;
+    this.projectPanel.visible = !!this.projectView && !this.deck.panel.visible && !this.modal.visible && !this.helperPairingView;
+    this.workspaceAnchor.update(this.headPose, this.time * 1000);
+    this.workspaceAnchor.place(this.projectPanel);
+    if (selection) {
+      setText(this.visualSelectionTitle, selection.phase === 'pending' ? 'Opening Mac visuals' : 'Waiting for Mac visuals');
+      setText(this.visualSelectionBody, `${selection.message}\n\nThis synth changes the screen silently. Selection resumes when one visual screen is ready.`);
+      this.visualSelectionRetry.group.visible = selection.phase === 'unavailable';
+      this.workspaceAnchor.place(this.visualSelection);
+    }
+    this.setupProgress.visible = this.card.visible && this.hasSetupProgress();
+    this.canvasPanel.visible = this.card.visible && this.hasCanvas();
+    // Center the taller game panel around eye level, not below the device card.
+    this.canvasPanel.position.y = 0.12;
+    this.heading.visible = !this.hasCanvas();
+    this.cardPlate.visible = !this.hasSetupProgress() && !this.hasCanvas();
+    const objectActions = this.card.visible && !this.deviceState?.handControl && !this.onboarding && !this.deviceState?.busy && !this.hasSetupProgress() && !this.hasCanvas();
+    this.inspectLaunch.group.visible = objectActions;
+    // Games are an object fallback, not an unrelated action on an operating instrument.
+    this.canvasLaunch.group.visible = objectActions && (this.deviceState?.canvasReady || !m?.armed && !this.deviceState?.performAvailable && !/synth|laptop|macbook|computer|keyboard/i.test(target?.label ?? ''));
+    this.inspectLaunch.group.position.x = this.canvasLaunch.group.visible ? -0.105 : 0;
+    setText(this.canvasLaunch.group.children[1] as SdfText, this.deviceState?.canvasReady ? 'Open game' : 'Make a game');
+    this.assistantTalk.group.visible = this.card.visible && !this.onboarding && !this.deviceState?.handControl;
+    this.assistantTalk.group.position.y = this.canvasPanel.visible ? 0.314 : 0.202;
+    const screenGuide = this.deviceState?.targetId === target?.id && this.deviceState?.screenGuide
+      && (this.selectedConnection() === 'setup' || this.deviceState.busy) && this.selectedConnection() !== 'ready';
+    this.screenGuide.visible = !!screenGuide && this.card.visible && !this.assistant.visible && !this.canvasPanel.visible;
+    if (this.screenGuide.visible) {
+      // This is a comfortable aiming aid, not a promise about camera capture boundaries.
+      this.screenGuide.position.set(0.30, 0.06, -1).applyQuaternion(this.headQuaternion).add(this.head);
+      this.screenGuide.quaternion.copy(this.headQuaternion);
+      setText(this.screenGuideText, this.deviceState?.busy ? 'Keep the Mac visuals centered\nwhile we check the controls.' : 'Center the Mac visuals\nThen choose Set up control.');
+    }
+    // The selected card names this device; its floating chip must not cross the conversation text.
+    for (const [id, label] of this.labels) {
+      const box = this.boxes.boxes.get(id);
+      label.visible = this.annotationLayer.visible && !!box?.visible && box.opacity > 0.001;
+    }
+    this.helperPairing.visible = !!this.helperPairingView && !this.modal.visible && !this.deck.panel.visible;
+    this.coach.visible = !!this.onboarding && !this.assistant.visible && !this.helperPairingView && !this.modal.visible && !this.deck.panel.visible && !this.projectView;
     this.helperPairing.update({ head: this.headPose, time: this.time * 1000 });
+    this.workspaceAnchor.place(this.helperPairing);
     const unfold = target ? unfoldEase((this.time - this.unfoldStarted) / THEME.motion.duration) : 1;
     this.card.scale.x = Math.max(0.001, unfold);
     const controls = unfoldEase((this.time - this.controlsStarted) / THEME.motion.duration);
     this.controls.scale.y = Math.max(0.001, controls);
     const box = target && this.boxes.boxes.get(target.id);
-    const key = target?.id ?? (m?.position ? `position:${m.spec.specId}` : 'idle');
-    if (key !== this.placementKey) {
-      this.placementKey = key;
-      this.idlePlacement.reset(); this.dockPlacement.reset();
-      if (box) {
-        this.comfort.place(this.head, box.center, box.w, this.card.position, this.card.quaternion);
-        this.dockPlacement.anchor(this.card, this.headPose, this.time * 1000);
-        this.cardScale = angularScale(this.card.position.distanceTo(this.head), THEME.control.buttonHeight);
-      } else if (m?.position) {
-        this.card.position.fromArray(m.position); this.face(this.card);
-        this.idlePlacement.anchor(this.card, this.headPose, this.time * 1000);
+    this.workspaceAnchor.place(this.card);
+    this.card.scale.set(Math.max(0.001, unfold), 1, 1);
+    if (box) this.placeTether(box.id); else this.tether.hide();
+    this.workspaceAnchor.place(this.modal);
+    this.workspaceAnchor.place(this.assistant);
+    this.assistant.scale.setScalar(1);
+    // One navigation slot clears the largest task panel and never follows head motion.
+    this.workspaceAnchor.place(this.deck, 0.378);
+    this.workspaceAnchor.place(this.deck.panel, 0.05);
+    const foreground = this.deck.panel.visible ? this.deck.panel : this.modal.visible ? this.modal
+      : this.helperPairing.visible ? this.helperPairing : this.projectPanel.visible ? this.projectPanel
+      : this.visualSelection.visible ? this.visualSelection : this.assistant.visible ? this.assistant
+      : this.card.visible ? this.card : this.deck.visible ? this.deck : undefined;
+    this.edge.visible = !!foreground && this.edgePlacement.update(this.head, this.headQuaternion, foreground.position);
+    if (this.edge.visible) {
+      this.edge.position.copy(this.edgePlacement.position); this.edge.quaternion.copy(this.headQuaternion);
+      this.edgeArrow.rotation.z = this.edgePlacement.angle;
+      const x = Math.cos(this.edgePlacement.angle), y = Math.sin(this.edgePlacement.angle);
+      const direction = Math.abs(x) >= Math.abs(y) ? x >= 0 ? 'right' : 'left' : y >= 0 ? 'up' : 'down';
+      setText(this.edgeText, this.deviceState?.handControl || this.projectView?.running ? `Controls · look ${direction}`
+        : this.assistantNeedsFocus() ? `Muse · look ${direction}`
+        : this.root.userData.menuRecall?.progress > 0 ? `Hold open hand · ${Math.round(this.root.userData.menuRecall.progress * 100)}%` : 'Raise open left hand · hold');
+      this.edge.userData.targetSurface = foreground!.name;
+      this.tether.hide();
+    } else this.edge.userData.targetSurface = undefined;
+    const presentation = this.presentationSnapshot();
+    this.root.userData.workspace = presentation;
+    this.deck.setWorkspace(presentation.stage);
+    const inputSurface = this.deck.panel.visible ? `menu:${this.deck.panel.userData.toolsOpen ? 'tools' : 'demo'}` : this.modal.visible ? `modal:${this.confirm?.id ?? 'pair-code'}`
+      : this.helperPairing.visible ? 'helper-pairing' : this.projectPanel.visible ? 'project' : this.visualSelection.visible ? 'visual-selection'
+      : this.assistant.visible ? `assistant:${this.assistantView?.targetId}` : this.card.visible ? `device:${this.locked}` : 'choose';
+    if (this.inputSurface !== inputSurface) {
+      this.inputSurface = inputSurface;
+      // A held pinch belongs to the surface it began on. A second hand may not
+      // click through a replacement surface in the same frame either.
+      for (const capture of this.captures.values()) {
+        if (capture.widget?.kind === 'control' || capture.widget?.kind === 'deck') this.releaseDockCapture(capture);
       }
-    }
-    if (box) {
-      if (!this.pinned) this.follow(this.card, this.dockPlacement);
-      const scale = this.cardScale;
-      this.card.scale.set(Math.max(0.001, unfold) * scale, scale, scale);
-      if (this.edgePlacement.update(this.head, this.headQuaternion, box.center)) {
-        this.edge.visible = this.card.visible || !!this.deviceState?.busy;
-        this.edge.position.copy(this.edgePlacement.position); this.edge.quaternion.copy(this.headQuaternion);
-        this.edgeArrow.rotation.z = this.edgePlacement.angle;
-        this.tether.hide();
-      } else { this.edge.visible = false; this.placeTether(box.id); }
-    } else {
-      this.edge.visible = false; this.tether.hide();
-      if (!this.pinned) this.follow(this.card, this.idlePlacement);
-    }
-    if (this.modal.visible) this.follow(this.modal, this.modalPlacement);
-    else this.modalPlacement.reset();
-    if (!this.handDock.tracked) {
-      this.follow(this.deck, this.deckPlacement);
-      if (this.card.visible) // The card is angularly scaled (>= 4° buttons), so separate against its real size.
-        this.panelSeparation.update(this.card, this.deck, this.headPose, THEME.card.width * this.card.scale.y, THEME.card.height * this.card.scale.y, this.deck.width, this.deck.height);
+      this.cancelInteractions();
     }
     if (this.coach.visible) this.follow(this.coach, this.coachPlacement);
     if (this.notice.visible) this.follow(this.notice, this.noticePlacement);
   }
+  /** Explicit title-bar drags retain a world anchor; head turns and status changes never move it. */
+  private dragHandle(panel: Group, name: string, width: number, y: number, x = 0, slotY = 0, height = 0.035): void {
+    const handle = new Group(); handle.name = name; handle.position.set(x, y, THEME.panel.depth * 3);
+    const start = new Vector3(), origin = new Vector3(), rotation = new Quaternion(), delta = new Vector3();
+    const explicitMove = name === 'menu-drag';
+    const grip = makeText({ text: explicitMove ? 'Move panel · hold pinch' : name === 'device-drag' ? 'Pinch here to move' : '', size: explicitMove ? 0.014 : 0.011, color: explicitMove ? THEME.color.text : THEME.color.muted, anchorX: 'center', maxWidth: width - 0.02, singleLine: true });
+    grip.name = `${name}-label`; grip.position.z = THEME.panel.depth;
+    if (explicitMove) { const plate = this.surfaces.create(width, height, 'button', true); plate.name = 'button-plate'; handle.add(plate); }
+    handle.userData.dragHandle = true;
+    handle.add(grip); panel.add(handle);
+    this.widgets.push({ group: handle, w: width, h: height, kind: 'handle', drag: true, lastMove: 0,
+      start: (point) => { start.copy(point); origin.copy(panel.position); rotation.copy(panel.quaternion); },
+      move: (point) => {
+        delta.subVectors(point, start).setZ(0).applyQuaternion(rotation);
+        if (delta.lengthSq() > 4) return;
+        panel.position.copy(origin).add(delta);
+        this.workspaceAnchor.adopt(panel, this.headPose, this.time * 1000, slotY);
+        if (panel === this.card) { this.pinned = true; this.card.userData.pinned = true; }
+      },
+      end: () => this.workspaceAnchor.adopt(panel, this.headPose, this.time * 1000, slotY),
+    });
+  }
   private inside(widget: Widget, point: Vector3): boolean {
-    if (widget.group.userData.dockIcon) return Math.hypot(point.x, point.y) <= (widget.group.userData.finger ? 0.02 / widget.group.scale.x : widget.w / 2 + 0.002);
     return Math.abs(point.x) <= Math.max(THEME.control.minHitSize, widget.group.userData.collapsed ? THEME.box.labelHeight : widget.w) / 2 + THEME.control.hitPadding
       && Math.abs(point.y) <= Math.max(THEME.control.minHitSize, widget.h) / 2 + THEME.control.hitPadding;
   }
@@ -976,7 +1336,7 @@ export class LeanHud implements Hud {
     this.inverse.copy(widget.group.matrixWorld).invert();
     this.local.copy(cursor.tip).applyMatrix4(this.inverse);
     let distance = Math.abs(this.local.z), rayHit = false;
-    if (!cursor.canPoke || distance > (widget.group.userData.dockIcon ? 0.03 : THEME.control.near) || !this.inside(widget, this.local)) {
+    if (!cursor.canPoke || distance > THEME.control.near || !this.inside(widget, this.local)) {
       if (!cursor.ray) return Infinity;
       rayHit = true;
       this.origin.copy(cursor.ray.origin).applyMatrix4(this.inverse);
@@ -989,9 +1349,7 @@ export class LeanHud implements Hud {
     }
     if (!clampToFace) {
       if (rayHit) {
-        if (widget.group.userData.dockIcon) {
-          if (Math.hypot(this.local.x, this.local.y) > widget.w * 0.65) return Infinity;
-        } else if (!expandedRayBounds(this.local.x, this.local.y, widget.group.userData.collapsed ? 0.07 : widget.w, widget.h)) return Infinity;
+        if (!expandedRayBounds(this.local.x, this.local.y, widget.group.userData.collapsed ? 0.07 : widget.w, widget.h)) return Infinity;
       } else if (!this.inside(widget, this.local)) return Infinity;
     }
     return distance;
@@ -1006,47 +1364,101 @@ export class LeanHud implements Hud {
     this.local.lerpVectors(this.previousTip, this.local, fraction);
     return this.inside(widget, this.local);
   }
-  private interactive(widget: Widget, cursor: Cursor): boolean {
-    if (!visible(widget.group) || this.suppressedHands.has(cursor.hand)) return false;
-    if (this.helperPairing.visible && !this.helperPairing.getObjectById(widget.group.id) && !this.deck.getObjectById(widget.group.id)) return false;
-    if (widget.group.userData.dockIcon && (!this.handDock.open || this.handDock.tracked && cursor.hand === (this.handDock.source === 'controller' ? 'left' : this.handDock.nonDominant))) return false;
-    return !this.modal.visible || !!this.modal.getObjectById(widget.group.id) || !!this.deck.getObjectById(widget.group.id);
+  /** Match the visible aim assistance: a near miss can select a button from a relaxed hand ray.
+   * Continuous controls keep exact plane geometry, and direct button hits always win. */
+  private magneticButton(cursor: Cursor): Widget | null {
+    if (!cursor.ray) return null;
+    let best: Widget | null = null, angle = Infinity;
+    for (const widget of this.widgets) {
+      if (!widget.button || !this.interactive(widget, cursor)) continue;
+      widget.group.getWorldPosition(this.point);
+      const distance = rayTargetWithinAngle(cursor.ray.origin, cursor.ray.dir, this.point, 3);
+      if (distance > THEME.control.rayDistance) continue;
+      if (this.hit(widget, cursor, true) === Infinity) continue;
+      // Rank the visible button face, not just its center: a near miss beside a wide Ask Muse
+      // button must not snap to the tiny lock icon below it merely because that center is closer.
+      const dx = Math.max(0, Math.abs(this.local.x) - widget.w / 2), dy = Math.max(0, Math.abs(this.local.y) - widget.h / 2);
+      const e = widget.group.matrixWorld.elements;
+      const sx2 = e[0]! ** 2 + e[1]! ** 2 + e[2]! ** 2, sy2 = e[4]! ** 2 + e[5]! ** 2 + e[6]! ** 2;
+      const error = (dx * dx * sx2 + dy * dy * sy2) / (distance * distance);
+      if (error < angle) { best = widget; angle = error; }
+    }
+    return best;
+  }
+  private interactive(widget: Widget, _cursor: Cursor): boolean {
+    if (!visible(widget.group)) return false;
+    let owner: Object3D | null = widget.group;
+    while (owner && owner !== this.root) { if (owner.userData.disabled) return false; owner = owner.parent; }
+    if (owner !== this.root) return false;
+    const menu = !!this.deck.getObjectById(widget.group.id) || !!this.deck.panel.getObjectById(widget.group.id);
+    if (this.deck.panel.visible && !menu) return false;
+    if (this.helperPairing.visible && !this.helperPairing.getObjectById(widget.group.id) && !menu) return false;
+    if (this.visualSelection.visible && !this.visualSelection.getObjectById(widget.group.id) && !menu) return false;
+    if (this.assistant.visible && !this.assistant.getObjectById(widget.group.id) && !menu) return false;
+    if (this.projectPanel.visible && !this.projectPanel.getObjectById(widget.group.id) && !menu) return false;
+    return !this.modal.visible || !!this.modal.getObjectById(widget.group.id) || menu;
+  }
+  private resolveTarget(cursor: Cursor): Widget | null {
+    let winner: Widget | null = null, distance = Infinity;
+    for (const widget of this.widgets) {
+      if (!this.interactive(widget, cursor)) continue;
+      const candidate = this.hit(widget, cursor);
+      if (candidate !== Infinity && candidate <= distance) { distance = candidate; winner = widget; }
+    }
+    // A fingertip can be near empty panel space while its far ray aims at Move.
+    // The passive surface still blocks other panels, but must not swallow its own controls.
+    if (winner && !winner.button && !winner.drag && winner.kind !== 'control') {
+      const surface = winner.group;
+      let child: Widget | null = null, childDistance = Infinity;
+      for (const widget of this.widgets) {
+        if ((!widget.button && !widget.drag && widget.kind !== 'control') || !surface.getObjectById(widget.group.id) || !this.interactive(widget, cursor)) continue;
+        const candidate = this.hit(widget, cursor);
+        if (candidate !== Infinity && candidate <= childDistance) { child = widget; childDistance = candidate; }
+      }
+      winner = child ?? winner;
+    }
+    if (!winner?.button && !winner?.drag && winner?.kind !== 'control') winner = this.magneticButton(cursor) ?? winner;
+    const capture = this.captures.get(cursor.id), ray = cursor.rawRay ?? cursor.ray;
+    if (capture && cursor.justPinched && !capture.wasPinching && ray) {
+      const compensated = capture.history.compensate(this.time * 1000, winner, ray.origin, ray.dir);
+      if (compensated && this.widgets.includes(compensated) && this.interactive(compensated, cursor)) return compensated;
+    }
+    return winner;
   }
   private interact(cursor: Cursor): void {
     const capture = this.captures.get(cursor.id); if (!capture) return;
-    if (!cursor.tracked || this.suppressedHands.has(cursor.hand)) {
+    if (!cursor.tracked) {
       const active = capture.widget; capture.widget = null; capture.mode = null; capture.hasTip = false; capture.wasPinching = false;
       capture.history.reset();
       if (active?.kind === 'control' || active?.kind === 'deck') active.end?.();
       return;
     }
-    if (capture.widget?.group.userData.dockIcon && !this.interactive(capture.widget, cursor)) {
+    if (capture.widget && !this.interactive(capture.widget, cursor)) {
       this.releaseDockCapture(capture); capture.history.reset();
     }
     if (cursor.canPoke && capture.pokeBlocked) {
       this.local.copy(cursor.tip).applyMatrix4(capture.pokePlane);
       if (this.local.z > THEME.control.pokeRelease) capture.pokeBlocked = false;
     }
-    let hover: Widget | null = null, poke: Widget | null = null, distance = Infinity;
+    const hover = this.resolveTarget(cursor);
+    let poke: Widget | null = null;
     for (const widget of this.widgets) {
-      if (!this.interactive(widget, cursor)) continue;
-      const candidate = this.hit(widget, cursor);
-      if (candidate !== Infinity && candidate <= distance) { distance = candidate; hover = widget; }
-      if (!poke && this.crosses(widget, cursor, capture)) poke = widget;
+      if (this.interactive(widget, cursor) && this.crosses(widget, cursor, capture)) poke = widget;
     }
     if (hover) hover.group.userData.hovered = true;
     if (!capture.mode) {
       const pinch = cursor.justPinched && !capture.wasPinching;
-      const ray = cursor.rawRay ?? cursor.ray;
-      const compensated = pinch && ray ? capture.history.compensate(this.time * 1000, hover, ray.origin, ray.dir) : hover;
-      const winner = pinch ? compensated && this.widgets.includes(compensated) && this.interactive(compensated, cursor) ? compensated : hover : !cursor.pinching ? poke : null;
-      if (winner) {
+      const winner = pinch ? hover : !cursor.pinching ? poke : null;
+      if (winner && ![...this.captures.values()].some((other) => other !== capture && other.widget === winner)) {
         if (pinch) this.hit(winner, cursor, true);
         else this.crosses(winner, cursor, capture);
         capture.widget = winner; capture.mode = pinch ? 'pinch' : 'poke';
         capture.pokeBlocked = cursor.canPoke;
         capture.pokePlane.copy(winner.group.matrixWorld).invert();
-        capture.dragNear = cursor.canPoke && Math.abs(this.point.copy(cursor.tip).applyMatrix4(capture.pokePlane).z) <= THEME.control.near;
+        // A hand ray can acquire this handle while its fingertip is merely at
+        // the same depth elsewhere. Keep that far-ray reference for the whole drag.
+        this.point.copy(cursor.tip).applyMatrix4(capture.pokePlane);
+        capture.dragNear = cursor.canPoke && Math.abs(this.point.z) <= THEME.control.near && this.inside(winner, this.point);
         this.pressUntil.set(winner.group.name, this.time + 0.12);
         this.events.emit('consumed', { hand: cursor.hand, widget: winner.kind });
         winner.start(this.local);
@@ -1063,7 +1475,9 @@ export class LeanHud implements Hud {
       if (released) {
         capture.widget = null; capture.mode = null;
         if (active.move && this.dragPoint(cursor, capture)) active.move(this.local);
-        active.end?.();
+        // Releasing a review/confirmation outside its face is cancellation.
+        // Control and dock end handlers still receive release to stop holds.
+        if (!active.button || active.kind === 'control' || active.kind === 'deck' || this.hit(active, cursor) !== Infinity) active.end?.();
       } else if (cursor.pinching && active.move && this.time - active.lastMove >= 1 / THEME.control.dragHz) {
         active.lastMove = this.time;
         if (this.dragPoint(cursor, capture)) active.move(this.local);
@@ -1091,48 +1505,20 @@ export class LeanHud implements Hud {
     this.local.copy(this.origin).addScaledVector(this.direction, distance);
     return true;
   }
-  private updateFingerMenu(frame: HudFrame): void {
-    const side = this.handDock.nonDominant;
-    if (this.deviceState?.performingLive && !frame.hands[side]?.controller) {
-      this.fingerCapture = null;
-      this.fingerTouch.update(undefined, false, frame.time);
-      return;
-    }
-    const open = this.handDock.source === 'hand' && this.handDock.open;
-    // Consume the menu hand before the shell selects devices, including an index pinch held on close.
-    if (open) this.suppressedHands.add(side);
-    for (const hand of ['left', 'right'] as const) {
-      if (this.suppressedHands.has(hand) && !(open && hand === side) && !frame.hands[hand]?.pinching) this.suppressedHands.delete(hand);
-      if (this.suppressedHands.has(hand)) this.events.emit('consumed', { hand, widget: 'deck' });
-    }
-    const touch = this.fingerTouch.update(frame.hands[side], open, frame.time);
-    if (this.fingerCapture && (!touch.touching || this.fingerCapture.group.userData.finger !== touch.finger)) {
-      const active = this.fingerCapture; this.fingerCapture = null; active.end?.();
-    }
-    for (const button of this.deck.buttons) button.userData.near = !!button.userData.finger && touch.near[button.userData.finger as keyof typeof touch.near];
-    if (!touch.justTouched) return;
-    const widget = this.widgets.find((widget) => widget.group.userData.finger === touch.finger);
-    if (!widget) return;
-    this.fingerCapture = widget;
-    this.pressUntil.set(`finger:${touch.finger}`, this.time + 0.12);
-    widget.start(this.local.set(0, 0, 0));
-  }
-
   private buttonFeedback(): void {
     for (const [name, until] of this.pressUntil) if (until < this.time) this.pressUntil.delete(name);
     for (const widget of this.widgets) {
-      if (!widget.button && widget.kind !== 'control') continue;
+      if (!widget.button && !widget.drag && widget.kind !== 'control') continue;
       const { group } = widget;
-      const finger = group.userData.finger;
-      let pressed = this.pressUntil.has(group.name) || !!finger && this.pressUntil.has(`finger:${finger}`) || this.fingerCapture === widget;
+      let pressed = this.pressUntil.has(group.name);
       for (const capture of this.captures.values()) if (capture.widget === widget) pressed = true;
       const hovered = Boolean(group.userData.hovered), selected = Boolean(group.userData.selected);
       group.userData.pressed = pressed;
+      if (group.name === 'menu-drag') setText(group.getObjectByName('menu-drag-label') as SdfText, pressed ? 'Moving · release to place' : hovered ? 'Move panel · pinch and hold' : 'Move panel · hold pinch');
       if (widget.button && !group.name.startsWith('target-label:')) {
-        const scale = finger ? (group.userData.near ? 1.15 : 1) : (pressed ? 0.92 : 1);
+        const scale = pressed ? 0.92 : 1;
         group.scale.setScalar(scale);
       }
-      if (group.userData.dockIcon) continue;
       const plate = group.getObjectByName('button-plate') as Mesh | undefined;
       if (!plate) continue;
       const command = this.mounted()?.command;
@@ -1149,26 +1535,47 @@ export class LeanHud implements Hud {
       m.command!.phase = 'fail'; this.refreshCommandUi(m);
     }
     this.surfaces.tick(this.time);
+    this.assistant.updateUi(frame.dt * 1000);
     this.hasFrame = true;
     this.head.copy(frame.head.position); this.headQuaternion.copy(frame.head.quaternion);
-    const wasTracked = this.handDock.tracked, previousSource = this.handDock.source;
-    this.handDock.update(frame, this.deck, this.deck.wrist, this.deck.width);
-    if (previousSource !== this.handDock.source) this.refreshHome();
-    if (wasTracked && !this.handDock.tracked) this.deckPlacement.reset();
-    this.deck.visible = this.handDock.opacity > 0;
-    this.deck.userData.anchor = this.handDock.source === 'controller' ? 'left-controller' : this.handDock.source === 'mouse' ? 'fallback' : this.handDock.source === 'hand' ? this.handDock.nonDominant : 'none';
-    this.deck.userData.open = this.handDock.open;
-    if (this.handDock.justOpened) { this.showDockHint(); this.coach.visible = false; this.coachUntil = 0; }
-    if (!this.handDock.open) for (const capture of this.captures.values()) {
-      if (capture.widget?.group.userData.dockIcon) {
-        this.releaseDockCapture(capture);
-      }
+    if (frame.pointer !== 'mouse' && frame.hands.left?.controller && frame.hands.left.menuPressed) {
+      this.recenter(); this.setMenuOpen(true);
     }
-    if (frame.frame && !this.coached && !this.handDock.open) {
-      this.coached = true; this.coach.visible = true; this.coachUntil = this.time + 4;
-      this.coachPlacement.reset();
+    // Menu recall is a visible raised-hand gesture, not a hidden wrist-normal
+    // test. The wrist can stay near the chest while extended fingers reach the face.
+    const menuHand = frame.hands.left;
+    this.menuPosture.update(menuHand, frame.time);
+    const wrist = menuHand?.joints.wrist;
+    const tipHeight = Math.max(...['index-finger-tip', 'middle-finger-tip', 'ring-finger-tip', 'pinky-finger-tip']
+      .map(name => menuHand?.joints[name]?.position.y ?? -Infinity));
+    const distance = wrist?.position.distanceTo(this.head) ?? Infinity;
+    const performing = !!this.deviceState?.handControl || !!this.projectView?.running;
+    const movingPanel = [...this.captures.values()].some(capture => capture.widget?.drag);
+    const assistantActive = this.assistantNeedsFocus();
+    const physicalReady = frame.pointer !== 'mouse' && !!menuHand && !menuHand.controller && this.menuPosture.tracked
+      && this.menuPosture.raw === 'open_palm' && !menuHand.pinching && !!wrist
+      && tipHeight >= this.head.y - 0.38 && wrist.position.y >= this.head.y - 0.65 && distance <= 0.95;
+    // Leaving Perform with both open palms must not immediately recall the menu:
+    // lower/close the left hand once before a fresh menu dwell can begin.
+    // Recording, generation and review also keep their surface until an explicit action.
+    if (performing || movingPanel || assistantActive) { this.palmRecallLatched = true; this.palmRecallSince = null; }
+    else if (!physicalReady) { this.palmRecallLatched = false; this.palmRecallSince = null; }
+    else if (!this.palmRecallLatched) this.palmRecallSince ??= frame.time;
+    const progress = !this.palmRecallLatched && this.palmRecallSince !== null ? Math.min(1, Math.max(0, (frame.time - this.palmRecallSince) / 650)) : 0;
+    const reason = performing ? 'performing' : movingPanel ? 'moving-panel' : assistantActive ? 'assistant-active' : frame.pointer === 'mouse' ? 'mouse'
+      : !menuHand || menuHand.controller || !this.menuPosture.tracked ? 'untracked'
+      : menuHand.pinching ? 'pinching' : this.menuPosture.raw !== 'open_palm' ? 'open-left-hand'
+      : distance > 0.95 ? 'bring-hand-closer' : !physicalReady ? 'raise-left-hand' : this.palmRecallLatched ? 'lower-to-rearm' : 'holding';
+    this.root.userData.menuRecall = { reason, progress, raw: this.menuPosture.raw, tracked: this.menuPosture.tracked,
+      palmUp: menuHand?.palmUp ?? false, fingertipHeight: Number.isFinite(tipHeight) ? tipHeight - this.head.y : null,
+      wristHeight: wrist ? wrist.position.y - this.head.y : null, distance: Number.isFinite(distance) ? distance : null };
+    this.deck.setRecallProgress(progress);
+    if (progress >= 1) {
+      this.palmRecallLatched = true; this.palmRecallSince = null;
+      this.deck.setRecallProgress(0); this.recenter(); this.setMenuOpen(true);
     }
-    if (this.time >= this.coachUntil) this.coach.visible = false;
+    this.deck.visible = true;
+    this.deck.userData.anchor = 'world';
     for (const target of this.targets.values()) {
       if (this.home.mode === 'control' && !target.tagged) this.boxes.setOpacity(target.id, 0);
       else if (this.home.mode === 'annotate' && this.boxes.boxes.get(target.id)?.opacity === 0) this.boxes.setOpacity(target.id, 1);
@@ -1182,11 +1589,9 @@ export class LeanHud implements Hud {
       this.boxes.labelQuaternion(this.head, label.position, label.quaternion);
     }
     this.place();
-    this.updateFingerMenu(frame);
-    this.deck.updateFingers(frame, this.handDock.nonDominant, this.handDock.open);
     this.root.updateMatrixWorld(true);
     handCursor('left', frame.hands.left, this.cursors[0]!); handCursor('right', frame.hands.right, this.cursors[1]!);
-    if (this.deviceState?.performingLive) for (const cursor of this.cursors) {
+    if (this.deviceState?.performingLive || this.projectView?.engaged) for (const cursor of this.cursors) {
       if (frame.hands[cursor.hand as 'left' | 'right']?.controller) continue;
       cursor.tracked = false;
       const capture = this.captures.get(cursor.id);
@@ -1194,20 +1599,19 @@ export class LeanHud implements Hud {
     }
     this.cursors[0]!.canPoke &&= !frame.hands.left?.controller;
     this.cursors[1]!.canPoke &&= !frame.hands.right?.controller;
-    for (const cursor of this.cursors) if (this.suppressedHands.has(cursor.hand)) cursor.tracked = false;
+    // Gesture travel stays gesture travel through pickup/tracking pauses. A paused Perform session
+    // still accepts deliberate ray pinches (including its off toggle and the recalled menu).
+    if (this.deviceState?.handControl || this.projectView?.running) for (const cursor of this.cursors) cursor.canPoke = false;
     for (let i = 0; i < this.cursors.length; i++) {
-      const cursor = this.cursors[i]!; let distance = Infinity; this.reticleHits[i] = null;
+      const cursor = this.cursors[i]!; this.reticleHits[i] = null;
       if (!cursor.tracked) continue;
-      for (const widget of this.widgets) {
-        if (!this.interactive(widget, cursor)) continue;
-        const hit = this.hit(widget, cursor);
-        if (hit < distance) {
-          distance = hit;
-          this.reticleHits[i] = this.reticlePoints[i]!.copy(this.local).applyMatrix4(widget.group.matrixWorld);
-          if (widget.button && cursor.ray) {
-            widget.group.getWorldPosition(this.point);
-            if (rayTargetWithinAngle(cursor.ray.origin, cursor.ray.dir, this.point) !== Infinity) this.reticleHits[i]!.copy(this.point);
-          }
+      const captured = this.captures.get(cursor.id)?.widget;
+      const winner = captured && this.interactive(captured, cursor) ? captured : this.resolveTarget(cursor);
+      if (winner && this.hit(winner, cursor, true) !== Infinity) {
+        this.reticleHits[i] = this.reticlePoints[i]!.copy(this.local).applyMatrix4(winner.group.matrixWorld);
+        if (winner.button && cursor.ray) {
+          winner.group.getWorldPosition(this.point);
+          if (rayTargetWithinAngle(cursor.ray.origin, cursor.ray.dir, this.point) !== Infinity) this.reticleHits[i]!.copy(this.point);
         }
       }
     }
@@ -1217,18 +1621,16 @@ export class LeanHud implements Hud {
     for (const cursor of this.devCursors) this.interact(cursor);
     if (this.deck.updateExitHold(frame.time)) this.events.emit('exit', {});
     this.buttonFeedback();
-    this.deck.updateFeedback(this.handDock.opacity);
-    this.deck.setWrist(this.home.mode, this.handDock.wristOpacity);
-    this.dockHint.visible = !this.deck.fingerMenu && !!this.dockHint.text && this.time < this.hintUntil;
-    (this.dockHint as SdfText & { fillOpacity: number }).fillOpacity = this.handDock.opacity;
     if (this.notice.visible && this.time > this.noticeUntil) this.notice.visible = false;
   }
   dispose(): void {
+    this.assistant.disposeUi();
+    this.projectPanel.disposeSpatial();
     this.root.traverse((o) => { if ('sync' in o && 'dispose' in o) (o as SdfText).dispose(); });
-    this.deck.dispose();
     this.helperPairing.dispose();
     this.boxes.dispose();
     this.checkGeometry.dispose(); this.arrowGeometry.dispose(); this.lockGeometry.dispose();
+    this.screenGuideGeometry.dispose(); this.screenGuideMaterial.dispose();
     this.surfaces.dispose();
     this.reticles.dispose();
     this.tether.dispose();

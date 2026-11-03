@@ -18,6 +18,8 @@
             <button id="nav-devices" class="nav-item" type="button" aria-controls="home-view"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="3" width="16" height="11" rx="2" /><path d="M7 18h6m-3-4v4" /></svg>Devices</button>
             <button id="nav-activity" class="nav-item" type="button" aria-controls="activity-view"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M1 10h4l3-7 4 14 3-7h4" /></svg>Activity</button>
             <button id="details-open" class="nav-item" type="button" aria-controls="drawer" aria-expanded="false"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 5-5 5 5 5m8-10 5 5-5 5" /></svg>Details</button>
+            <a class="nav-item" style="display:flex;align-items:center;text-decoration:none" href="/companion/canvas/" target="muse-canvas" rel="noopener"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="3" width="16" height="14" rx="2"/><path d="M2 7h16M6 3v4"/></svg>Muse Canvas</a>
+            <a class="nav-item" style="display:flex;align-items:center;text-decoration:none" href="/companion/tracking/"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4" r="2"/><path d="m4 9 6-2 6 2M10 7v6m0 0-4 5m4-5 4 5"/></svg>Motion lab</a>
           </nav>
         </div>
         <footer class="sidebar-footer">
@@ -38,7 +40,7 @@
             <div id="paired-summary" class="paired-summary" role="status" aria-live="polite" hidden>
               <span class="paired-check" aria-hidden="true">✓</span>
               <p class="paired-title">Paired with Quest 3</p>
-              <p class="onboarding-next">You can leave this page open; the headset uses it to reach your devices.</p>
+              <p id="paired-next" class="onboarding-next">Put on your headset and tag the devices you want to use.</p>
             </div>
             <h1 id="onboarding-title">Pair with your headset</h1>
             <p id="onboarding-next" class="onboarding-next" role="status" aria-live="polite"></p>
@@ -63,7 +65,7 @@
             </section>
           </section>
 
-          <div id="connection-steps" class="connection-steps" hidden><p id="headset-status">Waiting for your headset</p><p id="synth-status">Connect a synth with USB</p></div>
+          <div id="connection-steps" class="connection-steps" hidden><p id="headset-status">Waiting for your headset</p><p id="synth-status"></p></div>
 
           <section id="setup-activity" class="setup-activity panel" aria-labelledby="now-title" hidden>
             <div class="now-top"><h2 id="now-title"><span class="dot accent" aria-hidden="true"></span>Now</h2><button id="setup-stop" type="button" hidden>Stop</button></div>
@@ -71,11 +73,14 @@
             <progress id="setup-progress" max="100" aria-label="Current task progress"></progress>
           </section>
 
+          <section id="setup-workspace" class="setup-workspace panel" hidden></section>
+
           <section id="devices-panel" class="panel devices-panel" aria-labelledby="devices-title">
             <header><h2 id="devices-title">Devices<small>Bridges and targets on this Mac</small></h2></header>
             <div id="home-devices" class="home-devices"></div>
             <div class="midi-permission"><button id="enable-midi" class="primary" type="button" hidden>Allow USB MIDI</button><p id="midi-message" class="small dim" role="status"></p></div>
           </section>
+          <section id="object-canvas" class="object-canvas panel" hidden></section>
         </main>
 
         <section id="drawer" class="details-view" aria-labelledby="details-title" hidden>
@@ -94,6 +99,7 @@
               <div id="links" class="links"></div>
               <div class="connection-details"><div class="bridge-pills" aria-label="Bridge actions"><button id="bridge-midi" class="bridge-pill" type="button" aria-pressed="false" title="Allow USB MIDI">USB MIDI</button><button id="bridge-serial" class="bridge-pill" type="button" aria-pressed="false" title="Connect Cardputer">Cardputer serial</button><button id="bridge-mic" class="bridge-pill" type="button" aria-pressed="false" title="Enable microphone">Microphone</button></div><p id="bridge-msg" class="small dim" role="status" aria-live="polite"></p></div>
             </section>
+            <section class="panel" id="midi-chart-panel"><header><h2>Reviewed MIDI chart<small>For an instrument without a supported chart</small></h2></header><div id="midi-chart-editor" class="midi-chart-editor"></div></section>
             <section class="panel" id="learn-panel" hidden><header><h2>Remote learning<small>Captured buttons</small></h2><div id="learn-actions" class="row"></div></header><div id="learn"></div></section>
           </div>
         </section>
@@ -101,6 +107,7 @@
         <section id="activity-view" class="activity-view" aria-labelledby="activity-title" hidden>
           <header class="view-header"><h1 id="activity-title">Activity</h1><div id="agent-status" class="agent-status" role="status" aria-live="polite" aria-atomic="true"><span id="status-dot" class="dot" aria-hidden="true"></span><span id="status-text">Idle</span></div></header>
           <ul id="device-dots" class="device-dots" aria-label="Paired devices"></ul>
+          <section id="activity-workspace" class="setup-workspace panel" hidden></section>
           <section class="panel"><header><h2>System log</h2><button id="log-clear" class="ghost" type="button">Clear</button></header><pre id="log" class="monitor"></pre></section>
           <section class="panel"><header><h2>MIDI in / out</h2><label class="tiny dim"><input id="midi-clock" type="checkbox" /> Clock</label></header><pre id="midi-monitor" class="monitor"></pre><div id="midi-test-row" class="row monitor-actions"></div></section>
           <section class="panel"><header><h2>Serial · Cardputer</h2><span id="serial-state" class="tiny dim"></span></header><pre id="serial-monitor" class="monitor"></pre></section>

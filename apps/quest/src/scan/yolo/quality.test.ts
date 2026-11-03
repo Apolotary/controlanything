@@ -61,4 +61,10 @@ describe('SAM ownership of live objects', () => {
     expect(claimSamTarget(box, [{ id: 'other', box: [200, 200, 80, 60] }])).toBeUndefined();
     expect(claimSamTarget(box, [{ id: 'other', position: { x: 0.2, y: 0, z: -1 } }], { x: 0, y: 0, z: -1 })).toBeUndefined();
   });
+
+  it('cannot transfer ownership to a different visible object just because their guessed anchors are close', () => {
+    const position = { x: 0, y: 0, z: -1 };
+    expect(claimSamTarget(box, [{ id: 'neighbor', box: [200, 100, 80, 60], position, sizeM: [0.3, 0.2, 0.1] }], position, [0.3, 0.2, 0.1])).toBeUndefined();
+    expect(claimSamTarget(box, [{ id: 'edge-overlap', box: [170, 100, 80, 60], position, sizeM: [0.3, 0.2, 0.1] }], position, [0.3, 0.2, 0.1])).toBeUndefined();
+  });
 });

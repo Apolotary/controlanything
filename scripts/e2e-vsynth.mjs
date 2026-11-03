@@ -180,10 +180,23 @@ async function pinch({ targetId, nodeName, turn = false, fraction }) {
     for (let node = turn ? null : object; node; node = node.parent) {
       if (!node.visible) throw new Error(`HUD node is hidden: ${nodeName}`);
     }
-    const world = object
-      ? fraction === undefined ? object.getWorldPosition(app.desktopCam.position.clone())
-        : object.localToWorld(app.desktopCam.position.clone().set((fraction - 0.5) * object.getObjectByName('button-plate').scale.x, 0, 0))
-      : app.targets.get(targetId)?.position.clone();
+    let world = object ? object.getWorldPosition(app.desktopCam.position.clone()) : app.targets.get(targetId)?.position.clone();
+    if (object && fraction !== undefined) {
+      const plate = object.getObjectByName('button-plate');
+      if (!plate) throw new Error(`HUD control plate not found: ${nodeName}`);
+      const value = Math.max(0, Math.min(1, fraction));
+      const local = app.desktopCam.position.clone().set(0, 0, 0);
+      if (object.userData.archetype === 'knob') {
+        // Match control-shape.ts: clockwise from lower-left to upper-center to lower-right.
+        // Aim at the visible tick radius, outside the center acquisition dead zone.
+        const angle = (value * 1.5 - 0.75) * Math.PI;
+        const radius = plate.scale.x / 2 - 0.009;
+        local.set(Math.sin(angle) * radius, Math.cos(angle) * radius, 0);
+      } else if (object.userData.archetype === 'lever') {
+        local.y = (value - 0.5) * 0.048;
+      } else local.x = (value - 0.5) * plate.scale.x;
+      world = object.localToWorld(local);
+    }
     if (!world) throw new Error(`Target not found: ${targetId}`);
     if (turn) {
       app.emulator.lookAt(world);
@@ -210,6 +223,32 @@ async function pinch({ targetId, nodeName, turn = false, fraction }) {
     await quest.mouse.up();
   }
   await renderedFrames();
+}
+
+async function openMenu() {
+  if (await quest.evaluate(() => window.__ce.hud.root.getObjectByName('main-menu')?.visible)) return;
+  await pinch({ nodeName: 'menu-toggle', turn: true });
+  await waitQuest(() => window.__ce.hud.root.getObjectByName('main-menu')?.visible
+    && window.__ce.hud.deck.userData.open);
+}
+
+async function menuAction(nodeName, options = {}) {
+  await openMenu();
+  const route = await quest.evaluate(nodeName => {
+    const menu = window.__ce.hud.root.getObjectByName('main-menu'), node = menu.getObjectByName(nodeName);
+    if (!node?.userData.menuButton) throw new Error(`Unknown menu action: ${nodeName}`);
+    let visible = true;
+    for (let owner = node; owner; owner = owner.parent) if (!owner.visible) visible = false;
+    return visible ? null : menu.userData.toolsOpen ? 'menu-tools-back' : 'menu-tools';
+  }, nodeName);
+  if (route) await pinch({ nodeName: route, turn: true });
+  await waitQuest(nodeName => {
+    let node = window.__ce.hud.root.getObjectByName(nodeName);
+    if (!node) return false;
+    for (; node; node = node.parent) if (!node.visible) return false;
+    return true;
+  }, nodeName);
+  await pinch({ nodeName, turn: true, ...options });
 }
 
 async function target() {
@@ -332,7 +371,7 @@ async function run() {
     assert.deepEqual((await screenSample()).state, initial.state, 'Tagging must leave the instrument untouched');
   });
   await phase('04-control-mode', async () => {
-    await pinch({ nodeName: 'mode-control', turn: true });
+    await menuAction('mode-control');
     await waitQuest((id) => window.__ce.modes.mode === 'control' && !window.__ce.scanner.active
       && window.__ce.modes.byCard(id)?.connection === 'setup', cardId);
     assert.equal(await quest.evaluate(() => window.__vsynthRequests.some((event) => event.type === 'control.setup')), false);
@@ -353,12 +392,12 @@ async function run() {
       return ['forged', 'arming'].includes(state.state) && state;
     }, PIPELINE_TIMEOUT);
     const state = await target();
-    for (const action of ['cc71', 'pattern0', 'pattern1', 'pattern2']) {
+    for (const action of ['cc71', 'cc21', 'pattern0', 'pattern1', 'pattern2']) {
       assert.equal(state.verification[action], 'pass', `${action} must pass actual camera verification`);
     }
     const results = await quest.evaluate((id) => window.__vsynthEvents.filter((event) =>
       event.type === 'verify.result' && event.payload.cardId === id).map((event) => event.payload), cardId);
-    assert(results.filter((result) => result.pass).length >= 4, 'Require a camera result for all four generated actions');
+    assert(results.filter((result) => result.pass).length >= 5, 'Require a camera result for all five generated actions');
     assert(results.every((result) => result.expected?.sense === 'camera'
       && (!result.pass || result.observed?.sense === 'camera')), 'Visual instrument must use camera evidence only');
     assert.equal(state.driver.transport, 'midi');
@@ -375,7 +414,7 @@ async function run() {
       const ui = window.__vsynthEvents.findLast((event) => event.type === 'ui.spec' && event.payload.cardId === id).payload;
       return window.__ce.hud.specs.get(ui.gen3d.specId).spec.controls;
     }, cardId);
-    assert.equal(controls.filter((control) => !['trigger', 'toggle'].includes(control.kind)).length, 1);
+    assert.equal(controls.filter((control) => !['trigger', 'toggle'].includes(control.kind)).length, 2);
     assert.equal(controls.filter((control) => control.kind === 'trigger').length, 3);
     assert(controls.every((control) => control.armed !== false));
   });
@@ -407,7 +446,7 @@ async function run() {
     console.log(`  laptop screen: mean RGB change ${delta.toFixed(2)}/255 from real HUD CC71 input`);
   });
   await phase('09-stop-resets', async () => {
-    await pinch({ nodeName: 'deck:panic', turn: true });
+    await menuAction('deck:panic');
     await waitQuest(() => window.__vsynthEvents.some((event) => event.type === 'panic') && !window.__ce.pendingArm);
     await until('server disarms the visual synth', async () => !(await target()).armed);
     await sim.waitForFunction((state) => JSON.stringify(window.ceSimDebug.visualSynth.getState()) === JSON.stringify(state), initial.state);

@@ -7,7 +7,10 @@
   </head>
   <body>
     <canvas id="visuals" aria-label="Silent visual synth, controlled by ControlAnything"></canvas>
-    <div id="caption"><span>ControlAnything Visual Synth</span><output id="last-change" aria-live="polite">Ready · Silent visual instrument</output></div>
+    <div id="caption"><span>ControlAnything Visual Synth</span>
+      <output id="last-change" aria-live="polite">Visuals open · Hand control is not enabled yet</output>
+      <p id="setup-guide">In Quest, choose Try visual synth. Visuals open automatically in the paired Mac companion. Complete Set up control and Enable, then ask Muse for forward/back water ripples. Apply the mapping and turn on Perform. Hold your left fist and push/pull your right hand. Release the fist to pause. This instrument is silent.</p>
+    </div>
     <script type="module" src="/src/vsynth/main.ts"></script>
   </body>
 </html>

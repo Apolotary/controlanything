@@ -5,6 +5,7 @@ import { WorldPanel } from '../hud/v2/world-panel';
 
 const HANDS = ['left', 'right'] as const;
 const FORWARD = new Vector3(0, 0, 1);
+const valid = (point: Vector3 | undefined): point is Vector3 => !!point && Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z);
 
 interface HoverTarget {
   position: Vector3;
@@ -12,7 +13,7 @@ interface HoverTarget {
   sizeM: [number, number, number];
 }
 
-/** Shared fingertip and target feedback, plus one optional diagnostic plate. */
+/** Minimal index-fingertip and target feedback; full joint data stays in tracking/recordings. */
 export class HandFeedback {
   readonly root = new Group();
   private readonly geometry = new SphereGeometry(0.006, 8, 6);
@@ -79,7 +80,6 @@ export class HandFeedback {
 
   setAppearance(appearance: { accent: string; showHover: boolean }): void {
     this.idle.color.set(appearance.accent);
-    this.pressed.color.set(appearance.accent);
     this.showHover = appearance.showHover;
     if (!this.showHover) for (const hover of Object.values(this.hovers)) hover.visible = false;
   }
@@ -98,13 +98,15 @@ export class HandFeedback {
   update(f: ShellFrame, diagnostics: Record<Handedness, HandDiagnostics>, calls: number): void {
     for (const side of HANDS) {
       const hand = f.hands[side];
+      if (!hand) this.hovers[side].visible = false;
       const tip = hand?.joints['index-finger-tip'];
       const dot = this.dots[side];
-      dot.visible = Boolean(tip);
-      if (!tip) continue;
-      dot.position.copy(tip.position);
-      dot.material = hand?.pinching ? this.pressed : this.idle;
-      dot.scale.setScalar(hand?.pinching ? 1.25 : 1);
+      dot.visible = valid(tip?.position);
+      if (dot.visible) {
+        dot.position.copy(tip!.position);
+        dot.material = hand?.pinching ? this.pressed : this.idle;
+        dot.scale.setScalar(hand?.pinching ? 1.25 : 1);
+      }
     }
     if (!this.plate) return;
     this.plateAnchor.update(this.plate, f.head, f.time);

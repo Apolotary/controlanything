@@ -1,5 +1,6 @@
 import { applyVisualSynthMidi, createVisualSynthState, isVisualSynthState } from './state.js';
 import type { VisualSynthParameters } from './state.js';
+import { WaterRipples } from './ripples.js';
 
 const vertexSource = `#version 300 es
 void main() {
@@ -14,6 +15,8 @@ uniform vec2 resolution;
 uniform float time;
 uniform vec4 colour; // brightness, hue, saturation, warp
 uniform vec4 shape; // zoom, symmetry, pattern, spare
+uniform vec2 water; // real animation seconds, forward/back depth value
+uniform vec4 ripples[6]; // origin xy, start time, signed strength
 out vec4 outputColour;
 float hash(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
@@ -34,8 +37,38 @@ vec3 hsv(float h, float s, float v) {
   vec3 rgb = clamp(abs(fract(h + vec3(0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
   return v * mix(vec3(1), rgb, s);
 }
+// An analytic water surface: expanding, damped wavefronts with lighting from the
+// surface gradient. Depth CC motion launches the wavefronts; Warp is not involved.
+vec3 waterSurface(vec2 p) {
+  vec2 gradient = vec2(0.0);
+  float height = 0.0;
+  for (int i = 0; i < 6; i++) {
+    float age = max(0.0, water.x - ripples[i].z);
+    vec2 offset = p - ripples[i].xy;
+    float radius = max(.0001, length(offset));
+    float front = radius - age * .72;
+    float envelope = exp(-front * front * 24.0 - age * 1.15);
+    float wave = sin(front * 35.0);
+    float strength = ripples[i].w * envelope;
+    height += wave * strength;
+    gradient += offset / radius * strength * (35.0 * cos(front * 35.0) - 48.0 * front * wave);
+  }
+  vec3 normal = normalize(vec3(-gradient * .52, 1.0));
+  vec3 light = normalize(vec3(-.45, .65, .9));
+  float diffuse = max(0.0, dot(normal, light));
+  float sheen = pow(max(0.0, dot(normal, normalize(light + vec3(0, 0, 1)))), 36.0);
+  float caustic = pow(.5 + .5 * sin(p.x * 7.0 + height * 18.0 + .25 * water.x)
+    * cos(p.y * 9.0 - height * 20.0 - .18 * water.x), 5.0);
+  vec3 deep = vec3(.008, .065, .13), shallow = vec3(.025, .48, .66);
+  vec3 pool = mix(deep, shallow, .18 + .28 * water.y + .28 * diffuse);
+  pool += vec3(.18, .46, .50) * caustic * .18;
+  pool += vec3(.62, .90, 1.0) * sheen * .72;
+  pool *= .45 + colour.x * .75;
+  return pool;
+}
 void main() {
   vec2 p = (gl_FragCoord.xy * 2.0 - resolution) / max(resolution.y, 1.0);
+  if (shape.z > 2.5) { outputColour = vec4(waterSurface(p), 1.0); return; }
   p *= 0.65 + shape.x * 3.2;
   float radius = length(p);
   if (shape.y > 1.5) {
@@ -69,6 +102,8 @@ export interface VisualSynthRenderer {
   reset(): void;
   setState(parameters: VisualSynthParameters): void;
   getState(): VisualSynthParameters;
+  /** Read-only evidence for the actual rendered effect; not a capability or control API. */
+  getWaterDiagnostics(): { pattern: number; depth: number; seconds: number; waves: { x: number; y: number; age: number; strength: number }[] };
   render(nowMs: number): void;
   /** Fixed phase and settled parameters, for camera evidence and screenshot comparisons. */
   renderAt(timeMs: number): void;
@@ -114,14 +149,18 @@ export function createVisualSynth(
     time: gl.getUniformLocation(program, 'time'),
     colour: gl.getUniformLocation(program, 'colour'),
     shape: gl.getUniformLocation(program, 'shape'),
+    water: gl.getUniformLocation(program, 'water'),
+    ripples: gl.getUniformLocation(program, 'ripples[0]'),
   };
   let target = createVisualSynthState();
   let current = { ...target };
   let previousMs: number | null = null;
   let phase = 0;
+  let waterSeconds = 0;
+  const waterRipples = new WaterRipples();
   let frame = 0;
   let disposed = false;
-  const draw = (parameters: VisualSynthParameters, phaseSeconds: number): void => {
+  const draw = (parameters: VisualSynthParameters, phaseSeconds: number, waterTime = waterSeconds): void => {
     if (disposed || gl.isContextLost()) return;
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.useProgram(program);
@@ -129,9 +168,15 @@ export function createVisualSynth(
     gl.uniform1f(uniforms.time, phaseSeconds);
     gl.uniform4f(uniforms.colour, parameters.brightness, parameters.hue, parameters.saturation, parameters.warp);
     gl.uniform4f(uniforms.shape, parameters.zoom, parameters.symmetry, parameters.pattern, 0);
+    gl.uniform2f(uniforms.water, waterTime, parameters.ripple);
+    gl.uniform4fv(uniforms.ripples, waterRipples.data);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   };
-  const change = (parameters: VisualSynthParameters, label: string): void => {
+  const change = (parameters: VisualSynthParameters, label: string, liveMidi = false): void => {
+    // The first activation establishes a baseline. It must not manufacture a
+    // large splash merely because a saved value differs from the initial midpoint.
+    if (liveMidi && parameters.pattern === 3 && target.pattern === 3) waterRipples.push(target.ripple, parameters.ripple, waterSeconds);
+    else if (parameters.pattern !== target.pattern || !liveMidi && parameters.ripple !== target.ripple) waterRipples.reset();
     target = { ...parameters };
     options.onChange?.(label, { ...target });
   };
@@ -139,12 +184,12 @@ export function createVisualSynth(
     receiveMidi(bytes) {
       const result = applyVisualSynthMidi(target, bytes);
       if (!result) return false;
-      if (bytes[0] === 0xff || (bytes[0] & 0xf0) === 0xb0 && [120, 121, 123].includes(bytes[1])) phase = 0;
-      change(result.parameters, result.label);
+      if (bytes[0] === 0xff || (bytes[0] & 0xf0) === 0xb0 && [120, 121, 123].includes(bytes[1])) { phase = waterSeconds = 0; waterRipples.reset(); }
+      change(result.parameters, result.label, true);
       return true;
     },
     reset() {
-      phase = 0;
+      phase = waterSeconds = 0; waterRipples.reset();
       previousMs = null;
       change(createVisualSynthState(), 'Reset · Ready');
     },
@@ -152,6 +197,12 @@ export function createVisualSynth(
       if (isVisualSynthState(parameters)) change(parameters, 'Connected · Ready');
     },
     getState: () => ({ ...target }),
+    getWaterDiagnostics: () => ({ pattern: target.pattern, depth: target.ripple, seconds: waterSeconds,
+      waves: Array.from({ length: 6 }, (_, index) => { const offset = index * 4; return {
+        x: waterRipples.data[offset]!, y: waterRipples.data[offset + 1]!,
+        age: Math.max(0, waterSeconds - waterRipples.data[offset + 2]!), strength: waterRipples.data[offset + 3]!,
+      }; }).filter(wave => Math.abs(wave.strength) > 0 && wave.age >= 0 && wave.age < 6),
+    }),
     render(nowMs) {
       const delta = previousMs === null ? 0 : Math.min(Math.max(nowMs - previousMs, 0), 100);
       previousMs = nowMs;
@@ -159,9 +210,11 @@ export function createVisualSynth(
       const weight = 1 - Math.exp(-delta / (80 / 3));
       for (const key of Object.keys(current) as (keyof VisualSynthParameters)[]) current[key] += (target[key] - current[key]) * weight;
       phase += delta / 1000 * current.speed * 2.5;
+      waterSeconds += delta / 1000;
+      current.pattern = target.pattern; // modes are discrete; never blend through unrelated patterns
       draw(current, phase);
     },
-    renderAt(timeMs) { draw(target, Math.max(0, timeMs) / 1000 * target.speed * 2.5); },
+    renderAt(timeMs) { draw(target, Math.max(0, timeMs) / 1000 * target.speed * 2.5, Math.max(0, timeMs) / 1000); },
     start() {
       if (frame || disposed) return;
       const tick = (nowMs: number): void => {

@@ -16,7 +16,7 @@ import type { StepLog } from './steps';
 import type { TargetStore } from './targets';
 import type { TargetDetection } from './types';
 
-export const DEFAULT_SCAN_PROMPTS = ['electronic device', 'ceiling light', 'synthesizer'];
+export const DEFAULT_SCAN_PROMPTS = ['electronic device', 'ceiling light', 'synthesizer', 'book'];
 export const MIN_SCORE = 0.55;
 /** labels that must never be reported (the prompts never ask for them; this is the belt to those braces) */
 const FORBIDDEN = /person|people|face|hand|body|man|woman|child|human/i;

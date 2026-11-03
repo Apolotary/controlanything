@@ -1,0 +1,11 @@
+.midi-chart-editor { padding: 16px; display: grid; gap: 12px; }
+.midi-chart-editor fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 14px; min-width: 0; }
+.midi-chart-editor label { display: grid; gap: 6px; font-size: 12px; color: var(--muted, #a6afb6); }
+.midi-chart-editor input:not([type=checkbox]), .midi-chart-editor select { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px; border: 1px solid #46505a; border-radius: 6px; background: #151b21; color: #edf3f5; font: inherit; }
+.chart-source-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.chart-parameters { display: grid; gap: 10px; }
+.chart-parameter { display: grid; grid-template-columns: 70px minmax(100px, 1fr) 70px 70px auto; gap: 8px; align-items: end; }
+.chart-review-check { display: flex !important; align-items: start; line-height: 1.5; }
+.chart-review-check input { flex: 0 0 auto; margin-top: 3px; }
+.midi-chart-editor fieldset:disabled { opacity: .6; }
+@media (max-width: 720px) { .chart-source-fields { grid-template-columns: 1fr; } .chart-parameter { grid-template-columns: 65px 1fr; } }

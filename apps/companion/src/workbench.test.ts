@@ -9,15 +9,17 @@ const mocks = vi.hoisted(() => ({
   claim: vi.fn(), attach: vi.fn(), start: vi.fn(), send: vi.fn(), permission: vi.fn(),
   midiEnable: vi.fn(), serialChoose: vi.fn(), serialReconnect: vi.fn(), serialListen: vi.fn(), micStart: vi.fn(),
   replay: vi.fn(),
-  identity: vi.fn(), bridgeOnline: false, serialReady: false,
+  identity: vi.fn(), localPage: true, bridgeOnline: false, serialReady: false,
   leader: true, midiEnabled: false,
+  visualConnected: false, visualChanged: undefined as (() => void) | undefined,
+  visualOpen: vi.fn(() => true), visualUpdate: vi.fn(), visualClose: vi.fn(),
   midiPorts: [] as { id: string; kind: 'midi-out'; name: string; state: 'connected' }[],
 }));
 
 vi.mock('./api', () => ({ api: mocks.api, ApiError: class extends Error {} }));
 vi.mock('./identity', () => ({
   loadIdentity: mocks.identity,
-  clearIdentity: vi.fn(), saveIdentity: vi.fn(), isLocalPage: () => true,
+  clearIdentity: vi.fn(), saveIdentity: vi.fn(), isLocalPage: () => mocks.localPage,
   defaultDevice: () => ({ kind: 'mac', name: 'Mac' }),
 }));
 vi.mock('./replay', () => ({ runReplay: mocks.replay, replayArmResult: vi.fn() }));
@@ -55,6 +57,15 @@ vi.mock('./executor', () => ({
     panicLocal = vi.fn();
   },
 }));
+vi.mock('./visualPresence', () => ({ VisualSynthPresence: class {
+  constructor(_owner: unknown, changed: () => void) { mocks.visualChanged = changed; }
+  connected() { return mocks.visualConnected; }
+} }));
+vi.mock('./visualLauncher', () => ({ VisualSynthLauncher: class {
+  open = mocks.visualOpen;
+  update = mocks.visualUpdate;
+  close = mocks.visualClose;
+} }));
 vi.mock('./midi', () => ({
   MidiBridge: class {
     static supported = true;
@@ -167,6 +178,7 @@ class Element {
 }
 
 let body: Element;
+let documentListeners: Map<string, (() => void)[]>;
 const byId = (id: string) => {
   const element = body.querySelector(`#${id}`);
   if (!element) throw new Error(`Missing companion element: ${id}`);
@@ -195,6 +207,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-11-02T00:00:00Z'));
   body = new Element('body');
+  documentListeners = new Map();
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   for (const match of html.matchAll(/<([a-z][a-z0-9-]*)\b[^>]*\bid="([^"]+)"[^>]*>/g)) {
     const element = new Element(match[1]);
@@ -208,6 +221,7 @@ beforeEach(() => {
   byId('code-form').append(new Element('button'));
   vi.stubGlobal('document', {
     body, visibilityState: 'visible',
+    addEventListener: (type: string, callback: () => void) => documentListeners.set(type, [...(documentListeners.get(type) ?? []), callback]),
     getElementById: (id: string) => body.querySelector(`#${id}`),
     createElement: (tag: string) => new Element(tag),
     createElementNS: (_namespace: string, tag: string) => new Element(tag),
@@ -228,10 +242,12 @@ beforeEach(() => {
   vi.stubGlobal('requestAnimationFrame', (callback: () => void) => setTimeout(callback, 16));
   mocks.permission.mockResolvedValue({ state: 'prompt' });
   mocks.identity.mockReturnValue({ deviceId: 'mac-1', deviceToken: 'owner-token', kind: 'mac', name: 'Mac' });
+  mocks.localPage = true;
   mocks.bridgeOnline = false;
   mocks.serialReady = false;
   mocks.leader = true;
   mocks.midiEnabled = false;
+  mocks.visualConnected = false;
   mocks.midiPorts = [];
   mocks.serialReconnect.mockResolvedValue(false);
   mocks.api.health.mockResolvedValue({ mode: 'live', models: { chat: 'meta-model' }, urls: { lan: [] } });
@@ -254,8 +270,16 @@ async function boot(search = '') {
   const { Connection } = await import('./connection');
   const connection = (Connection as unknown as { instances: { inject(message: { type: string; payload: unknown }): void }[] }).instances.at(-1)!;
   await flush();
-  const emit = async (type: string, payload: unknown) => { connection.inject({ type, payload }); await flush(); };
-  return { emit };
+  const emit = async (type: string, payload: unknown, from = 'server', to?: string) => {
+    const message = { v: 1, id: `test-${Date.now()}`, ts: Date.now(), from, to, type, payload };
+    connection.inject(message); await flush();
+  };
+  const visibility = async (state: 'visible' | 'hidden') => {
+    Object.assign(document, { visibilityState: state });
+    for (const listener of documentListeners.get('visibilitychange') ?? []) listener();
+    await flush();
+  };
+  return { emit, visibility };
 }
 
 async function live() {
@@ -265,13 +289,249 @@ async function live() {
 }
 
 const pairing = () => ({ pairingId: 'pair-1', code: 'K7Q4M2', display: 'K7Q-4M2', name: 'Room remote', kind: 'cardputer', expiresAt: Date.now() + 5000 });
+
+describe('Reviewed MIDI chart editor', () => {
+  const card = { cardId: 'unknown-midi', maker: 'Example', model: 'Instrument A', name: 'Example Instrument A', category: 'synthesizer',
+    confidence: .9, protocols: ['midi'], requires: ['midi'], evidence: [] };
+  const chart = { maker: card.maker, model: card.model, source: { title: 'Instrument A manual', url: 'https://example.com/manual', section: 'MIDI table' },
+    channel: 2, parameters: [{ cc: 74, name: 'Cutoff', min: 10, max: 100 }] };
+  const response = (model = card.model) => ({ card: { ...card, model }, revision: 3,
+    chart: { cardId: card.cardId, revision: 3, reviewedAt: 1, reviewedBy: 'Reviewer', chart } });
+  const input = (host: Element, label: string) => host.querySelectorAll('input').find(item => item.getAttribute('aria-label') === label)!;
+  const consent = (host: Element) => host.querySelectorAll('input').find(item => (item as unknown as { type: string }).type === 'checkbox')!;
+
+  it('requires a fresh review and saves only the selected chart revision without sending control messages', async () => {
+    const { MidiChartPanel } = await import('./ui/midi-chart');
+    const host = new Element();
+    const request = vi.fn().mockResolvedValueOnce(response()).mockResolvedValueOnce({ ...response(), revision: 4 });
+    const panel = new MidiChartPanel(host as unknown as HTMLElement, request);
+    panel.update([card as never], true); await flush();
+    const submit = host.querySelectorAll('button').find(item => item.textContent === 'Save reviewed chart')!;
+    expect(submit.disabled).toBe(true);
+    consent(host).checked = true; await consent(host).fire('change');
+    expect(submit.disabled).toBe(false);
+    await host.querySelector('form')!.fire('submit'); await flush();
+    expect(request).toHaveBeenLastCalledWith('/api/agent/midi-charts', { cardId: card.cardId, expectedRevision: 3, reviewed: true, chart });
+    expect(host.textContent).toContain('Controls remain off');
+    expect(consent(host).checked).toBe(false);
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('does not carry an older model’s chart into a newly identified instrument', async () => {
+    const { MidiChartPanel } = await import('./ui/midi-chart');
+    const host = new Element();
+    const request = vi.fn().mockResolvedValue(response('Instrument B'));
+    new MidiChartPanel(host as unknown as HTMLElement, request).update([{ ...card, model: 'Instrument B' } as never], true);
+    await flush();
+    expect(input(host, 'Source URL').value).toBe('');
+    expect(input(host, 'CC number').value).toBe('');
+    expect(host.textContent).toContain('previous identification');
+  });
+
+  it('ignores stale loads after the target identity changes and rejects a read-only submit', async () => {
+    const { MidiChartPanel } = await import('./ui/midi-chart');
+    const host = new Element(); let finishOld!: (value: unknown) => void;
+    const request = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; })).mockResolvedValue(response('Instrument B'));
+    const panel = new MidiChartPanel(host as unknown as HTMLElement, request);
+    panel.update([card as never], true);
+    panel.update([{ ...card, model: 'Instrument B' } as never], false); await flush();
+    finishOld(response()); await flush();
+    expect(host.textContent).toContain('Instrument B');
+    expect(input(host, 'Source URL').value).toBe('');
+    consent(host).checked = true; await host.querySelector('form')!.fire('submit'); await flush();
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a removed instrument disabled when its pending chart request finishes', async () => {
+    const { MidiChartPanel } = await import('./ui/midi-chart');
+    const host = new Element(); let finish!: (value: unknown) => void;
+    const request = vi.fn().mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const panel = new MidiChartPanel(host as unknown as HTMLElement, request);
+    panel.update([card as never], true); panel.update([], true);
+    finish(response()); await flush();
+    expect(host.querySelector('fieldset')!.disabled).toBe(true);
+    expect(host.textContent).not.toContain('Example · Instrument A');
+    consent(host).checked = true; await host.querySelector('form')!.fire('submit'); await flush();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+});
+
 const pairButton = (name: string) => {
   const button = byId('pending').querySelectorAll('button').find((candidate) => candidate.textContent === name);
   if (!button) throw new Error(`Missing pairing button: ${name}`);
   return button;
 };
 
+describe('Companion Canvas', () => {
+  const document = (cardId = 'book', revision = 1) => ({ canvasId: `canvas-${cardId}`, cardId, revision, source: 'fixture', modelId: 'fixture-canvas',
+    prompt: 'Make an adventure', history: revision > 1 ? [{ revision: 1, title: 'First draft' }] : [], updatedAt: revision,
+    spec: { title: '<script>Book adventure</script>', intro: 'Find the missing bookmark.', objectUse: 'Use the book as inspiration.',
+      rounds: [{ id: 'trail', prompt: 'Where will you look?', choices: [{ id: 'cover', label: 'Inspect the cover', points: 2, feedback: 'You found a clue.' },
+        { id: 'shelf', label: 'Search the shelf', points: 0, feedback: 'No clue here.' }] }], ending: 'The bookmark is back.' } });
+  const game = { phase: 'preview', roundIndex: 0, score: 0, maxScore: 2 };
+  const tags = [{ cardId: 'book', label: 'Book', connection: 'offline' }, { cardId: 'lamp', label: 'Desk lamp', connection: 'ready' }];
+  const paired = async (app: Awaited<ReturnType<typeof boot>>) => app.emit('presence', {
+    devices: [{ deviceId: 'quest', kind: 'quest', name: 'Quest 3', online: true, capabilities: [], ports: [] }],
+  });
+
+  it('keeps the editor collapsed until requested or a game arrives, and respects a later close', async () => {
+    const app = await live(); await paired(app);
+    mocks.send.mockReturnValue(true);
+    await app.emit('tags.state', { tags });
+    expect(byId('canvas-body').hidden).toBe(true);
+    expect(byId('canvas-toggle').getAttribute('aria-expanded')).toBe('false');
+    await byId('canvas-toggle').click();
+    expect(byId('canvas-body').hidden).toBe(false);
+    await byId('canvas-toggle').click();
+    await app.emit('canvas.state', { cardId: 'book', status: 'generating', requestId: 'quest-game' });
+    expect(byId('canvas-body').hidden).toBe(false);
+    await byId('canvas-toggle').click();
+    await app.emit('canvas.state', { cardId: 'book', status: 'ready', document: document(), game });
+    expect(byId('canvas-body').hidden).toBe(true);
+    await byId('canvas-toggle').click();
+    expect(byId('canvas-game-title').textContent).toContain('Book adventure');
+  });
+
+  it('renders plain text, waits for Play, and follows only authoritative shared game state', async () => {
+    const app = await live();
+    await paired(app);
+    mocks.send.mockReturnValue(true);
+    await app.emit('tags.state', { tags });
+    expect(byId('canvas-hint').textContent).toContain('does not need a device connection');
+    expect(mocks.send).toHaveBeenCalledWith('canvas.get', { cardId: 'book' }, { to: 'server' });
+    await app.emit('canvas.state', { cardId: 'book', status: 'ready', document: document(), game });
+    expect(byId('canvas-game-title').textContent).toBe('<script>Book adventure</script>');
+    expect(byId('canvas-game-title').htmlWrites).toEqual([]);
+    expect(byId('canvas-preview').querySelector('script')).toBeNull();
+    expect(byId('canvas-preview').textContent).not.toContain('You found a clue.');
+    expect(byId('canvas-preview').querySelector('#canvas-choices')).toBeNull();
+    expect(byId('canvas-source').textContent).toBe('Fixture demo · fixture-canvas');
+    mocks.send.mockClear();
+    await byId('canvas-play').click(); await flush();
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith('canvas.action', expect.objectContaining({ cardId: 'book', revision: 1, action: 'play' }), { to: 'server' });
+    expect(byId('canvas-play').disabled).toBe(true);
+    expect(byId('canvas-preview').querySelector('#canvas-choices')).toBeNull();
+    await app.emit('canvas.state', { cardId: 'book', requestId: mocks.send.mock.calls.at(-1)![1].requestId, status: 'ready', document: document(), game: { ...game, phase: 'playing' } });
+    expect(byId('canvas-choices').querySelectorAll('button')).toHaveLength(2);
+    expect(byId('canvas-preview').textContent).not.toContain('You found a clue.');
+    await byId('canvas-choice-0').click(); await flush();
+    expect(mocks.send).toHaveBeenLastCalledWith('canvas.action', expect.objectContaining({ action: 'choose', roundId: 'trail', choiceId: 'cover' }), { to: 'server' });
+    await app.emit('canvas.state', { cardId: 'book', requestId: mocks.send.mock.calls.at(-1)![1].requestId, status: 'ready', document: document(), game: { ...game, phase: 'feedback', choiceId: 'cover', score: 2, feedback: 'You found a clue.' } });
+    expect(byId('canvas-feedback').textContent).toBe('You found a clue.');
+    await byId('canvas-next').click(); await flush();
+    expect(mocks.send).toHaveBeenLastCalledWith('canvas.action', expect.objectContaining({ action: 'next', roundId: 'trail' }), { to: 'server' });
+    expect(mocks.midiEnable).not.toHaveBeenCalled(); expect(mocks.micStart).not.toHaveBeenCalled();
+  });
+
+  it('scopes edits and restore to the chosen object, disables generation actions, and removes forgotten games', async () => {
+    const app = await live();
+    await paired(app);
+    mocks.send.mockReturnValue(true);
+    await app.emit('tags.state', { tags });
+    await app.emit('canvas.state', { cardId: 'book', status: 'ready', document: document('book', 2), game });
+    await app.emit('canvas.state', { cardId: 'lamp', status: 'ready', document: document('lamp', 1), game });
+    byId('canvas-object').value = 'lamp'; await byId('canvas-object').fire('change'); await flush();
+    expect(byId('object-canvas').dataset.cardId).toBe('lamp');
+    expect(byId('canvas-restore').hidden).toBe(true);
+    byId('canvas-prompt').value = 'Make this a mystery'; await byId('canvas-prompt').fire('input'); await flush();
+    await byId('canvas-form').fire('submit'); await flush();
+    expect(mocks.send).toHaveBeenLastCalledWith('canvas.request', expect.objectContaining({ cardId: 'lamp', baseRevision: 1, prompt: 'Make this a mystery' }), { to: 'server' });
+    expect(byId('canvas-play').disabled).toBe(true);
+    byId('canvas-object').value = 'book'; await byId('canvas-object').fire('change'); await flush();
+    expect(byId('canvas-prompt').value).toBe('');
+    expect(byId('canvas-restore').hidden).toBe(false);
+    await byId('canvas-restore').click(); await flush();
+    expect(mocks.send).toHaveBeenLastCalledWith('canvas.restore', expect.objectContaining({ cardId: 'book', revision: 1, baseRevision: 2 }), { to: 'server' });
+    await app.emit('tags.state', { tags: [] });
+    expect(byId('canvas-preview').querySelector('#canvas-game-title')).toBeNull();
+    expect(byId('canvas-submit').disabled).toBe(true);
+    await app.emit('canvas.state', { cardId: 'book', status: 'ready', document: document(), game });
+    expect(byId('canvas-preview').querySelector('#canvas-game-title')).toBeNull();
+  });
+
+  it('shows a read-only shared preview with disabled actions and no foreign Cancel or forbidden requests', async () => {
+    mocks.localPage = false;
+    const app = await boot();
+    await app.emit('welcome', { canApprove: false, name: 'Viewer', kind: 'web', deviceId: 'viewer' });
+    await paired(app);
+    await app.emit('tags.state', { tags });
+    await app.emit('canvas.state', { cardId: 'book', status: 'ready', document: document('book', 2), game });
+    expect(byId('canvas-game-title').textContent).toContain('Book adventure');
+    expect(byId('canvas-prompt').disabled).toBe(true);
+    expect(byId('canvas-submit').disabled).toBe(true);
+    expect(byId('canvas-play').disabled).toBe(true);
+    expect(byId('canvas-restore').disabled).toBe(true);
+    expect(byId('canvas-status').textContent).toContain('A room owner');
+    await app.emit('canvas.state', { cardId: 'book', status: 'generating', requestId: 'quest-request', document: document('book', 2), game });
+    expect(byId('canvas-cancel').hidden).toBe(true);
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+});
+
 describe('Calm companion behavior', () => {
+  const workspaceDriver = (cardId = 'visual', deviceId = 'mac-1', label = 'Warp') => ({
+    cardId, driverId: `driver-${cardId}`, transport: 'midi', executor: { deviceId, port: 'ce-visual-synth' },
+    source: 'live', modelId: 'muse-test', provenance: [], actions: [{ actionId: 'warp', label, kind: 'set',
+      range: { min: 0, max: 127 }, encode: { kind: 'midi', msg: 'cc', channel: 1, number: 71, value: '$value' } }],
+  });
+  const openWorkspace = async () => {
+    const app = await live();
+    await app.emit('presence', { devices: [{ deviceId: 'quest', kind: 'quest', name: 'Quest 3', online: true, capabilities: [], ports: [] }] });
+    await app.emit('target.status', { cardId: 'visual', runId: 'run-1', state: 'driving', since: 0, executorDeviceId: 'mac-1' });
+    return app;
+  };
+
+  it('shows real definitions and six stages on Home and Activity using text-only rendering', async () => {
+    const app = await openWorkspace();
+    const label = '</code><script>untrusted()</script>';
+    await app.emit('driver.spec', workspaceDriver('visual', 'mac-1', label));
+    expect(byId('setup-workspace').hidden).toBe(false);
+    expect(byId('setup-workspace-artifact-label').textContent).toBe('Generated driver');
+    expect(byId('setup-workspace-code').textContent).toContain('"number": 71');
+    expect(byId('setup-workspace-code').textContent).toContain(label);
+    expect(byId('setup-workspace-code').htmlWrites).toEqual([]);
+    expect(byId('setup-workspace').querySelector('script')).toBeNull();
+    expect(byId('setup-workspace-stages').querySelectorAll('li')).toHaveLength(6);
+    expect(byId('setup-workspace-source').textContent).toContain('Live');
+    const contents = byId('setup-workspace-code');
+    await app.emit('driver.spec', workspaceDriver('visual', 'mac-1', label));
+    expect(byId('setup-workspace-code')).toBe(contents); // no unchanged DOM rebuild
+    await byId('nav-activity').fire('click'); await flush();
+    expect(byId('setup-workspace').hidden).toBe(true);
+    expect(byId('activity-workspace').hidden).toBe(false);
+    expect(byId('activity-workspace-code').textContent).toContain('"number": 71');
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('does not replace this Mac’s workspace with another executor or a client-origin claim', async () => {
+    const app = await openWorkspace();
+    await app.emit('driver.spec', workspaceDriver());
+    await app.emit('target.status', { cardId: 'other', runId: 'run-other', state: 'driving', since: 0, executorDeviceId: 'another-mac' });
+    await app.emit('driver.spec', workspaceDriver('other', 'another-mac', 'Other device'));
+    await app.emit('target.status', { cardId: 'spoof', runId: 'run-spoof', state: 'driving', since: 0, executorDeviceId: 'mac-1' }, 'another-client');
+    expect(byId('setup-workspace').dataset.cardId).toBe('visual');
+    expect(byId('setup-workspace-code').textContent).toContain('Warp');
+    expect(byId('setup-workspace-code').textContent).not.toContain('Other device');
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('renders streamed interface definitions only when visible and clears cancelled work', async () => {
+    const app = await openWorkspace();
+    await app.emit('driver.spec', workspaceDriver());
+    await app.visibility('hidden');
+    await app.emit('ui.partial', { cardId: 'visual', runId: 'run-1', specId: 'partial-interface', seq: 1 });
+    expect(byId('setup-workspace-artifact-label').textContent).toBe('Generated driver');
+    await app.visibility('visible');
+    expect(byId('setup-workspace-artifact-label').textContent).toBe('Generated interface');
+    expect(byId('setup-workspace-code').textContent).toContain('partial-interface');
+    mocks.send.mockReturnValue(true);
+    await byId('setup-stop').fire('click'); await flush();
+    expect(byId('setup-workspace').hidden).toBe(true);
+    await app.emit('driver.spec', workspaceDriver());
+    expect(byId('setup-workspace').hidden).toBe(true);
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith('control.cancel', { cardId: 'visual', runId: 'run-1' }, { to: 'server' });
+  });
+
   it('opens the short pairing page directly into a QR and code without waiting for health', async () => {
     mocks.identity.mockReturnValue(undefined);
     vi.stubGlobal('location', new URL('http://localhost/companion/?pair=1'));
@@ -294,7 +554,7 @@ describe('Calm companion behavior', () => {
     expect(mocks.api.pairStart).toHaveBeenCalledOnce();
   });
 
-  it('shows pairing confirmation immediately after approval, then keeps the USB steps', async () => {
+  it('shows pairing confirmation immediately after approval without starting USB onboarding', async () => {
     mocks.identity.mockReturnValue(undefined);
     mocks.api.pairStart.mockResolvedValue({ status: 'pending', pairingId: 'p1', code: 'K7Q4M2', display: 'K7Q-4M2', qr: 'https://localhost/p/p1#K7Q4M2', pollSecret: 'secret', expiresAt: Date.now() + 30_000 });
     mocks.api.pairStatus.mockResolvedValue({ status: 'approved', deviceId: 'mac-1', deviceToken: 'saved-token' });
@@ -311,8 +571,13 @@ describe('Calm companion behavior', () => {
     connection.inject({ type: 'presence', payload: { devices: [{ deviceId: 'quest', kind: 'quest', name: 'Quest 3', online: true, capabilities: [], ports: [] }] } });
     await flush();
     expect(byId('paired-summary').hidden).toBe(false);
-    expect(byId('onboarding').dataset.state).toBe('midi-permission');
-    expect(byId('enable-midi').hidden).toBe(false);
+    expect(byId('onboarding').dataset.state).toBe('paired');
+    expect(byId('onboarding-next').textContent).toContain('opens here automatically');
+    expect(byId('paired-next').textContent).toContain('set up and enable controls in Quest');
+    expect(byId('enable-midi').hidden).toBe(true);
+    expect(byId('connection-steps').hidden).toBe(true);
+    expect(byId('setup-activity').hidden).toBe(true);
+    expect(mocks.midiEnable).not.toHaveBeenCalled();
   });
 
   it('reuses the saved token when reloading the short pairing page', async () => {
@@ -324,7 +589,7 @@ describe('Calm companion behavior', () => {
     expect(byId('pairscreen').hidden).toBe(true);
     await app.emit('presence', { devices: [{ deviceId: 'quest', kind: 'quest', name: 'Quest 3', online: true, capabilities: [], ports: [] }] });
     expect(byId('paired-summary').hidden).toBe(false);
-    expect(byId('enable-midi').hidden).toBe(false);
+    expect(byId('enable-midi').hidden).toBe(true);
   });
 
   it('shows a QR for a new Mac joining an existing room and refreshes it after expiry despite poll errors', async () => {
@@ -355,24 +620,33 @@ describe('Calm companion behavior', () => {
     expect(byId('self-retry').hidden).toBe(false);
   });
 
-  it('updates the primary panel on headset connection, USB appearance and unplug', async () => {
+  it('keeps pairing neutral across USB changes, then offers USB help after an explicit setup attempt', async () => {
     const app = await live();
     expect(byId('onboarding').dataset.state).toBe('headset');
     const quest = { deviceId: 'quest', name: 'Quest 3', kind: 'quest', online: true, capabilities: [], ports: [] };
     await app.emit('presence', { devices: [quest] });
-    expect(byId('onboarding').dataset.state).toBe('midi-permission');
-    expect(byId('enable-midi').hidden).toBe(false);
+    expect(byId('onboarding').dataset.state).toBe('paired');
+    expect(byId('enable-midi').hidden).toBe(true);
+    await app.emit('device.card', { cardId: 'synth', name: 'OP-1 Field', protocols: ['midi'], category: 'synthesizer' });
+    expect(byId('onboarding').dataset.state).toBe('paired');
     mocks.midiEnable.mockImplementation(async () => { mocks.midiEnabled = true; });
-    await byId('enable-midi').fire('click');
+    await byId('details-open').fire('click');
+    await byId('bridge-midi').fire('click');
     await flush();
-    expect(byId('onboarding').dataset.state).toBe('usb');
+    await byId('details-close').fire('click');
+    expect(byId('onboarding').dataset.state).toBe('paired');
     mocks.midiPorts = [{ id: 'op1', kind: 'midi-out', name: 'OP-1 Field', state: 'connected' }];
     await app.emit('presence', { devices: [quest] });
-    expect(byId('onboarding-title').textContent).toBe('Set it up from the headset');
+    expect(byId('onboarding-title').textContent).toBe('Paired with Quest 3');
     expect(byId('synth-status').textContent).toBe('OP-1 Field on USB');
     mocks.midiPorts = [];
     await app.emit('presence', { devices: [quest] });
+    expect(byId('onboarding').dataset.state).toBe('paired');
+    await app.emit('agent.step', { stepId: 'link-synth', cardId: 'synth', phase: 'link', status: 'fail', title: 'Plug the synth into your Mac' });
     expect(byId('onboarding').dataset.state).toBe('usb');
+    expect(byId('connection-steps').hidden).toBe(false);
+    await app.emit('mode.state', { mode: 'annotate' });
+    expect(byId('onboarding').dataset.state).toBe('paired');
     expect(mocks.send).not.toHaveBeenCalled();
   });
 
@@ -391,6 +665,169 @@ describe('Calm companion behavior', () => {
     expect(mocks.send).toHaveBeenCalledWith('control.cancel', { cardId: 'synth', runId: 'run-1' }, { to: 'server' });
   });
 
+  it('requests MIDI access only for a synth setup, never for tagging or visual synth setup', async () => {
+    const app = await live();
+    await app.emit('presence', { devices: [{ deviceId: 'quest', name: 'Quest 3', kind: 'quest', online: true, capabilities: [], ports: [] }] });
+    await app.emit('device.card', { cardId: 'visuals', name: 'ControlAnything Visual Synth', protocols: ['midi'], category: 'computer' });
+    await app.emit('agent.step', { stepId: 'link-visuals', cardId: 'visuals', phase: 'link', status: 'running', title: 'Connecting to the visual synth' });
+    await app.emit('target.status', { cardId: 'visuals', executorDeviceId: 'mac-1', state: 'verifying', runId: 'visual-run', since: 0 });
+    expect(byId('onboarding').dataset.state).toBe('paired');
+    expect(byId('enable-midi').hidden).toBe(true);
+    expect(byId('home-devices').textContent).toContain('ControlAnything Visual Synth');
+
+    await app.emit('device.card', { cardId: 'synth', name: 'OP-1 Field', protocols: ['midi'], category: 'synthesizer' });
+    expect(byId('enable-midi').hidden).toBe(true);
+    await app.emit('agent.step', { stepId: 'link-synth', cardId: 'synth', phase: 'link', status: 'fail', title: 'Plug the synth into your Mac' });
+    expect(byId('onboarding').dataset.state).toBe('midi-permission');
+    expect(byId('enable-midi').hidden).toBe(false);
+    expect(mocks.midiEnable).not.toHaveBeenCalled();
+
+    await app.emit('mode.state', { mode: 'annotate' });
+    expect(byId('onboarding').dataset.state).toBe('paired');
+    expect(byId('enable-midi').hidden).toBe(true);
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('keeps Open visuals discoverable after selection and explains explicit headset setup and Perform', async () => {
+    const opened = vi.fn().mockReturnValue(null); vi.stubGlobal('window', { open: opened });
+    const app = await live();
+    await app.emit('device.card', { cardId: 'visuals', name: 'ControlAnything Visual Synth', maker: 'ControlAnything', model: 'Visual Synth', protocols: ['midi'], category: 'synthesizer' });
+    expect(byId('home-devices').querySelectorAll('button').filter((button) => button.textContent === 'Open visuals')).toHaveLength(1);
+    await app.emit('link.result', { cardId: 'visuals', verdict: 'consistent', channel: 'midi', executorDeviceId: 'mac-1', port: { id: 'ce-visual-synth', name: 'ControlAnything Visual Synth' }, evidence: [] });
+    const home = byId('home-devices');
+    expect(home.textContent).toContain('Try visual synth'); expect(home.textContent).toContain('Perform'); expect(home.textContent).toContain('left fist');
+    const open = home.querySelectorAll('button').find((button) => button.textContent === 'Open visuals')!;
+    expect(open).toBeDefined(); await open.click();
+    expect(opened).not.toHaveBeenCalled();
+    expect(mocks.visualOpen).toHaveBeenCalledOnce();
+    await flush();
+    expect(home.textContent).toContain('Opening visuals…');
+    expect(home.textContent).not.toContain('No visual screen was detected');
+    expect(mocks.send).not.toHaveBeenCalled(); expect(mocks.midiEnable).not.toHaveBeenCalled();
+  });
+
+  it('shows only this browser’s canonical visual synth on Home while retaining other cards in Details', async () => {
+    const app = await live();
+    const visual = { maker: 'ControlAnything', model: 'Visual Synth', protocols: ['midi'], category: 'synthesizer' };
+    await app.emit('device.card', { ...visual, cardId: 'visual-synth-current', name: 'Current visual synth', notes: 'virtual:visual-synth:mac-1' });
+    await app.emit('device.card', { ...visual, cardId: 'legacy-visual', name: 'Legacy visual synth' });
+    await app.emit('link.result', { cardId: 'legacy-visual', executorDeviceId: 'mac-1', verdict: 'consistent', channel: 'midi', port: { id: 'ce-visual-synth' }, evidence: [] });
+    await app.emit('device.card', { ...visual, cardId: 'visual-synth-other', name: 'Other visual synth', notes: 'virtual:visual-synth:mac-2' });
+    const home = byId('home-devices');
+    expect(home.querySelectorAll('button').filter((button) => button.textContent === 'Open visuals')).toHaveLength(1);
+    expect(home.textContent).toContain('Current visual synth');
+    expect(home.textContent).not.toContain('Legacy visual synth');
+    expect(home.textContent).not.toContain('Other visual synth');
+    await byId('details-open').click(); await flush();
+    expect(byId('device-card').textContent).toContain('Other visual synth');
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('opens in-page only for an addressed server request and waits for the renderer heartbeat', async () => {
+    const app = await live();
+    await app.emit('visual.open', { requestId: 'wrong-sender' }, 'other-client', 'mac-1');
+    await app.emit('visual.open', { requestId: 'wrong-owner' }, 'server', 'mac-2');
+    expect(mocks.visualOpen).not.toHaveBeenCalled();
+    await app.emit('visual.open', { requestId: 'valid' }, 'server', 'mac-1');
+    expect(mocks.visualOpen).toHaveBeenCalledOnce();
+    expect(byId('home-devices').textContent).toContain('Opening visuals');
+    expect(byId('home-devices').textContent).not.toContain('Visuals ready');
+    mocks.visualConnected = true; mocks.visualChanged?.(); await flush();
+    await app.emit('visual.open', { requestId: 'duplicate' }, 'server', 'mac-1');
+    expect(mocks.visualOpen).toHaveBeenCalledOnce();
+    expect(mocks.midiEnable).not.toHaveBeenCalled();
+  });
+
+  it('does not present another browser’s selected visual synth as this browser’s available instrument', async () => {
+    const app = await live();
+    await app.emit('device.card', { cardId: 'visual-synth-other', name: 'Other visual synth', maker: 'ControlAnything', model: 'Visual Synth', protocols: ['midi'], category: 'synthesizer', notes: 'virtual:visual-synth:mac-2' });
+    await app.emit('target.status', { cardId: 'visual-synth-other', executorDeviceId: 'mac-2', state: 'armed', since: 0 });
+    const home = byId('home-devices');
+    expect(home.textContent).not.toContain('Other visual synth');
+    expect(home.textContent).toContain('Visual synth · Virtual screen · Available');
+    expect(home.querySelectorAll('button').filter((button) => button.textContent === 'Open visuals')).toHaveLength(1);
+  });
+
+  it('withdraws enabled visual controls from Home when their actual renderer disappears', async () => {
+    const app = await live();
+    const cardId = 'visual-synth-current';
+    await app.emit('device.card', { cardId, name: 'Current visual synth', maker: 'ControlAnything', model: 'Visual Synth', protocols: ['midi'], category: 'synthesizer', notes: 'virtual:visual-synth:mac-1' });
+    await app.emit('ui.spec', { specId: 'visual-ui', cardId, title: 'Visual controls', widgets: [], gen3d: { controls: [{ id: 'warp', armed: true }], parts: [] } });
+    await app.emit('target.status', { cardId, executorDeviceId: 'mac-1', state: 'armed', since: 0 });
+    mocks.visualConnected = true; mocks.visualChanged?.(); await flush();
+    expect(byId('home-devices').textContent).toContain('Controls enabled');
+    mocks.visualConnected = false; mocks.visualChanged?.(); await flush();
+    expect(byId('home-devices').textContent).toContain('Unavailable');
+    expect(byId('home-devices').textContent).not.toContain('Controls enabled');
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('explains a missing renderer heartbeat, recovers when one arrives, and withdraws readiness when it disappears', async () => {
+    vi.stubGlobal('window', { open: vi.fn().mockReturnValue(null) });
+    await live();
+    const home = byId('home-devices');
+    await home.querySelectorAll('button').find((button) => button.textContent === 'Open visuals')!.click();
+    await flush();
+    expect(home.textContent).toContain('Opening visuals…');
+    expect(home.textContent).not.toContain('Visuals ready');
+    await vi.advanceTimersByTimeAsync(5000); await flush();
+    expect(home.textContent).toContain('No visual screen was detected');
+    expect(home.textContent).toContain('Bring this paired companion tab to the front');
+    expect(home.textContent).toContain('graphics failed');
+    mocks.visualConnected = true; mocks.visualChanged?.(); await flush();
+    expect(home.textContent).toContain('Visuals ready');
+    expect(home.textContent).not.toContain('No visual screen was detected');
+    mocks.visualConnected = false; mocks.visualChanged?.(); await flush();
+    expect(home.textContent).toContain('Visuals paused');
+    expect(home.textContent).not.toContain('Visuals ready');
+    expect(home.textContent).toContain('Bring it to the front');
+    const { Connection } = await import('./connection');
+    const connection = (Connection as unknown as { instances: { open: boolean }[] }).instances.at(-1)!;
+    connection.open = false;
+    mocks.visualConnected = true; mocks.visualChanged?.(); await flush();
+    expect(home.textContent).toContain('Reconnect this companion to your room');
+    expect(home.textContent).not.toContain('Visuals ready');
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('clears the pending visual-open timeout when the companion page leaves', async () => {
+    let pagehide: (() => void) | undefined;
+    vi.stubGlobal('addEventListener', (type: string, callback: () => void) => { if (type === 'pagehide') pagehide = callback; });
+    vi.stubGlobal('window', { open: vi.fn().mockReturnValue(null) });
+    const app = await live();
+    const home = byId('home-devices');
+    await home.querySelectorAll('button').find((button) => button.textContent === 'Open visuals')!.click();
+    await flush();
+    expect(home.textContent).toContain('Opening visuals…');
+    expect(pagehide).toBeDefined(); pagehide!();
+    await app.visibility('visible');
+    await vi.advanceTimersByTimeAsync(5000); await flush();
+    expect(home.textContent).not.toContain('Opening visuals…');
+    expect(home.textContent).not.toContain('No visual screen was detected');
+  });
+
+  it('advertises the virtual output connected only while this companion owns a visible renderer', async () => {
+    await live();
+    const { Connection } = await import('./connection');
+    const connection = (Connection as unknown as { instances: { hello(): { ports: unknown[] }; resendHello: ReturnType<typeof vi.fn> }[] }).instances.at(-1)!;
+    expect(connection.hello().ports).toContainEqual(expect.objectContaining({ id: 'ce-visual-synth', state: 'disconnected' }));
+    mocks.visualConnected = true; mocks.visualChanged?.(); await flush();
+    expect(connection.hello().ports).toContainEqual(expect.objectContaining({ id: 'ce-visual-synth', state: 'connected' }));
+    expect(connection.resendHello).toHaveBeenCalled(); expect(byId('home-devices').textContent).toContain('Visuals ready');
+    mocks.visualConnected = false; mocks.visualChanged?.(); await flush();
+    expect(connection.hello().ports).toContainEqual(expect.objectContaining({ id: 'ce-visual-synth', state: 'disconnected' }));
+  });
+
+  it('does not call an armed Mac playback panel ready when its visible controls are unverified', async () => {
+    const app = await live();
+    await app.emit('device.card', { cardId: 'laptop', name: 'Apple MacBook', maker: 'Apple', model: 'MacBook', protocols: ['other'], category: 'computer' });
+    await app.emit('target.status', { cardId: 'laptop', executorDeviceId: 'mac-1', state: 'armed', since: 0 });
+    await app.emit('tags.state', { tags: [{ cardId: 'laptop', label: 'MacBook', connection: 'offline', hint: 'Mac audio is disabled in this demo. Playback and speech do not run.' }] });
+    expect(byId('home-devices').textContent).toContain('Mac audio is disabled');
+    expect(byId('home-devices').textContent).toContain('Unavailable');
+    expect(byId('home-devices').textContent).not.toContain('Controls enabled');
+  });
+
   it('shows same-Mac ports in a standby tab while keeping MIDI access disabled', async () => {
     mocks.leader = false;
     const app = await live();
@@ -398,7 +835,7 @@ describe('Calm companion behavior', () => {
       { deviceId: 'quest', name: 'Quest 3', kind: 'quest', online: true, capabilities: [], ports: [] },
       { deviceId: 'mac-1', name: 'Mac', kind: 'mac', online: true, capabilities: ['midi'], ports: [{ id: 'op1', kind: 'midi-out', name: 'OP-1 Field', state: 'connected' }] },
     ] });
-    expect(byId('onboarding').dataset.state).toBe('setup');
+    expect(byId('onboarding').dataset.state).toBe('paired');
     expect(byId('synth-status').textContent).toBe('OP-1 Field on USB');
     expect(byId('enable-midi').hidden).toBe(true);
     expect(mocks.midiEnable).not.toHaveBeenCalled();
@@ -452,7 +889,12 @@ describe('Calm companion behavior', () => {
     expect(connection.hello().capabilities).not.toContain('ir');
   });
   it('keeps replay display-only, including disabled bridge and approval actions', async () => {
+    mocks.identity.mockReturnValue(undefined);
     const app = await boot('?replay=1');
+    expect(byId('onboarding-title').textContent).toBe('Recorded setup demo');
+    expect(byId('onboarding-next').textContent).toContain('display-only demo');
+    expect(byId('home-title').textContent).toBe('Recorded setup demo');
+    for (const id of ['pairscreen', 'headset-open', 'approve-panel', 'enable-midi', 'connection-steps', 'paired-summary']) expect(byId(id).hidden).toBe(true);
     await app.emit('welcome', { canApprove: true });
     await app.emit('pair.pending', pairing());
     for (const id of ['bridge-midi', 'bridge-serial', 'bridge-mic']) {
@@ -738,7 +1180,7 @@ describe('Calm companion behavior', () => {
     expect(mocks.send).not.toHaveBeenCalled();
   });
 
-  it('only shows the ready chips for connected USB outputs and an online headset mic', async () => {
+  it('only shows connection chips for connected USB outputs and an online headset mic', async () => {
     const app = await live();
     expect(byId('home-chips').textContent).toBe('');
     const quest = { deviceId: 'quest', kind: 'quest', name: 'Quest 3', online: true, capabilities: [], ports: [] };
@@ -746,11 +1188,31 @@ describe('Calm companion behavior', () => {
     expect(byId('home-chips').textContent).toBe('');
     mocks.midiPorts = [{ id: 'op1', kind: 'midi-out', name: 'OP-1 Field', state: 'connected' }];
     await app.emit('presence', { devices: [{ ...quest, capabilities: ['mic'] }] });
-    expect(byId('home-chips').textContent).toContain('USB MIDI ready');
+    expect(byId('home-chips').textContent).toContain('USB MIDI connected');
     expect(byId('home-chips').textContent).toContain('Headset mic active');
     mocks.midiPorts = [];
     await app.emit('presence', { devices: [{ ...quest, online: false, capabilities: ['mic'] }] });
     expect(byId('home-chips').textContent).toBe('');
+  });
+
+  it('withdraws live headset status on server disconnect without discarding saved pairing', async () => {
+    const app = await live();
+    const quest = { deviceId: 'quest', kind: 'quest', name: 'Quest 3', online: true, capabilities: ['mic'], ports: [] };
+    await app.emit('presence', { devices: [quest] });
+    expect(byId('home-title').textContent).toBe('Connected to Quest 3');
+    expect(byId('home-chips').textContent).toContain('Headset mic active');
+    const { Connection } = await import('./connection');
+    const connection = (Connection as unknown as { instances: { open: boolean; onState(state: string): void }[] }).instances.at(-1)!;
+    connection.open = false; connection.onState('closed'); await flush();
+    expect(byId('paired-summary').hidden).toBe(false);
+    expect(byId('home-title').textContent).toBe('Waiting for your headset');
+    expect(byId('headset-status').classList.contains('connected')).toBe(false);
+    expect(byId('home-chips').textContent).not.toContain('Headset mic active');
+    expect(byId('paired-next').textContent).toContain('when the server is ready');
+    connection.open = true; connection.onState('open');
+    await app.emit('presence', { devices: [quest] });
+    expect(byId('home-title').textContent).toBe('Connected to Quest 3');
+    expect(mocks.api.pairStart).not.toHaveBeenCalled();
   });
 
   it('stops a local target’s active run and hides Stop when its controls are ready', async () => {
@@ -787,6 +1249,67 @@ describe('Calm companion behavior', () => {
     mocks.send.mockReturnValue(true);
     await byId('setup-stop').fire('click');
     expect(mocks.send).toHaveBeenCalledExactlyOnceWith('control.cancel', { cardId: 'laptop', runId: 'run-laptop' }, { to: 'server' });
+  });
+
+  it('clears corrected-object controls and evidence across reconnect snapshots while preserving other devices', async () => {
+    const app = await live();
+    const oldDriver = { driverId: 'keyboard-driver', cardId: 'object', name: 'Keyboard controls', transport: 'local',
+      executor: { deviceId: 'mac-1' }, provenance: [], actions: [{ actionId: 'play', label: 'Start playback', kind: 'trigger', encode: { kind: 'local', op: 'play' }, verified: 'pass' }] };
+    const oldSpec = { specId: 'keyboard-ui', cardId: 'object', driverId: oldDriver.driverId, title: 'Keyboard controls', widgets: [] };
+    const oldLink = { linkId: 'keyboard-link', cardId: 'object', channel: 'local', verdict: 'confirmed', evidence: [] };
+    const oldEvidence = { evidenceId: 'keyboard-evidence', cardId: 'object', driverId: oldDriver.driverId, actionId: 'play', execId: 'old-send', attempt: 1,
+      sent: { op: { kind: 'local', op: 'play' }, at: Date.now() }, expected: { sense: 'ack', effect: 'any' },
+      observed: { sense: 'ack', metric: 'ack', before: 0, after: 1, delta: 1, threshold: 1 }, pass: true };
+    await app.emit('device.card', { cardId: 'object', name: 'External wired keyboard', maker: 'Unknown', model: 'Keyboard', protocols: ['local'], category: 'computer' });
+    await app.emit('driver.spec', oldDriver); await app.emit('ui.spec', oldSpec);
+    await app.emit('link.result', oldLink); await app.emit('verify.result', oldEvidence);
+    await app.emit('driver.status', { driverId: oldDriver.driverId, cardId: 'object', phase: 'disarmed', actions: [{ actionId: 'play', verified: 'pass' }] });
+    await app.emit('device.card', { cardId: 'other', name: 'Other synth', maker: 'Example', model: 'Other', protocols: ['midi'], category: 'synthesizer' });
+    await app.emit('driver.spec', { driverId: 'other-driver', cardId: 'other', name: 'Other synth', transport: 'midi', executor: { deviceId: 'mac-1' }, provenance: [], actions: [] });
+    await app.emit('ui.spec', { specId: 'other-ui', cardId: 'other', title: 'Other synth controls', widgets: [] });
+    const otherTag = { cardId: 'other', label: 'Other synth', identityRevision: 0, connection: 'setup', specId: 'other-ui' };
+    await app.emit('tags.state', { tags: [{ cardId: 'object', label: 'Keyboard', identityRevision: 0, connection: 'setup', specId: oldSpec.specId }, otherTag] });
+    const select = async (name: string) => {
+      const row = byId('home-devices').querySelectorAll('.device-row').find((candidate) => candidate.textContent.includes(name))!;
+      await row.querySelector('button')!.fire('click'); await flush();
+    };
+    await select('External wired keyboard');
+    expect(byId('code').textContent).toContain(oldDriver.driverId);
+    expect(byId('spec').textContent).toContain(oldSpec.specId);
+    expect(byId('evidence').querySelectorAll('.ev')).toHaveLength(1);
+    await app.emit('device.card', { cardId: 'object', name: 'OP-1 Field', maker: 'Teenage Engineering', model: 'OP-1 Field', protocols: ['midi'], category: 'synthesizer' });
+    await app.emit('target.status', { cardId: 'object', runId: 'corrected-run', state: 'identified', since: Date.now() });
+    const correctedTag = { cardId: 'object', label: 'OP-1 Field', identityRevision: 1, connection: 'setup', hint: 'Review an incoming MIDI chart before setup.' };
+    await app.emit('tags.state', { tags: [correctedTag, otherTag] });
+    expect(byId('device-card').textContent).toContain('OP-1 Field');
+    expect(byId('device-card').textContent).toContain('Owner-confirmed identity');
+    expect(byId('device-card').textContent).not.toContain('Seen by camera');
+    expect(byId('device-card').textContent).not.toContain('Local connected');
+    expect(byId('code').textContent).toContain('No driver yet');
+    expect(byId('spec').textContent).not.toContain(oldSpec.specId);
+    expect(byId('evidence').querySelectorAll('.ev')).toHaveLength(0);
+    expect(byId('home-devices').textContent).toContain('OP-1 Field · USB MIDI · Needs setup');
+
+    // A reconnect and delayed old artifacts cannot restore the previous UI or lower the revision.
+    await app.emit('welcome', { canApprove: true, name: 'Mac', kind: 'mac', deviceId: 'mac-1' });
+    await app.emit('driver.spec', oldDriver); await app.emit('ui.spec', oldSpec);
+    await app.emit('link.result', oldLink); await app.emit('verify.result', oldEvidence);
+    await app.emit('tags.state', { tags: [{ cardId: 'object', label: 'Keyboard', identityRevision: 0, connection: 'ready', specId: oldSpec.specId }, otherTag] });
+    expect(byId('code').textContent).toContain('No driver yet');
+    expect(byId('spec').textContent).not.toContain(oldSpec.specId);
+    expect(byId('evidence').querySelectorAll('.ev')).toHaveLength(0);
+    expect(byId('home-devices').textContent).toContain(correctedTag.hint);
+    await select('Other synth');
+    expect(byId('code').textContent).toContain('other-driver');
+    expect(byId('spec').textContent).toContain('other-ui');
+    await select('OP-1 Field');
+    await app.emit('driver.spec', { ...oldDriver, driverId: 'corrected-driver', name: 'Reviewed Field controls', transport: 'midi', actions: [] });
+    await app.emit('ui.spec', { ...oldSpec, specId: 'corrected-ui', driverId: 'corrected-driver', title: 'Reviewed Field controls' });
+    await app.emit('tags.state', { tags: [{ ...correctedTag, specId: 'corrected-ui' }, otherTag] });
+    expect(byId('code').textContent).toContain('corrected-driver');
+    expect(byId('spec').textContent).toContain('corrected-ui');
+    // Snapshot/focus changes may fetch a saved Canvas; correction never starts controls or setup.
+    expect(mocks.send.mock.calls.map(([type]) => type).filter((type) => type !== 'canvas.get')).toEqual([]);
   });
 
   it('keeps the selected device’s driver, spec and checks separate when action IDs are reused', async () => {

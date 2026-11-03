@@ -209,6 +209,32 @@ async function pinch({ targetId, nodeName, turn = false }) {
   await renderedFrames();
 }
 
+async function openMenu() {
+  if (await quest.evaluate(() => window.__ce.hud.root.getObjectByName('main-menu')?.visible)) return;
+  await pinch({ nodeName: 'menu-toggle', turn: true });
+  await waitQuest(() => window.__ce.hud.root.getObjectByName('main-menu')?.visible
+    && window.__ce.hud.deck.userData.open);
+}
+
+async function menuAction(nodeName, options = {}) {
+  await openMenu();
+  const route = await quest.evaluate(nodeName => {
+    const menu = window.__ce.hud.root.getObjectByName('main-menu'), node = menu.getObjectByName(nodeName);
+    if (!node?.userData.menuButton) throw new Error(`Unknown menu action: ${nodeName}`);
+    let visible = true;
+    for (let owner = node; owner; owner = owner.parent) if (!owner.visible) visible = false;
+    return visible ? null : menu.userData.toolsOpen ? 'menu-tools-back' : 'menu-tools';
+  }, nodeName);
+  if (route) await pinch({ nodeName: route, turn: true });
+  await waitQuest(nodeName => {
+    let node = window.__ce.hud.root.getObjectByName(nodeName);
+    if (!node) return false;
+    for (; node; node = node.parent) if (!node.visible) return false;
+    return true;
+  }, nodeName);
+  await pinch({ nodeName, turn: true, ...options });
+}
+
 async function target() {
   const result = await json(`/api/agent/targets/${encodeURIComponent(cardId)}`);
   assert.notEqual(result.state, 'failed', `Agent failed: ${JSON.stringify(result)}`);
@@ -216,26 +242,51 @@ async function target() {
 }
 
 async function assertDockIcons(mode, canStop = false) {
-  const state = await quest.evaluate(() => {
-    const { hud } = window.__ce;
-    const dock = hud.root.getObjectByName('hand-dock');
-    if (!dock) throw new Error('Hand dock is missing');
-    const icons = [];
-    dock.traverse((node) => {
-      if (!/^(mode-(annotate|control)|filter:(everything|lights|electronics)|deck:panic|exit-ar)$/.test(node.name)) return;
-      for (let current = node; current; current = current.parent) if (!current.visible) return;
-      icons.push(node.name);
-    });
-    return { icons: icons.sort(), anchor: dock.userData.anchor,
-      oldBar: !!hud.root.getObjectByName('home-bar'), oldHint: !!hud.root.getObjectByName('home-hint'),
-      close: !!hud.root.getObjectByName('deck-close') };
+  const pose = await quest.evaluate(() => {
+    const head = window.__ce.emulator.head();
+    return { position: head.position.toArray(), quaternion: head.quaternion.toArray() };
   });
-  const expected = ['mode-annotate', 'mode-control', 'exit-ar'];
-  if (mode === 'annotate') expected.push('filter:everything', 'filter:lights', 'filter:electronics');
+  assert.equal(await quest.evaluate(() => window.__ce.hud.root.getObjectByName('main-menu')?.visible), false,
+    'Menu choices must stay closed until the user opens Menu');
+  await openMenu();
+  const menuState = () => quest.evaluate(() => {
+    const { hud } = window.__ce, menu = hud.root.getObjectByName('main-menu'), choices = [];
+    menu.traverse(node => {
+      if (!node.userData.menuButton) return;
+      for (let owner = node; owner; owner = owner.parent) if (!owner.visible) return;
+      choices.push(node.name);
+    });
+    return { choices: choices.sort(), hasLights: !!hud.root.getObjectByName('filter:lights'), anchor: hud.deck.userData.anchor,
+      mode: window.__ce.modes.mode, menuOpen: hud.deck.userData.open };
+  });
+  const primary = await menuState();
+  const expectedPrimary = ['visual-synth', 'ask-muse-general', 'menu-tools', 'exit-ar', 'menu-close'];
+  if (canStop) expectedPrimary.push('deck:panic');
+  assert.deepEqual(primary.choices, expectedPrimary.sort(), 'Primary menu must emphasize the synth and retain immediate Stop');
+  await pinch({ nodeName: 'menu-tools', turn: true });
+  const state = await menuState();
+  const expected = ['menu-tools-back', 'muse-canvas', 'mode-annotate', mode === 'annotate' ? 'mode-control' : 'change-device',
+    'identify-area', 'helper-pair', 'menu-recenter', 'exit-ar', 'menu-close'];
+  if (mode === 'annotate' && !canStop) expected.push('filter:everything', 'filter:electronics');
   if (canStop) expected.push('deck:panic');
-  assert.deepEqual(state.icons, expected.sort(), `${mode} dock must expose only its available actions`);
-  assert.equal(state.anchor, 'fallback', 'Mouse emulator input must use the fallback dock');
-  assert.equal(state.oldBar || state.oldHint || state.close, false, 'The old bar, permanent hint, and Close button must be removed');
+  assert.deepEqual(state.choices, expected.sort(), `${mode} secondary menu must expose only its available actions`);
+  assert.equal(state.hasLights, false, 'Menu must omit the unsupported Lights-only detector filter');
+  assert.equal(state.anchor, 'world', 'Mouse emulator input must use the world-locked Menu pill');
+  assert.equal(state.mode, mode, 'Opening Menu must preserve the current mode');
+  assert.equal(state.menuOpen, true);
+  await quest.evaluate(() => {
+    const app = window.__ce;
+    app.emulator.lookAt(app.hud.root.getObjectByName('main-menu').getWorldPosition(app.desktopCam.position.clone()));
+  });
+  await renderedFrames();
+  await screenshot(`${currentPhase}-menu-open`);
+  await pinch({ nodeName: 'menu-close', turn: true });
+  await waitQuest(() => !window.__ce.hud.root.getObjectByName('main-menu')?.visible);
+  await quest.evaluate((pose) => {
+    const app = window.__ce, head = app.emulator.head();
+    app.emulator.setHead(head.position.fromArray(pose.position), head.quaternion.fromArray(pose.quaternion));
+  }, pose);
+  await renderedFrames();
 }
 
 async function run() {
@@ -323,7 +374,7 @@ async function run() {
     assert.equal(await sim.evaluate(() => window.ceSim.lamp().power), 'off');
   });
   await phase('05-control-mode', async () => {
-    await pinch({ nodeName: 'mode-control', turn: true });
+    await menuAction('mode-control');
     await waitQuest(() => window.__ce.modes.mode === 'control' && !window.__ce.scanner.active);
     await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'setup', cardId);
     await assertDockIcons('control');

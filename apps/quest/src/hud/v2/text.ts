@@ -21,7 +21,7 @@ export interface SdfTextOptions {
 }
 export type SdfText = Text;
 const headless = typeof document === 'undefined';
-const textMaterial = new MeshBasicMaterial({ color: THEME.color.text, transparent: true, depthWrite: false, toneMapped: false });
+const textMaterial = new MeshBasicMaterial({ color: THEME.color.text, transparent: true, depthTest: false, depthWrite: false, toneMapped: false });
 
 // Exact bundled Latin glyph coverage. An unsupported name must never ask Troika's CDN fallback.
 const unsupportedGlyphs = /[^\t\n\r\u0020-\u007e\u00a0-\u00ac\u00ae-\u00ff\u0131\u0152-\u0153\u02bb-\u02bc\u02c6\u02da\u02dc\u0300-\u0301\u0303-\u0304\u0308-\u0309\u0323\u2002\u2009\u200b\u2013-\u2014\u2018-\u201a\u201c-\u201e\u2022\u2026\u2032-\u2033\u2039-\u203a\u2044\u20ac\u2122\u2191\u2193\u2212\ufeff]/gu;

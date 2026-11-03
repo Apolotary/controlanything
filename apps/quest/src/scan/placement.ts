@@ -1,7 +1,7 @@
 /**
  * 2D detection → 3D placement (research/04 §3): a ray from the CAPTURE camera pose through the box centre,
  * then depth from (in order) a WebXR hit test, the emulator's virtual room, or a size prior along the ray
- * (marked unconfirmed, drawn dashed, until the user refines it with a pinch).
+ * (marked unconfirmed; selecting a candidate does not measure its depth).
  */
 import { Vector3 } from 'three';
 import type { Det } from '../io/v1';
@@ -113,7 +113,8 @@ const PERSON = /\b(person|people|human|man|woman|men|women|child|kid|face|head|b
  */
 export function rejectReason(det: Det, rec: FrameRecord): string | null {
   if (PERSON.test(det.label) || (det.prompt && PERSON.test(det.prompt))) return 'person or body part';
-  const area = (det.box[2] * det.box[3]) / (rec.width * rec.height);
+  const cropArea = rec.region ? (rec.region[2] - rec.region[0]) * (rec.region[3] - rec.region[1]) : 1;
+  const area = (det.box[2] * det.box[3]) / (rec.width * rec.height) * cropArea;
   if (area > 0.6) return 'covers over 60 % of the frame';
   const joints = rec.handJoints.flatMap((joint) => {
     const px = worldToPixel(joint, rec.intrinsics, rec.cam);

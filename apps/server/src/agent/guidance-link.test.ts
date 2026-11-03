@@ -1,6 +1,7 @@
 import type { DeviceCardPayload, DeviceInfo, Driver, PayloadOf, SenseResultPayload, TargetState } from '@ce/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MidiProfile } from '../devices/profiles';
+import { MidiChartStore } from '../devices/midi-charts';
 import type { MuseChat } from '../muse/adapter';
 import { encodeJpeg } from '../oracle/image';
 import type { WebSearcher } from '../research/websearch';
@@ -36,11 +37,11 @@ class TestHub {
 }
 
 const midiCard: DeviceCardPayload = {
-  cardId: 'synth', name: 'OP-1', maker: 'Teenage Engineering', model: 'OP-1', category: 'synthesizer',
+  cardId: 'synth', name: 'OP-1 Field', maker: 'Teenage Engineering', model: 'OP-1 Field', category: 'synthesizer',
   confidence: 0.9, protocols: ['midi'], requires: ['midi'], evidence: ['Label on device'],
 };
 const profile: MidiProfile = {
-  id: 'op-1-field', device: 'OP-1', manufacturer: 'Teenage Engineering', sources: [],
+  id: 'op-1-field', device: 'OP-1 Field', manufacturer: 'Teenage Engineering', sources: [],
   usb: { portNameHint: 'OP-1' }, parameters: [{ name: 'Parameter', cc: 1, range: [0, 127] }],
 };
 const midiDriver: Driver = {
@@ -133,6 +134,20 @@ describe('MIDI connection readiness', () => {
     expect(verifyDriver).toHaveBeenCalledTimes(1);
     expect(target.armed).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not add a SysEx identity probe to an explicitly reviewed CC-only chart', async () => {
+    const { target, deps, exec } = loopSetup();
+    const charts = new MidiChartStore();
+    charts.review(midiCard, { maker: midiCard.maker, model: midiCard.model, channel: 1,
+      source: { title: 'Reviewed manual', url: 'https://example.com/manual', section: 'CC chart' },
+      parameters: [{ cc: 1, name: 'Parameter', min: 0, max: 127 }],
+    }, 0, 'Owner');
+    deps.midiCharts = charts;
+    await runLoop(deps, target);
+    expect(verifyDriver).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(tryLink).mock.calls.every((call) => call[3].probeIdentity === false)).toBe(true);
+    expect(exec).not.toHaveBeenCalled();
   });
 
   it.each([true, false])('uses the headset microphone when available (%s) and describes the actual sensor', async (headsetOnline) => {

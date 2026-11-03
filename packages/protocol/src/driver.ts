@@ -240,7 +240,7 @@ export const DriverAction = z.object({
   label: z.string().min(1).max(40),
   kind: ActionKind,
   description: z.string().max(300).optional(),
-  /** "set" only: the control's value range; the server maps it onto the encode's domain */
+  /** "set" only: control value range. MIDI CC uses wire-value bounds; other ops map onto the encode's domain. */
   range: ActionRange.optional(),
   /** Mapping from a normalized gesture to this action's range. */
   curve: z.enum(['linear', 'exponential', 'step']).optional(),

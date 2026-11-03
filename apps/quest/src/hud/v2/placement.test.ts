@@ -1,205 +1,259 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { Matrix4, PerspectiveCamera, Quaternion, Scene, Vector3, type WebGLRenderer } from 'three';
-import { EXAMPLES } from '@ce/gen3d';
-import type { Hud, HudTarget } from '../contract';
+import { Euler, PerspectiveCamera, Quaternion, Scene, Vector3, type Object3D, type WebGLRenderer } from 'three';
+import type { HandState, Hud, HudFrame, HudTarget } from '../contract';
 import { createHud } from './index';
-import { CardPlacement } from './comfort';
-import { THEME } from './theme';
+import { makeGestureHand, moveHand, setPosture } from '../../gestures/fixtures.test-support';
 
 const UP = new Vector3(0, 1, 0);
-const target: HudTarget = {
-  id: 'lamp', tagged: true, connection: 'ready', label: 'Ceiling light', status: 'scanned', position: [0.4, 2.4, -3],
-  confirmed: true, facing: [0, 0, 1], sizeM: [0.3, 0.2, 0.05],
-};
+const target: HudTarget = { id: 'lamp', tagged: true, connection: 'ready', label: 'Ceiling light', status: 'scanned',
+  position: [0.4, 0.4, -3], confirmed: true, facing: [0, 0, 1], sizeM: [0.3, 0.2, 0.05] };
 const instances: Hud[] = [];
-
-function setup(kind: 'idle' | 'card' | 'modal' = 'idle') {
-  const camera = new PerspectiveCamera();
-  const hud = createHud({ scene: new Scene(), camera, renderer: {} as WebGLRenderer });
-  instances.push(hud);
+function setup(kind: 'idle' | 'card' | 'modal' | 'menu' = 'idle', nonDominant: 'left' | 'right' = 'left') {
+  const hud = createHud({ scene: new Scene(), camera: new PerspectiveCamera(), renderer: {} as WebGLRenderer, nonDominant }); instances.push(hud);
   hud.setHome?.({ mode: 'control', filter: 'electronics', tagged: 1, status: 'Choose a device' });
   const head = { position: new Vector3(0, 1.6, 0), quaternion: new Quaternion() };
   if (kind === 'card') { hud.upsertTarget(target); hud.setLocked(target.id); }
   if (kind === 'modal') hud.showConfirm({ id: 'allow', title: 'Allow device control' });
-  const panel = hud.root.getObjectByName(kind === 'modal' ? 'confirmation-panel' : kind === 'idle' ? 'hand-dock' : 'device-card')!;
-  const update = (time: number) => hud.update({ time, dt: 1 / 72, pointer: 'mouse', head, hands: {} });
-  return { hud, head, panel, update };
+  if (kind === 'menu') hud.setDeck({ open: true });
+  const node = (name: string) => hud.root.getObjectByName(name)!;
+  const panel = node(kind === 'modal' ? 'confirmation-panel' : kind === 'menu' ? 'main-menu' : kind === 'idle' ? 'hand-dock' : 'device-card');
+  const update = (time: number, hands: HudFrame['hands'] = {}, tracked = false) => hud.update({ time, dt: 1 / 72, ...(tracked ? {} : { pointer: 'mouse' as const }), head, hands });
+  return { hud, head, panel, node, update };
 }
+function local(panel: Object3D, head: HudFrame['head']): Vector3 { return panel.position.clone().sub(head.position).applyQuaternion(head.quaternion.clone().invert()); }
+afterEach(() => instances.splice(0).forEach((hud) => hud.dispose()));
 
-function projectedBounds(panel: Hud['root'], head: { position: Vector3; quaternion: Quaternion }, width: number, height: number) {
-  const inverse = head.quaternion.clone().invert();
-  const corners = [-1, 1].flatMap((x) => [-1, 1].map((y) => {
-    const point = new Vector3(x * width / 2, y * height / 2, 0).applyQuaternion(panel.quaternion)
-      .add(panel.position).sub(head.position).applyQuaternion(inverse);
-    return { x: point.x / -point.z, y: point.y / -point.z, front: point.z < -0.01 };
-  }));
-  return { bottom: Math.min(...corners.map((p) => p.y)), top: Math.max(...corners.map((p) => p.y)),
-    left: Math.min(...corners.map((p) => p.x)), right: Math.max(...corners.map((p) => p.x)),
-    inView: corners.every((point) => point.front && Math.abs(point.x) < 1 && Math.abs(point.y) < 1) };
-}
-
-afterEach(() => { for (const hud of instances.splice(0)) hud.dispose(); });
-
-describe('HUD world placement', () => {
-  it('uses the first frame pose instead of the constructor camera pose', () => {
-    const { head, panel, update } = setup();
-    head.position.set(2, 1.75, 3);
-    head.quaternion.setFromAxisAngle(UP, Math.PI / 4);
-    update(0);
-    const expected = new Vector3(-0.24, -0.4, -0.6).applyQuaternion(head.quaternion).add(head.position);
-    expect(panel.position.distanceTo(expected)).toBeLessThan(1e-6);
-    expect(panel.quaternion.angleTo(head.quaternion)).toBeLessThan(1e-6);
+describe('comfortable and explicitly recoverable HUD placement', () => {
+  it('uses the first headset pose and keeps navigation above the desk even when looking down', () => {
+    const f = setup('card'); f.head.position.set(2, 1.2, 3); f.head.quaternion.setFromEuler(new Euler(-0.9, Math.PI / 4, 0, 'YXZ')); f.update(0);
+    const launcher = f.node('hand-dock');
+    expect(launcher.position.y).toBeCloseTo(f.head.position.y - 0.06 + 0.378);
+    expect(f.panel.position.y).toBeCloseTo(f.head.position.y - 0.06);
+    expect(f.panel.position.distanceTo(f.head.position)).toBeCloseTo(Math.hypot(0.65, 0.06));
+    expect(new Vector3(0, 1, 0).applyQuaternion(f.panel.quaternion).distanceTo(UP)).toBeLessThan(1e-6);
+    const position = launcher.position.clone(); f.hud.upsertTarget({ ...target, position: [2, -4, 2] }); f.update(300);
+    expect(launcher.position).toEqual(position);
   });
 
-  it.each(['idle', 'card', 'modal'] as const)('keeps the %s panel fixed during short looks away and small head movements', (kind) => {
-    const { head, panel, update } = setup(kind);
-    update(0);
-    const position = panel.position.clone(), rotation = panel.quaternion.clone();
-    head.position.x = 0.1;
-    head.quaternion.setFromAxisAngle(UP, 0.15);
-    update(100);
-    update(2000);
-    expect(panel.position.equals(position)).toBe(true);
-    expect(panel.quaternion.equals(rotation)).toBe(true);
-    head.quaternion.setFromAxisAngle(UP, Math.PI / 2);
-    update(2100);
-    update(3600);
-    expect(panel.position.equals(position)).toBe(true);
-    expect(panel.quaternion.equals(rotation)).toBe(true);
-    head.quaternion.identity();
-    update(3601);
-    update(5000);
-    expect(panel.position.equals(position)).toBe(true);
-    expect(panel.quaternion.equals(rotation)).toBe(true);
+  it.each(['idle', 'card', 'modal', 'menu'] as const)('keeps the open %s fixed through long looks and a step while reaching', (kind) => {
+    const f = setup(kind); f.update(0); const position = f.panel.position.clone(), rotation = f.panel.quaternion.clone();
+    f.head.position.x = 0.9; f.head.quaternion.setFromAxisAngle(UP, Math.PI / 2); f.update(100); f.update(1700); f.update(4000);
+    expect(f.panel.position).toEqual(position); expect(f.panel.quaternion.toArray()).toEqual(rotation.toArray());
+    f.hud.recenter?.(); f.update(4010);
+    expect(f.panel.position.distanceTo(position)).toBeGreaterThan(0.3);
+    expect(Math.abs(local(f.panel, f.head).x)).toBeLessThan(1e-6); expect(local(f.panel, f.head).z).toBeLessThan(-0.64);
   });
 
-  it.each(['idle', 'card', 'modal'] as const)('recentres the %s panel after a sustained look away without chasing the head during the transition', (kind) => {
-    const { head, panel, update } = setup(kind);
-    update(0);
-    const position = panel.position.clone();
-    head.quaternion.setFromAxisAngle(UP, Math.PI / 2);
-    update(100);
-    update(1600);
-    expect(panel.position.equals(position)).toBe(true);
-    update(1601);
-    expect(panel.position.equals(position)).toBe(true);
-    head.position.x = 0.1;
-    head.quaternion.setFromAxisAngle(UP, Math.PI);
-    update(1751);
-    const distance = kind === 'card' ? THEME.card.dockDistance : 0.6;
-    const lateral = kind === 'idle' ? -0.24 : 0;
-    expect(panel.position.x).toBeCloseTo((position.x - distance) / 2);
-    expect(panel.position.z).toBeCloseTo((position.z - lateral) / 2);
-    update(1901);
-    expect(panel.position.x).toBeCloseTo(-distance);
-    expect(panel.position.z).toBeCloseTo(-lateral);
-    expect(panel.quaternion.angleTo(new Quaternion().setFromAxisAngle(UP, Math.PI / 2))).toBeLessThan(1e-6);
+  it.each(['card', 'menu'] as const)('allows an explicit title drag of the %s and retains that placement after release', (kind) => {
+    const f = setup(kind); f.update(0); f.update(300);
+    const handle = f.node(kind === 'card' ? 'device-drag' : 'menu-drag');
+    const origin = f.panel.position.clone(), point = handle.getWorldPosition(new Vector3());
+    const hand = (at: Vector3, pressed = false, just = false, released = false): HandState => ({
+      controller: true, joints: {}, pinchPoint: new Vector3(10, 10, 10), pinching: pressed, justPinched: just, justReleased: released,
+      ray: { origin: f.head.position.clone(), dir: at.clone().sub(f.head.position).normalize() },
+    });
+    f.update(400, { right: hand(point) }); f.update(420, { right: hand(point, true, true) });
+    const moved = point.clone().add(new Vector3(0.12, 0.04, 0));
+    f.update(600, { right: hand(moved, true) }); f.update(700, { right: hand(moved, false, false, true) });
+    expect(f.panel.position.x - origin.x).toBeCloseTo(0.12, 2);
+    expect(f.panel.position.y - origin.y).toBeCloseTo(0.04, 2);
+    const settled = f.panel.position.clone(); f.head.quaternion.setFromAxisAngle(UP, 0.6); f.update(5000);
+    expect(f.panel.position).toEqual(settled);
   });
 
-  it('smoothly recentres the fallback dock after a step exceeds .75m', () => {
-    const { head, panel, update } = setup();
-    update(0);
-    head.position.x = 0.75;
-    update(100);
-    expect(panel.position.x).toBe(-0.24);
-    head.position.x = 0.8;
-    update(200);
-    expect(panel.position.x).toBe(-0.24);
-    update(350);
-    expect(panel.position.x).toBeCloseTo(0.4 - 0.24);
-    update(500);
-    expect(panel.position.x).toBeCloseTo(0.8 - 0.24);
-    expect(panel.position.z).toBeCloseTo(-0.6);
+  it('keeps a direct title-edge drag from being stolen by nearby Ask Muse button assistance', () => {
+    const f = setup('card'); f.update(0); f.update(300);
+    let asks = 0; f.hud.on('assistantTalk', () => asks++);
+    const handle = f.node('device-drag'), origin = f.panel.position.clone();
+    const point = handle.localToWorld(new Vector3(0, 0.016, 0));
+    const hand = (at: Vector3, pressed = false, just = false, released = false): HandState => ({
+      controller: true, joints: {}, pinchPoint: new Vector3(10, 10, 10), pinching: pressed, justPinched: just, justReleased: released,
+      ray: { origin: f.head.position.clone(), dir: at.clone().sub(f.head.position).normalize() },
+    });
+    f.update(400, { right: hand(point) }); f.update(420, { right: hand(point, true, true) });
+    const moved = point.clone().add(new Vector3(0.12, 0.04, 0));
+    f.update(600, { right: hand(moved, true) }); f.update(700, { right: hand(moved, false, false, true) });
+    expect(asks).toBe(0);
+    expect(f.panel.position.x - origin.x).toBeCloseTo(0.12, 2);
+    expect(f.panel.position.y - origin.y).toBeCloseTo(0.04, 2);
   });
 
-  it('holds the device card across head movement, target updates and arming, then anchors a newly selected target', () => {
-    const { hud, head, panel, update } = setup('card');
-    const spec = { ...EXAMPLES['ceiling-dimmer']!, specId: 'lamp-controls', state: { armed: false } };
-    hud.renderSpec(spec, { targetId: target.id });
-    update(0);
-    const position = panel.position.clone(), rotation = panel.quaternion.clone();
-    head.position.x = 0.15;
-    head.quaternion.setFromAxisAngle(UP, Math.PI / 4);
-    update(100);
-    hud.upsertTarget({ ...target, position: [0.1, 1.6, -0.2], status: 'verified' });
-    hud.setArmed(spec.specId, true);
-    hud.setLocked(target.id);
-    update(300);
-    expect(panel.position.equals(position)).toBe(true);
-    expect(panel.quaternion.equals(rotation)).toBe(true);
-    const next = { ...target, id: 'second-lamp', position: [2, 2.4, -3] as [number, number, number] };
-    hud.upsertTarget(next);
-    hud.setLocked(next.id);
-    update(400);
-    const expected = new Vector3(), nextRotation = new Quaternion();
-    new CardPlacement().place(head.position, new Vector3(...next.position), next.sizeM![0], expected, nextRotation);
-    expect(panel.position.distanceTo(expected)).toBeLessThan(1e-6);
-    expect(panel.quaternion.angleTo(nextRotation)).toBeLessThan(1e-6);
+  it('does not jump the controls when a conversation opens, changes state, or is dismissed', () => {
+    const f = setup('card'); f.update(300); const origin = f.panel.position.clone();
+    f.head.quaternion.setFromAxisAngle(UP, 0.4); f.head.position.x += 0.2;
+    f.hud.setAssistant?.({ targetId: target.id, state: 'thinking', transcript: 'Use my hand depth' }); f.update(600);
+    expect(f.node('assistant-panel').position).toEqual(origin);
+    f.hud.setAssistant?.({ targetId: target.id, state: 'error', text: 'No new mapping was applied.' }); f.update(800);
+    f.hud.setAssistant?.(null); f.update(1000); expect(f.panel.position).toEqual(origin);
   });
 
-  it('holds the open card and fallback dock through a sustained 20 degree turn', () => {
-    const { hud, head, panel, update } = setup('card');
-    update(200);
-    const dock = hud.root.getObjectByName('hand-dock')!;
-    expect(dock.userData.anchor).toBe('fallback');
-    expect(dock.userData.width).toBeGreaterThan(0);
-    expect(dock.userData.height).toBe(0.032);
-    const cardPosition = panel.position.clone(), dockPosition = dock.position.clone();
-    head.quaternion.setFromAxisAngle(UP, 20 * Math.PI / 180);
-    for (let time = 300; time <= 3000; time += 100) update(time);
-    expect(panel.position).toEqual(cardPosition);
-    expect(dock.position).toEqual(dockPosition);
-    expect(Math.abs(panel.position.z - dock.position.z)).toBeGreaterThanOrEqual(0.01);
-    expect(projectedBounds(dock, head, dock.userData.width, dock.userData.height).top)
-      .toBeLessThan(projectedBounds(panel, head, 0.4, 0.32).bottom);
+  it.each(['left', 'right'] as const)('recalls with the left palm even when the non-dominant hand is %s, and keeps Exit AR reachable', (nonDominant) => {
+    const f = setup('idle', nonDominant); f.update(0); f.head.quaternion.setFromAxisAngle(UP, Math.PI / 2);
+    const palm = makeGestureHand('open_palm'); moveHand(palm, -0.3, 1.5, 0);
+    palm.palmUp = true; palm.palmUpMs = 700;
+    palm.pinchPoint.set(10, 10, 10); palm.ray.origin.set(10, 10, 10);
+    f.update(50, { right: palm }, true);
+    expect(f.node('main-menu').visible).toBe(false);
+    f.update(100, { left: palm }, true); f.update(750, { left: palm }, true);
+    const menu = f.node('main-menu'); expect(menu.visible).toBe(true); expect(Math.abs(local(menu, f.head).x)).toBeLessThan(1e-6);
+    const anchored = menu.position.clone(); f.head.position.x += 0.1; f.head.quaternion.identity(); f.update(3000, { left: palm }, true);
+    expect(menu.position).toEqual(anchored);
+    f.hud.setDeck({ open: false }); f.update(3010, {}, true); f.update(3020, { left: palm }, true);
+    expect(menu.visible).toBe(false); // Reacquired hands must complete a fresh open-palm dwell.
+    setPosture(palm, 'fist'); f.update(3030, { left: palm }, true); setPosture(palm, 'open_palm'); f.update(3040, { left: palm }, true); f.update(3700, { left: palm }, true);
+    expect(menu.visible).toBe(true); expect(menu.position).not.toEqual(anchored);
+    menu.updateMatrixWorld(true);
+    const exit = f.node('exit-ar').getWorldPosition(new Vector3()).sub(f.head.position);
+    expect(exit.y).toBeGreaterThan(-0.25); expect(exit.length()).toBeLessThan(0.9);
+  });
 
-    head.quaternion.setFromAxisAngle(UP, 100 * Math.PI / 180);
-    update(3100); update(4601); update(4901);
-    for (const node of [panel, dock]) {
-      expect(node.position.distanceTo(head.position)).toBeGreaterThan(0.5);
-      expect(node.position.distanceTo(head.position)).toBeLessThan(1);
-      expect(new Vector3(0, 1, 0).applyQuaternion(node.quaternion).distanceTo(UP)).toBeLessThan(1e-6);
-      expect(node.quaternion.angleTo(head.quaternion)).toBeLessThan(1e-6);
+  it.each(['reply'] as const)('recalls an offscreen %s conversation without cancelling its request', (state) => {
+    for (const targetId of [target.id, 'muse-general']) {
+      const f = setup('card'); f.update(0);
+      const dismissed: string[] = [];
+      f.hud.on('assistantDismiss', (event) => dismissed.push(event.targetId));
+      f.hud.setAssistant?.({ targetId, state, transcript: 'Keep this request.', text: 'The current request is retained.' });
+      f.update(10);
+      const assistant = f.node('assistant-panel'), previous = assistant.position.clone();
+      f.head.quaternion.setFromAxisAngle(UP, Math.PI / 2); f.update(20);
+      expect(assistant.position).toEqual(previous);
+      const left = makeGestureHand('open_palm'); moveHand(left, -0.3, 1.5, 0);
+      left.palmUp = true; left.pinchPoint.set(10, 10, 10); left.ray.origin.set(10, 10, 10);
+      f.update(100, { left }, true); f.update(749, { left }, true);
+      expect(f.node('main-menu').visible).toBe(false);
+      f.update(750, { left }, true);
+      expect(f.node('main-menu').visible).toBe(true);
+      expect(Math.abs(local(f.node('main-menu'), f.head).x)).toBeLessThan(1e-6);
+      expect(assistant.visible).toBe(false); expect(dismissed).toEqual([]);
+      f.hud.setDeck({ open: false }); f.update(800, { left }, true);
+      expect(f.node('main-menu').visible).toBe(false);
+      expect(assistant.visible).toBe(true); expect(assistant.userData.state).toBe(state);
+      expect(Math.abs(local(assistant, f.head).x)).toBeLessThan(1e-6);
+      expect(assistant.position.distanceTo(previous)).toBeGreaterThan(0.3);
+      expect(f.node('assistant-transcript')).toMatchObject({ text: 'You: Keep this request.' });
+      expect(dismissed).toEqual([]);
     }
-    const inverse = head.quaternion.clone().invert();
-    const depth = (node: typeof panel) => node.position.clone().sub(head.position).applyQuaternion(inverse).z;
-    expect(Math.abs(depth(panel) - depth(dock))).toBeGreaterThanOrEqual(0.01);
-    const dockBounds = projectedBounds(dock, head, dock.userData.width, dock.userData.height);
-    const cardBounds = projectedBounds(panel, head, 0.4, 0.32);
-    expect(dockBounds.inView).toBe(true);
-    expect(cardBounds.inView).toBe(true);
-    expect(dockBounds.top).toBeLessThan(cardBounds.bottom);
   });
 
-  it('keeps a nearby card fixed after opening and lazily brings it back when looking away', () => {
-    const { hud, head, panel, update } = setup('card');
-    hud.upsertTarget({ ...target, id: 'nearby', position: [0, 1.46, -0.8] });
-    hud.setLocked('nearby');
-    update(200);
-    const position = panel.position.clone(), rotation = panel.quaternion.clone();
-    for (let frame = 1; frame <= 30; frame++) {
-      head.position.x = frame * 0.001;
-      head.quaternion.setFromAxisAngle(UP, frame * 0.002);
-      hud.upsertTarget({ ...target, id: 'nearby', position: [frame * 0.001, 1.46, -0.8] });
-      update(200 + frame * 16);
-      expect(panel.position).toEqual(position);
-      expect(panel.quaternion.equals(rotation)).toBe(true);
-    }
-    head.quaternion.setFromAxisAngle(UP, 100 * Math.PI / 180);
-    update(700); update(2201); update(2501);
-    expect(panel.position.distanceTo(head.position)).toBeGreaterThan(0.5);
-    expect(panel.position.distanceTo(head.position)).toBeLessThan(1);
-    expect(new Vector3(0, 1, 0).applyQuaternion(panel.quaternion).distanceTo(UP)).toBeLessThan(1e-6);
-    expect(panel.quaternion.angleTo(head.quaternion)).toBeLessThan(1e-6);
+  it.each(['idle'] as const)('dismisses the unused assistant when deliberate recall interrupts %s', (state) => {
+    const f = setup('card'); f.update(0);
+    const dismissed: string[] = [];
+    f.hud.on('assistantDismiss', (event) => { dismissed.push(event.targetId); f.hud.setAssistant?.(null); });
+    f.hud.setAssistant?.({ targetId: target.id, state });
+    const left = makeGestureHand('open_palm'); moveHand(left, -0.3, 1.5, 0);
+    left.palmUp = true; left.pinchPoint.set(10, 10, 10); left.ray.origin.set(10, 10, 10);
+    f.update(100, { left }, true); f.update(749, { left }, true);
+    expect(dismissed).toEqual([]);
+    f.update(750, { left }, true);
+    expect(f.node('main-menu').visible).toBe(true); expect(dismissed).toEqual([target.id]);
+    f.hud.setDeck({ open: false }); f.update(800, { left }, true);
+    expect(f.node('assistant-panel').visible).toBe(false);
+    expect(f.node('device-card').visible).toBe(true);
   });
 
-  it('does not slide away while the user looks straight at an offset panel', () => {
-    const { head, panel, update } = setup();
-    update(0);
-    const start = panel.position.clone();
-    // Look directly at the lower-left fallback dock for longer than the follow delay.
-    head.quaternion.setFromRotationMatrix(new Matrix4().lookAt(head.position, panel.getWorldPosition(new Vector3()), UP));
-    update(100); update(2000); update(4000);
-    expect(panel.position.distanceTo(start)).toBeLessThan(1e-6);
+  it('keeps a pending confirmation isolated while recalling Menu over a retained conversation', () => {
+    const f = setup('card'); f.update(0);
+    f.hud.setAssistant?.({ targetId: target.id, state: 'thinking', transcript: 'Keep this request.' });
+    f.hud.showConfirm({ id: 'arm', kind: 'arm', title: 'Enable controls' });
+    const confirmations: string[] = [];
+    f.hud.on('confirm', (event) => confirmations.push(event.id));
+    const left = makeGestureHand('open_palm'); moveHand(left, -0.3, 1.5, 0);
+    left.palmUp = true; left.pinchPoint.set(10, 10, 10); left.ray.origin.set(10, 10, 10);
+    f.update(100, { left }, true); f.update(750, { left }, true);
+    expect(f.node('main-menu').visible).toBe(true);
+    expect(f.node('confirmation-panel').parent?.visible).toBe(false);
+    expect(f.node('assistant-panel').visible).toBe(false); expect(confirmations).toEqual([]);
+    f.hud.setDeck({ open: false }); f.update(800, { left }, true);
+    expect(f.node('confirmation-panel').parent?.visible).toBe(true);
+    expect(f.node('assistant-panel').visible).toBe(false); expect(confirmations).toEqual([]);
+    f.hud.showConfirm(null);
+    expect(f.node('assistant-panel').visible).toBe(true);
+    expect(f.node('assistant-panel').userData.state).toBe('thinking');
+  });
+
+  it('does not recall Menu for the Perform fist or carry its dwell into a brief clutch release', () => {
+    const f = setup('card'); f.update(0);
+    f.hud.setHome?.({ mode: 'control', filter: 'electronics', tagged: 1, status: 'Ready', canStop: true });
+    f.hud.setDeviceState?.({ targetId: target.id, connection: 'ready', performAvailable: true, handControl: true, performingLive: true });
+    const left = makeGestureHand('fist'); moveHand(left, -0.2, 1.4, -0.4);
+    left.palmUp = true; left.palmUpMs = 1000;
+    const right = makeGestureHand('open_palm'); moveHand(right, 0.2, 1.4, -0.4);
+    f.update(100, { left, right }, true); f.update(1100, { left, right }, true);
+    expect(f.node('main-menu').visible).toBe(false);
+    setPosture(left, 'open_palm');
+    f.hud.setDeviceState?.({ targetId: target.id, connection: 'ready', performAvailable: true, handControl: true, performingLive: false });
+    f.update(1200, { left, right }, true); f.update(1849, { left, right }, true);
+    expect(f.node('main-menu').visible).toBe(false);
+    f.update(5000, { left, right }, true);
+    expect(f.node('main-menu').visible).toBe(false); // Gesture pauses cannot navigate away from Perform.
+    f.hud.setDeviceState?.({ targetId: target.id, connection: 'ready', performAvailable: true, handControl: false });
+    f.update(5100, { left, right }, true); expect(f.node('main-menu').visible).toBe(false);
+    setPosture(left, 'fist'); f.update(5200, { left, right }, true); setPosture(left, 'open_palm');
+    f.update(5300, { left, right }, true); f.update(5950, { left, right }, true);
+    expect(f.node('main-menu').visible).toBe(true);
+    expect(f.node('deck:panic').visible).toBe(true);
+  });
+
+  it('leaves both palms available for Stop and does not count missing finger joints as an open palm', () => {
+    const f = setup('card'); f.update(0);
+    const left = makeGestureHand('open_palm'), right = makeGestureHand('open_palm');
+    moveHand(left, -0.2, 1.4, -0.4); moveHand(right, 0.2, 1.4, -0.4);
+    left.palmUp = right.palmUp = true;
+    f.hud.setDeviceState?.({ targetId: target.id, connection: 'ready', handControl: true });
+    f.update(100, { left, right }, true); f.update(1000, { left, right }, true);
+    expect(f.node('main-menu').visible).toBe(false);
+    f.hud.setDeviceState?.({ targetId: target.id, connection: 'ready', handControl: false });
+    right.palmUp = false; delete left.joints['pinky-finger-tip'];
+    f.update(1100, { left, right }, true); f.update(2000, { left, right }, true);
+    expect(f.node('main-menu').visible).toBe(false);
+  });
+
+  it.each(['closed', 'lowered', 'missing'] as const)('allows another deliberate recall after the left hand is %s', (release) => {
+    const f = setup(); f.update(0);
+    const left = makeGestureHand('open_palm'); moveHand(left, -0.2, 1.4, -0.4); left.palmUp = true;
+    f.update(100, { left }, true); f.update(750, { left }, true);
+    expect(f.node('main-menu').visible).toBe(true); f.hud.setDeck({ open: false });
+    if (release === 'closed') setPosture(left, 'fist');
+    if (release === 'lowered') moveHand(left, -0.2, 0.9, -0.4);
+    f.update(800, release === 'missing' ? {} : { left }, true);
+    setPosture(left, 'open_palm'); moveHand(left, -0.2, 1.4, -0.4);
+    f.update(900, { left }, true); f.update(1549, { left }, true);
+    expect(f.node('main-menu').visible).toBe(false);
+    f.update(1550, { left }, true); expect(f.node('main-menu').visible).toBe(true);
+  });
+
+  it('does not release the recall latch merely because the right palm turns toward the head', () => {
+    const f = setup(); f.update(0);
+    const left = makeGestureHand('open_palm'), right = makeGestureHand('open_palm');
+    moveHand(left, -0.2, 1.4, -0.4); moveHand(right, 0.2, 1.4, -0.4); left.palmUp = true;
+    f.update(100, { left, right }, true); f.update(750, { left, right }, true);
+    f.hud.setDeck({ open: false }); right.palmUp = true; f.update(800, { left, right }, true);
+    right.palmUp = false; f.update(900, { left, right }, true); f.update(1550, { left, right }, true);
+    expect(f.node('main-menu').visible).toBe(false);
+  });
+
+  it('recalls from a controller button without attaching navigation to the moving grip', () => {
+    const f = setup(); f.update(0);
+    const controller: HandState = { controller: true, grip: { position: new Vector3(-0.2, 0.8, -0.2), quaternion: new Quaternion() },
+      menuPressed: true, joints: {}, pinching: false, justPinched: false, justReleased: false, pinchPoint: new Vector3(10, 10, 10),
+      ray: { origin: new Vector3(10, 10, 10), dir: new Vector3(0, 0, -1) } };
+    f.update(100, { left: controller }, true); const menu = f.node('main-menu'), position = menu.position.clone(); expect(menu.visible).toBe(true);
+    controller.menuPressed = false; controller.grip!.position.y -= 0.5; f.head.quaternion.setFromAxisAngle(UP, 1); f.update(4000, { left: controller }, true);
+    expect(menu.position).toEqual(position); expect(f.node('hand-dock').userData.anchor).toBe('world');
+  });
+
+  it('uses one reachable conversation workspace and restores the control card after dismissal', () => {
+    const f = setup('card'); f.update(300); f.hud.setAssistant?.({ targetId: target.id, state: 'listening' }); f.update(320);
+    const assistant = f.node('assistant-panel'), card = f.node('device-card');
+    expect(assistant.visible).toBe(true); expect(f.node('assistant-send').visible).toBe(true);
+    expect(card.visible).toBe(false);
+    expect(Math.abs(local(assistant, f.head).x)).toBeLessThan(1e-6);
+    expect(assistant.position.distanceTo(f.head.position)).toBeLessThan(0.66);
+    const pair = [card.position.clone(), assistant.position.clone()];
+    f.head.position.x += 0.4; f.head.quaternion.setFromAxisAngle(UP, Math.PI / 2); f.update(5000);
+    expect(card.position).toEqual(pair[0]); expect(assistant.position).toEqual(pair[1]);
+    f.hud.recenter?.(); f.update(5010); expect(card.position).not.toEqual(pair[0]); expect(assistant.position).not.toEqual(pair[1]);
+    f.hud.setAssistant?.(null); f.update(5020);
+    expect(Math.abs(local(card, f.head).x)).toBeLessThan(1e-6); expect(assistant.visible).toBe(false); expect(card.visible).toBe(true);
   });
 });

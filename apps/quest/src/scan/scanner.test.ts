@@ -21,8 +21,9 @@ function setup(hit: DepthProvider['hit'] = async () => ({ point: new Vector3(0, 
   const upsertTarget = vi.fn();
   const hud = { root: new Group(), setScanning: vi.fn(), upsertTarget } as unknown as Hud;
   const targets = new TargetStore();
+  const capture = vi.fn(async () => ({ record, payload: { frameId: record.frameId, jpeg: 'cropped', width: record.width, height: record.height } }));
   const scanner = new Scanner({
-    capture: () => ({ get: (id: string) => records.get(id) } as unknown as FrameCapture), ws: { send } as unknown as WsClient,
+    capture: () => ({ get: (id: string) => records.get(id), capture } as unknown as FrameCapture), ws: { send } as unknown as WsClient,
     hud: () => hud, targets, poses: new PoseRing(), depth: () => [{ name: 'test', hit }], log: vi.fn(),
   });
   const result = (labels: string[], score = 0.9): ScanResultPayload => ({
@@ -31,7 +32,7 @@ function setup(hit: DepthProvider['hit'] = async () => ({ point: new Vector3(0, 
       detId: String(i), label, prompt: label, score, box: [300, 220, 40, 40],
     })),
   });
-  return { scanner, targets, upsertTarget, result, record, records, send };
+  return { scanner, targets, upsertTarget, result, record, records, send, capture };
 }
 
 describe('automatic annotation scanning', () => {
@@ -59,6 +60,34 @@ describe('automatic annotation scanning', () => {
     scanner.rangeM = 3;
     await scanner.onResult(result(['laptop', 'screen', 'phone', 'keyboard', 'ceiling light', 'remote', 'mouse']));
     expect(targets.list()).toHaveLength(5);
+  });
+
+  it('suppresses generic duplicate boxes before depth placement while retaining a separate device', async () => {
+    const hit = vi.fn(async () => ({ point: new Vector3(0, 0, -1) }));
+    const { scanner, targets, result } = setup(hit);
+    scanner.start();
+    const payload = result([]);
+    payload.detections = [
+      { detId: 'generic', label: 'electronic device', prompt: 'electronic device', score: 0.99, box: [110, 110, 180, 130] },
+      { detId: 'laptop', label: 'laptop', prompt: 'laptop', score: 0.7, box: [100, 100, 200, 160] },
+      { detId: 'phone', label: 'phone', prompt: 'phone', score: 0.8, box: [350, 100, 40, 80] },
+    ];
+    await scanner.onResult(payload);
+    expect(targets.list().map((target) => target.label).sort()).toEqual(['laptop', 'phone']);
+    expect(hit).toHaveBeenCalledTimes(2);
+    expect(scanner.stats.rejected).toBe(1);
+  });
+
+  it('does not let a low-confidence named box suppress an eligible unidentified candidate', async () => {
+    const { scanner, targets, result } = setup();
+    scanner.start();
+    const payload = result([]);
+    payload.detections = [
+      { detId: 'generic', label: 'electronic device', prompt: 'electronic device', score: 0.8, box: [110, 110, 180, 130] },
+      { detId: 'laptop', label: 'laptop', prompt: 'laptop', score: 0.4, box: [100, 100, 200, 160] },
+    ];
+    await scanner.onResult(payload);
+    expect(targets.list().map((target) => target.label)).toEqual(['electronic device']);
   });
 
   it('ignores delayed segmentation after leaving Annotate, including while placement is pending', async () => {
@@ -120,4 +149,37 @@ it('registers fixture captures with the server before exposing their selection b
     await scanner.onResult({ frameId: record.frameId, width: 640, height: 480, modelId: 'fixture', source: 'fixture', latencyMs: 0, detections: [{ detId: 'other', label: 'phone', prompt: 'phone', score: 1, box: [220, 180, 200, 120] }] });
     expect(upsertTarget).toHaveBeenCalledTimes(1);
   } finally { vi.useRealTimers(); }
+});
+
+
+describe('single selected-area scan', () => {
+  it('waits for asynchronous depth placement even when another render frame ticks', async () => {
+    let place!: (hit: DepthHit) => void;
+    const f = setup(() => new Promise(resolve => { place = resolve; }));
+    await f.scanner.scanRegion([0.2, 0.3, 0.8, 0.9], 100);
+    const pending = f.scanner.onResult(f.result(['synthesizer']));
+    f.scanner.tick(200); expect(f.scanner.active).toBe(true);
+    place({ point: new Vector3(0, 0, -2) }); await pending;
+    expect(f.targets.list()).toHaveLength(1); expect(f.scanner.active).toBe(false);
+  });
+  it('sends one cropped frame, never starts whole-view cadence and stops after its result', async () => {
+    const f = setup();
+    const region = [0.2, 0.3, 0.8, 0.9] as const;
+    expect(await f.scanner.scanRegion(region, 100)).toBe(true);
+    expect(f.capture).toHaveBeenCalledWith('scan', undefined, region);
+    f.scanner.tick(2000); f.scanner.tick(4000);
+    expect(f.capture).toHaveBeenCalledTimes(1);
+    await f.scanner.onResult(f.result(['synthesizer']));
+    expect(f.targets.list()).toHaveLength(1);
+    expect(f.scanner.active).toBe(false);
+    f.scanner.tick(5000); expect(f.capture).toHaveBeenCalledTimes(1);
+  });
+  it('does not stop a region capture while its async bitmap is still being prepared', async () => {
+    const f = setup(); let release!: (value: Awaited<ReturnType<typeof f.capture>>) => void;
+    f.capture.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const pending = f.scanner.scanRegion([0.2, 0.3, 0.8, 0.9], 100);
+    f.scanner.tick(200); expect(f.scanner.active).toBe(true);
+    release({record:f.record, payload:{frameId:f.record.frameId,jpeg:'crop',width:f.record.width,height:f.record.height}});
+    expect(await pending).toBe(true);
+  });
 });

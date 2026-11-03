@@ -25,7 +25,9 @@ describe('performance feedback', () => {
     let draws = 0; feedback.root.traverseVisible((node) => { if ((node as Mesh).isMesh) draws++; });
     expect(draws).toBe(3);
     feedback.update(f, state(true)); expect(status.text).toBe('LIVE');
-    feedback.update(f, state(false)); expect(status.text).toBe('Frozen · Hold left fist');
+    feedback.update(f, state(false)); expect(status.text).toBe('Paused · Hold left fist');
+    feedback.update(f, { ...state(false), trackingLost: true }); expect(status.text).toBe('Tracking lost · Show hands');
+    feedback.update(f, { ...state(false), trackingLost: false }); expect(status.text).toBe('Paused · Hold left fist');
     feedback.update(f, null); expect(feedback.root.visible).toBe(false);
     feedback.dispose(); expect(scene.children).toHaveLength(0);
   });

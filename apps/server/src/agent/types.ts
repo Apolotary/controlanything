@@ -5,6 +5,7 @@
 import type { AgentGuidance, DeviceCardPayload, Driver, Evidence, IrCapture, LinkResultPayload, Polygon, Provenance, PxBox, TargetState, VerifyState } from '@ce/protocol';
 import type { DriverIssue } from '../devices/validate';
 import type { IrLibrary, MidiProfile } from '../devices/profiles';
+import type { IdentityCorrectionAudit } from './identity-correction';
 
 export interface TargetDetection {
   frameId: string;
@@ -56,6 +57,9 @@ export interface Target extends AgentGuidance {
   selectedBy?: string;
   selection?: { userText?: string; preferDeviceId?: string };
   card?: DeviceCardPayload;
+  /** Durable owner-reviewed identity epoch; old setup history cannot cross this boundary. */
+  identityRevision?: number;
+  identityCorrection?: IdentityCorrectionAudit;
   link?: LinkResultPayload;
   research?: Research;
   driver?: Driver;

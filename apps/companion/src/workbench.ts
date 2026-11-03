@@ -15,13 +15,16 @@ import {
   type DriverSpecPayload,
   type DriverStatusPayload,
   formatCode,
+  isMessageType,
   isValidCode,
+  type Message,
   type LinkRequestPayload,
   type LinkResultPayload,
   type PayloadOf,
   type PendingPairing,
   type Port,
   type TargetStatusPayload,
+  type TaggedDevice,
   type UiSpecPayload,
   type VerifyResultPayload,
 } from '@ce/protocol';
@@ -34,6 +37,8 @@ import { clearIdentity, defaultDevice, type Identity, isLocalPage, loadIdentity,
 import { MidiBridge } from './midi';
 import { describeMidi, isRealtimeNoise, toHex } from './midiDecode';
 import { VisualSynthExecutor, visualSynthPort } from './vsynthExecutor';
+import { VisualSynthPresence } from './visualPresence';
+import { VisualSynthLauncher } from './visualLauncher';
 import { MidiExecutor } from './midiExec';
 import { clearPendingPairing, loadPendingPairing, savePendingPairing } from './pairing';
 import { CardputerBridge } from './serial/bridge';
@@ -46,6 +51,9 @@ import { PRODUCT_NAME } from './ui/product';
 import { buildCheckSteps, type CheckProgress } from './ui/checks';
 import { createStatusPresenter, type CalmStatus } from './ui/status';
 import { companionPorts, companionView, setupActivity, type SetupActivity } from './ui/onboarding';
+import { CompanionSetupProgress, SetupProgressPanel } from './ui/setup-progress';
+import { CompanionCanvas, CanvasPanel } from './ui/canvas';
+import { MidiChartPanel, chartRequest } from './ui/midi-chart';
 import { replayArmResult, runReplay } from './replay';
 
 const APP = 'companion@0.2.0';
@@ -84,7 +92,7 @@ const linkRequests = new Map<string, LinkRequestPayload>();
 const specs = new Map<string, UiSpecPayload>();
 let lastSpec: UiSpecPayload | undefined;
 let arm: ArmRequestPayload | undefined;
-let armNote: { text: string; ok: boolean; at: number } | undefined;
+let armNote: { cardId?: string; armId?: string; text: string; ok: boolean; at: number } | undefined;
 let focusCardId: string | undefined;
 let focusPinned = false;
 let calls: CallsResponse | undefined;
@@ -94,11 +102,22 @@ let addTarget: 'phone' | 'quest' | 'devterm' = 'phone';
 let qrShown = '';
 let headsetQrShown = '';
 const targets = new Map<string, TargetStatusPayload>();
+const taggedDevices = new Map<string, TaggedDevice>();
+/** Keep revisions across reconnect snapshots and temporary untagging. */
+const identityRevisions = new Map<string, number>();
+const retiredSetupIds = new Set<string>();
 let currentSetup: SetupActivity | undefined;
+let midiSetupCardId: string | undefined;
 let currentView: 'home' | 'devices' | 'activity' | 'details' = 'home';
 let stopTarget: TargetStatusPayload | undefined;
 let serverDown = false;
 const presenter = createStatusPresenter();
+const setupProgress = new CompanionSetupProgress(() => ({ deviceId: identity?.deviceId, local: isLocalPage(), replay: replaying }));
+let homeWorkspace: SetupProgressPanel | undefined;
+let activityWorkspace: SetupProgressPanel | undefined;
+const objectCanvas = new CompanionCanvas((type, payload) => !replaying && !!conn?.send(type, payload, { to: 'server' }), () => render('canvas'));
+let canvasPanel: CanvasPanel | undefined;
+let midiChartPanel: MidiChartPanel | undefined;
 let activity: CalmStatus = { text: 'Idle', working: false };
 let shownStatus = '';
 let statusAnimation: Animation | undefined;
@@ -106,13 +125,59 @@ let pairingBusy = false;
 let shownPair = '';
 const bridgeBusy = new Set<string>();
 const dialogTimers = new Map<HTMLDialogElement, ReturnType<typeof setTimeout>>();
+let visualsOpening = false;
+let visualsOpenTimedOut = false;
+let visualsSeen = false;
+let visualsOpenTimer: ReturnType<typeof setTimeout> | undefined;
+const clearVisualsOpenTimer = (): void => { clearTimeout(visualsOpenTimer); visualsOpenTimer = undefined; };
 
 const midi = new MidiBridge();
 const midiExec = new MidiExecutor(midi);
 const link = new CardputerLink(APP);
 const bridge = new CardputerBridge(link, APP);
 const oracle = new AudioOracle();
-const executor = new Executor(midiExec, bridge, oracle, new VisualSynthExecutor());
+const visualPresence = new VisualSynthPresence(() => identity?.deviceId, () => {
+  if (visualPresence.connected()) {
+    visualsSeen = true;
+    visualsOpening = false;
+    visualsOpenTimedOut = false;
+    clearVisualsOpenTimer();
+  }
+  conn?.resendHello();
+  ['calm', 'device', 'links'].forEach(render);
+});
+const executor = new Executor(midiExec, bridge, oracle, new VisualSynthExecutor(undefined, () => visualPresence.connected()));
+const currentVisualPort = (): Port => ({ ...visualSynthPort, state: visualPresence.connected() ? 'connected' : 'disconnected' });
+const visualLauncher = new VisualSynthLauncher({
+  owner: () => identity?.deviceId,
+  connected: () => !replaying && executor.leader && !!conn?.open && !serverDown,
+  onClosed: () => { clearVisualsOpenTimer(); visualsOpening = false; render('calm'); },
+});
+const openVisuals = (): void => {
+  if (!identity || replaying || !executor.leader) return;
+  clearVisualsOpenTimer();
+  visualsOpenTimedOut = false;
+  visualsOpening = !visualPresence.connected();
+  if (visualsOpening) visualsOpenTimer = setTimeout(() => {
+    visualsOpenTimer = undefined;
+    visualsOpening = false;
+    visualsOpenTimedOut = true;
+    render('calm');
+  }, 5000);
+  // An in-page renderer needs no popup permission or second setup gesture.
+  if (!visualLauncher.open()) { visualsOpening = false; visualsOpenTimedOut = true; clearVisualsOpenTimer(); }
+  render('calm');
+};
+
+function visualScreenStatus(): { state: string; hint: string; tone: string } {
+  if (visualPresence.connected()) return conn?.open && !serverDown
+    ? { state: 'Visuals ready', hint: 'Visuals ready. Keep the visual screen visible and continue setup in Quest.', tone: 'on' }
+    : { state: 'Visuals open', hint: 'Visual screen detected. Reconnect this companion to your room before using it in Quest.', tone: 'warn' };
+  if (visualsOpening) return { state: 'Opening visuals…', hint: 'Opening visuals… Waiting for a visible screen in this browser.', tone: 'warn' };
+  if (visualsOpenTimedOut) return { state: 'No visuals detected', hint: 'No visual screen was detected. Bring this paired companion tab to the front. If graphics failed, choose Open visuals to retry.', tone: 'warn' };
+  if (visualsSeen) return { state: 'Visuals paused', hint: 'No visible visual screen is detected. Bring it to the front, or choose Try visual synth in Quest to reopen it here.', tone: 'warn' };
+  return { state: 'Available', hint: 'Choose Try visual synth in Quest to open silent visuals here automatically. Keep this companion tab visible.', tone: '' };
+}
 
 /** /p/<id>#<code> redirects here as /companion/?approve=<id>#<code> */
 let intent = (() => {
@@ -132,6 +197,8 @@ bridge.log = log;
 
 const render = scheduler({
   calm: renderCalm,
+  workspace: renderSetupProgress,
+  canvas: renderCanvas,
   top: renderTop,
   banners: renderBanners,
   device: renderDevice,
@@ -146,7 +213,7 @@ const render = scheduler({
   approve: renderApprove,
   daemons: renderDaemons,
 });
-const renderAll = () => ['calm', 'top', 'banners', 'device', 'code', 'tape', 'spec', 'agent', 'calls', 'evidence', 'learn', 'links', 'approve', 'daemons'].forEach(render);
+const renderAll = () => ['calm', 'canvas', 'top', 'banners', 'device', 'code', 'tape', 'spec', 'agent', 'calls', 'evidence', 'learn', 'links', 'approve', 'daemons'].forEach(render);
 
 // --- helpers --------------------------------------------------------------------------------
 
@@ -164,6 +231,38 @@ function setFocus(cardId: string | undefined, byUser = false): void {
 function focusDriver(): DriverSpecPayload | undefined {
   const all = [...drivers.values()];
   return focusCardId ? all.filter((d) => d.cardId === focusCardId).at(-1) : all.at(-1);
+}
+
+function retiredSetupMessage(message: { payload: unknown }): boolean {
+  if (!message.payload || typeof message.payload !== 'object') return false;
+  const payload = message.payload as Record<string, unknown>;
+  return ['driverId', 'specId', 'linkId', 'armId', 'stepId'].some((key) =>
+    typeof payload[key] === 'string' && retiredSetupIds.has(`${key}:${payload[key]}`));
+}
+
+/** Only current UI caches are discarded; the server keeps historical setup versions. */
+function clearIdentitySetup(cardId: string): void {
+  const retire = (key: string, id?: string) => { if (id) retiredSetupIds.add(`${key}:${id}`); };
+  const driverIds = new Set<string>();
+  for (const [id, driver] of drivers) if (driver.cardId === cardId) {
+    driverIds.add(id); retire('driverId', id); drivers.delete(id); driverStatus.delete(id);
+  }
+  for (const [id, status] of driverStatus) if (status.cardId === cardId) { driverIds.add(id); retire('driverId', id); driverStatus.delete(id); }
+  for (const [key, spec] of specs) if (spec.cardId === cardId) { retire('specId', spec.specId); specs.delete(key); }
+  if (lastSpec?.cardId === cardId) { retire('specId', lastSpec.specId); lastSpec = [...specs.values()].at(-1); }
+  const link = linkResults.get(cardId); if (link) retire('linkId', link.linkId);
+  linkResults.delete(cardId);
+  for (const [id, request] of linkRequests) if (request.cardId === cardId) { retire('linkId', id); linkRequests.delete(id); }
+  for (let i = evidence.length - 1; i >= 0; i--) if (evidence[i].cardId === cardId || driverIds.has(evidence[i].driverId ?? '')) evidence.splice(i, 1);
+  for (let i = refusals.length - 1; i >= 0; i--) if (refusals[i].cardId === cardId) { retire('linkId', refusals[i].linkId); refusals.splice(i, 1); }
+  for (const [id, step] of steps) if (step.cardId === cardId) { retire('stepId', id); steps.delete(id); }
+  if (arm?.cardId === cardId) { retire('armId', arm.armId); arm = undefined; }
+  if (armNote?.cardId === cardId) { retire('armId', armNote.armId); armNote = undefined; }
+  if (midiSetupCardId === cardId) midiSetupCardId = undefined;
+  const target = targets.get(cardId);
+  // The correction's fresh identified status may arrive before its tag snapshot.
+  if (target && (target.state !== 'identified' || target.driverId || target.specId)) targets.delete(cardId);
+  setupProgress.clear(cardId); presenter.reset(cardId);
 }
 
 function deviceName(deviceId?: string): string | undefined {
@@ -287,7 +386,7 @@ function renderCalm(): void {
   const activeStates: Record<string, string> = { identifying: 'Identifying', linking: 'Connecting to', researching: 'Reading instructions for', driving: 'Writing controls for', verifying: 'Checking', forging: 'Making controls for' };
   stopTarget = !serverDown && conn?.open ? [...targets.values()].reverse().find((target) => relevant(target) && target.state in activeStates) : undefined;
   const working = Boolean(stopTarget || status.working && (!targets.size || learning));
-  $('setup-activity').hidden = currentView === 'devices' || $('workbench').classList.contains('pairing') || Boolean(targets.size && !latestTarget);
+  $('setup-activity').hidden = currentView === 'devices' || $('workbench').classList.contains('pairing') || Boolean(targets.size && !latestTarget) || !stopTarget && status.text === 'Idle';
   $('setup-activity-text').textContent = stopTarget
     ? currentSetup?.cardId === stopTarget.cardId ? currentSetup.text : companionText(stopTarget.sentence ?? `${activeStates[stopTarget.state]} ${cards.get(stopTarget.cardId)?.name ?? 'your device'}…`)
     : status.text;
@@ -312,10 +411,33 @@ function renderCalm(): void {
   pill('serial', 'Cardputer', link.ready, CardputerLink.supported, link.lastError);
   pill('mic', 'Microphone', oracle.state === 'on', AudioOracle.supported, oracle.error);
   $('details-open').classList.toggle('attention', Boolean(arm));
+  renderSetupProgress();
+  renderCanvas();
+}
+
+function renderCanvas(): void {
+  if (document.visibilityState === 'hidden') return;
+  const host = $('object-canvas');
+  host.hidden = replaying || currentView !== 'home' || $('workbench').classList.contains('pairing');
+  if (host.hidden) return;
+  canvasPanel ??= new CanvasPanel(host, objectCanvas);
+  canvasPanel.render(objectCanvas.view());
+}
+
+function renderSetupProgress(): void {
+  // Keep received state while a background tab is idle; draw it once when the user returns.
+  if (document.visibilityState === 'hidden') return;
+  homeWorkspace ??= new SetupProgressPanel($('setup-workspace'));
+  activityWorkspace ??= new SetupProgressPanel($('activity-workspace'));
+  const view = $('workbench').classList.contains('pairing') ? undefined : setupProgress.get();
+  homeWorkspace.render(currentView === 'home' ? view : undefined);
+  activityWorkspace.render(currentView === 'activity' ? view : undefined);
 }
 
 function renderOnboarding(): void {
   const ownId = identity?.deviceId;
+  const connected = replaying || Boolean(conn?.open) && !serverDown;
+  const quest = connected && identity ? devices.find((d) => d.kind === 'quest' && d.online) : undefined;
   const ports = companionPorts(ownId, devices, midi.ports(), executor.leader);
   currentSetup = undefined;
   for (const target of [...targets.values()].reverse()) {
@@ -323,55 +445,70 @@ function renderOnboarding(): void {
     const candidate = [...linkRequests.values()].some((request) => request.cardId === target.cardId && request.needs.includes('midi') && request.candidates?.some((c) => c.deviceId === ownId));
     if (!ownId || (target.executorDeviceId ?? result?.executorDeviceId) !== ownId && !(target.state === 'linking' && candidate)) continue;
     const card = cards.get(target.cardId);
-    if (card && !card.protocols.includes('midi')) continue;
+    if (card && (!card.protocols.includes('midi') || /visual[\s-]synth/i.test(card.name))) continue;
     const step = [...steps.values()].reverse().find((s) => s.cardId === target.cardId);
     const next = setupActivity(card?.name ?? ports[0]?.name ?? 'your synth', target, step);
     if (next) { currentSetup = next; break; }
   }
   const view = companionView({
-    connected: replaying || Boolean(conn?.open), authenticated: Boolean(identity), pairing: selfPairing || selfPairingError,
-    devices, ports, midiSupported: MidiBridge.supported, midiEnabled: midi.enabled, leader: executor.leader, headsetPaired: pairedWithQuest, activity: currentSetup,
+    connected, authenticated: Boolean(identity), pairing: selfPairing || selfPairingError,
+    devices, ports, midiSupported: MidiBridge.supported, midiEnabled: midi.enabled, leader: executor.leader, headsetPaired: pairedWithQuest, activity: currentSetup, midiSetupRequested: Boolean(midiSetupCardId),
   });
-  const pairOnly = pairNow && !identity;
-  const paired = Boolean(identity && !selfPairing && (pairedWithQuest || devices.some((d) => d.kind === 'quest')));
+  const pairOnly = !replaying && pairNow && !identity;
+  const paired = !replaying && Boolean(identity && !selfPairing && (pairedWithQuest || devices.some((d) => d.kind === 'quest')));
   $('workbench').classList.toggle('pair-only', pairOnly);
   const pairing = !paired && !replaying && ['pairing', 'connecting', 'headset'].includes(view.stage);
   $('app-header').hidden = pairing;
   $('workbench').classList.toggle('pairing', pairing);
   $('onboarding').classList.toggle('has-paired', paired);
   $('paired-summary').hidden = !paired;
-  $('onboarding').dataset.state = view.stage;
-  $('onboarding-title').textContent = view.title;
-  $('onboarding-next').textContent = view.next;
+  $('paired-next').textContent = ['paired', 'connecting', 'headset'].includes(view.stage) ? view.next : 'Keep this page open; your headset uses it to reach your devices.';
+  $('onboarding').dataset.state = replaying ? 'demo' : view.stage;
+  $('onboarding-title').textContent = replaying ? 'Recorded setup demo' : view.title;
+  $('onboarding-next').textContent = replaying ? 'Watch a recorded setup unfold, from device commands to generated controls. This is a display-only demo; no devices are connected or controlled.' : view.next;
+  $('onboarding-title').hidden = paired && view.stage === 'paired';
+  $('onboarding-next').hidden = paired && view.stage === 'paired';
   $('headset-status').textContent = view.headset;
-  $('headset-status').classList.toggle('connected', devices.some((d) => d.kind === 'quest' && d.online));
+  $('headset-status').classList.toggle('connected', Boolean(quest));
   $('synth-status').textContent = view.synth;
   $('synth-status').classList.toggle('connected', ports.length > 0);
-  $('home-title').textContent = currentView === 'activity' ? 'Activity' : currentView === 'details' ? 'Device details' : view.headset;
-  const quest = devices.find((d) => d.kind === 'quest' && d.online);
+  $('home-title').textContent = currentView === 'activity' ? 'Activity' : currentView === 'details' ? 'Device details' : replaying ? 'Recorded setup demo' : view.headset;
   $('home-chips').replaceChildren(
-    ...(ports.length ? [chip('USB MIDI ready')] : []),
+    ...(ports.length ? [chip('USB MIDI connected')] : []),
     ...(quest?.capabilities.includes('mic') ? [chip('Headset mic active')] : []),
   );
   $('devices-panel').hidden = pairing;
-  $('connection-steps').hidden = view.stage === 'pairing' || view.stage === 'connecting';
-  $('pairscreen').hidden = view.stage !== 'pairing';
-  $('headset-open').hidden = view.stage !== 'headset';
+  $('connection-steps').hidden = replaying || !midiSetupCardId || view.stage === 'pairing' || view.stage === 'connecting';
+  $('pairscreen').hidden = replaying || view.stage !== 'pairing';
+  $('headset-open').hidden = replaying || view.stage !== 'headset';
   const questUrl = health?.urls.https ? `${health.urls.https}/quest/` : undefined;
   $('headset-url').textContent = questUrl ?? 'Open the server’s Quest address in Quest Browser.';
   $('headset-qr').hidden = !questUrl;
-  if (questUrl && questUrl !== headsetQrShown) {
+  if (!replaying && questUrl && questUrl !== headsetQrShown) {
     headsetQrShown = questUrl;
     void renderQr($('headset-qr'), questUrl);
   }
-  $('approve-panel').hidden = !canApprove || view.stage !== 'headset';
-  $('enable-midi').hidden = !view.enableMidi;
+  $('approve-panel').hidden = replaying || !canApprove || view.stage !== 'headset';
+  $('enable-midi').hidden = replaying || !view.enableMidi;
   $<HTMLButtonElement>('enable-midi').disabled = replaying || bridgeBusy.has('midi');
   renderHomeDevices(ports);
 }
 
 function renderHomeDevices(ports: Port[]): void {
   const rows: HTMLElement[] = [];
+  const devicePorts = [currentVisualPort(), ...ports];
+  const visualScreen = visualScreenStatus();
+  const virtualCards = [...cards.values()].filter((card) => /visual[\s-]synth/i.test(card.name));
+  const virtualOwner = (card: DeviceCardPayload): string | undefined => card.notes?.startsWith('virtual:visual-synth:')
+    ? card.notes.slice('virtual:visual-synth:'.length) || undefined
+    : targets.get(card.cardId)?.executorDeviceId ?? linkResults.get(card.cardId)?.executorDeviceId
+      ?? [...drivers.values()].findLast((driver) => driver.cardId === card.cardId)?.executor.deviceId;
+  const ownVirtualCards = virtualCards.filter((card) => virtualOwner(card) === identity?.deviceId);
+  // One Home entry for this browser's instrument, even before link.result arrives. Other
+  // owners and old display cards remain available in Details/history, never merged or deleted.
+  const homeVirtualCard = replaying ? virtualCards.at(-1)
+    : ownVirtualCards.findLast((card) => card.cardId.startsWith('visual-synth-') && card.notes === `virtual:visual-synth:${identity?.deviceId}`)
+      ?? ownVirtualCards.at(-1) ?? virtualCards.findLast((card) => !virtualOwner(card));
   const usedPorts = new Set<string>();
   const addRow = (icon: string, name: string, transport: string, state: string, subtitle: string, tone: string, action?: HTMLButtonElement) => {
     const dot = el('span', { className: `dot ${tone}` });
@@ -383,32 +520,46 @@ function renderHomeDevices(ports: Port[]): void {
       el('span', { className: `status-word ${tone}` }, dot, state), action));
   };
   for (const card of cards.values()) {
+    const virtual = virtualCards.includes(card);
+    if (virtual && card !== homeVirtualCard) continue;
+    if (virtual) usedPorts.add(visualSynthPort.id);
     const connection = linkResults.get(card.cardId);
     const target = targets.get(card.cardId);
     const driver = [...drivers.values()].filter((d) => d.cardId === card.cardId).at(-1);
     const transport = connection?.channel ?? driver?.transport ?? card.protocols[0];
-    const port = ports.find((p) => p.id === connection?.port?.id || p.id === driver?.executor.port || p.name === connection?.port?.name);
+    const port = devicePorts.find((p) => p.id === connection?.port?.id || p.id === driver?.executor.port || p.name === connection?.port?.name);
     if (port) usedPorts.add(port.id);
     const connected = connection?.verdict === 'confirmed' || connection?.verdict === 'consistent' || Boolean(port);
-    const ready = target?.state === 'armed' || target?.state === 'controlling';
-    const failed = target?.state === 'failed' || connection?.verdict === 'mismatch';
-    const offline = target?.detail === 'offline' || transport === 'midi' && midi.enabled && !port;
-    const state = failed ? 'Needs attention' : offline ? 'Not connected' : ready ? 'Ready' : 'Needs setup';
     const spec = specs.get(card.cardId);
-    const count = spec?.hackset?.hacks.length ?? spec?.gen3d?.controls.length;
-    const subtitle = companionText(target?.sentence ?? (count ? `${count} controls ready${ready ? ' · Enabled in your headset' : ' · Waiting for headset confirmation'}` : [card.maker, card.model, connected ? 'Connected to this Mac' : 'Select the device in your headset to set up controls'].filter(Boolean).join(' · ')));
-    addRow(transport === 'midi' ? '▥' : transport === 'local' ? '▱' : '⌁', card.name, transport === 'midi' ? 'USB MIDI' : transport === 'local' ? 'This Mac' : transport === 'ir' ? 'Infrared' : 'Device', state, subtitle, failed ? 'danger' : offline ? '' : ready ? 'on' : 'warn', button('Details', () => { setFocus(card.cardId, true); showView('details'); }));
+    const count = spec?.gen3d?.controls.filter((control) => control.armed === true).length
+      ?? spec?.hackset?.hacks.filter((hack) => hack.status === 'verified').length ?? 0;
+    const tag = taggedDevices.get(card.cardId);
+    const ready = count > 0 && tag?.connection !== 'offline' && (target?.state === 'armed' || target?.state === 'controlling');
+    const failed = target?.state === 'failed' || connection?.verdict === 'mismatch';
+    const offline = tag?.connection === 'offline' || target?.detail === 'offline' || transport === 'midi' && midi.enabled && !port
+      || virtual && !replaying && (!visualPresence.connected() || !conn?.open || serverDown);
+    const state = failed ? 'Needs attention' : offline ? 'Unavailable' : ready ? 'Controls enabled' : 'Needs setup';
+    const subtitle = virtual
+      ? `${visualScreen.hint} In Quest: Try visual synth → Set up control → Enable. Ask Muse for the gesture you want, Apply, then Perform. Hold your left fist and follow the active gesture mapping shown in Quest.`
+      : companionText(tag?.hint ?? (count ? `${count} verified controls${ready ? ' · Enabled in your headset' : ' · Waiting for headset confirmation'}`
+        : target && (target.state === 'armed' || target.state === 'controlling') ? 'The displayed controls have not passed verification. Set up control again in your headset.'
+        : [card.maker, card.model, connected ? 'Connected to this Mac' : 'Select the device in your headset to set up controls'].filter(Boolean).join(' · ')));
+    addRow(virtual ? '▱' : transport === 'midi' ? '▥' : transport === 'local' ? '▱' : '⌁', card.name,
+      virtual ? 'Virtual screen' : transport === 'midi' ? 'USB MIDI' : transport === 'local' ? 'Mac controls' : transport === 'ir' ? 'Infrared' : 'Device',
+      state, subtitle, failed ? 'danger' : offline ? '' : ready ? 'on' : 'warn', virtual
+        ? button('Open visuals', openVisuals)
+        : button('Details', () => { setFocus(card.cardId, true); showView('details'); }));
   }
-  for (const port of ports) {
+  for (const port of devicePorts) {
     if (usedPorts.has(port.id)) continue;
     if (/visual[\s-]synth/i.test(port.name) || port.id === 'ce-visual-synth') {
-      addRow('▱', 'Visual synth', 'Virtual', 'Ready', 'Silent visuals on this Mac · open them, then select the screen in your headset.', 'on',
-        button('Open visuals', () => { window.open('/vsynth/', '_blank', 'noopener'); }));
+      addRow('▱', 'Visual synth', 'Virtual screen', visualScreen.state, `${visualScreen.hint} In your headset choose Menu → Try visual synth. Hand control starts after Set up control, Enable, and Perform.`, visualScreen.tone,
+        button('Open visuals', openVisuals));
       continue;
     }
-    addRow('▥', port.name, 'USB MIDI', 'Ready', 'USB connected · Select the synth in your headset to set up controls.', 'on', button('Details', () => showView('details')));
+    addRow('▥', port.name, 'USB MIDI', 'Connected', 'USB discovered · Device actions still need setup and verification in your headset.', 'on', button('Details', () => showView('details')));
   }
-  if (!ports.length && ![...cards.values()].some((c) => c.protocols.includes('midi'))) {
+  if (midiSetupCardId && !ports.length && ![...cards.values()].some((c) => c.protocols.includes('midi'))) {
     addRow('▥', 'USB MIDI', 'This Mac', midi.enabled ? 'Not connected' : 'Off', midi.enabled ? 'Plug in your synth with a USB cable.' : MidiBridge.supported ? 'Allow access to connect your synth over USB.' : 'Open this page in Chrome or Edge to connect USB devices.', '');
   }
   const serialAction = button(link.hasPort ? 'Details' : 'Connect', () => {
@@ -500,6 +651,8 @@ function setupCalm(): void {
     if (bridge.learning && bridge.learning.until > Date.now()) { bridge.stopLearning(); return; }
     if (!stopTarget) return;
     if (conn?.send('control.cancel', { cardId: stopTarget.cardId, ...(stopTarget.runId ? { runId: stopTarget.runId } : {}) }, { to: 'server' })) {
+      setupProgress.clear(stopTarget.cardId);
+      render('workspace');
       $('setup-activity-text').textContent = 'Stopping setup and controls…';
       $<HTMLButtonElement>('setup-stop').disabled = true;
     }
@@ -628,6 +781,8 @@ function confirmArm(a: ArmRequestPayload, approve: boolean, hold: boolean): void
 // --- device card, code, tape, spec ----------------------------------------------------------
 
 function renderDevice(): void {
+  midiChartPanel ??= new MidiChartPanel($('midi-chart-editor'), (path, body) => chartRequest(path, body, identity?.deviceToken));
+  midiChartPanel.update([...cards.values()], !replaying && Boolean(conn?.open) && (canApprove || isLocalPage()), focusCardId);
   const box = $('device-card');
   box.replaceChildren();
   const card = focusCardId ? cards.get(focusCardId) : undefined;
@@ -664,7 +819,7 @@ function renderDevice(): void {
   fact('via', deviceName(lr?.executorDeviceId ?? drv?.executor.deviceId));
   // opinion (the camera's reading) and proof (what the wire says): never a numeric model confidence
   const chips = el('span', { className: 'row' });
-  if (card) chips.append(chip('Seen by camera', 'opinion'));
+  if (card) chips.append(chip((identityRevisions.get(card.cardId) ?? 0) > 0 ? 'Owner-confirmed identity' : 'Seen by camera', 'opinion'));
   chips.append(proofChip(lr));
   box.append(el('div', { className: 'name', text: name }), chips, facts);
 }
@@ -1240,6 +1395,7 @@ function setupExecutors(): void {
     if (!tabChosenByUser && mainTab === 'code' && executor.tape.length && armedOnce) setTab('tape');
   };
   executor.onLeader = (leader) => {
+    visualLauncher.update();
     conn?.resendHello();
     log('info', leader ? 'this tab is the executor' : 'standby');
     renderAll();
@@ -1428,7 +1584,7 @@ function hello(): PayloadOf<'hello'> {
     if (bridge.online) caps.push('ir');
     if (AudioOracle.supported) caps.push('mic');
     p.capabilities = caps;
-    const ports: Port[] = [visualSynthPort, ...(midi.enabled ? midi.ports() : [])];
+    const ports: Port[] = [currentVisualPort(), ...(midi.enabled ? midi.ports() : [])];
     if (bridge.online) ports.push({ id: `serial:${link.info?.chip ?? 'cardputer'}`, kind: 'serial', name: `Cardputer USB serial (${link.info?.board ?? 'cardputer'})`, state: 'connected' });
     p.ports = ports;
   }
@@ -1437,15 +1593,21 @@ function hello(): PayloadOf<'hello'> {
 
 function connect(): void {
   conn?.stop();
+  setupProgress.clear();
+  objectCanvas.connection(false, false);
   const c = new Connection(Connection.sameOrigin(), hello);
   conn = c;
   c.onState = (s, info) => {
     serverDown = s === 'closed';
+    visualLauncher.update();
+    if (s === 'closed') setupProgress.disconnect();
+    if (s !== 'open') objectCanvas.connection(false, false);
     ['calm', 'top'].forEach(render);
     if (s === 'closed' && info?.code === CLOSE_UNAUTHORIZED) {
       log('warn', 'This browser is no longer paired (revoked or unknown token); pairing again.');
       clearIdentity();
       identity = undefined;
+      visualLauncher.close();
       pairedWithQuest = false;
       void pairThisBrowser();
     }
@@ -1454,6 +1616,7 @@ function connect(): void {
   c.on('welcome', (m) => {
     welcome = m.payload;
     canApprove = m.payload.canApprove;
+    if (m.from === 'server') objectCanvas.connection(!replaying, !replaying && (canApprove || isLocalPage()));
     pending.clear();
     log('info', `connected as ${m.payload.name} (${m.payload.kind}, ${m.payload.deviceId}) · ${m.payload.server} · ${m.payload.mode}`);
     ['calm', 'top', 'approve', 'banners', 'links'].forEach(render);
@@ -1466,6 +1629,10 @@ function connect(): void {
   c.on('presence', (m) => {
     devices = m.payload.devices;
     ['calm', 'links'].forEach(render);
+  });
+  c.on('visual.open', (m) => {
+    if (m.from !== 'server' || replaying || !executor.leader || !identity || m.to !== identity.deviceId || visualPresence.connected()) return;
+    openVisuals();
   });
   c.on('pair.pending', (m) => {
     if (settledPairings.has(m.payload.pairingId)) return;
@@ -1485,11 +1652,15 @@ function connect(): void {
   });
   c.on('log', (m) => log(m.payload.level, `${m.payload.code ? `[${m.payload.code}] ` : ''}${m.payload.message}`));
   c.on('agent.step', (m) => {
+    if (retiredSetupMessage(m)) return;
     const prev = steps.get(m.payload.stepId);
     steps.set(m.payload.stepId, { ...m.payload, seenAt: prev?.seenAt ?? Date.now() });
     if (steps.size > 300) steps.delete(steps.keys().next().value!);
+    const card = m.payload.cardId ? cards.get(m.payload.cardId) : undefined;
+    // A failed link step also represents an explicit setup request when USB is still offline.
+    if (m.payload.phase === 'link' && card?.protocols.includes('midi') && !/visual[\s-]synth/i.test(card.name)) midiSetupCardId = card.cardId;
     setFocus(m.payload.cardId);
-    ['agent', 'code', 'top'].forEach(render);
+    ['agent', 'code', 'top', 'calm'].forEach(render);
   });
   c.on('device.card', (m) => {
     cards.set(m.payload.cardId, m.payload);
@@ -1497,36 +1668,67 @@ function connect(): void {
     ['calm', 'device', 'evidence', 'links', 'banners'].forEach(render);
   });
   c.on('target.status', (m) => {
+    if (retiredSetupMessage(m)) return;
     targets.delete(m.payload.cardId);
     targets.set(m.payload.cardId, m.payload);
+    const card = cards.get(m.payload.cardId);
+    if (m.payload.executorDeviceId === identity?.deviceId && ['linking', 'researching', 'driving', 'verifying', 'forging'].includes(m.payload.state)
+      && (!card || card.protocols.includes('midi') && !/visual[\s-]synth/i.test(card.name))) midiSetupCardId = m.payload.cardId;
     render('calm');
   });
   c.on('tags.state', (m) => {
-    const tagged = new Set(m.payload.tags.map((tag) => tag.cardId));
+    const accepted: TaggedDevice[] = [];
+    let changedIdentity = false;
+    for (const tag of m.payload.tags) {
+      const revision = tag.identityRevision ?? 0, previous = identityRevisions.get(tag.cardId) ?? 0;
+      if (revision < previous) {
+        const current = taggedDevices.get(tag.cardId); if (current) accepted.push(current);
+        continue;
+      }
+      if (revision > previous) { clearIdentitySetup(tag.cardId); changedIdentity = true; }
+      identityRevisions.set(tag.cardId, revision);
+      accepted.push(tag);
+    }
+    taggedDevices.clear();
+    for (const tag of accepted) taggedDevices.set(tag.cardId, tag);
+    const tagged = new Set(accepted.map((tag) => tag.cardId));
     for (const cardId of targets.keys()) if (!tagged.has(cardId)) targets.delete(cardId);
+    if (midiSetupCardId && !tagged.has(midiSetupCardId)) midiSetupCardId = undefined;
+    if (m.from === 'server') objectCanvas.setTags(accepted);
+    if (changedIdentity) ['device', 'code', 'spec', 'evidence', 'links', 'banners', 'agent', 'daemons', 'workspace'].forEach(render);
+    render('calm');
+  });
+  c.on('canvas.state', (m) => { objectCanvas.receive(m); });
+  c.on('mode.state', (m) => {
+    if (m.payload.mode === 'annotate') midiSetupCardId = undefined;
     render('calm');
   });
   c.on('driver.spec', (m) => {
+    if (retiredSetupMessage(m)) return;
     drivers.set(m.payload.driverId, m.payload);
     setFocus(m.payload.cardId);
     if (!tabChosenByUser) setTab('code');
-    ['code', 'device', 'evidence'].forEach(render);
+    ['code', 'device', 'evidence', 'calm'].forEach(render);
   });
   c.on('driver.status', (m) => {
+    if (retiredSetupMessage(m)) return;
     driverStatus.set(m.payload.driverId, m.payload);
     render('evidence');
   });
   c.on('verify.result', (m) => {
+    if (retiredSetupMessage(m)) return;
     evidence.push(m.payload);
     if (evidence.length > 100) evidence.shift();
     ['evidence', 'learn', 'tape'].forEach(render);
   });
   c.on('link.request', (m) => {
+    if (retiredSetupMessage(m)) return;
     linkRequests.set(m.payload.linkId, m.payload);
     setFocus(m.payload.cardId);
     ['calm', 'banners'].forEach(render);
   });
   c.on('link.result', (m) => {
+    if (retiredSetupMessage(m)) return;
     linkResults.set(m.payload.cardId, m.payload);
     if (m.payload.verdict === 'mismatch') {
       refusals.push(m.payload);
@@ -1536,13 +1738,15 @@ function connect(): void {
     ['calm', 'links', 'evidence', 'device', 'banners'].forEach(render);
   });
   c.on('arm.request', (m) => {
+    if (retiredSetupMessage(m)) return;
     arm = m.payload;
     setFocus(m.payload.cardId);
     render('banners');
   });
   c.on('arm.result', (m) => {
+    if (retiredSetupMessage(m)) return;
     if (arm?.armId === m.payload.armId) arm = undefined;
-    armNote = { text: m.payload.armed ? `${cards.get(m.payload.cardId)?.name ?? 'Device'} enabled${m.payload.by ? ` by ${m.payload.by}` : ''}` : (m.payload.reason ?? 'cancelled'), ok: m.payload.armed, at: Date.now() };
+    armNote = { cardId: m.payload.cardId, armId: m.payload.armId, text: m.payload.armed ? `${cards.get(m.payload.cardId)?.name ?? 'Device'} enabled${m.payload.by ? ` by ${m.payload.by}` : ''}` : (m.payload.reason ?? 'cancelled'), ok: m.payload.armed, at: Date.now() };
     if (m.payload.armed) {
       armedOnce = true;
       if (!tabChosenByUser) setTab('tape');
@@ -1550,6 +1754,7 @@ function connect(): void {
     ['banners', 'calm'].forEach(render);
   });
   c.on('ui.spec', (m) => {
+    if (retiredSetupMessage(m)) return;
     const key = m.payload.cardId ?? m.payload.specId;
     specs.set(key, m.payload);
     lastSpec = m.payload;
@@ -1558,6 +1763,8 @@ function connect(): void {
   });
   if (!replaying) executor.attach(c);
   c.onAny((m) => {
+    if (retiredSetupMessage(m)) return;
+    if (m.from === 'server' && isMessageType(m.type) && setupProgress.update(m as Message)) render('workspace');
     const next = presenter.update(m);
     if (next) { activity = next; render('calm'); }
   });
@@ -1591,6 +1798,8 @@ function setupForms(): void {
   $<HTMLButtonElement>('panic').disabled = replaying;
   $('panic').addEventListener('click', () => {
     if (replaying) return;
+    setupProgress.clear();
+    render('workspace');
     void executor.panicLocal('button');
     conn?.send('panic', { reason: 'Stop all button on the Mac' }, { to: 'server' });
   });
@@ -1654,6 +1863,8 @@ export async function bootWorkbench(): Promise<void> {
   }
   setupCalm();
   setupForms();
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { render('calm'); render('workspace'); render('canvas'); } });
+  globalThis.addEventListener?.('pagehide', () => { clearVisualsOpenTimer(); visualsOpening = false; visualLauncher.close(); });
   setupExecutors();
   renderAll();
   requestAnimationFrame(meterLoop);

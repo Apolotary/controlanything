@@ -1,13 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { LibraryIdentity, RoomPlacement, type TaggedDevice, type UiSpecPayload } from '@ce/protocol';
+import { DeviceCardPayload, LibraryIdentity, RoomPlacement, type TaggedDevice, type UiSpecPayload } from '@ce/protocol';
 import { z } from 'zod';
 import {
   AssetRef, LegacyTag, LibraryFile, LibraryRecord, SetupData, SetupVersion,
   restoreResearch, saveResearch, type StoredTag,
 } from './library-schema';
 import type { Target } from './types';
+import { IdentityCorrectionAudit } from './identity-correction';
 
 export type { AssetRef, LibraryRecord, SetupVersion, StoredTag } from './library-schema';
 export interface SetupContext { forgeContext?: unknown; skinRefs?: AssetRef[] }
@@ -20,6 +21,8 @@ function canonical(value: unknown): string {
 }
 const hash = (value: Uint8Array | string): string => createHash('sha256').update(value).digest('hex');
 const jsonValue = (value: unknown): z.infer<ReturnType<typeof z.json>> | undefined => value === undefined ? undefined : z.json().parse(JSON.parse(JSON.stringify(value)));
+const identityKey = (card: Target['card']) => card ? canonical([card.maker.trim().toLowerCase(), card.model.trim().toLowerCase(), card.category, [...card.protocols].sort()]) : undefined;
+const currentVersion = (record: LibraryRecord, version?: SetupVersion) => !!version && (version.identityRevision ?? 0) === (record.identityRevision ?? 0);
 
 /** Synchronous transactions serialize writes, including rename and directory fsync, before returning. */
 function atomicWrite(file: string, bytes: string | Uint8Array): void {
@@ -85,6 +88,8 @@ export class TagStore {
   has(cardId: string): boolean { const record = this.records.get(cardId); return !!record && !record.hidden; }
 
   add(target: Target, label: string, position?: TaggedDevice['position']): StoredTag {
+    const existing = this.records.get(target.cardId);
+    if (existing && !this.currentIdentity(existing, target)) return this.snapshot(existing);
     if (!this.records.has(target.cardId) && this.records.size >= 64) throw new Error('A space can have at most 64 saved devices');
     this.transaction(() => {
       const old = this.records.get(target.cardId);
@@ -108,6 +113,38 @@ export class TagStore {
     this.transaction(() => this.capture(this.records.get(target.cardId)!, target, spec, extras));
   }
 
+  /** Commit the reviewed identity boundary before integration replaces its live target. No execution. */
+  correctIdentity(target: Target, review: IdentityCorrectionAudit): StoredTag | undefined {
+    const record = this.records.get(target.cardId);
+    if (!record) return undefined;
+    const audit = IdentityCorrectionAudit.parse(review), card = DeviceCardPayload.parse(target.card);
+    if (audit.cardId !== record.cardId || card.cardId !== record.cardId || identityKey(record.card) !== identityKey({ ...card, ...audit.previousIdentity })
+      || card.maker !== audit.identity.maker || card.model !== audit.identity.model) throw new Error('Identity review no longer matches this saved object');
+    if (target.armed || target.armId || target.abort && !target.abort.signal.aborted || target.driver || target.specId || target.link || target.research
+      || Object.keys(target.verification).length || target.evidence.length || Object.keys(target.paramValues).length || Object.keys(target.stepIndex).length) {
+      throw new Error('Identity correction must clear the old setup before it can be saved');
+    }
+    this.transaction(() => {
+      record.card = card;
+      record.displayName = card.name;
+      record.identityRevision = (record.identityRevision ?? 0) + 1;
+      record.identityCorrections = [...(record.identityCorrections ?? []), audit].slice(-32);
+      record.identity = LibraryIdentity.parse({ label: card.name, maker: card.maker, model: card.model, category: card.category,
+        appearance: card.evidence.join('; ').slice(0, 2000), executorDeviceId: audit.portEvidence.deviceId,
+        portId: audit.portEvidence.portId, portName: audit.portEvidence.portName, manufacturer: audit.portEvidence.manufacturer });
+      record.selection = target.selection;
+      record.enabled = false;
+      record.activeVersionId = undefined; record.candidateVersionId = undefined; record.candidate = undefined; record.draft = undefined;
+      record.lastKnownState = { at: audit.confirmedAt, stepIndex: {}, paramValues: {} };
+    }, true);
+    return this.get(target.cardId);
+  }
+
+  canRestoreVersion(cardId: string, versionId: string): boolean {
+    const record = this.records.get(cardId);
+    return !!record && currentVersion(record, record.versions.find((version) => version.versionId === versionId));
+  }
+
   beginCandidate(cardId: string): boolean {
     return this.change(cardId, (record) => {
       record.candidate = { id: `candidate-${randomUUID()}`, createdAt: Date.now(), enabledAtStart: record.enabled, cancelled: false };
@@ -117,7 +154,8 @@ export class TagStore {
 
   activateCandidate(cardId: string): StoredTag | undefined {
     const record = this.records.get(cardId);
-    if (!record?.candidateVersionId || !record.enabled || record.candidate?.cancelled) return undefined;
+    if (!record?.candidateVersionId || !record.enabled || record.candidate?.cancelled
+      || !currentVersion(record, record.versions.find((version) => version.versionId === record.candidateVersionId))) return undefined;
     this.change(cardId, (current) => {
       current.activeVersionId = current.candidateVersionId;
       current.candidateVersionId = undefined;
@@ -128,7 +166,7 @@ export class TagStore {
 
   restoreVersion(cardId: string, versionId: string): StoredTag | undefined {
     const record = this.records.get(cardId);
-    if (!record?.versions.some((version) => version.versionId === versionId)) return undefined;
+    if (!record || !this.canRestoreVersion(cardId, versionId)) return undefined;
     this.change(cardId, (current) => {
       current.activeVersionId = versionId;
       current.candidateVersionId = undefined;
@@ -139,6 +177,9 @@ export class TagStore {
 
   /** Explicit enablement is independent of version selection, so rollback cannot undo a disable. */
   setEnabled(cardId: string, enabled: boolean): boolean {
+    const record = this.records.get(cardId);
+    if (enabled && record?.identityRevision && !record.versions.some((version) => currentVersion(record, version)
+      && [record.activeVersionId, record.candidateVersionId].includes(version.versionId))) return false;
     return this.change(cardId, (record) => {
       record.enabled = enabled;
       if (record.candidate) record.candidate.cancelled = !enabled;
@@ -177,7 +218,8 @@ export class TagStore {
     if (!saved?.driver || !saved.uiSpec) return false;
     const record = this.records.get(cardId)!;
     const active = record.versions.find((version) => version.versionId === record.activeVersionId);
-    if (!active) return false;
+    if (!currentVersion(record, active) || !active) return false;
+    if (spec && (spec.specId !== active.specId || spec.driverId !== active.driver.driverId)) return false;
     this.change(cardId, (current) => {
       const uiSpec = spec ?? active.uiSpec;
       const version = this.version(current, {
@@ -212,8 +254,8 @@ export class TagStore {
   }
 
   private snapshot(record: LibraryRecord): StoredTag {
-    const setup = record.versions.find((version) => version.versionId === record.activeVersionId);
-    const draft = record.draft;
+    const setup = record.versions.find((version) => version.versionId === record.activeVersionId && currentVersion(record, version));
+    const draft = (record.draft?.identityRevision ?? 0) === (record.identityRevision ?? 0) ? record.draft : undefined;
     return structuredClone({
       cardId: record.cardId, label: record.displayName.slice(0, 80), position: record.position,
       card: record.card, selection: record.selection, driver: setup?.driver ?? draft?.driver,
@@ -224,12 +266,14 @@ export class TagStore {
       stepIndex: record.lastKnownState?.stepIndex ?? {}, paramValues: record.lastKnownState?.paramValues ?? {},
       forgeContext: this.loadContext(setup?.forgeContext), skinRefs: setup?.skinRefs ?? [], placement: record.placement,
       activeVersionId: record.activeVersionId,
+      identityRevision: record.identityRevision ?? 0, identityCorrection: record.identityCorrections?.at(-1),
     });
   }
 
   private capture(record: LibraryRecord, target: Target, spec?: UiSpecPayload, extras: SetupContext = {}): void {
-    const active = record.versions.find((version) => version.versionId === record.activeVersionId);
-    const prior = record.versions.find((version) => version.versionId === record.candidateVersionId) ?? active;
+    if (!this.currentIdentity(record, target)) return;
+    const active = record.versions.find((version) => version.versionId === record.activeVersionId && currentVersion(record, version));
+    const prior = record.versions.find((version) => version.versionId === record.candidateVersionId && currentVersion(record, version)) ?? active;
     const candidate = spec ?? prior?.uiSpec;
     const uiSpec = candidate?.specId === target.specId && candidate?.cardId === target.cardId && candidate?.driverId === target.driver?.driverId ? candidate : undefined;
     record.card = target.card ?? record.card;
@@ -251,6 +295,7 @@ export class TagStore {
       record.lastKnownState = { at: Date.now(), ...structuredClone(values) };
     }
     record.draft = LibraryRecord.shape.draft.parse({
+      identityRevision: record.identityRevision ?? 0,
       cardId: target.cardId, label: record.displayName.slice(0, 80), card: target.card, selection: target.selection,
       driver: target.driver, link: target.link, verification: target.verification, evidence: target.evidence,
       research: saveResearch(target.research), armed: false, specId: target.specId, uiSpec,
@@ -273,7 +318,7 @@ export class TagStore {
   }
 
   private version(record: LibraryRecord, input: unknown): SetupVersion {
-    const data = SetupData.parse(input);
+    const data = SetupData.parse({ ...(input as Record<string, unknown>), identityRevision: record.identityRevision ?? 0 });
     const versionId = `setup-${hash(canonical(data))}`;
     const existing = record.versions.find((version) => version.versionId === versionId);
     if (existing) return existing;
@@ -281,6 +326,13 @@ export class TagStore {
     const version = SetupVersion.parse({ ...data, versionId, createdAt: Date.now() });
     record.versions.push(version);
     return version;
+  }
+
+  private currentIdentity(record: LibraryRecord, target: Target): boolean {
+    if (!record.identityRevision) return true;
+    if (target.identityRevision !== record.identityRevision || identityKey(target.card) !== identityKey(record.card)) return false;
+    return !record.versions.some((version) => !currentVersion(record, version)
+      && (version.driver.driverId === target.driver?.driverId || version.specId === target.specId));
   }
 
   private storeContext(context: unknown): z.infer<ReturnType<typeof z.json>> | undefined {
@@ -313,14 +365,14 @@ export class TagStore {
     return true;
   }
 
-  private transaction(update: () => void): void {
+  private transaction(update: () => void, protectIdentityBackup = false): void {
     const before = structuredClone(this.records);
     const previous = this.serialize();
     try {
       update();
       if (this.serialize() === previous) return;
       for (const [id, record] of this.records) if (canonical(record) !== canonical(before.get(id))) record.updatedAt = Date.now();
-      this.flush();
+      this.flush(protectIdentityBackup);
     } catch (error) {
       this.records = before;
       throw error;
@@ -329,10 +381,11 @@ export class TagStore {
 
   private serialize(): string { return JSON.stringify(LibraryFile.parse({ version: 2, records: [...this.records.values()] })); }
 
-  private flush(): void {
+  private flush(protectIdentityBackup = false): void {
     const serialized = this.serialize();
     if (this.file) {
-      atomicWrite(`${this.file}.last-good`, this.lastSerialized ?? serialized);
+      // A damaged primary must never resurrect a pre-correction identity/driver from its backup.
+      atomicWrite(`${this.file}.last-good`, protectIdentityBackup ? serialized : this.lastSerialized ?? serialized);
       atomicWrite(this.file, serialized);
     }
     this.lastSerialized = serialized;

@@ -10,6 +10,7 @@ import type { CameraSource } from './camera';
 import type { JpegEncoder } from './encode';
 import type { PoseRing } from './poses';
 import { cameraPoseFromHead, fovYDeg, type PoseLike, questIntrinsics, scaleIntrinsics } from './projection';
+import { regionCrop, type ScanRegion } from './region';
 
 export interface FrameRecord {
   frameId: string;
@@ -30,6 +31,8 @@ export interface FrameRecord {
   /** world positions of tracked hand joints at capture (for the "never tag a hand" guard) */
   handJoints: Vector3[];
   bytes: number;
+  /** Explicit selected area in the original camera image, when this is a cropped scan. */
+  region?: ScanRegion;
 }
 
 export interface CaptureResult {
@@ -78,7 +81,7 @@ export class FrameCapture {
   }
 
   /** Grab + stamp + encode. Returns null when the camera has no frame or a capture is already running. */
-  async capture(purpose: FramePurpose, senseId?: string): Promise<CaptureResult | null> {
+  async capture(purpose: FramePurpose, senseId?: string, region?: ScanRegion): Promise<CaptureResult | null> {
     if (this.busy) return null;
     this.busy = true;
     try {
@@ -103,9 +106,17 @@ export class FrameCapture {
         speedDeg = p.speedDeg;
       }
       const cam = cameraPoseFromHead(head, this.d.camera.eye);
-      const sourceK = g.intrinsics ?? questIntrinsics(g.width, g.height);
+      let sourceK = g.intrinsics ?? questIntrinsics(g.width, g.height);
       const handJoints = this.d.handJoints().map((v) => v.clone());
-      const enc = await this.d.encoder.encode(g.bitmap, { maxWidth: this.opts.maxWidth ?? 1280, quality: this.opts.quality ?? 0.8 });
+      let bitmap = g.bitmap;
+      if (region) {
+        try {
+          const crop = regionCrop(sourceK, region);
+          bitmap = await createImageBitmap(g.bitmap, crop.x, crop.y, crop.width, crop.height);
+          sourceK = crop.intrinsics;
+        } finally { g.bitmap.close(); }
+      }
+      const enc = await this.d.encoder.encode(bitmap, { maxWidth: this.opts.maxWidth ?? 1280, quality: this.opts.quality ?? 0.8 });
       const k = scaleIntrinsics(sourceK, enc.width, enc.height);
       const frameId = newId('f');
       const capturedAt = Date.now() - (performance.now() - g.tCapture);
@@ -123,6 +134,7 @@ export class FrameCapture {
         speedDeg,
         handJoints,
         bytes: enc.bytes,
+        ...(region ? { region } : {}),
       };
       const payload: ScanFramePayload = {
         frameId,

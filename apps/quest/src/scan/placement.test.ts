@@ -71,6 +71,11 @@ describe('rejectReason (devices only)', () => {
   it('drops walls (over 60 % of the frame)', () => {
     expect(rejectReason(det({ box: [0, 0, 1200, 900] }), record())).toMatch(/60/);
   });
+  it('accepts an object filling a deliberately cropped area but still excludes people', () => {
+    const rec = record({ region: [0.25, 0.25, 0.75, 0.75] });
+    expect(rejectReason(det({ box: [0, 0, 1200, 900] }), rec)).toBeNull();
+    expect(rejectReason(det({ label: 'hand', prompt: 'hand', box: [0, 0, 1200, 900] }), rec)).toMatch(/person/);
+  });
   it('keeps held devices when a hand covers only their middle', () => {
     const rec = record();
     // 15 joints projected into the middle of the box
@@ -89,7 +94,9 @@ describe('TargetStore', () => {
   it('uses one short sentence-case label', () => {
     expect(displayLabel('  CEILING   LIGHT  ')).toBe('Ceiling light');
     expect(displayLabel('LAPTOP')).toBe('Laptop');
-    expect(displayLabel('')).toBe('Device');
+    expect(displayLabel('')).toBe('Unidentified device');
+    expect(displayLabel('electronic device')).toBe('Unidentified device');
+    expect(displayLabel('device with screen and keyboard')).toBe('Pocket computer');
     expect(displayLabel('Very long electronic device description').length).toBeLessThanOrEqual(22);
   });
 
@@ -145,6 +152,42 @@ describe('TargetStore', () => {
     const removed = store.clearTransient((t) => Boolean(t.cardId));
     expect(removed).toEqual([t1.id]);
     expect(store.byCard('card1')?.id).toBe(t2.id);
+  });
+
+  it('keeps two nearby same-class boxes in a capture separate and respects known device identities', async () => {
+    const store = new TargetStore();
+    const placement = await placeDetection(det(), record(), [wall]);
+    const first = store.upsert(det({ detId: 'one', deviceId: 'one' }), placement, 'f1').target;
+    const next = { ...placement, position: placement.position.clone().add(new Vector3(0.12, 0, 0)) };
+    const second = store.upsert(det({ detId: 'two', deviceId: 'two' }), next, 'f1').target;
+    expect(second.id).not.toBe(first.id);
+    // A later detection for another physical device cannot reuse a neighboring target by proximity.
+    const third = store.upsert(det({ detId: 'three', deviceId: 'three' }), next, 'f2').target;
+    expect(new Set([first.id, second.id, third.id]).size).toBe(3);
+    const anonymous = new TargetStore();
+    const a = anonymous.upsert(det({ detId: 'one' }), placement, 'f1').target;
+    const b = anonymous.upsert(det({ detId: 'two' }), next, 'f1').target;
+    expect(a.id).not.toBe(b.id);
+  });
+
+  it('selection does not turn a size estimate into measured depth, and a later measurement may improve it', async () => {
+    const store = new TargetStore();
+    const estimate = await placeDetection(det(), record(), []);
+    const target = store.upsert(det(), estimate, 'f1').target;
+    store.refine(target.id, new Vector3(0, 0, -0.2));
+    expect(target.refined).toBe(true);
+    expect(target.confirmed).toBe(false);
+    expect(target.method).toBe('size-prior');
+    expect(target.position.equals(estimate.position)).toBe(true);
+    const measured = { ...estimate, position: estimate.position.clone().add(new Vector3(0, 0, -0.1)), confirmed: true, method: 'hit-test' };
+    expect(store.upsert(det(), measured, 'f2').target).toBe(target);
+    expect(target.confirmed).toBe(true);
+    expect(target.position.equals(measured.position)).toBe(true);
+    expect(target.method).toBe('hit-test');
+    // Neither the prior depth nor its scaled dimensions may replace that measurement on the next scan.
+    store.upsert(det(), { ...estimate, sizeM: [0.5, 0.5, 0.5] }, 'f3');
+    expect(target.position.equals(measured.position)).toBe(true);
+    expect(target.sizeM).toEqual(measured.sizeM);
   });
 });
 

@@ -31,6 +31,35 @@
     "payload": {
       "type": "object",
       "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "virtual": {
+          "type": "string",
+          "const": "visual-synth"
+        },
+        "position": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            },
+            "z": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "x",
+            "y",
+            "z"
+          ],
+          "additionalProperties": false
+        },
         "frameId": {
           "type": "string",
           "minLength": 1,

@@ -4,14 +4,36 @@
  */
 import type { Object3D, Quaternion, Vector3 } from 'three';
 import type { Channel, ControlEvent, Gen3dSpec, HackItem, HudStatus, LogRow, ModelChip, Patch } from '@ce/gen3d';
-import type { TaggedDevice } from '@ce/protocol';
+import type { CanvasActionPayload, CanvasStatePayload, ObjectInformation, ProjectSpatialScene, SetupProgressView, TaggedDevice } from '@ce/protocol';
 
 export type AppMode = 'annotate' | 'control';
 export type ObjectFilter = 'electronics' | 'lights' | 'everything';
 export type DeviceConnection = 'ready' | 'setup' | 'offline' | 'unknown';
-export interface HomeState { mode: AppMode; filter: ObjectFilter; tagged: number; status: string; canStop?: boolean }
-export interface DeviceState { targetId: string; connection: DeviceConnection; hint?: string; action?: TaggedDevice['action']; busy?: boolean; sentence?: string; handControl?: boolean; performAvailable?: boolean; performingLive?: boolean; performanceRoute?: string; pairingSeconds?: number }
+export interface HomeState { mode: AppMode; filter: ObjectFilter; tagged: number; status: string; canStop?: boolean; visualSynthSelection?: { phase: 'pending' | 'unavailable'; message: string } }
+export type MappingOutcome = 'working' | 'review' | 'applied' | 'unchanged' | 'failed' | 'cancelled';
+export interface DeviceState { targetId: string; connection: DeviceConnection; hint?: string; action?: TaggedDevice['action']; busy?: boolean; sentence?: string; handControl?: boolean; performAvailable?: boolean; performingLive?: boolean; performanceRoute?: string; pairingSeconds?: number; screenGuide?: boolean; canvasReady?: boolean; silentVisual?: boolean; mappingSummary?: string; mappingActionId?: string; mappingOutcome?: MappingOutcome }
+export interface CanvasView { targetId: string; state: CanvasStatePayload }
+export interface ProjectView {
+  title: string; status: string; projectCount: number; actionCount: number; ready: boolean; running: boolean; engaged: boolean;
+  action?: { label: string; kind: 'number' | 'trigger'; value: number };
+  chordPads?: { id: string; label: string }[];
+  lastChord?: string;
+  spatial?: { recipe: ProjectSpatialScene; normalized: number; running: boolean; available: boolean };
+}
+export type ProjectUiCommand = 'next-project' | 'next-action' | 'start' | 'stop' | 'refresh' | 'trigger' | 'pad' | 'close' | 'open-page' | 'run-spatial';
 export interface HelperPairingView { urls: string[]; pairedName?: string }
+export interface OnboardingView { step: 'tag' | 'use'; title: string; message: string }
+export interface AssistantView {
+  targetId: string;
+  targetLabel?: string;
+  objectInfo?: ObjectInformation;
+  state: 'idle' | 'listening' | 'thinking' | 'reply' | 'setup' | 'proposal' | 'applied' | 'error';
+  transcript?: string;
+  text?: string;
+  proposalId?: string;
+  proposalKind?: 'gesture' | 'identity' | 'peripheral';
+  mapping?: string[];
+}
 
 export interface JointState {
   position: Vector3;
@@ -149,6 +171,24 @@ export interface HudEvents {
   pairCancel: { targetId: string };
   pairCode: { targetId: string; code: string };
   helperSkip: Record<string, never>;
+  helperPair: Record<string, never>;
+  visualSynth: Record<string, never>;
+  menuOpened: {};
+  askMuseGeneral: {};
+  identifyArea: {};
+  projectsOpen: Record<string, never>;
+  projectsCommand: { command: ProjectUiCommand; actionId?: string };
+  projectsPause: Record<string, never>;
+  changeDevice: Record<string, never>;
+  inspectObject: { targetId: string };
+  gestureSetup: { targetId: string };
+  canvasCreate: { targetId: string };
+  canvasAction: { targetId: string } & Omit<CanvasActionPayload, 'requestId' | 'cardId'>;
+  canvasRestore: { targetId: string; revision: number; baseRevision: number };
+  canvasClose: { targetId: string };
+  assistantTalk: { targetId: string };
+  assistantConfirm: { targetId: string; proposalId: string; accept: boolean };
+  assistantDismiss: { targetId: string };
   handControl: { targetId: string; enabled: boolean };
   deck: { key: DeckKey; phase: 'press' | 'release' };
   hack: { ts?: number; targetId: string; itemId: string; controlId?: string; index: number; hold?: boolean };
@@ -162,9 +202,17 @@ export interface HudEvents {
 
 export interface Hud {
   readonly root: Object3D;
+  /** Presentation only; never establishes device or mapping authority. */
+  presentationSnapshot?(): { surface: 'menu' | 'device' | 'assistant' | 'project' | 'inspect'; stage: 'choose' | 'prepare' | 'building' | 'review' | 'ready' | 'perform' };
   update(f: HudFrame): void;
   setHome?(state: HomeState): void;
   setDeviceState?(state: DeviceState | null): void;
+  /** Actual setup events and artifact previews for the selected card. */
+  setSetupProgress?(view: SetupProgressView | null): void;
+  setCanvas?(view: CanvasView | null): void;
+  setProjects?(view: ProjectView | null): void;
+  /** Explicitly bring navigation and the selected workspace to the current view. */
+  recenter?(): void;
 
   // SCAN
   setScanning(on: boolean, info?: { prompts?: number; pending?: number; startedAt?: number; modelId?: string }): void;
@@ -201,9 +249,13 @@ export interface Hud {
   // pairing, voice, deck, toasts
   showPairing(p: { display: string; qr: string; message?: string } | null): void;
   showHelperPairing?(view: HelperPairingView | null): void;
+  setOnboarding?(view: OnboardingView | null): void;
+  setAssistant?(view: AssistantView | null): void;
   showApprovals(list: { pairingId: string; name: string; kind: string; display: string }[]): void;
   setVoice(v: { listening: boolean; level?: number; partial?: string; final?: string }): void;
   setDeck(d: { open?: boolean; scanning?: boolean; daemons?: boolean; at?: [number, number, number] }): void;
+  /** Discard captured input without firing release actions (for hidden/suspended XR). */
+  cancelInteractions?(): void;
   toast(text: string, level?: 'info' | 'ok' | 'warn' | 'error'): void;
 
   on<K extends keyof HudEvents>(k: K, fn: (e: HudEvents[K]) => void): () => void;

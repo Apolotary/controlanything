@@ -15,9 +15,10 @@ export const DeviceCardDraft = DeviceCardSchema.omit({ cardId: true, snapshotId:
 export type DeviceCardDraft = z.infer<typeof DeviceCardDraft>;
 
 export const IDENTIFY_SYSTEM =
-  'You identify ONE physical device for an agent that will control it. The first image is a tight crop of the device; the second is the whole scene for context. ' +
+  'You identify ONE selected physical object for an agent that can control devices or create games inspired by ordinary objects. The first image is a tight crop of the object; the second is the whole scene for context. ' +
   'Fill the DeviceCard: maker and model only when legible text or an unmistakable design supports them (quote the text in evidence), otherwise write "unknown" and keep confidence low. ' +
   'Never identify, describe or mention people. `requires` lists the client capabilities needed to control it: ["midi"] for a USB-MIDI instrument, ["ir"] for anything driven by an infrared remote (ceiling lights, air conditioners, TVs), ["local"] for a computer or phone. ' +
+  'For ordinary non-electronic objects such as a book, cup, bottle or ball, use category "other", protocols ["other"], requires [], companion "none". Do not invent a control connection. For books, quote only legible cover text; never invent contents of unread pages. ' +
   'A screen showing the legible label ControlAnything Visual Synth is the silent virtual MIDI instrument (maker ControlAnything, model Visual Synth, category synthesizer, protocols ["midi"], requires ["midi"]); identify that application when selected. ' +
   'alternatives: other plausible identifications. followUp: what to photograph to be sure (a label, the ports).';
 
@@ -183,6 +184,10 @@ export function fixtureDeviceCard(messages: ChatMessage[]): DeviceCardDraft {
   // the SAM label is the strongest cue; the system prompt names every category, so the whole text only decides
   // when the label says nothing (a synth selected in FIXTURE mode used to come back as a ceiling light)
   const label = /label "([^"]+)"/.exec(text)?.[1] ?? '';
+  if (/\b(book|cup|mug|bottle|ball)s?\b/.test(label)) {
+    return { name: `FIXTURE ${label.slice(0, 60)}`, maker: 'unknown', model: 'unknown', category: 'other', confidence: 0.6,
+      protocols: ['other'], requires: [], companion: 'none', evidence: ['FIXTURE: object label only; contents were not read'] };
+  }
   const kindOf = (s: string) => (/ceiling light|lamp|\blight\b/.test(s) ? 'light' : /synth|keyboard|op-1|electronic device/.test(s) ? 'synth' : undefined);
   if (/controlanything visual synth|visual synth/.test(label)) {
     return { name: 'ControlAnything Visual Synth', maker: 'ControlAnything', model: 'Visual Synth', category: 'synthesizer', confidence: 0.9, protocols: ['midi'], requires: ['midi'], companion: 'computer_usb', evidence: ['FIXTURE: simulated laptop screen, no Meta model was called'], visibleText: ['ControlAnything Visual Synth'] };

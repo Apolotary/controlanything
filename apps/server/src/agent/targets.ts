@@ -7,6 +7,7 @@ import { stateGuidance } from './guidance';
 export class TargetStore {
   private readonly targets = new Map<string, Target>();
   private readonly listeners = new Set<(t: Target) => void>();
+  private statusProjection?: (target: Target, status: TargetStatusPayload) => TargetStatusPayload;
 
   constructor(
     private readonly hub: Pick<Hub, 'broadcast'>,
@@ -20,6 +21,9 @@ export class TargetStore {
   get(cardId: string): Target | undefined {
     return this.targets.get(cardId);
   }
+
+  /** Attach current connection/control availability to saved or reconnecting states. */
+  setStatusProjection(project: (target: Target, status: TargetStatusPayload) => TargetStatusPayload): void { this.statusProjection = project; }
 
   remove(cardId: string): boolean {
     return this.targets.delete(cardId);
@@ -85,12 +89,13 @@ export class TargetStore {
 
   /** Current wire state for a reconnect; reading it never starts work. */
   status(t: Target): TargetStatusPayload {
-    return {
+    const status: TargetStatusPayload = {
       cardId: t.cardId, runId: t.runId, state: t.state, since: t.since,
       sentence: t.sentence, hint: t.hint, action: t.action, detail: t.detail?.slice(0, 300),
       driverId: t.driver?.driverId, specId: t.specId,
       executorDeviceId: t.link?.executorDeviceId ?? t.driver?.executor.deviceId,
     };
+    return this.statusProjection?.(t, status) ?? status;
   }
 
   /** Public view (no frame bytes). */

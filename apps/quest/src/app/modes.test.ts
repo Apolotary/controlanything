@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { ModeState } from './modes';
 
 describe('local tags and server snapshots', () => {
+  it('clears a removed control spec while retaining the corrected object identity and local pose', () => {
+    const state = new ModeState();
+    state.accept({ cardId: 'object', label: 'Keyboard', connection: 'ready', specId: 'old', identityRevision: 0, position: { x: 1, y: 2, z: -1 } });
+    state.accept({ cardId: 'object', label: 'OP-1 Field', connection: 'setup', identityRevision: 1 });
+    expect(state.byCard('object')).toMatchObject({ label: 'OP-1 Field', identityRevision: 1, specId: undefined, position: { x: 1, y: 2, z: -1 } });
+    state.accept({ cardId: 'object', label: 'Keyboard', connection: 'ready', specId: 'old', identityRevision: 0 });
+    expect(state.byCard('object')).toMatchObject({ label: 'OP-1 Field', connection: 'setup', specId: undefined });
+    state.snapshot([]); state.accept({ cardId: 'object', label: 'Keyboard', connection: 'ready', identityRevision: 0 });
+    expect(state.byCard('object')).toBeUndefined();
+  });
   it('associates simultaneous picks by their position even when identification returns in reverse order', () => {
     const state = new ModeState();
     state.add('left', { label: 'Ceiling light', position: { x: -1, y: 2, z: -1 } });

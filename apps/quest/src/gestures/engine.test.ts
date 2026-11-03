@@ -16,6 +16,32 @@ function makeMap(axis: GestureAxis = 'right_height'): GestureMap {
   };
 }
 
+it('distinguishes lost tracking from a released clutch and accepts a tracked controller without a left hand', () => {
+  const engine = new GestureEngine(makeMap(), () => {}), frame = makeGestureFrame();
+  engine.update(frame, 0); expect(engine.update(frame, 80)).toMatchObject({ engaged: true, trackingLost: false });
+  setPosture(frame.hands.left!, 'point'); expect(engine.update(frame, 100)).toMatchObject({ engaged: false, trackingLost: false });
+  const right = frame.hands.right!; delete frame.hands.right;
+  expect(engine.update(frame, 120)).toMatchObject({ engaged: false, trackingLost: true });
+  frame.hands.right = right; expect(engine.update(frame, 140)).toMatchObject({ engaged: false, trackingLost: false });
+  delete frame.hands.left; expect(engine.update(frame, 160)).toMatchObject({ engaged: false, trackingLost: true });
+  right.controller = true;
+  expect(engine.update(frame, 180, true)).toMatchObject({ engaged: true, trackingLost: false });
+});
+
+it('reports missing joints needed by the active map even when the wrist remains tracked', () => {
+  const frame = makeGestureFrame(), engine = new GestureEngine(makeMap('right_pinch_aperture'), () => {});
+  engine.update(frame, 0); expect(engine.update(frame, 80).trackingLost).toBe(false);
+  const thumb = frame.hands.right!.joints['thumb-tip']; delete frame.hands.right!.joints['thumb-tip'];
+  expect(engine.update(frame, 100).trackingLost).toBe(true);
+  frame.hands.right!.joints['thumb-tip'] = thumb;
+  expect(engine.update(frame, 120).trackingLost).toBe(false);
+  const span = new GestureEngine(makeMap('two_hand_distance'), () => {});
+  frame.hands.right!.controller = true; delete frame.hands.left;
+  expect(span.update(frame, 140, true).trackingLost).toBe(true);
+  frame.hands.left = makeGestureHand();
+  expect(span.update(frame, 160, true).trackingLost).toBe(false);
+});
+
 describe('joint posture vocabulary', () => {
   it.each<HandPosture>(['fist', 'open_palm', 'point', 'pinch'])('detects %s at different hand scales after dwell', (posture) => {
     for (const scale of [0.7, 1, 1.3]) {
@@ -319,5 +345,45 @@ describe('gesture clutch and device events', () => {
       expect(engine.state.axes).toBe(axes);
       expect(engine.state.axes[0]).toBe(axis);
     }
+  });
+});
+
+
+describe('calibrated forward/back hand input', () => {
+  it('responds to push/pull, not hand height or a head turn', () => {
+    const events: number[] = [], frame = makeGestureFrame();
+    const engine = new GestureEngine(makeMap('right_depth'), (_action, value) => events.push(value as number));
+    engine.update(frame, 0); engine.update(frame, 80); expect(events).toEqual([]);
+    moveHand(frame.hands.right!, .2, 1.6, -.4); engine.update(frame, 120); expect(events).toEqual([]);
+    frame.head.quaternion.setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 2);
+    engine.update(frame, 160); expect(events).toEqual([]);
+    moveHand(frame.hands.right!, .2, 1.6, -.56); engine.update(frame, 200);
+    expect(events.at(-1)).toBeGreaterThan(75);
+    moveHand(frame.hands.right!, .2, 1.6, -.30); engine.update(frame, 240);
+    expect(events.at(-1)).toBeLessThan(45);
+    setPosture(frame.hands.left!, 'point'); const count = events.length;
+    moveHand(frame.hands.right!, .2, 1.6, -.7); engine.update(frame, 280); expect(events).toHaveLength(count);
+  });
+  it('calibrates heading at clutch pickup and cancels shared head/hand translation', () => {
+    const events: number[] = [], frame = makeGestureFrame();
+    frame.head.quaternion.setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 2);
+    const engine = new GestureEngine(makeMap('right_depth'), (_action, value) => events.push(value as number));
+    engine.update(frame, 0); engine.update(frame, 80);
+    frame.head.position.x += .25; moveHand(frame.hands.right!, .45, 1.3, -.4); engine.update(frame, 120);
+    expect(events).toEqual([]);
+    moveHand(frame.hands.right!, .30, 1.3, -.4); engine.update(frame, 160);
+    expect(events.at(-1)).toBeGreaterThan(70);
+  });
+  it('freezes lost samples and reacquires without jumping, then clamps travel to the action range', () => {
+    const events: number[] = [], frame = makeGestureFrame();
+    const engine = new GestureEngine(makeMap('right_depth'), (_action, value) => events.push(value as number));
+    engine.update(frame, 0); engine.update(frame, 80);
+    frame.head.position.x = NaN; moveHand(frame.hands.right!, .2, 1.3, -.9);
+    expect(engine.update(frame, 120).trackingLost).toBe(true); expect(events).toEqual([]);
+    frame.head.position.x = 0; engine.update(frame, 160); expect(events).toEqual([]);
+    moveHand(frame.hands.right!, .2, 1.3, -4);
+    for (const time of [200, 240, 280, 320]) engine.update(frame, time);
+    expect(events.at(-1)).toBe(100); expect(events.every(value => value >= 0 && value <= 100)).toBe(true);
+    const count = events.length; delete frame.hands.right; engine.update(frame, 360); expect(events).toHaveLength(count);
   });
 });

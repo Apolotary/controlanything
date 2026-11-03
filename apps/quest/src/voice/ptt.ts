@@ -4,7 +4,7 @@
  * seconds of release, fall back to POST /api/transcribe with the whole utterance as a WAV and send the text
  * as a typed `voice.text {final: true}`.
  */
-import { newId } from '@ce/protocol';
+import { newId, SERVER_ID, type WorkspaceContext } from '@ce/protocol';
 import { Emitter } from '../app/emitter';
 import { api } from '../io/api';
 import type { VoiceTextPayload } from '../io/v1';
@@ -16,17 +16,18 @@ import { concatPcm, pcm16ToWav } from './wav';
 export interface PttEvents extends Record<string, unknown> {
   listening: { listening: boolean; utteranceId?: string };
   level: number;
-  text: { utteranceId?: string; text: string; final: boolean; modelId?: string; via: 'ws' | 'http' };
+  text: VoiceTextPayload & { via: 'ws' | 'http' };
   error: string;
 }
 
-type VoiceContext = { cardId?: string; specId?: string };
+type VoiceContext = { cardId?: string; specId?: string; workspace?: WorkspaceContext };
 
 export class PushToTalk extends Emitter<PttEvents> {
   private current?: { id: string; seq: number; chunks: Int16Array[]; startedAt: number; context: VoiceContext };
   private awaiting = new Map<string, { chunks: Int16Array[]; timer: ReturnType<typeof setTimeout>; context: VoiceContext }>();
   private pressGeneration = 0;
   private preparing = false;
+  private flushTimer?: ReturnType<typeof setTimeout>;
   /** wait this long after release for a WS transcript before using the HTTP fallback */
   fallbackMs = 6000;
   context: VoiceContext = {};
@@ -39,18 +40,37 @@ export class PushToTalk extends Emitter<PttEvents> {
   ) {
     super();
     mic.on('level', (l) => this.emit('level', l));
-    mic.on('chunk', ({ pcm, final }) => this.onChunk(pcm, final));
-    ws.on('voice.text', (m) => this.onText(m.payload as VoiceTextPayload));
+    mic.on('chunk', ({ pcm, final, captureId }) => this.onChunk(pcm, final, captureId));
+    mic.on('stopped', ({ reason }) => {
+      if (!this.current && !this.preparing) return;
+      this.cancel();
+      this.emit('error', reason);
+    });
+    ws.on('voice.text', (m) => { if (m.from === SERVER_ID) this.onText(m.payload as VoiceTextPayload); });
   }
 
   get listening(): boolean {
     return Boolean(this.current);
   }
 
-  async press(): Promise<void> {
+  get opening(): boolean { return this.preparing; }
+
+  /** Abandon this utterance without sending a final chunk or a late HTTP fallback. */
+  cancel(): void {
+    clearTimeout(this.flushTimer);
+    this.pressGeneration++;
+    this.preparing = false;
+    const current = this.current;
+    this.current = undefined;
+    if (current) this.mic.stop();
+    for (const pending of this.awaiting.values()) clearTimeout(pending.timer);
+    this.awaiting.clear();
+  }
+
+  async press(overrideContext?: VoiceContext): Promise<void> {
     if (this.current || this.preparing) return;
     const generation = ++this.pressGeneration;
-    const context = { ...this.selectedContext() };
+    const context = structuredClone(overrideContext ?? this.selectedContext());
     this.preparing = true;
     try {
       await this.mic.prepare();
@@ -62,7 +82,7 @@ export class PushToTalk extends Emitter<PttEvents> {
     }
     if (generation !== this.pressGeneration) return;
     this.current = { id: newId('u'), seq: 0, chunks: [], startedAt: performance.now(), context };
-    this.mic.start();
+    this.mic.start(this.current.id);
     this.emit('listening', { listening: true, utteranceId: this.current.id });
   }
 
@@ -70,26 +90,36 @@ export class PushToTalk extends Emitter<PttEvents> {
     this.pressGeneration++;
     this.preparing = false;
     if (!this.current) return;
+    const id = this.current.id;
     this.mic.stop(); // the worklet flushes a final chunk
+    clearTimeout(this.flushTimer);
+    this.flushTimer = setTimeout(() => {
+      if (this.current?.id !== id) return;
+      this.cancel();
+      this.emit('error', 'Microphone did not finish recording. Enable Camera + mic and try again.');
+    }, 1500);
   }
 
-  private onChunk(pcm: Int16Array, final: boolean): void {
+  private onChunk(pcm: Int16Array, final: boolean, captureId?: string): void {
     const u = this.current;
-    if (!u) return;
+    if (!u || captureId && captureId !== u.id) return;
+    if (final) clearTimeout(this.flushTimer);
     u.chunks.push(pcm);
+    if (final && u.chunks.reduce((a, c) => a + c.length, 0) < TARGET_RATE * 0.25) {
+      this.current = undefined;
+      this.emit('listening', { listening: false, utteranceId: u.id });
+      this.emit('error', 'Too short. Tap Ask Muse, speak, then tap Send.');
+      return;
+    }
     const payload: Record<string, unknown> = { utteranceId: u.id, seq: u.seq++, sampleRate: TARGET_RATE, pcm16: toBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)) };
     if (final) payload.final = true;
     if (u.context.cardId) payload.cardId = u.context.cardId;
     if (u.context.specId) payload.specId = u.context.specId;
+    if (u.context.workspace) payload.workspace = u.context.workspace;
     this.ws.send('voice.audio', payload, { to: 'server' });
     if (final) {
       this.current = undefined;
       this.emit('listening', { listening: false, utteranceId: u.id });
-      const samples = u.chunks.reduce((a, c) => a + c.length, 0);
-      if (samples < TARGET_RATE * 0.25) {
-        this.emit('error', 'too short; hold the mic key while you speak');
-        return;
-      }
       const timer = setTimeout(() => void this.fallback(u.id), this.fallbackMs);
       this.awaiting.set(u.id, { chunks: u.chunks, timer, context: u.context });
     }
@@ -100,7 +130,7 @@ export class PushToTalk extends Emitter<PttEvents> {
       clearTimeout(this.awaiting.get(p.utteranceId)!.timer);
       this.awaiting.delete(p.utteranceId);
     }
-    this.emit('text', { utteranceId: p.utteranceId, text: p.text, final: p.final, modelId: p.modelId, via: 'ws' });
+    this.emit('text', { ...p, via: 'ws' });
   }
 
   private async fallback(utteranceId: string): Promise<void> {
@@ -112,11 +142,16 @@ export class PushToTalk extends Emitter<PttEvents> {
       if (this.awaiting.get(utteranceId) !== a) return;
       this.awaiting.delete(utteranceId);
       const text = r.text?.trim() ?? '';
-      this.emit('text', { utteranceId, text, final: true, modelId: r.model, via: 'http' });
+      if (!text) {
+        this.emit('error', 'No speech heard. Tap Ask Muse and try again.');
+        return;
+      }
+      this.emit('text', { utteranceId, text, final: true, modelId: r.model, ...a.context, via: 'http' });
       if (text) {
         const payload: Record<string, unknown> = { utteranceId, text, final: true };
         if (a.context.cardId) payload.cardId = a.context.cardId;
         if (a.context.specId) payload.specId = a.context.specId;
+        if (a.context.workspace) payload.workspace = a.context.workspace;
         this.ws.send('voice.text', payload, { to: 'server' });
       }
     } catch (e) {

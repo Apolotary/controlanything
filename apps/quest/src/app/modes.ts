@@ -17,6 +17,7 @@ export class ModeState {
   readonly removals = new Set<string>();
   readonly savedCards = new Set<string>();
   private readonly cancelled = new Map<string, LocalTag>();
+  private readonly identityRevisions = new Map<string, number>();
 
   add(targetId: string, payload: PayloadOf<'tag.add'>): LocalTag {
     this.cancelled.delete(targetId);
@@ -44,6 +45,9 @@ export class ModeState {
 
   /** Match pending picks by capture position/label, never by whichever object is selected now. */
   accept(remote: TaggedDevice): LocalTag | undefined {
+    const revision = remote.identityRevision ?? 0;
+    if (revision < (this.identityRevisions.get(remote.cardId) ?? 0)) return this.byCard(remote.cardId);
+    this.identityRevisions.set(remote.cardId, revision);
     if (this.removals.has(remote.cardId)) return;
     for (const [id, cancelled] of this.cancelled) if (this.matches(cancelled, remote)) {
       this.cancelled.delete(id);
@@ -72,7 +76,7 @@ export class ModeState {
     }
     // The local tracker owns the live pose; snapshots retain the persisted capture pose.
     const position = tag.position ?? remote.position;
-    Object.assign(tag, remote, { position, hint: remote.hint, action: remote.action, pending: undefined });
+    Object.assign(tag, remote, { position, hint: remote.hint, action: remote.action, specId: remote.specId, pending: undefined });
     return tag;
   }
 

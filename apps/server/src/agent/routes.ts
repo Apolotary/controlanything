@@ -20,6 +20,7 @@ import { ArmConfirmPayload, PanicPayload, TargetSelectPayload } from '@ce/protoc
 import express, { type Request } from 'express';
 import type { ServerContext } from '../context';
 import { DATA_DIR } from '../devices/profiles';
+import { MidiChartConflict, MidiChartRequest } from '../devices/midi-charts';
 import { getAgent } from './index';
 
 function bearer(req: Request): string | undefined {
@@ -69,6 +70,37 @@ export function agentRouter(ctx: ServerContext): express.Router {
       return;
     }
     res.type('json').send(readFileSync(file, 'utf8'));
+  });
+  const chartView = (cardId: string) => {
+    const card = agent.targets.get(cardId)?.card;
+    if (!card) return undefined;
+    const chart = agent.midiCharts.get(cardId);
+    return { card: { cardId, maker: card.maker, model: card.model, name: card.name }, revision: chart?.revision ?? 0, chart: chart ?? null };
+  };
+  r.get('/midi-charts/:cardId', (req, res) => {
+    if (!caller(req).canApprove) { res.status(403).json({ error: 'forbidden', message: 'Reviewing MIDI permissions needs an approver token or localhost.' }); return; }
+    const view = chartView(String(req.params.cardId));
+    if (!view) { res.status(404).json({ error: 'not_found', message: 'Identify and select a MIDI device first.' }); return; }
+    res.json(view);
+  });
+  r.post('/midi-charts', (req, res) => {
+    const c = caller(req);
+    if (!c.canApprove) { res.status(403).json({ error: 'forbidden', message: 'Reviewing MIDI permissions needs an approver token or localhost.' }); return; }
+    const parsed = MidiChartRequest.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json({ error: 'bad_request', message: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ').slice(0, 1200) }); return; }
+    const body = parsed.data, target = agent.targets.get(body.cardId);
+    if (!target?.card) { res.status(404).json({ error: 'not_found', message: 'Identify and select a MIDI device first.' }); return; }
+    if (target.armed || (target.abort && !target.abort.signal.aborted)) {
+      res.status(409).json({ error: 'busy', message: 'Stop controls and finish or cancel setup before changing its MIDI chart.' }); return;
+    }
+    try {
+      agent.midiCharts.review(target.card, body.chart, body.expectedRevision, c.device?.name ?? 'Mac owner');
+      agent.invalidateMidiChart(body.cardId);
+      // Store permissions only. A separate full setup still needs effect verification and explicit Enable.
+      res.status(200).json(chartView(body.cardId));
+    } catch (error) {
+      res.status(error instanceof MidiChartConflict ? 409 : 400).json({ error: error instanceof MidiChartConflict ? 'conflict' : 'invalid_chart', message: (error as Error).message });
+    }
   });
   r.post('/select', (req, res) => {
     const c = caller(req);

@@ -11,6 +11,7 @@ import { CallLog, createMuseChat, createTranscriber, DEFAULT_FIXTURES, type Fixt
 import { isLoopback, lanIPv4, localHostnames } from './net';
 import { PairingManager } from './pairing/manager';
 import { DeviceRegistry } from './pairing/registry';
+import { createProjects } from './projects';
 
 export interface PublicUrls {
   /** host used in QR codes and join links */
@@ -37,6 +38,7 @@ export interface ServerContext {
   bound: { https?: number; http?: number };
   startedAt: number;
   log: (line: string) => void;
+  projects: ReturnType<typeof createProjects>;
 }
 
 export interface ContextDeps {
@@ -48,6 +50,7 @@ export interface ContextDeps {
   registryFile?: string | null;
   fixtures?: Record<string, FixtureValue>;
   heartbeatMs?: number;
+  projectsFile?: string | null;
 }
 
 export function createContext(config: ServerConfig, deps: ContextDeps = {}): ServerContext {
@@ -89,7 +92,10 @@ export function createContext(config: ServerConfig, deps: ContextDeps = {}): Ser
   const calls = new CallLog(log);
   const muse = createMuseChat(config.muse, { fetchImpl: deps.fetchImpl, log, fixtures: { ...DEFAULT_FIXTURES, ...deps.fixtures }, callLog: calls });
   const transcriber = createTranscriber(config.muse, { fetchImpl: deps.fetchImpl, callLog: calls });
-  return { config, registry, pairing, hub, muse, transcriber, calls, isLocal, urls, bound, startedAt: Date.now(), log };
+  const ctx = { config, registry, pairing, hub, muse, transcriber, calls, isLocal, urls, bound, startedAt: Date.now(), log } as ServerContext;
+  ctx.projects = createProjects(ctx, deps.projectsFile === null || deps.registryFile === null && deps.projectsFile === undefined
+    ? undefined : deps.projectsFile ?? join(config.dataDir, 'projects.json'));
+  return ctx;
 }
 
 export interface RunningServers {
@@ -133,6 +139,7 @@ export async function startServers(ctx: ServerContext, app: Express): Promise<Ru
     out.certRegenerated = cert.regenerated;
   }
   out.close = async () => {
+    ctx.projects.close();
     ctx.hub.close();
     ctx.registry.flush();
     await Promise.all(

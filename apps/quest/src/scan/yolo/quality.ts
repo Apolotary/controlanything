@@ -44,11 +44,13 @@ export function claimSamTarget(box: Box, candidates: readonly SamCandidate[], po
     // A little button inside a laptop must not claim the entire laptop.
     const covers = sam && containment(box, sam) >= 0.6 && containment(sam, box) >= 0.2;
     let score = overlap >= 0.25 || covers ? 1 + overlap : 0;
-    if (!score && position && candidate.position) {
+    // When both image boxes exist, their disagreement is evidence: two nearby depth guesses must
+    // not override it and transfer selection/identity to the neighboring desk device.
+    if (!score && !sam && position && candidate.position) {
       const p = candidate.position;
       const distance = Math.hypot(position.x - p.x, position.y - p.y, position.z - p.z);
       // Keep the subobject guard when looking away: proximity alone cannot establish ownership.
-      const areaRatio = sam ? (sam[2] * sam[3]) / (box[2] * box[3]) : faceArea(candidate.sizeM) / faceArea(sizeM);
+      const areaRatio = faceArea(candidate.sizeM) / faceArea(sizeM);
       if (distance < 0.12 && areaRatio >= 0.2 && areaRatio <= 5) score = 1 - distance / 0.12;
     }
     if (score > bestScore) {

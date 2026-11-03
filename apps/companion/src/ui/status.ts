@@ -158,7 +158,8 @@ export function createStatusPresenter() {
       }
       return statusForMessage(m);
     },
-    reset(): void {
+    reset(cardId?: string): void {
+      if (cardId) { specs.delete(cardId); actions.delete(cardId); armed.delete(cardId); return; }
       specs.clear();
       actions.clear();
       armed.clear();

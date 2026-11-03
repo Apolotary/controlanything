@@ -5,7 +5,7 @@ export const VISUAL_SYNTH_CHANNEL = 'ce-visual-synth';
 export const VISUAL_SYNTH_IDENTITY_REPLY = Object.freeze([
   0xf0, 0x7e, 0x7f, 0x06, 0x02, 0x7d, 0x43, 0x45, 0, 1, 0, 0, 0, 1, 0xf7,
 ]);
-export const VISUAL_SYNTH_PATTERNS = ['Flow', 'Rings', 'Prism'] as const;
+export const VISUAL_SYNTH_PATTERNS = ['Flow', 'Rings', 'Prism', 'Water'] as const;
 
 export interface VisualSynthParameters {
   brightness: number;
@@ -14,6 +14,8 @@ export interface VisualSynthParameters {
   speed: number;
   zoom: number;
   warp: number;
+  /** CC21 is a dedicated water depth control, distinct from Warp. */
+  ripple: number;
   symmetry: number;
   pattern: number;
 }
@@ -30,11 +32,12 @@ export const VISUAL_SYNTH_CONTROLS = [
   { cc: 1, parameter: 'speed', label: 'Speed', min: 0, max: 1, curve: 'linear' },
   { cc: 74, parameter: 'zoom', label: 'Zoom', min: 0, max: 1, curve: 'linear' },
   { cc: 71, parameter: 'warp', label: 'Warp', min: 0, max: 1, curve: 'linear' },
+  { cc: 21, parameter: 'ripple', label: 'Water ripples', min: 0, max: 1, curve: 'linear' },
   { cc: 20, parameter: 'symmetry', label: 'Symmetry', min: 1, max: 8, curve: 'stepped' },
 ] as const;
 
 export function createVisualSynthState(): VisualSynthParameters {
-  return { brightness: 0.75, hue: 0.54, saturation: 0.85, speed: 0.35, zoom: 0.45, warp: 0.4, symmetry: 1, pattern: 0 };
+  return { brightness: 0.75, hue: 0.54, saturation: 0.85, speed: 0.35, zoom: 0.45, warp: 0.4, ripple: 0.5, symmetry: 1, pattern: 0 };
 }
 
 /** The same CC ranges are published in the device chart for later gesture bindings. */
@@ -55,7 +58,7 @@ export function applyVisualSynthMidi(current: VisualSynthParameters, bytes: read
   const unit = bytes[2] / 127;
   const value = control.parameter === 'symmetry' ? 1 + Math.round(unit * 7) : unit;
   return {
-    parameters: { ...current, [control.parameter]: value },
+    parameters: { ...current, [control.parameter]: value, ...(control.parameter === 'ripple' ? { pattern: 3 } : {}) },
     label: `${control.label} · ${control.parameter === 'symmetry' ? value : `${Math.round(value * 100)}%`}`,
   };
 }

@@ -1,7 +1,7 @@
 import { Matrix4, Object3D, Quaternion, Vector3 } from 'three';
 
 interface HeadPose { position: Vector3; quaternion: Quaternion }
-interface PanelOffset { distance?: number; height?: number; lateral?: number }
+interface PanelOffset { distance?: number; height?: number; lateral?: number; follow?: boolean }
 
 const UP = new Vector3(0, 1, 0);
 const CONE_COS = Math.cos(35 * Math.PI / 180);
@@ -29,11 +29,13 @@ export class WorldPanel {
   private readonly distance: number;
   private readonly height: number;
   private readonly lateral: number;
+  private readonly follows: boolean;
 
-  constructor({ distance = 0.6, height = -0.14, lateral = 0 }: PanelOffset = {}) {
+  constructor({ distance = 0.6, height = -0.14, lateral = 0, follow = true }: PanelOffset = {}) {
     this.distance = distance;
     this.height = height;
     this.lateral = lateral;
+    this.follows = follow;
   }
 
   /** The next update anchors at its current head pose, for example when selecting another device. */
@@ -62,6 +64,8 @@ export class WorldPanel {
       this.placed = true;
       return;
     }
+
+    if (!this.follows) return;
 
     if (this.movingSince === null) {
       this.gaze.set(0, 0, -1).applyQuaternion(head.quaternion);

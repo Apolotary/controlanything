@@ -23,8 +23,9 @@ import { compileHackset, previewHack, rearmSpec, withStatus } from './compile';
 import { issue, type Issue, type Stage } from './issues';
 import { applyEdit, EditSet, syncHackset } from './editPatch';
 import { editMessages, forgeMessages } from './forgePrompt';
+import { boundedInteractionReferences, type InteractionReferenceProvider, type InteractionReferenceQuery } from './interactionReferences';
 import { ForgeDevice, ForgeDriver, verificationOf, VerifyState } from './forgeTypes';
-import { proposeGestureMap } from '../devices/gestures';
+import { proposeGestureMap, validateGestureMap } from '../devices/gestures';
 import { draftIssues, isStepper } from './forgeVerify';
 import { draftAccent, draftToHack, ForgeDraft, type Hack, HackDraft, HACKSET_VERSION, type HackSet } from './hackset';
 import { TopLevelItemScanner } from './partial';
@@ -176,6 +177,8 @@ export interface Forge {
   undo(specId: string): EditResult;
   redo(specId: string): EditResult;
   rearm(specId: string, verification: Record<string, VerifyState>): UiSpec;
+  /** Commit a validated gesture proposal as a normal, durable undoable revision. */
+  applyGestureMap?(specId: string, map: unknown, expected: { driverId: string; rev: number }): UiSpec;
   get(specId: string): UiSpec | undefined;
   specIdFor(cardId: string): string;
   list(): UiSpec[];
@@ -191,6 +194,8 @@ export interface Forge {
   restore?(snapshot: unknown): UiSpec;
   /** Discard in-memory context after a device is explicitly forgotten. */
   forget?(specId: string): boolean;
+  /** Install after the saved library is ready; queried afresh for each model request. */
+  setReferences?(provider: InteractionReferenceProvider | undefined): void;
 }
 
 export interface ForgeDeps {
@@ -212,6 +217,7 @@ export interface ForgeDeps {
   skinPainter?: SkinPainter;
   /** Durable skin bytes; shared with the device library's content-addressed assets. */
   skinStore?: SkinStore;
+  references?: InteractionReferenceProvider;
 }
 
 // --- helpers ----------------------------------------------------------------------------------------
@@ -454,6 +460,11 @@ type Entry = Omit<ForgeSnapshot, 'version'>;
 
 export function createForge(deps: ForgeDeps): Forge {
   const log = deps.log ?? (() => {});
+  let referenceProvider = deps.references;
+  const referencesFor = (query: InteractionReferenceQuery) => {
+    try { return boundedInteractionReferences(referenceProvider?.(structuredClone(query))); }
+    catch (error) { log(`[forge] saved references unavailable: ${(error as Error).message}`); return []; }
+  };
   const transport: ModelTransport =
     deps.transport ??
     (deps.muse.mode === 'live'
@@ -472,11 +483,28 @@ export function createForge(deps: ForgeDeps): Forge {
         : new ReplaySkinPainter({ dir: deps.replayDir ? `${deps.replayDir}/skins` : undefined, store: skins, speed: deps.replaySpeed ?? 1 })
       : undefined);
 
+  const retainVerifiedMap = (map: NonNullable<UiSpec['gestureMap']>, entry: Entry) => {
+    const safe = (binding: (typeof map.axes)[number] | (typeof map.postures)[number]) => {
+      try {
+        validateGestureMap({ ...map, axes: 'axis' in binding ? [binding] : [], postures: 'posture' in binding ? [binding] : [] }, entry.driver, entry.verification);
+        return true;
+      } catch { return false; }
+    };
+    const retained = validateGestureMap({ ...map, axes: map.axes.filter(safe), postures: map.postures.filter(safe) }, entry.driver, entry.verification);
+    return retained.axes.length || retained.postures.length ? retained : undefined;
+  };
+
   const publish = (e: ForgeEvent) => {
     if (e.type === 'spec') {
       const entry = store.get(e.uiSpec.specId);
       if (entry) {
-        const map = proposeGestureMap(entry.driver, entry.verification, entry.device);
+        let map = e.uiSpec.gestureMap;
+        if (map) {
+          // Verification can be revoked on rearm/history restore. Never resurrect unsafe bindings.
+          try { map = validateGestureMap(map, entry.driver, entry.verification); }
+          catch { map = retainVerifiedMap(map, entry); }
+        }
+        map ??= proposeGestureMap(entry.driver, entry.verification, entry.device);
         if (map) e.uiSpec.gestureMap = map;
         else delete e.uiSpec.gestureMap;
       }
@@ -583,6 +611,7 @@ export function createForge(deps: ForgeDeps): Forge {
     const firstEffort = req.effort ?? DEFAULT_EFFORT;
     const verification = verificationOf(driver, req.verification);
     const request = req.request?.trim() || `generate a hack set for the ${device.name}`;
+    const references = referencesFor({ device, driver, verification, request });
     const specId = specIdFor(device.cardId);
     const existing = store.get(specId);
     const step = stepper(runId, device.cardId, req.onProgress);
@@ -628,7 +657,7 @@ export function createForge(deps: ForgeDeps): Forge {
         const res = await call(
           session,
           attempt === 1 ? 'gen3d.forge' : 'gen3d.forge.repair',
-          forgeMessages({ device, driver, verification, request, room: req.room, current: existing?.revs[existing.cursor]?.hackset, repair: attempt > 1 ? { issues: errors.slice(0, 20).map(fmtIssue), previous } : undefined }),
+          forgeMessages({ device, driver, verification, request, references, room: req.room, current: existing?.revs[existing.cursor]?.hackset, repair: attempt > 1 ? { issues: errors.slice(0, 20).map(fmtIssue), previous } : undefined }),
           rf,
           model,
           effort,
@@ -734,6 +763,9 @@ export function createForge(deps: ForgeDeps): Forge {
       ? structuredClone(existing)
       : { specId, device, driver, room: req.room ?? [], verification, revs: [], cursor: -1 };
     Object.assign(entry, { device, driver, room: req.room ?? entry.room, verification, ...(crop ? { crop } : {}), ...(reuseSkin ? { skin: reuseSkin } : {}) });
+    if (existing?.driver.driverId === driver.driverId && existing.revs[existing.cursor]?.gestureMap) {
+      ui.gestureMap = structuredClone(existing.revs[existing.cursor].gestureMap);
+    }
     commit(entry, ui);
     if (skinJob) {
       const wait = skinJob.then((r) => attachSkin(entry, r, runId, skinStep));
@@ -811,6 +843,7 @@ export function createForge(deps: ForgeDeps): Forge {
     if (/^(redo|redo that)[.!]?$/i.test(instruction)) return historyMove(req.specId, 'redo');
     const current = e.revs[e.cursor];
     const runId = req.runId ?? newId('edit_');
+    const references = referencesFor({ device: e.device, driver: e.driver, verification: e.verification, request: instruction });
     const model = req.model ?? defaultModel;
     const firstEffort = req.effort ?? DEFAULT_EFFORT;
     const step = stepper(runId, e.device.cardId, req.onProgress);
@@ -830,7 +863,7 @@ export function createForge(deps: ForgeDeps): Forge {
       for (let attempt = 1; attempt <= 1 + MAX_REPAIRS; attempt++) {
         const effort = attempt === 1 ? firstEffort : REPAIR_EFFORT;
         const gen = step({ phase: 'forge', status: 'running', title: attempt === 1 ? `Editing: ${instruction}`.slice(0, 200) : `Repair ${attempt - 1}/${MAX_REPAIRS}: fixing ${errors.length} issue${errors.length === 1 ? '' : 's'}`, model, effort, source: transport.source });
-        const res = await call(session, attempt === 1 ? 'gen3d.edit' : 'gen3d.edit.repair', editMessages({ spec: current.gen3d, hackset: current.hackset, driver: e.driver, instruction, repair: attempt > 1 ? { issues: errors.slice(0, 20).map(fmtIssue), previous } : undefined }), rf, model, effort, () => {}, req.signal);
+        const res = await call(session, attempt === 1 ? 'gen3d.edit' : 'gen3d.edit.repair', editMessages({ spec: current.gen3d, hackset: current.hackset, driver: e.driver, instruction, references, repair: attempt > 1 ? { issues: errors.slice(0, 20).map(fmtIssue), previous } : undefined }), rf, model, effort, () => {}, req.signal);
         last = res;
         modelUsed = res.recordedFrom ?? res.model ?? model;
         usage = addUsage(usage, res.usage);
@@ -880,6 +913,7 @@ export function createForge(deps: ForgeDeps): Forge {
       cardId: e.device.cardId,
       driverId: e.driver.driverId,
       title: rearmed.spec.title,
+      ...(current.gestureMap ? { gestureMap: structuredClone(current.gestureMap) } : {}),
       rev,
       gen3d: { ...rearmed.spec, rev },
       hackset: rearmed.hackset,
@@ -888,6 +922,8 @@ export function createForge(deps: ForgeDeps): Forge {
       ...(base.recordedFrom ? { recordedFrom: base.recordedFrom } : {}),
       check: { ok: true, attempts: rep.attempts, errors: 0, warnings: rep.warnings.length },
     };
+    if (req.signal?.aborted) throw new RequestCancelledError();
+    if (store.get(req.specId) !== e || e.revs[e.cursor] !== current) throw new ForgeInputError('Interface changed while editing; ask again');
     commit(e, ui);
     step({ phase: 'deploy', status: 'ok', title: `Edit applied: ${applied.summary || instruction}`.slice(0, 200), detail: `rev ${rev} · changed ${applied.touched.join(', ') || 'nothing'}`, model: modelUsed, effort: firstEffort, latencyMs: base.latencyMs, source: base.source, recordedFrom: base.recordedFrom, endedAt: Date.now() });
     return { ok: true, uiSpec: ui, ...base, touched: applied.touched, untouchedIdentical: applied.untouchedIdentical, summary: applied.summary };
@@ -909,6 +945,7 @@ export function createForge(deps: ForgeDeps): Forge {
 
   return {
     mode: transport.source === 'live' ? 'live' : 'fixture',
+    setReferences: (provider) => { referenceProvider = provider; },
     generate: forge,
     forge,
     target,
@@ -921,6 +958,14 @@ export function createForge(deps: ForgeDeps): Forge {
     undo: (id) => historyMove(id, 'undo'),
     redo: (id) => historyMove(id, 'redo'),
     rearm,
+    applyGestureMap: (specId, map, expected) => {
+      const entry = getEntry(specId);
+      const current = entry.revs[entry.cursor];
+      if (entry.driver.driverId !== expected.driverId || current.rev !== expected.rev) throw new ForgeInputError('Gesture proposal is stale; ask again');
+      const checked = validateGestureMap(map, entry.driver, entry.verification);
+      const rev = latestRev(entry) + 1;
+      return commit(entry, { ...current, rev, gen3d: { ...current.gen3d, rev }, gestureMap: checked });
+    },
     get: (id) => {
       const e = store.get(id);
       return e && e.cursor >= 0 ? e.revs[e.cursor] : undefined;
@@ -941,6 +986,11 @@ export function createForge(deps: ForgeDeps): Forge {
       const parsed = ForgeSnapshot.safeParse(snapshot);
       if (!parsed.success) throw new ForgeInputError('Invalid saved interface context', parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).slice(0, 20));
       const { version: _version, ...entry } = parsed.data;
+      // Saved maps are data, never authority. Recheck against restored verification.
+      for (const ui of entry.revs) if (ui.gestureMap) {
+        try { ui.gestureMap = validateGestureMap(ui.gestureMap, entry.driver, entry.verification); }
+        catch { ui.gestureMap = retainVerifiedMap(ui.gestureMap, entry); }
+      }
       store.set(entry.specId, entry);
       skinWaits.delete(entry.specId);
       return structuredClone(entry.revs[entry.cursor]);

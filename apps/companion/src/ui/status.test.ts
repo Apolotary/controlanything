@@ -141,4 +141,13 @@ describe('status presenter', () => {
     presenter.reset();
     expect(presenter.update(arm(true))?.text).toBe('Ready: controls enabled');
   });
+
+  it('clears corrected-object counts without discarding another device’s status', () => {
+    const presenter = createStatusPresenter();
+    presenter.update(spec('light', 6)); presenter.update(spec('synth', 4));
+    presenter.update(arm(true, 'light')); presenter.update(arm(true, 'synth'));
+    presenter.reset('light');
+    expect(presenter.update(arm(true, 'light'))?.text).toBe('Ready: controls enabled');
+    expect(presenter.update(target('armed', 'synth'))?.text).toBe('Ready: 4 controls enabled');
+  });
 });

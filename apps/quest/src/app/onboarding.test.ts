@@ -65,4 +65,59 @@ describe('helper onboarding', () => {
       expect(flow.visible).toBe(!allowSim);
     }
   });
+
+  it('guides pairing, tagging, and choosing Use devices without advancing automatically', () => {
+    const flow = new HelperOnboarding();
+    flow.enter(0);
+    expect(flow.guide(0)).toBeNull();
+    flow.update({ urls, helpers: [] }, 1);
+    expect(flow.guide(0)).toBeNull();
+    flow.scan();
+    flow.updateHelpers([mac], 100);
+    expect(flow.guide(0)).toBeNull();
+    flow.tick(1600);
+    expect(flow.guide(0)).toMatchObject({ step: 'tag', message: 'Boxes appear on devices. Pinch one to tag it.' });
+    expect(flow.guide(1)).toMatchObject({ step: 'use', message: "When you're ready, open Menu and choose Use devices." });
+    flow.tick(60_000);
+    expect(flow.guide(1)?.step).toBe('use');
+    flow.chooseControl();
+    expect(flow.guide(1)).toBeNull();
+    expect(flow.guide(0)).toBeNull();
+    flow.leave();
+    flow.enter(70_000);
+    expect(flow.guide(0)?.step).toBe('tag');
+  });
+
+  it('continues with tagging after Skip and hides the guide outside AR', () => {
+    const flow = new HelperOnboarding();
+    flow.update({ urls, helpers: [] }, 0);
+    flow.enter(0);
+    flow.skip();
+    expect(flow.guide(0)?.step).toBe('tag');
+    flow.updateHelpers([], 1000);
+    expect(flow.guide(1)?.step).toBe('use');
+    flow.show();
+    expect(flow.guide(1)).toBeNull();
+    flow.skip();
+    flow.leave();
+    expect(flow.guide(1)).toBeNull();
+  });
+
+  it('can pair another helper explicitly without accepting an existing helper as success', () => {
+    const flow = new HelperOnboarding();
+    flow.update({ urls, helpers: [mac] }, 0);
+    flow.enter(0);
+    expect(flow.guide(0)?.step).toBe('tag');
+    flow.show(true);
+    flow.scan();
+    flow.updateHelpers([mac], 100);
+    flow.updateUrls(urls, 500);
+    expect(flow.state).toBe('scanning');
+    expect(flow.guide(0)).toBeNull();
+    flow.updateHelpers([mac, { ...mac, deviceId: 'second', name: 'Second laptop' }], 1000);
+    expect(flow.state).toBe('paired');
+    expect(flow.pairedName).toBe('Second laptop');
+    flow.tick(2500);
+    expect(flow.guide(0)?.step).toBe('tag');
+  });
 });

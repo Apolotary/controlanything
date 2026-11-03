@@ -7,7 +7,8 @@ import type { AgentGuidance, AgentPhase, Driver, DriverDraft } from '@ce/protoco
 import { newId } from '@ce/protocol';
 import { resolveOp } from '../devices/encode';
 import { isVisualSynthPort } from '../devices/visualSynth';
-import { allowedCcs, matchMidiProfile, type Profiles } from '../devices/profiles';
+import { allowedCcs, type Profiles } from '../devices/profiles';
+import type { MidiChartStore } from '../devices/midi-charts';
 import { formatIssues, validateDriver } from '../devices/validate';
 import type { Forge } from '../gen3d/forge';
 import type { Hub } from '../hub';
@@ -30,6 +31,7 @@ import type { StepLog } from './steps';
 import type { TargetStore } from './targets';
 import type { Target } from './types';
 import { type VerifyDeps, type VerifySummary, verifyDriver } from './verify';
+import { virtualScreenExecutor } from './visual-synth';
 
 export interface LoopDeps {
   hub: Pick<Hub, 'broadcast' | 'sendToDevice'>;
@@ -42,6 +44,7 @@ export interface LoopDeps {
   wonder?: MuseChat;
   web: WebSearcher;
   profiles: Profiles;
+  midiCharts?: MidiChartStore;
   forge: () => Forge | undefined;
   arm: ArmService;
   /** the "say" oracle: Muse Voice Transcribe hears a spoken line back */
@@ -66,13 +69,14 @@ const LEARN_WINDOW_MS = 10_000;
 const LEARN_WINDOW_RETRY_MS = 15_000;
 
 /** Run the loop for a target that has a detection (from SCAN) or a card (a paired device the user pointed at). */
-export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string; preferDeviceId?: string; identifyOnly?: boolean; identified?: Omit<IdentifyResult, 'card'> } = {}): Promise<void> {
+export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string; preferDeviceId?: string; identifyOnly?: boolean; identified?: Omit<IdentifyResult, 'card'>; refreshResearch?: boolean } = {}): Promise<void> {
   const log = d.log ?? (() => {});
   t.abort?.abort();
   const abort = new AbortController();
   t.abort = abort;
   const signal = abort.signal;
   const base = { cardId: t.cardId, runId: t.runId };
+  let visualRestore: { deviceId: string; port?: string; driverId: string } | undefined;
   const flow = new FlowRun(abort, { ...d.phaseTimeoutMs, ...(d.companionWaitMs !== undefined ? { link: d.companionWaitMs } : {}) });
   const retryNotice = () => {
     const guidance: AgentGuidance = { sentence: 'That did not work; trying once more…', hint: 'You can cancel or choose another device', action: 'cancel' };
@@ -117,7 +121,7 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       return;
     }
     d.targets.setState(t, 'linking', `needs ${cap}`);
-    const profile = cap === 'midi' ? (await flow.wait(doResearch({ profiles: d.profiles, web: d.web }, card, cap, { allowWeb: false }))).profile : undefined;
+    const profile = cap === 'midi' ? (await flow.wait(doResearch({ profiles: d.profiles, web: d.web, midiCharts: d.midiCharts }, card, cap, { allowWeb: false }))).profile : undefined;
     const linkId = newId('ln');
     let announced = false;
     let link = await flow.wait(tryLink({ roster: d.roster, dispatcher: d.dispatcher }, card, cap, { linkId, profile, preferDeviceId: opts.preferDeviceId ?? t.selectedBy, signal, probeIdentity: false }));
@@ -176,18 +180,9 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       flow.enter('research');
       d.targets.setState(t, 'researching');
       const rstep = d.steps.begin('research', cap === 'midi' ? 'looking up the MIDI chart' : cap === 'ir' ? 'looking up IR codes' : 'local actions', { ...base, kind: 'proof' });
-      // the cable knows the model when the camera does not: a USB port name that matches a stored chart's hint
-      if (cap === 'midi' && executor.port && !matchMidiProfile(d.profiles, card)) {
-        const byPort = [...d.profiles.midi.values()].find((p) => p.usb?.portNameHint && executor.port!.name.toLowerCase().includes(p.usb.portNameHint.toLowerCase()));
-        if (byPort) {
-          card.maker = byPort.manufacturer;
-          card.model = byPort.device.replace(byPort.manufacturer, '').trim() || byPort.device;
-          card.evidence = [...card.evidence, `USB port "${executor.port.name}" matches the ${byPort.device} chart`].slice(0, 12);
-          d.hub.broadcast('device.card', card);
-          d.steps.note('research', `USB says ${byPort.device}: using its chart`, { ...base, kind: 'proof', evidence: executor.port.name.slice(0, 64) });
-        }
-      }
-      const research = await flow.retry(() => doResearch({ profiles: d.profiles, web: d.web }, card, cap, { learned, signal }), retryNotice);
+      // USB port labels can be shared by different models (for example OP-1 and OP-1 Field).
+      // Keep the identified model; a port-name hint alone cannot promote it to another model's chart.
+      const research = await flow.retry(() => doResearch({ profiles: d.profiles, web: d.web, midiCharts: d.midiCharts }, card, cap, { learned, signal, refresh: opts.refreshResearch }), retryNotice);
       t.research = research;
       rstep.ok(research.provenance.map((p) => `${p.source}: ${p.ref}`).join('; ').slice(0, 400), {
         kind: research.modelId ? 'opinion' : 'proof',
@@ -195,13 +190,22 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
         evidence: research.profile ? `chart: ${research.profile.id}` : research.learned?.length ? `${research.learned.length} learned codes` : research.irLibrary ? `${research.irLibrary.candidates.length} library codes` : research.provenance[0]?.source,
       });
       flow.check();
+      if (cap === 'midi' && !research.allowedCcs?.size) {
+        const guidance = { sentence: 'This device needs a reviewed MIDI chart', hint: 'On the Mac, open Details → MIDI chart, confirm its exact model and cited controls, then retry setup', action: 'retry' as const };
+        d.steps.note('research', 'Web research is not a MIDI permission chart; no device commands were generated', { ...base, kind: 'proof', status: 'fail', ...guidance });
+        fail('Missing MIDI chart: no reviewed CC permissions for this device', guidance);
+        return;
+      }
 
       // ---------------------------------------------------------------- DRIVE
       flow.enter('drive');
       d.targets.setState(t, 'driving');
       driverId = newId('drv');
       const ids = { driverId, executor: { deviceId: executor.deviceId, port: executor.port?.id }, executorKind: executor.kind };
-      const vctx = { allowedCcs: research.allowedCcs, irLibrary: research.irLibrary, learned: research.learned, executorKind: executor.kind, emitsLight: cap === 'ir' || card.category === 'lighting' };
+      const reviewed = research.profile?.reviewedChart;
+      const vctx = { expectedTransport: cap, allowedCcs: research.allowedCcs,
+        ...(reviewed ? { allowedChannels: new Set([reviewed.channel]), ccRanges: new Map(research.profile!.parameters.filter((p) => p.cc !== null && p.range).map((p) => [p.cc!, { min: p.range![0], max: p.range![1] }])), midiCcOnly: true } : {}),
+        irLibrary: research.irLibrary, learned: research.learned, executorKind: executor.kind, emitsLight: cap === 'ir' || card.category === 'lighting' };
       const dstep = d.steps.begin('drive', 'writing the driver', { ...base, kind: 'opinion', model: d.spark.model });
       const result = await flow.wait(drive({ spark: d.spark, wonder: d.wonder, log }, card, research, cap, ids, vctx, {
         signal,
@@ -216,7 +220,13 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
         dstep.ok(`${driver.actions.length} actions, validated against the allowlist`, { model: result.model, effort: result.effort, latencyMs: result.latencyMs, source: result.source, recordedFrom: result.recordedFrom, evidence: `${driver.actions.length} actions · ${result.attempts} attempt(s)` });
       } else {
         // last resort: the curated template, honestly labelled
-        const draft: DriverDraft = cap === 'midi' && research.profile ? templateMidiDraft(card, research.profile, research) : cap === 'ir' ? templateIrDraft(card, research) : templateLocalDraft(card, research, executor.kind);
+        const draft: DriverDraft | undefined = cap === 'midi' ? (research.profile ? templateMidiDraft(card, research.profile, research) : undefined)
+          : cap === 'ir' ? templateIrDraft(card, research) : cap === 'local' ? templateLocalDraft(card, research, executor.kind) : undefined;
+        if (!draft) {
+          dstep.fail('The selected transport has no supported fallback');
+          fail('Could not write commands for the selected MIDI device', { sentence: 'I could not prepare this device’s MIDI controls', hint: 'Review its MIDI chart on the Mac, then retry setup', action: 'retry' });
+          return;
+        }
         const v = validateDriver(draft, ids, vctx);
         if (!v.ok) {
           dstep.fail(`no valid driver: ${formatIssues(v.issues).slice(0, 300)}`);
@@ -236,7 +246,10 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
 
       // ---------------------------------------------------------------- VERIFY
       flow.enter('verify');
-      const camera = pickSensor(d.roster, 'camera', { preferDeviceId: t.detection?.sensorDeviceId });
+      const virtualScreen = !!virtualScreenExecutor(t.card);
+      const camera = virtualScreen
+        ? d.roster.devices().find((device) => device.deviceId === t.selectedBy && device.online && device.capabilities.includes('camera'))
+        : pickSensor(d.roster, 'camera', { preferDeviceId: t.detection?.sensorDeviceId });
       const headsets = online(d.roster, 'mic').filter((device) => device.kind === 'quest');
       const headset = headsets.find((device) => device.deviceId === t.detection?.sensorDeviceId)
         ?? headsets.find((device) => device.deviceId === t.selectedBy) ?? headsets[0];
@@ -250,7 +263,7 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       d.targets.setState(t, 'verifying', `${driver.actions.length} actions to prove`, verifyGuidance);
       // The identity query is device output too: keep it inside verification.
       if (cap === 'midi') {
-        const identity = await flow.wait(tryLink({ roster: d.roster, dispatcher: d.dispatcher }, card, cap, { linkId, profile, preferDeviceId: executor.deviceId, signal }));
+        const identity = await flow.wait(tryLink({ roster: d.roster, dispatcher: d.dispatcher }, card, cap, { linkId, profile, preferDeviceId: executor.deviceId, signal, probeIdentity: !research.profile?.reviewedChart }));
         if (!identity.executor || identity.executor.deviceId !== executor.deviceId || identity.executor.port?.id !== executor.port?.id || identity.result.verdict === 'mismatch') {
           fail(identity.result.reason ?? 'the connected instrument changed', { sentence: 'Check the connected instrument', hint: 'Connect the instrument you selected, then retry or cancel', action: 'retry' });
           return;
@@ -259,6 +272,7 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
         d.hub.broadcast('link.result', identity.result);
       }
       const vstep = d.steps.begin('verify', `verifying on the real ${card.name}`, { ...base, kind: 'proof', ...verifyGuidance });
+      if (isVisualSynthPort(driver.executor.port)) visualRestore = { ...driver.executor, driverId };
       const summary = await flow.wait(verifyDriver(
         { dispatcher: d.dispatcher, sam: d.sam, heard: d.heard ? (...args) => flow.retry(() => d.heard!(...args), retryNotice) : undefined, readVolume: d.readVolume, restoreVolume: d.restoreVolume, silentSpeech: d.silentSpeech, log, settleMs: (tt, a) => d.settleMs?.(tt, a.encode.kind === 'ir' ? 'ir' : driver.transport) ?? (driver.transport === 'ir' ? 2000 : 350) },
         t,
@@ -302,6 +316,7 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
     flow.check();
     if (isVisualSynthPort(summary.driver.executor.port)) {
       await flow.wait(d.dispatcher.exec(executor.deviceId, { kind: 'midi', msg: 'panic', channel: 1 }, { port: executor.port?.id, cardId: t.cardId, driverId, actionId: 'restore-visual-defaults', waitForSlot: true, signal }));
+      visualRestore = undefined;
     }
     // VERIFY may leave a light off or in its night-light mode, where dimmer steps do nothing: put it back on for the controls
     if (cap === 'ir') {
@@ -371,6 +386,16 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
     d.targets.setState(t, 'failed', detail.slice(0, 300), guidance);
   } finally {
     flow.clear();
+    // Verification freezes the silent screen to distinguish MIDI changes from animation.
+    // Restore after a miss/cancellation too; never queue cleanup behind a replacement run.
+    if (visualRestore && t.abort === abort && t.runId === base.runId) {
+      try {
+        await d.dispatcher.exec(visualRestore.deviceId, { kind: 'midi', msg: 'panic', channel: 1 }, {
+          port: visualRestore.port, cardId: t.cardId, driverId: visualRestore.driverId,
+          actionId: 'restore-visual-defaults', timeoutMs: 1000, signal: AbortSignal.timeout(1100),
+        });
+      } catch (error) { log(`[verify] could not restore visual defaults: ${(error as Error).message}`); }
+    }
     if (t.abort === abort) t.abort = undefined;
   }
 }

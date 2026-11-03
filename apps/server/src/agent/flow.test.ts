@@ -18,6 +18,7 @@ import { StepLog } from './steps';
 import { TargetStore } from './targets';
 import type { LearnedCode, Research } from './types';
 import { verifyDriver, type VerifySummary } from './verify';
+import { visualSynthDraft } from '../devices/visualSynth';
 
 vi.mock('./identify', async (original) => ({
   ...await original<typeof import('./identify')>(),
@@ -130,6 +131,28 @@ function expectRecovery(status: TargetStatusPayload | undefined) {
 }
 
 describe('bounded discovery phases', () => {
+  it.each(['failed', 'cancelled', 'replaced'] as const)('restores frozen virtual visuals after %s verification only while owning the run', async (outcome) => {
+    const { target, deps, exec, generate } = setup();
+    target.card = { ...card, name: 'ControlAnything Visual Synth', category: 'synthesizer', protocols: ['midi'], requires: ['midi'], notes: 'virtual:visual-synth:sim' };
+    target.detection = undefined; target.selectedBy = 'quest';
+    const visual: Driver = { ...visualSynthDraft(target.cardId, []), driverId: 'visual-driver', executor: { deviceId: 'sim', port: 'ce-visual-synth' } };
+    vi.mocked(tryLink).mockResolvedValue({ result: { linkId: 'link', cardId: target.cardId, executorDeviceId: 'sim', channel: 'midi', verdict: 'confirmed', evidence: [] },
+      executor: { deviceId: 'sim', name: 'Sim', kind: 'sim', port: { id: 'ce-visual-synth', name: 'ControlAnything Visual Synth', kind: 'midi-out', state: 'connected' } } });
+    vi.mocked(drive).mockResolvedValue({ ...driven, draft: visual, validation: { ok: true, driver: visual, issues: [] } });
+    vi.mocked(research).mockResolvedValue({ ...researched, allowedCcs: new Set([71]) });
+    exec.mockResolvedValue({ execId: 'reset', ok: true, sentAt: 1 });
+    vi.mocked(verifyDriver).mockImplementation(async () => {
+      if (outcome === 'cancelled') { target.abort?.abort(); throw new Error('cancelled'); }
+      if (outcome === 'replaced') { target.abort = new AbortController(); target.runId = 'replacement'; throw new Error('replaced'); }
+      return { driver: visual, verification: { warp: 'fail' }, evidence: [], passed: 0, failed: 1 };
+    });
+    await runLoop(deps, target);
+    expect(verifyDriver).toHaveBeenCalledOnce();
+    expect(vi.mocked(verifyDriver).mock.calls[0][3]?.cameraDeviceId).toBe('quest');
+    if (outcome === 'replaced') expect(exec).not.toHaveBeenCalled();
+    else expect(exec).toHaveBeenCalledExactlyOnceWith('sim', { kind: 'midi', msg: 'panic', channel: 1 }, expect.objectContaining({ port: 'ce-visual-synth', actionId: 'restore-visual-defaults', timeoutMs: 1000 }));
+    expect(generate).not.toHaveBeenCalled();
+  });
   it.each([
     ['identify', 20_000], ['link', 45_000], ['learn', 60_000], ['research', 20_000],
     ['drive', 45_000], ['verify', 40_000], ['forge', 45_000],
@@ -237,12 +260,37 @@ describe('bounded discovery phases', () => {
 });
 
 describe('discovery retries and consent', () => {
+  it('stops an unfamiliar MIDI setup at missing-chart guidance without producing local commands', async () => {
+    const { hub, target, deps, exec, generate } = setup();
+    target.card = { ...card, name: 'Unknown model synth', maker: 'Example', model: 'Orion 6', category: 'synthesizer', protocols: ['midi'], requires: ['midi'] };
+    vi.mocked(tryLink).mockResolvedValue({ result: { linkId: 'link', cardId: target.cardId, executorDeviceId: 'mac', channel: 'midi', verdict: 'consistent', evidence: [] }, executor: { deviceId: 'mac', name: 'Mac', kind: 'mac', port: { id: 'out', name: 'Orion 6', kind: 'midi-out' } } });
+    vi.mocked(research).mockResolvedValue({ brief: 'Web prose mentions CC74, but no chart was reviewed.', provenance: [] });
+    await runLoop(deps, target);
+    expect(target).toMatchObject({ state: 'failed', armed: false });
+    expect(target.sentence).toContain('reviewed MIDI chart');
+    expect(target.hint).toContain('MIDI chart');
+    expect(drive).not.toHaveBeenCalled(); expect(verifyDriver).not.toHaveBeenCalled(); expect(exec).not.toHaveBeenCalled(); expect(generate).not.toHaveBeenCalled();
+    expect(hub.sent.some((event) => event.type === 'driver.spec' || event.type === 'arm.request')).toBe(false);
+  });
+  it('does not fall back to Mac actions after a failed MIDI draft without a profile template', async () => {
+    const { hub, target, deps, exec } = setup();
+    target.card = { ...card, category: 'synthesizer', protocols: ['midi'], requires: ['midi'] };
+    vi.mocked(tryLink).mockResolvedValue({ result: { linkId: 'link', cardId: target.cardId, executorDeviceId: 'mac', channel: 'midi', verdict: 'consistent', evidence: [] }, executor: { deviceId: 'mac', name: 'Mac', kind: 'mac' } });
+    // Exercise fallback even if a future research provider supplies permissions without a template profile.
+    vi.mocked(research).mockResolvedValue({ brief: 'CC74 permitted', provenance: [], allowedCcs: new Set([74]) });
+    vi.mocked(drive).mockResolvedValue(undefined);
+    await runLoop(deps, target);
+    expect(drive).toHaveBeenCalled(); expect(target.state).toBe('failed');
+    expect(verifyDriver).not.toHaveBeenCalled(); expect(exec).not.toHaveBeenCalled();
+    expect(hub.sent.some((event) => event.type === 'driver.spec')).toBe(false);
+  });
   it.each([false, true])('never sends a MIDI identity probe during link (output present: %s)', async (hasPort) => {
     const { hub, target, deps, exec } = setup();
     const actualLink = await vi.importActual<typeof import('./link')>('./link');
     vi.mocked(tryLink).mockImplementation(actualLink.tryLink);
     vi.mocked(identify).mockResolvedValue({ ...identified, card: { ...card, category: 'synthesizer', protocols: ['midi'], requires: ['midi'] } });
     vi.mocked(drive).mockReturnValue(new Promise(() => {}));
+    vi.mocked(research).mockResolvedValue({ ...researched, allowedCcs: new Set([74]) });
     deps.roster = {
       macLocal: false,
       devices: () => [{

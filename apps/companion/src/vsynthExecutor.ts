@@ -7,7 +7,7 @@ export const isVisualPort = (port?: string): boolean => port === visualSynthPort
 
 /** Independent of Web MIDI permissions and all physical outputs. */
 export class VisualSynthExecutor {
-  constructor(private readonly port = createVisualSynthPort()) {}
+  constructor(private readonly port = createVisualSynthPort(), private readonly connected: () => boolean = () => true) {}
 
   execute(cmd: ExecCommandPayload): ExecAckPayload {
     const ack = (ok: boolean, extra: Partial<ExecAckPayload> = {}): ExecAckPayload => ({ execId: cmd.execId, ok, sentAt: Date.now(), ...extra });
@@ -17,6 +17,7 @@ export class VisualSynthExecutor {
     if (error || op.channel !== 1) return ack(false, { error: 'bad_args', detail: error ?? 'Visual synth listens on channel 1' });
     if (op.msg === 'note') return ack(false, { error: 'unsupported', detail: 'Visual synth accepts CCs and patterns; it has no audio' });
     if (cmd.dryRun) return ack(true, { detail: 'dry run' });
+    if (op.msg !== 'panic' && !this.connected()) return ack(false, { error: 'no_port', detail: 'Open visuals from this companion and keep the visual screen visible.' });
     if (op.msg === 'sysex-identity') return ack(true, { reply: [...VISUAL_SYNTH_IDENTITY_REPLY] });
     if (op.msg === 'panic') this.panic();
     else {

@@ -69,6 +69,134 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128
+        },
+        "workspace": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "number",
+              "const": 1
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "general",
+                "device"
+              ]
+            },
+            "surface": {
+              "type": "string",
+              "enum": [
+                "menu",
+                "device",
+                "assistant",
+                "project",
+                "inspect"
+              ]
+            },
+            "stage": {
+              "type": "string",
+              "enum": [
+                "choose",
+                "prepare",
+                "building",
+                "review",
+                "ready",
+                "perform"
+              ]
+            },
+            "performance": {
+              "type": "string",
+              "enum": [
+                "off",
+                "live",
+                "paused",
+                "tracking-lost"
+              ]
+            },
+            "selected": {
+              "type": "object",
+              "properties": {
+                "targetId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "cardId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "specId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "specRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "identityRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "targetId",
+                "cardId"
+              ],
+              "additionalProperties": false
+            },
+            "pending": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "setup",
+                    "gesture",
+                    "identity",
+                    "peripheral",
+                    "inspect",
+                    "project"
+                  ]
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "working",
+                    "review"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "state"
+              ],
+              "additionalProperties": false
+            },
+            "mappingOutcome": {
+              "type": "string",
+              "enum": [
+                "working",
+                "review",
+                "applied",
+                "unchanged",
+                "failed",
+                "cancelled"
+              ]
+            }
+          },
+          "required": [
+            "version",
+            "scope",
+            "surface",
+            "stage",
+            "performance"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [

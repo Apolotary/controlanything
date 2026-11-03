@@ -1,10 +1,11 @@
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Evidence, UiSpecPayload } from '@ce/protocol';
+import type { DeviceInfo, Evidence, UiSpecPayload } from '@ce/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TagStore } from './tags';
 import { TargetStore } from './targets';
 import type { Target } from './types';
+import { IdentityCorrections } from './identity-correction';
 
 const faults = vi.hoisted(() => ({ rename: false, fsync: false }));
 vi.mock('node:fs', async (original) => {
@@ -55,7 +56,108 @@ function setup(target: Target, suffix = '1'): UiSpecPayload {
   return { specId: target.specId, cardId: target.cardId, driverId: target.driver.driverId, title: `Lamp controls ${suffix}` };
 }
 
+function reviewedCorrection(target: Target) {
+  const companion: DeviceInfo = { deviceId: 'mac', name: 'Mac', kind: 'mac', role: 'companion', capabilities: ['midi'], canApprove: true,
+    online: true, connections: 1, pairedAt: 1, ports: [{ id: 'op1-out', kind: 'midi-out', name: 'OP-1', state: 'connected' }] };
+  const service = new IdentityCorrections();
+  const proposed = service.propose(target, 'This is actually an OP-1 Field, not the earlier device.', 'owner', [companion]);
+  if (!proposed.ok) throw new Error(proposed.reason);
+  const result = service.confirm(target, { proposalId: proposed.proposal.proposalId, cardId: target.cardId, sender: 'owner', accept: true, canApprove: true }, [companion]);
+  if (result.status !== 'confirmed') throw new Error(result.reason);
+  return { corrected: Object.assign(structuredClone(target), result.patch), audit: result.audit };
+}
+
 describe('durable device library', () => {
+  it('atomically corrects identity while preserving placement/history and refusing old setups after restart or reassociation', () => {
+    const path = file(), library = new TagStore(path), target = device();
+    library.add(target, 'Old label', { x: 1, y: 2, z: -1 });
+    const spec = setup(target); target.paramValues = { old: 70 }; library.sync(target, spec);
+    library.add(device('untouched'), 'Other object');
+    const oldVersion = library.library().find((record) => record.cardId === target.cardId)!.activeVersionId!;
+    const oldTarget = structuredClone(target);
+    target.armed = false;
+    const { corrected, audit } = reviewedCorrection(target);
+    const saved = library.correctIdentity(corrected, audit)!;
+    expect(saved).toMatchObject({ cardId: target.cardId, label: 'OP-1 Field', position: { x: 1, y: 2, z: -1 },
+      identityRevision: 1, identityCorrection: { source: 'user-confirmed', firmware: 'unknown', physicalControlVerified: false }, armed: false, verification: {}, paramValues: {} });
+    expect(saved.driver).toBeUndefined(); expect(saved.specId).toBeUndefined();
+    expect(library.library().find((record) => record.cardId === target.cardId)?.versions).toHaveLength(1);
+    expect(library.canRestoreVersion(target.cardId, oldVersion)).toBe(false);
+    expect(library.restoreVersion(target.cardId, oldVersion)).toBeUndefined();
+    expect(library.setEnabled(target.cardId, true)).toBe(false);
+    library.sync(oldTarget, spec); // Late prior setup/Forge completion cannot cross the identity boundary.
+    expect(library.saveSetupContext(target.cardId, {}, spec)).toBe(false);
+    library.add(oldTarget, 'Stale old label', { x: 9, y: 9, z: 9 });
+    expect(library.get(target.cardId)).toMatchObject({ label: 'OP-1 Field', armed: false, position: { x: 1, y: 2, z: -1 } });
+    expect(library.get('untouched')?.label).toBe('Other object');
+    const restarted = new TagStore(path);
+    expect(restarted.get(target.cardId)).toMatchObject({ identityRevision: 1, identityCorrection: { confirmedBy: 'owner', firmware: 'unknown' }, armed: false });
+    expect(restarted.restoreVersion(target.cardId, oldVersion)).toBeUndefined();
+    restarted.remove(target.cardId);
+    const current = new TargetStore({ broadcast: () => 0 }).create(restarted.get(target.cardId));
+    restarted.add(current, 'OP-1 Field');
+    expect(restarted.get(target.cardId)?.driver).toBeUndefined();
+    expect(restarted.canRestoreVersion(target.cardId, oldVersion)).toBe(false);
+  });
+
+  it('allows newly verified setups for the corrected identity while still rejecting old late artifacts', () => {
+    const library = new TagStore(), target = device(); library.add(target, 'Old');
+    const oldSpec = setup(target); library.sync(target, oldSpec); target.armed = false;
+    const { corrected, audit } = reviewedCorrection(target);
+    const snapshot = library.correctIdentity(corrected, audit)!;
+    Object.assign(corrected, { identityRevision: snapshot.identityRevision, identityCorrection: snapshot.identityCorrection });
+    const fresh = setup(corrected, 'new');
+    // Synthetic completed setup: only the durable revision boundary is exercised here.
+    corrected.driver = { driverId: fresh.driverId!, cardId: corrected.cardId, transport: 'midi',
+      executor: { deviceId: 'mac', port: 'op1-out' }, provenance: [],
+      actions: [{ actionId: 'engine', label: 'Engine', kind: 'set', range: { min: 20, max: 100 },
+        encode: { kind: 'midi', msg: 'cc', channel: 1, number: 46, value: '$value' } }] };
+    corrected.verification = { engine: 'pass' }; corrected.evidence = [];
+    fresh.title = 'Corrected identity controls';
+    library.sync(corrected, fresh);
+    const active = library.library()[0].activeVersionId!;
+    expect(library.canRestoreVersion(target.cardId, active)).toBe(true);
+    expect(library.restoreVersion(target.cardId, active)?.identityRevision).toBe(1);
+    expect(library.saveSetupContext(target.cardId, {}, oldSpec)).toBe(false);
+    expect(library.get(target.cardId)?.specId).toBe(fresh.specId);
+  });
+
+  it.each(['rename', 'fsync'] as const)('a failed identity correction %s leaves the old live candidate and saved record unchanged', (fault) => {
+    const path = file(), library = new TagStore(path), target = device(); library.add(target, 'Old');
+    const spec = setup(target); library.sync(target, spec); target.armed = false;
+    const before = readFileSync(path, 'utf8'), originalCard = structuredClone(target.card);
+    const { corrected, audit } = reviewedCorrection(target);
+    faults[fault] = true;
+    expect(() => library.correctIdentity(corrected, audit)).toThrow('interrupted');
+    expect(target.card).toEqual(originalCard);
+    expect(readFileSync(path, 'utf8')).toBe(before);
+    expect(library.get(target.cardId)?.card).toEqual(originalCard);
+    expect(new TagStore(path).get(target.cardId)?.card).toEqual(originalCard);
+  });
+
+  it('does not resurrect pre-correction authority when the primary library is damaged', () => {
+    const path = file(), library = new TagStore(path), target = device(); library.add(target, 'Old');
+    const spec = setup(target); library.sync(target, spec); target.armed = false;
+    const oldVersion = library.library()[0].activeVersionId!;
+    const { corrected, audit } = reviewedCorrection(target);
+    library.correctIdentity(corrected, audit);
+    writeFileSync(path, '{');
+    const recovered = new TagStore(path);
+    expect(recovered.get(target.cardId)).toMatchObject({ card: { model: 'OP-1 Field' }, identityRevision: 1, armed: false });
+    expect(recovered.get(target.cardId)?.driver).toBeUndefined();
+    expect(recovered.restoreVersion(target.cardId, oldVersion)).toBeUndefined();
+  });
+
+  it('rejects an identity transaction that retains a driver or describes another old object', () => {
+    const library = new TagStore(), target = device(); library.add(target, 'Old');
+    const { corrected, audit } = reviewedCorrection(target);
+    const stale = { ...audit, previousIdentity: { ...audit.previousIdentity, model: 'Different old object' } };
+    expect(() => library.correctIdentity(corrected, stale)).toThrow('no longer matches');
+    setup(corrected);
+    expect(() => library.correctIdentity(corrected, audit)).toThrow('clear the old setup');
+    expect(library.get(target.cardId)?.card?.model).toBe('Model');
+  });
+
   it('migrates legacy tags once, isolates invalid tags, and never resurrects forgotten records', () => {
     const path = file();
     const legacy = path.replace('library.json', 'tags.json');

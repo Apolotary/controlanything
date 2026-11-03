@@ -401,7 +401,9 @@ export class Hub {
       c.ws.close(CLOSE_UNAUTHORIZED, 'revoked');
       return;
     }
-    if (m.to !== SERVER_ID) {
+    // Generated-app operations are always server-bound, including a missing/forged `to`.
+    // In particular, prompts and unvalidated action values must never reach a preview peer.
+    if (m.to !== SERVER_ID && !m.type.startsWith('project.')) {
       const json = JSON.stringify({ ...raw, from: device.deviceId });
       const targets = m.to ? this.authed().filter((t) => t.deviceId === m.to) : this.authed().filter((t) => t !== c);
       if (m.to && !targets.length) {

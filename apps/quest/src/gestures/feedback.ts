@@ -5,6 +5,7 @@ import { THEME } from '../hud/v2/theme';
 
 export interface GestureFeedbackState {
   engaged: boolean;
+  trackingLost?: boolean;
   axes: readonly { axis: string; actionId: string; label: string; value: number; normalized: number }[];
 }
 
@@ -30,6 +31,7 @@ export class GestureFeedback {
   private lastText = -Infinity;
   private wasLive = false;
   private engaged = false;
+  private trackingLost = false;
 
   constructor(scene: Scene) {
     this.root.name = 'gesture-feedback';
@@ -61,10 +63,11 @@ export class GestureFeedback {
     if (!state) { this.wasLive = false; this.lastText = -Infinity; return; }
     this.anchor(this.ribbons, frame.hands.right, frame, 0.13, 0.075);
     this.anchor(this.status, frame.hands.left, frame, -0.05, 0.07);
-    const changed = this.engaged !== state.engaged;
+    const changed = this.engaged !== state.engaged || this.trackingLost !== !!state.trackingLost;
     this.engaged = state.engaged;
+    this.trackingLost = !!state.trackingLost;
     this.wasLive ||= state.engaged;
-    if (changed || this.lastText === -Infinity) setText(this.status, state.engaged ? 'LIVE' : this.wasLive ? 'Frozen · Hold left fist' : 'Hold left fist', state.engaged ? THEME.color.accent : THEME.color.muted);
+    if (changed || this.lastText === -Infinity) setText(this.status, this.trackingLost ? 'Tracking lost · Show hands' : state.engaged ? 'LIVE' : this.wasLive ? 'Paused · Hold left fist' : 'Hold left fist', state.engaged && !this.trackingLost ? THEME.color.accent : THEME.color.muted);
     const count = Math.min(MAX_AXES, state.axes.length);
     this.ribbons.visible = count > 0;
     this.bars.count = count * 3;

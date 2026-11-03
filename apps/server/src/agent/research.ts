@@ -6,6 +6,7 @@ import type { DeviceCardPayload, Provenance } from '@ce/protocol';
 import { allowedCcs, irBrief, matchMidiProfile, midiBrief, type Profiles } from '../devices/profiles';
 import type { WebSearcher } from '../research/websearch';
 import type { LinkCapability } from './link';
+import type { MidiChartStore } from '../devices/midi-charts';
 import type { LearnedCode, Research } from './types';
 
 export const KOIZUMI_NOTE =
@@ -15,26 +16,32 @@ export const KOIZUMI_NOTE =
 export interface ResearchDeps {
   profiles: Profiles;
   web: WebSearcher;
+  midiCharts?: MidiChartStore;
 }
 
 export async function research(
   deps: ResearchDeps,
   card: DeviceCardPayload,
   cap: LinkCapability | undefined,
-  opts: { learned?: LearnedCode[]; signal?: AbortSignal; allowWeb?: boolean } = {},
+  opts: { learned?: LearnedCode[]; signal?: AbortSignal; allowWeb?: boolean; refresh?: boolean } = {},
 ): Promise<Research> {
   const provenance: Provenance[] = [];
   if (cap === 'midi') {
-    const profile = matchMidiProfile(deps.profiles, card);
+    const profile = deps.midiCharts?.profile(card) ?? matchMidiProfile(deps.profiles, card);
     if (profile) {
-      provenance.push({ source: 'curated', ref: `apps/server/data/devices/${profile.id}.json`, note: profile.sources[0]?.url });
+      if (profile.reviewedChart) provenance.push({ source: 'manual', ref: `reviewed-midi:${card.cardId}:r${profile.reviewedChart.revision}`,
+        note: `Explicitly reviewed by ${profile.reviewedChart.reviewedBy}; CC subset only; physical effect still requires verification` });
+      else provenance.push({ source: 'curated', ref: `apps/server/data/devices/${profile.id}.json`, note: profile.sources[0]?.url });
       for (const s of profile.sources.slice(0, 3)) provenance.push({ source: 'manual', ref: s.url, note: s.title.slice(0, 200) });
       return { brief: midiBrief(profile), provenance, profile, allowedCcs: allowedCcs(profile) };
     }
     if (opts.allowWeb === false) return { brief: `No stored MIDI chart for ${card.maker} ${card.model}.`, provenance };
     const q = `${card.maker} ${card.model} MIDI implementation chart: incoming CC numbers, parameter names, channel rules, USB MIDI port name`;
-    const w = await deps.web.research(q, { signal: opts.signal });
-    for (const c of w.citations.slice(0, 6)) provenance.push({ source: 'web_search', ref: c.url, note: c.title?.slice(0, 200) });
+    const w = await deps.web.research(q, { signal: opts.signal, refresh: opts.refresh });
+    const researchedAt = w.researchedAt === undefined ? undefined : new Date(w.researchedAt);
+    const reuseNote = w.cached ? `Reused research${researchedAt && Number.isFinite(researchedAt.getTime()) ? ` from ${researchedAt.toISOString()}` : ''}` : '';
+    for (const c of w.citations.slice(0, 6)) provenance.push({ source: 'web_search', ref: c.url,
+      note: [reuseNote, c.title].filter(Boolean).join(' · ').slice(0, 200) || undefined });
     return { brief: w.text, provenance, modelId: w.model };
   }
   if (cap === 'ir') {

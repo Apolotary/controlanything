@@ -8,11 +8,23 @@ import { ControlRouter } from './control';
 import { Dispatcher, RateLimiter } from './dispatch';
 import { pickExecutor, pickSensor, type Roster } from './executors';
 import { hearBack, similarity } from './heard';
-import { cropForSkin } from './identify';
+import { cropForSkin, defaultRequires, fixtureDeviceCard } from './identify';
+import { neededCapability } from './link';
 import { MacLocalExecutor, planLocal } from './maclocal';
 import { scanPrompts } from './scan';
 import { StepLog } from './steps';
 import { TargetStore } from './targets';
+
+describe('ordinary object recognition for Canvas', () => {
+  it('preserves a book as an unconnected object without inventing its contents', () => {
+    const card = fixtureDeviceCard([{ role: 'user', content: 'Identify label "book"' }]);
+    expect(card).toMatchObject({ category: 'other', requires: [], companion: 'none', protocols: ['other'] });
+    expect(defaultRequires(card)).toEqual([]);
+    expect(neededCapability(card)).toBeUndefined();
+    expect(card.visibleText).toBeUndefined();
+    expect(scanPrompts({})).toContain('book');
+  });
+});
 
 class FakeHub {
   sent: { to?: string; type: string; payload: unknown }[] = [];
@@ -117,7 +129,7 @@ describe('executor and sensor picking by capability', () => {
 
 describe('steps, targets, arm', () => {
   it.each([
-    { results: ['pass', 'pass'] as const, summary: 'All 2 commands worked on the real device.' },
+    { results: ['pass', 'pass'] as const, summary: 'All 2 command checks passed.' },
     { results: ['pass', 'fail'] as const, summary: '1 of 2 commands worked; only those are enabled.' },
     { results: ['pass', 'untested'] as const, summary: '1 of 2 commands worked; only those are enabled.' },
   ])('describes verified command counts plainly: $summary', async ({ results, summary }) => {

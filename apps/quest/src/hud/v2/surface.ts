@@ -16,7 +16,7 @@ export class GlassSurfaces {
     const selected = primary || style === 'selected' || style === 'selected-hover' || style === 'pressed' || style === 'sending';
     const outlined = style === 'hover' || style === 'selected-hover' || style === 'pressed' || style === 'sending';
     material = new ShaderMaterial({
-      transparent: true, depthWrite: false, toneMapped: false,
+      transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
       uniforms: {
         time: { value: 0 },
         shimmer: { value: style === 'sending' ? 1 : 0 },
@@ -59,7 +59,9 @@ export class GlassSurfaces {
       mesh.material.uniforms.radius!.value = pill ? h / 2 : THEME.card.radius;
       mesh.material.uniformsNeedUpdate = true;
     };
-    mesh.renderOrder = THEME.render.plates;
+    // Explicit layers prevent a large transparent panel from sorting in front of its buttons
+    // when the wearer turns their head. Depth is not an occlusion signal for this HUD.
+    mesh.renderOrder = style === 'plate' ? THEME.render.plates : THEME.render.buttons;
     return mesh;
   }
 

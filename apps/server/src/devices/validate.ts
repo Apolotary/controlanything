@@ -17,10 +17,15 @@ export interface DriverIssue {
 }
 
 export interface ValidationContext {
+  /** Selected connection capability, independent of what a generated draft claims. */
+  expectedTransport?: Driver['transport'];
   /** CC numbers the chart allows (undefined = no chart: CC actions are refused) */
   allowedCcs?: Set<number>;
   /** MIDI channels allowed (default any) */
   allowedChannels?: Set<number>;
+  /** Imported charts authorize a subset of values for each CC, not all 128 values. */
+  ccRanges?: Map<number, { min: number; max: number }>;
+  midiCcOnly?: boolean;
   irLibrary?: IrLibrary;
   /** learned IR captures (already labelled or not) */
   learned?: IrCapture[];
@@ -96,6 +101,7 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
   const err = (code: string, path: string, message: string) => issues.push({ severity: 'error', code, path, message });
   const warn = (code: string, path: string, message: string) => issues.push({ severity: 'warn', code, path, message });
   const visual = isVisualSynthPort(ids.executor.port);
+  if (ctx.expectedTransport && input.transport !== ctx.expectedTransport) err('selected_transport_mismatch', 'transport', `The selected device uses ${ctx.expectedTransport}; a ${input.transport} driver cannot replace it`);
   if (visual && input.transport !== 'midi') err('visual_transport', 'transport', 'The visual synth uses MIDI commands');
 
   const seen = new Set<string>();
@@ -123,12 +129,17 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
     if (visual) {
       if (a.expect?.sense !== 'camera') err('physical_oracle_required', `${path}.expect`, 'Visual synth actions require camera evidence');
       if (a.expect?.effect !== 'any') err('visual_effect', `${path}.expect.effect`, 'Visual synth actions verify a visible change with effect any');
-      if (a.actionId === 'cc71') {
-        if (a.kind !== 'set' || e.kind !== 'midi' || e.channel !== 1 || e.msg !== 'cc' || e.number !== 71 || e.value !== VALUE_PLACEHOLDER) {
-          err('visual_action', `${path}.encode`, 'cc71 must be a set action sending Warp CC71 with value $value on channel 1');
+      if (a.actionId === 'cc71' || a.actionId === 'cc21') {
+        const cc = a.actionId === 'cc71' ? 71 : 21;
+        const label = cc === 71 ? 'Warp' : 'Water ripples';
+        // This virtual instrument has a fixed semantic contract. A generated
+        // label must not make the old Warp action masquerade as Water ripples.
+        a.label = label;
+        if (a.kind !== 'set' || e.kind !== 'midi' || e.channel !== 1 || e.msg !== 'cc' || e.number !== cc || e.value !== VALUE_PLACEHOLDER) {
+          err('visual_action', `${path}.encode`, `${a.actionId} must be a set action sending ${label} CC${cc} with value $value on channel 1`);
         }
         if (a.range?.min !== 0 || a.range.max !== 127 || a.range.step !== 1) {
-          err('visual_range', `${path}.range`, 'Warp uses range 0-127 with step 1');
+          err('visual_range', `${path}.range`, `${label} uses range 0-127 with step 1`);
         }
         a.curve = 'linear';
       } else {
@@ -140,11 +151,19 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
     }
     // per-op allowlists
     if (e.kind === 'midi') {
+      if (ctx.midiCcOnly && e.msg !== 'cc') err('midi_message_not_reviewed', `${path}.encode.msg`, 'The reviewed chart permits only its listed CC messages');
+      if (ctx.midiCcOnly && (a.expect?.sense !== 'audio' || !['any', 'louder', 'quieter', 'tone-up', 'tone-down'].includes(a.expect.effect))) {
+        err('physical_oracle_required', `${path}.expect`, 'Reviewed synth CC controls require an observed audio effect; an acknowledgment is not verification');
+      }
       if (ctx.allowedChannels && !ctx.allowedChannels.has(e.channel)) err('channel_not_allowed', `${path}.encode.channel`, `channel ${e.channel} is not allowed for this device`);
       if (e.msg === 'cc') {
         if (e.number === undefined) err('missing_cc', `${path}.encode.number`, 'cc needs a controller number');
         else if (!ctx.allowedCcs) err('no_chart', `${path}.encode.number`, `CC ${e.number} cannot be allowed: no stored chart for this device`);
         else if (!ctx.allowedCcs.has(e.number)) err('cc_not_in_chart', `${path}.encode.number`, `CC ${e.number} is not in the stored chart (allowed: ${[...ctx.allowedCcs].sort((x, y) => x - y).join(', ')})`);
+        const range = e.number === undefined ? undefined : ctx.ccRanges?.get(e.number);
+        if (range && ((a.range && (a.range.min < range.min || a.range.max > range.max)) || (typeof e.value === 'number' && (e.value < range.min || e.value > range.max)))) {
+          err('cc_range_not_reviewed', `${path}.range`, `CC ${e.number} is reviewed only for values ${range.min}-${range.max}`);
+        }
         if (e.value === undefined && a.kind !== 'set') err('missing_value', `${path}.encode.value`, 'cc needs a value');
       } else if (e.msg === 'note') {
         if (e.number === undefined) err('missing_note', `${path}.encode.number`, 'note needs a note number');
@@ -186,9 +205,9 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
   }
 
   if (visual) {
-    const expected = ['cc71', 'pattern0', 'pattern1', 'pattern2'];
+    const expected = ['cc71', 'cc21', 'pattern0', 'pattern1', 'pattern2'];
     if (actions.length !== expected.length || expected.some((id) => !actions.some((a) => a.actionId === id))) {
-      err('visual_controls', 'actions', 'The visual demo uses exactly cc71 Warp and pattern0, pattern1, pattern2');
+      err('visual_controls', 'actions', 'The visual demo uses exactly cc71 Warp, cc21 Water ripples and pattern0, pattern1, pattern2');
     }
   }
 

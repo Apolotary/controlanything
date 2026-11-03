@@ -4,6 +4,14 @@ import { makeText } from './text';
 import { THEME } from './theme';
 
 describe('shared HUD resources', () => {
+  it('renders background, buttons and text in fixed layers independent of head-angle depth sorting', () => {
+    const surfaces = new GlassSurfaces();
+    const background = surfaces.create(0.44, 0.74), button = surfaces.create(0.39, 0.052, 'button', true), label = makeText({ text: 'Ask Muse' });
+    expect(background.renderOrder).toBeLessThan(button.renderOrder); expect(button.renderOrder).toBeLessThan(label.renderOrder);
+    expect(background.material.depthTest).toBe(false); expect(button.material.depthTest).toBe(false); expect(label.material.depthTest).toBe(false);
+    surfaces.dispose(); label.dispose();
+  });
+
   it('uses a bounded style cache across changing label dimensions', () => {
     const surfaces = new GlassSurfaces();
     const materials = new Set();

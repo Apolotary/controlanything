@@ -35,6 +35,18 @@ describe('annotation policy', () => {
     }
   });
 
+  it('offers ordinary game objects in All without treating them as electronics', () => {
+    for (const label of ['Book', 'books', 'coffee cup', 'water bottle', 'sports ball']) {
+      expect(matchesAnnotationFilter(label, 'everything')).toBe(true);
+      expect(matchesAnnotationFilter(label, 'electronics')).toBe(false);
+    }
+    for (const id of [32, 39, 41, 73]) {
+      expect(allowedClasses('everything').has(id)).toBe(true);
+      expect(allowedClasses('electronics').has(id)).toBe(false);
+    }
+    expect(matchesAnnotationFilter('person holding a book')).toBe(false);
+  });
+
   it('accepts an explicit positive range and includes only positions within that head distance', () => {
     for (const value of [null, '', '-1', '0', 'Infinity', 'oops']) expect(annotationRange(value)).toBe(3);
     expect(annotationRange('1.5')).toBe(1.5);

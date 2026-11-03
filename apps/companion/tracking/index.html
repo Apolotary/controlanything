@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Motion lab · ControlAnything</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <a class="brand" href="/companion/" aria-label="Back to ControlAnything companion"><span class="brand-mark" aria-hidden="true">c<span>a</span></span>ControlAnything <span class="slash">/</span> <span class="brand-section">Motion lab</span></a>
+        <span class="local-badge"><i></i> Local file review</span>
+      </header>
+
+      <main>
+        <section class="page-heading">
+          <div><p class="eyebrow">Physical AI · Demonstration data</p><h1>Movement, in context.</h1><p class="subtitle">Review a Quest recording with the wearer’s hand joints and head pose.</p></div>
+          <div class="file-actions"><button id="load-demo" class="quiet" type="button">Explore sample</button><button id="open-take" class="primary" type="button"><span aria-hidden="true">＋</span> Open recording</button><input id="take-file" type="file" accept=".zip,.jsonl" hidden /></div>
+        </section>
+
+        <div id="load-status" class="load-status" role="status" aria-live="polite">Open a Quest take (.zip), or a tracking .jsonl file with a separate video.</div>
+        <section class="workspace" aria-label="Synchronized recording viewer">
+          <header class="session-bar"><div class="session-name"><i id="session-dot" class="status-dot"></i><h2 id="take-name">No recording loaded</h2><span id="provenance-badge" class="badge">Ready to inspect</span></div><div class="session-actions"><button id="attach-video" class="quiet small" type="button" disabled>Attach video</button><input id="video-file" type="file" accept="video/mp4,video/webm,.mp4,.webm" hidden /><button id="export-data" class="quiet small" type="button" disabled>Export dataset <span aria-hidden="true">↗</span></button></div></header>
+          <div id="demo-banner" class="demo-banner" hidden>SYNTHETIC SAMPLE <span>Illustrates the viewer. These poses are generated, not captured from a person.</span></div>
+          <div class="view-grid">
+            <section class="video-pane" aria-labelledby="video-title">
+              <div class="pane-heading"><h3 id="video-title">Wearer’s view</h3><span id="video-badge" class="micro-badge">VIDEO</span></div>
+              <div class="video-stage">
+                <video id="recording-video" playsinline muted preload="metadata" aria-label="Recorded Quest video" hidden></video>
+                <div id="video-empty" class="video-empty"><svg class="viewfinder" viewBox="0 0 160 120" aria-hidden="true"><path d="M15 38V16h30m70 0h30v22m0 44v22h-30m-70 0H15V82"/><circle cx="80" cy="60" r="25"/><circle cx="80" cy="60" r="9"/><path d="M80 24V8m0 104V96M44 60H28m104 0h-16"/></svg><strong id="video-empty-title">A first-person view of the moment</strong><p id="video-empty-copy">Your video appears here. Tracked motion is shown alongside it, on the same timeline.</p></div>
+                <div id="video-range" class="video-range" hidden>No video at this timestamp</div>
+                <span id="video-time" class="video-time">00:00.000</span>
+              </div>
+              <div class="pane-foot"><span id="video-detail">Video stays in this browser.</span><span class="coordinate-note">Separate views · no calibrated image overlay</span></div>
+            </section>
+
+            <section class="pose-pane" aria-labelledby="pose-title">
+              <div class="pane-heading"><h3 id="pose-title">Tracked motion</h3><div class="view-tabs" role="group" aria-label="Pose view"><button type="button" data-view="world" aria-pressed="true">World</button><button type="button" data-view="pov" aria-pressed="false">POV</button><button type="button" data-view="left" aria-pressed="false">Left</button><button type="button" data-view="right" aria-pressed="false">Right</button></div></div>
+              <div class="pose-stage"><canvas id="pose-canvas" aria-label="3D hand skeletons and head pose visualization"></canvas><div id="pose-empty" class="pose-empty"><strong>See the motion behind the moment</strong><span>25 joints per hand · head orientation · motion trail</span></div><span id="pose-space" class="pose-space">LOCAL FLOOR · METERS</span><span id="pose-state" class="pose-state">Waiting for a recording</span></div>
+              <div class="pane-foot legend"><span><i class="left-color"></i>Left hand</span><span><i class="right-color"></i>Right hand</span><span><i class="head-color"></i>Head</span></div>
+            </section>
+          </div>
+
+          <section class="transport" aria-label="Playback controls">
+            <div class="transport-top"><div class="playback-group"><button id="play" class="play-button" type="button" disabled aria-label="Play recording">▶</button><button id="rewind" class="quiet small" type="button" disabled aria-label="Jump to beginning">↤</button><output id="play-time" class="time-code">00:00.000 <span>/ 00:00.000</span></output></div><div class="playback-settings"><label class="rate-label">Speed <select id="play-rate" aria-label="Playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></label><label class="trail-toggle"><input id="show-trail" type="checkbox" checked />Motion trail</label></div></div>
+            <label class="sr-only" for="timeline">Recording timestamp</label><input id="timeline" class="timeline" type="range" min="0" max="1" step="1" value="0" disabled />
+            <div class="coverage"><span>Tracking</span><canvas id="coverage-canvas" aria-label="Head and hand tracking availability over the recording"></canvas><span id="duration-label">0.0 s</span></div>
+          </section>
+        </section>
+
+        <div class="detail-grid">
+          <section class="detail-card" aria-labelledby="tracking-title"><div class="detail-title"><h2 id="tracking-title">Tracking at this moment</h2><span id="sample-age" class="muted">—</span></div><div class="tracking-rows"><div><span><i class="left-color"></i>Left hand</span><strong id="left-status">No data</strong></div><div><span><i class="right-color"></i>Right hand</span><strong id="right-status">No data</strong></div><div><span><i class="head-color"></i>Head pose</span><strong id="head-status">No data</strong></div></div><p id="head-values" class="head-values">Position and orientation appear when a tracked pose is available.</p></section>
+          <section class="detail-card" aria-labelledby="quality-title"><div class="detail-title"><h2 id="quality-title">Recording coverage</h2><span id="sample-rate" class="muted">—</span></div><div class="metrics"><div><strong id="head-coverage">—</strong><span>Head</span></div><div><strong id="left-coverage">—</strong><span>Left hand</span></div><div><strong id="right-coverage">—</strong><span>Right hand</span></div></div><p id="coverage-detail" class="muted small-copy">Unavailable poses stay unavailable. Missing tracking is not filled in.</p></section>
+          <section class="detail-card" aria-labelledby="alignment-title"><div class="detail-title"><h2 id="alignment-title">Video alignment</h2><span id="sync-badge" class="micro-badge">NO VIDEO</span></div><label class="offset-label" for="video-offset">Video starts at <div><input id="video-offset" type="number" value="0" step="10" min="-3600000" max="3600000" disabled /><span>ms on the take timeline</span></div></label><p class="muted small-copy">Positive offsets delay the video. Camera timing is approximate; head-to-camera calibration is not available.</p></section>
+        </div>
+
+        <section class="provenance"><div><span class="eyebrow">Data provenance</span><p id="provenance-text">Quest runtime estimates, in local floor coordinates. Review the source, tracking coverage and timing before using a take as training data.</p></div><details><summary>Recording guide &amp; limitations</summary><div class="guide"><p>Prepare the camera on the Quest launcher. Under Record a demonstration, choose Record take, then enter AR and perform the interaction. Exit AR to finish, then Save take. Open that .zip here to review the video and tracked poses. Takes are limited to 90 seconds; no audio is recorded.</p><p>Existing takes may contain only head poses and still images. Hand joints and continuous video must be captured by the updated recorder. You can also load a tracking .jsonl file and attach a Quest video, then adjust its start offset.</p><p>World and POV are coordinate views of the recorded telemetry, not a reconstruction of the room. The RGB video and pose view are shown side by side because passthrough camera calibration is unavailable. This viewer does not estimate poses from ordinary videos or establish training-data accuracy.</p></div></details><ul id="warnings" class="warnings" hidden></ul></section>
+      </main>
+      <footer class="page-footer"><span>ControlAnything · Motion lab</span><span>Observe → interact → review</span></footer>
+    </div>
+    <script type="module" src="../src/tracking/main.ts"></script>
+  </body>
+</html>

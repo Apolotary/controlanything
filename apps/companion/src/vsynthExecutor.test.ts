@@ -4,6 +4,15 @@ import { createVisualSynthState, VISUAL_SYNTH_IDENTITY_REPLY } from '@ce/vsynth'
 import type { ExecCommandPayload, MidiOp } from '@ce/protocol';
 
 describe('silent virtual output', () => {
+  it('refuses disconnected/hidden screen output while still allowing Stop to reset saved state', () => {
+    const port = { receiveMidi: vi.fn(), reset: vi.fn(), getState: createVisualSynthState, setState: vi.fn(), dispose: vi.fn() };
+    const executor = new VisualSynthExecutor(port, () => false);
+    const command: ExecCommandPayload = { execId: 'exec', executorDeviceId: 'companion', port: visualSynthPort.id, op: { kind: 'midi', msg: 'cc', channel: 1, number: 71, value: 127 } };
+    expect(executor.execute(command)).toMatchObject({ ok: false, error: 'no_port', detail: expect.stringContaining('visible') });
+    expect(port.receiveMidi).not.toHaveBeenCalled();
+    expect(executor.execute({ ...command, op: { kind: 'midi', msg: 'panic', channel: 1 } }).ok).toBe(true);
+    expect(port.reset).toHaveBeenCalledOnce();
+  });
   it('relays CC and program bytes without requesting Web MIDI, rejects notes, and resets on Stop', () => {
     const port = { receiveMidi: vi.fn(), reset: vi.fn(), getState: createVisualSynthState, setState: vi.fn(), dispose: vi.fn() };
     const executor = new VisualSynthExecutor(port);

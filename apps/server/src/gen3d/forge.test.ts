@@ -350,3 +350,31 @@ describe('replay for cards the discovery loop creates (no recording for that car
     expect(r.report.fixes.some((f) => f.startsWith('replay: dropped'))).toBe(true);
   });
 });
+
+describe('confirmed gesture mapping revisions', () => {
+  it('validates, publishes and preserves custom maps through undo/redo, rearm, UI edits, regeneration and restart', async () => {
+    const f = mockFetch([reply(LIGHT_DRAFT), reply(LEVER_EDIT), reply(LIGHT_DRAFT)]);
+    const forge = createForge({ muse: live, fetchImpl: f.impl });
+    const generated = (await forge.forge(forgeReq())).uiSpec!;
+    const defaultMap = structuredClone(generated.gestureMap);
+    const custom = { version: 1 as const, clutchPosture: 'L_FIST' as const, panicPosture: 'BOTH_PALMS_OUT' as const, axes: [],
+      postures: [{ posture: 'R_POINT' as const, actionId: 'ir.off', label: 'Off', mode: 'press' as const, maxRateHz: 1 }] };
+    const changed = forge.applyGestureMap!(generated.specId, custom, { driverId: generated.driverId, rev: generated.rev });
+    expect(changed.gestureMap).toEqual(custom); expect(changed.rev).toBe(2);
+    expect(forge.undo(generated.specId).uiSpec?.gestureMap).toEqual(defaultMap);
+    expect(forge.redo(generated.specId).uiSpec?.gestureMap).toEqual(custom);
+    expect(forge.rearm(generated.specId, FORGE_LIGHT_VERIFIED).gestureMap).toEqual(custom);
+    expect((await forge.edit({ specId: generated.specId, instruction: 'make the dimmer a red lever' })).uiSpec?.gestureMap).toEqual(custom);
+    expect((await forge.generateFor(generated.cardId)).uiSpec?.gestureMap).toEqual(custom);
+    const snapshot = forge.snapshot!(generated.specId)!;
+    const restored = createForge({ muse: fixture });
+    expect(restored.restore!(snapshot).gestureMap).toEqual(custom);
+    expect(restored.get(generated.specId)?.gestureMap).toEqual(custom);
+    const current = restored.get(generated.specId)!;
+    expect(() => restored.applyGestureMap!(generated.specId, custom, { driverId: 'old', rev: current.rev })).toThrow('stale');
+    expect(() => restored.applyGestureMap!(generated.specId, custom, { driverId: current.driverId, rev: current.rev - 1 })).toThrow('stale');
+    const invalid = { ...custom, postures: [{ ...custom.postures[0], actionId: 'arbitrary' }] };
+    expect(() => restored.applyGestureMap!(generated.specId, invalid, { driverId: current.driverId, rev: current.rev })).toThrow('verified');
+    expect(restored.rearm(generated.specId, { 'ir.off': 'fail' }).gestureMap?.postures.some((b) => b.actionId === 'ir.off')).toBe(false);
+  });
+});

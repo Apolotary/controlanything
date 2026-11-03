@@ -51,7 +51,11 @@ export function resolveOp(action: DriverAction, value?: number): ExecOp {
     if (value === undefined) throw new Error(`action ${action.actionId} needs a value`);
     const from = action.range ?? { min: 0, max: 1 };
     const { range, int } = placeholderDomain(op);
-    const mapped = mapRange(value, from, range, int);
+    // MIDI CC ranges are wire-value bounds (including reviewed subsets), not normalized UI
+    // domains. Expanding 20–100 into 0–127 would send values the chart never authorized.
+    const domain = op.kind === 'midi' && op.msg === 'cc' && action.range
+      ? { min: clamp(action.range.min, 0, 127), max: clamp(action.range.max, 0, 127) } : range;
+    const mapped = mapRange(value, from, domain, int);
     if (op.kind === 'midi') op.value = mapped;
     else if (op.kind === 'local') op.arg = op.op === 'torch' ? mapped > 0.5 : mapped;
   }

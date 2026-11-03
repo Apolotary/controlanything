@@ -4,12 +4,15 @@ import {
 } from '@ce/protocol';
 import { z } from 'zod';
 import type { Research } from './types';
+import { IdentityCorrectionAudit } from './identity-correction';
 
 const Timestamp = z.number().finite().nonnegative();
 const Values = z.record(z.string(), z.number().finite());
 const Source = z.object({ title: z.string(), url: z.string(), confidence: z.string().optional() });
 const MidiProfile = z.object({
   id: z.string(), device: z.string(), manufacturer: z.string(), firmwareNotes: z.string().optional(),
+  sense: z.enum(['camera', 'audio']).optional(),
+  reviewedChart: z.object({ cardId: z.string(), revision: z.number().int().positive(), channel: z.number().int().min(1).max(16), reviewedAt: z.number().nonnegative(), reviewedBy: z.string() }).optional(),
   sources: z.array(Source),
   usb: z.object({ classCompliantMidi: z.boolean().optional(), classCompliantAudio: z.boolean().optional(), portNameHint: z.string().optional(), notes: z.string().optional() }).optional(),
   identity: z.object({ respondsToUniversalInquiry: z.boolean().nullable(), manufacturerId: z.array(z.number()).optional(), replyExample: z.string().nullable().optional(), notes: z.string().optional() }).optional(),
@@ -51,6 +54,7 @@ export const AssetRef = z.object({
 export type AssetRef = z.infer<typeof AssetRef>;
 
 export const SetupData = z.object({
+  identityRevision: z.number().int().nonnegative().optional(),
   driver: Driver, link: LinkResultPayload.optional(),
   verification: z.record(z.string(), VerifyState), evidence: z.array(Evidence),
   research: SavedResearch.optional(), specId: Id, uiSpec: UiSpecPayload,
@@ -77,10 +81,12 @@ export const LegacyTag = z.object({
 export const LibraryRecord = z.object({
   cardId: Id, displayName: z.string().min(1).max(120), hidden: z.boolean(),
   identity: LibraryIdentity, placement: RoomPlacement.optional(),
+  identityRevision: z.number().int().nonnegative().optional(),
+  identityCorrections: z.array(IdentityCorrectionAudit).max(32).optional(),
   // Old coordinates are retained for migration only; clients must qualify them by session before use.
   position: TaggedDevice.shape.position,
   card: DeviceCardPayload.optional(), selection: LegacyTag.shape.selection,
-  draft: LegacyTag.extend({ evidence: z.array(Evidence).default([]), research: SavedResearch.optional() }).optional(),
+  draft: LegacyTag.extend({ identityRevision: z.number().int().nonnegative().optional(), evidence: z.array(Evidence).default([]), research: SavedResearch.optional() }).optional(),
   createdAt: Timestamp, updatedAt: Timestamp, enabled: z.boolean(),
   activeVersionId: Id.optional(), candidateVersionId: Id.optional(),
   candidate: z.object({ id: Id, createdAt: Timestamp, enabledAtStart: z.boolean(), cancelled: z.boolean().default(false) }).optional(),
@@ -106,4 +112,6 @@ export type StoredTag = z.infer<typeof LegacyTag> & {
   skinRefs: AssetRef[];
   placement?: z.infer<typeof RoomPlacement>;
   activeVersionId?: string;
+  identityRevision?: number;
+  identityCorrection?: z.infer<typeof IdentityCorrectionAudit>;
 };

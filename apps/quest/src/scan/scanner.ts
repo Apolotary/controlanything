@@ -17,6 +17,8 @@ import type { VirtualRoom } from './synthetic';
 import { type Target, type TargetStore, toHudTarget } from './targets';
 import { ANNOTATION_MAX_BOXES, ANNOTATION_MIN_SCORE, ANNOTATION_RANGE_M, inAnnotationRange, matchesAnnotationFilter } from './policy';
 import type { Category } from './yolo/classes';
+import { deduplicateDetections } from './detections';
+import type { ScanRegion } from './region';
 
 export interface ScannerDeps {
   /** a getter: replay swaps the camera (and with it the capture) at runtime */
@@ -72,6 +74,8 @@ export class Scanner extends Emitter<ScannerEvents> {
   private generation = 0;
   private latestCapture = -Infinity;
   private readonly fixtureFrames = new Set<string>();
+  private region?: ScanRegion;
+  private singleShot = false;
 
   constructor(private readonly d: ScannerDeps) {
     super();
@@ -80,6 +84,8 @@ export class Scanner extends Emitter<ScannerEvents> {
   start(purpose: 'scan' | 'pair' = 'scan'): void {
     if (this.active && this.purpose === purpose) return;
     this.active = true;
+    this.region = undefined;
+    this.singleShot = false;
     this.generation++;
     this.latestCapture = -Infinity;
     this.purpose = purpose;
@@ -109,6 +115,18 @@ export class Scanner extends Emitter<ScannerEvents> {
     this.category = category;
   }
 
+  /** One deliberate cropped scan. No background whole-view scans resume afterward. */
+  async scanRegion(region: ScanRegion, now: number): Promise<boolean> {
+    this.stop(); this.start();
+    const generation = this.generation;
+    this.region = region; this.singleShot = true;
+    this.ticking = true;
+    try { await this.shoot(now); } finally { this.ticking = false; }
+    if (generation !== this.generation) return false;
+    if (!this.inFlight.size) { this.stop(); return false; }
+    return true;
+  }
+
   /** Call every frame (cheap when idle). */
   tick(now: number): void {
     for (const [id, at] of this.inFlight) {
@@ -117,7 +135,7 @@ export class Scanner extends Emitter<ScannerEvents> {
         this.d.log(`scan frame ${id.slice(-6)} got no result in ${Math.round(this.timeoutMs / 1000)} s`, 'warn');
       }
     }
-    if (!this.active || this.ticking || this.d.capture().busy) return;
+    if (!this.active || this.singleShot || this.ticking || this.d.capture().busy) return;
     if (this.inFlight.size >= this.maxInFlight || now - this.lastSentAt < this.periodMs) return;
     if (this.d.poses.peakSpeed(now, 150) > this.maxSpeedDeg) {
       if (!this.waitingSince) this.waitingSince = now;
@@ -133,7 +151,7 @@ export class Scanner extends Emitter<ScannerEvents> {
 
   private async shoot(now: number): Promise<void> {
     const generation = this.generation;
-    const r = await this.d.capture().capture(this.purpose);
+    const r = await this.d.capture().capture(this.purpose, undefined, this.region);
     if (!r || !this.active || generation !== this.generation) return;
     this.frameGenerations.set(r.payload.frameId, generation);
     if (this.frameGenerations.size > 64) this.frameGenerations.delete(this.frameGenerations.keys().next().value!);
@@ -204,7 +222,8 @@ export class Scanner extends Emitter<ScannerEvents> {
     }
     const placed: Target[] = [];
     const rejected: { det: Det; reason: string }[] = [];
-    for (const det of dets.sort((a, b) => b.score - a.score)) {
+    const eligible: Det[] = [];
+    for (const det of dets) {
       const why = rejectReason(det, rec)
         ?? (det.score < ANNOTATION_MIN_SCORE ? 'low confidence' : null)
         ?? (!matchesAnnotationFilter(det.label, this.category) ? 'outside object filter' : null);
@@ -212,6 +231,11 @@ export class Scanner extends Emitter<ScannerEvents> {
         rejected.push({ det, reason: why });
         continue;
       }
+      eligible.push(det);
+    }
+    const { kept, suppressed } = deduplicateDetections(eligible);
+    for (const det of suppressed) rejected.push({ det, reason: 'overlaps a more specific or repeated detection' });
+    for (const det of kept) {
       const pl = await placeDetection(det, rec, this.d.depth());
       if (!this.active || generation !== this.generation || rec.tCapture < this.latestCapture) return;
       if (!matchesAnnotationFilter(det.label, this.category)) continue;
@@ -231,6 +255,7 @@ export class Scanner extends Emitter<ScannerEvents> {
     this.stats.rejected += rejected.length;
     if (this.active) this.d.hud().setScanning(true, { startedAt: this.startedAt, pending: this.inFlight.size, modelId: p.modelId });
     this.emit('result', { frameId: p.frameId, placed, rejected, dets });
+    if (this.singleShot) this.stop();
   }
 
   frameRecord(frameId: string): FrameRecord | undefined {

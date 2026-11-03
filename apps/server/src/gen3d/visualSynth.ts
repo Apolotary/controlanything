@@ -27,6 +27,14 @@ export function visualSynthDraft(driver: ForgeDriver): ForgeDraft {
       default: Math.max(range.min, Math.min(range.max, 51)), unit: '' }],
     inverse: { commands: [], restore: 'p_warp' },
   };
+  const rippleRange = driver.actions.find((action) => action.actionId === 'cc21')?.range;
+  const ripples: HackDraft | undefined = rippleRange ? {
+    ...common, id: 'h_ripples', name: 'Water ripples', kind: 'control', blurb: 'Push and pull to create water ripples',
+    commands: [{ action: 'cc21', param: 'p_ripples', value: 0, delayMs: 0 }],
+    control: { accent: '', archetype: 'slider', param: 'p_ripples', size: 'm' },
+    params: [{ id: 'p_ripples', name: 'Water ripples', ...rippleRange, step: rippleRange.step ?? 1, default: 64, unit: '' }],
+    inverse: { commands: [], restore: 'p_ripples' },
+  } : undefined;
   const patterns = ['Flow', 'Rings', 'Prism'].map((name, index): HackDraft => ({
     ...common, id: `h_pattern${index}`, name, kind: 'action', blurb: `Show the ${name.toLowerCase()} pattern`,
     commands: [{ action: `pattern${index}`, param: '', value: 0, delayMs: 0 }],
@@ -34,7 +42,7 @@ export function visualSynthDraft(driver: ForgeDriver): ForgeDraft {
     // Undo returns to the default visual preset.
     inverse: { commands: [{ action: 'pattern0', param: '', value: 0, delayMs: 0 }], restore: '' },
   }));
-  return { title: 'Visual Synth', hacks: [warp, ...patterns] };
+  return { title: 'Visual Synth', hacks: [warp, ...(ripples ? [ripples] : []), ...patterns] };
 }
 
 export function visualSynthFixtureSession(driver: ForgeDriver): TransportSession {

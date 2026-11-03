@@ -1,3 +1,5 @@
+import type { OnboardingView } from '../hud/contract';
+
 export interface HelperDevice {
   deviceId: string;
   name: string;
@@ -22,6 +24,8 @@ export class HelperOnboarding {
   private helpers?: HelperDevice[];
   private pairedAt = 0;
   private skipped = false;
+  private guideComplete = false;
+  private pairingBaseline?: Set<string>;
 
   constructor(private readonly allowSim = false) {}
 
@@ -34,6 +38,8 @@ export class HelperOnboarding {
   enter(now: number): void {
     this.active = true;
     this.skipped = false;
+    this.guideComplete = false;
+    this.pairingBaseline = undefined;
     this.state = 'hidden';
     this.generation++;
     this.reconcile(now);
@@ -42,6 +48,7 @@ export class HelperOnboarding {
   leave(): void {
     this.active = false;
     this.state = 'hidden';
+    this.pairingBaseline = undefined;
     this.generation++;
   }
 
@@ -61,8 +68,9 @@ export class HelperOnboarding {
   }
 
   /** An explicit Pair action may reopen the card after Skip. */
-  show(): void {
-    if (!this.active || this.online) return;
+  show(explicit = false): void {
+    if (!this.active || this.online && !explicit) return;
+    this.pairingBaseline = explicit ? new Set(this.helpers?.filter((device) => device.online).map((device) => device.deviceId)) : undefined;
     this.skipped = false;
     this.pairedName = undefined;
     this.state = 'shown';
@@ -74,8 +82,19 @@ export class HelperOnboarding {
   skip(): void {
     this.skipped = true;
     this.state = 'skipped';
+    this.pairingBaseline = undefined;
     this.generation++;
   }
+
+  /** Guidance is informational: only a deliberate mode choice completes it. */
+  guide(tagged: number): OnboardingView | null {
+    if (!this.active || this.guideComplete || this.visible || !this.skipped && !this.online) return null;
+    return tagged > 0
+      ? { step: 'use', title: 'Your device is tagged', message: "When you're ready, open Menu and choose Use devices." }
+      : { step: 'tag', title: 'Look around', message: 'Boxes appear on devices. Pinch one to tag it.' };
+  }
+
+  chooseControl(): void { if (this.active) this.guideComplete = true; }
 
   tick(now: number): void {
     if (this.state === 'paired' && now - this.pairedAt >= 1500) {
@@ -86,12 +105,16 @@ export class HelperOnboarding {
 
   private reconcile(now: number): void {
     if (!this.active || this.state === 'paired') return;
-    const helper = this.online;
+    const helper = this.pairingBaseline
+      ? this.helpers?.find((device) => device.online && !this.pairingBaseline!.has(device.deviceId)
+        && (device.kind === 'mac' || device.kind === 'laptop' || this.allowSim && device.kind === 'sim'))
+      : this.online;
     if (helper) {
       if (this.state === 'shown' || this.state === 'scanning') {
         this.pairedName = helper.name;
         this.pairedAt = now;
         this.state = 'paired';
+        this.pairingBaseline = undefined;
         this.generation++;
       } else this.state = this.skipped ? 'skipped' : 'hidden';
     } else if (!this.skipped && this.helpers && this.urls.length && !this.visible) this.show();

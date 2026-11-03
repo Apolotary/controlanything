@@ -9,7 +9,7 @@ describe('target chip words', () => {
   });
 
   it('offers untagging only when a tagged annotation is hovered', () => {
-    expect(targetChipLabel({ label: 'Ceiling light' }, 'annotate', true)).toBe('Ceiling light');
+    expect(targetChipLabel({ label: 'Ceiling light' }, 'annotate', true)).toBe('Ceiling light · Pinch to tag');
     expect(targetChipLabel({ label: 'Ceiling light', tagged: true, identifying: true }, 'annotate', true)).toBe('Pinch to untag');
     expect(targetChipLabel({ label: 'Ceiling light', tagged: true, connection: 'ready' }, 'control', true)).toBe('✓ Ceiling light · Ready');
   });

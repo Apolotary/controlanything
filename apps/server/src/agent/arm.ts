@@ -44,7 +44,7 @@ export class ArmService {
       driverId: driver.driverId,
       title: `${target.card?.name ?? target.detection?.label ?? 'Device'} is ready`,
       summary: summary ?? (passed === actions.length
-        ? `All ${actions.length} commands worked on the real device.`
+        ? `All ${actions.length} command checks passed.`
         : `${passed} of ${actions.length} commands worked; only those are enabled.`),
       actions,
       irreversible,

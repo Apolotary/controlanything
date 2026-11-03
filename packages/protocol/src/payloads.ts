@@ -18,6 +18,8 @@ import { Driver, Evidence, ExecOp, IrCapture, VerifyState } from './driver';
 import { GestureMap } from './gestures';
 import { Hack, HackSet } from './hackset';
 import { RoomPlacement } from './library';
+import { ObjectInformation } from './object-information';
+import { WorkspaceContext } from './workspace-context';
 import {
   PairApproveRequest,
   PairDenyRequest,
@@ -250,6 +252,11 @@ export type ScanResultPayload = z.infer<typeof ScanResultPayload>;
 
 /** C->S. The user picked a detection (pinch) or a known device; starts the discovery loop for it. */
 export const TargetSelectPayload = z.object({
+  /** Correlates explicit virtual-device selection without guessing from generic device labels. */
+  requestId: Id.optional(),
+  virtual: z.literal('visual-synth').optional(),
+  /** User-chosen placement of a known virtual screen; not a vision detection. */
+  position: Vec3.optional(),
   frameId: Id.optional(),
   detId: Id.optional(),
   /** a target already identified earlier */
@@ -260,6 +267,19 @@ export const TargetSelectPayload = z.object({
   text: z.string().max(500).optional(),
 });
 export type TargetSelectPayload = z.infer<typeof TargetSelectPayload>;
+
+/** S->requester. Selection only; setup, camera verification and Enable remain separate steps. */
+export const TargetSelectResultPayload = z.object({
+  requestId: Id,
+  ok: z.boolean(),
+  cardId: Id.optional(),
+  reason: z.string().max(300).optional(),
+});
+export type TargetSelectResultPayload = z.infer<typeof TargetSelectResultPayload>;
+
+/** S->paired companion. Opens only the built-in silent visual screen, never device controls. */
+export const VisualOpenPayload = z.object({ requestId: Id });
+export type VisualOpenPayload = z.infer<typeof VisualOpenPayload>;
 
 /** C->S. Stop work on this target; runId ignores an action from an older run when supplied. */
 export const TargetCancelPayload = z.object({
@@ -880,6 +900,8 @@ export const VoiceAudioPayload = z.object({
   final: z.boolean().optional(),
   cardId: Id.optional(),
   specId: Id.optional(),
+  /** Client-observed UI state, frozen at request start; never control authority. */
+  workspace: WorkspaceContext.optional(),
 });
 export type VoiceAudioPayload = z.infer<typeof VoiceAudioPayload>;
 
@@ -896,10 +918,31 @@ export const VoiceTextPayload = z.object({
   latencyMs: z.number().min(0).optional(),
   cardId: Id.optional(),
   specId: Id.optional(),
+  /** Client-observed UI state, frozen at request start; never control authority. */
+  workspace: WorkspaceContext.optional(),
   /** what the server did with it */
-  intent: z.enum(['edit', 'hack', 'scan', 'undo', 'panic', 'question', 'none']).optional(),
+  intent: z.enum(['edit', 'hack', 'scan', 'undo', 'panic', 'question', 'inspect', 'identity', 'setup', 'gesture', 'none']).optional(),
+  /** Server-stamped destination for selected-device assistant replies. */
+  recipientId: Id.optional(),
+  assistant: z.object({
+    state: z.enum(['thinking', 'reply', 'setup', 'proposal', 'applied', 'error']),
+    text: z.string().min(1).max(2000),
+    proposalId: Id.optional(),
+    proposalKind: z.enum(['gesture', 'identity', 'peripheral']).optional(),
+    /** Server-confirmed peripheral selection; never client-authoritative. */
+    selectedCardId: Id.optional(),
+    mapping: z.array(z.string().max(240)).max(10).optional(),
+    objectInfo: ObjectInformation.optional(),
+  }).optional(),
 });
 export type VoiceTextPayload = z.infer<typeof VoiceTextPayload>;
+
+/** C->S. A proposal belongs to its requesting sender and selected card. */
+export const VoiceConfirmPayload = z.object({ cardId: Id, proposalId: Id, accept: z.boolean() });
+export type VoiceConfirmPayload = z.infer<typeof VoiceConfirmPayload>;
+/** C->S. Abandon a selected-device request, including transcription and deferred proposals. */
+export const VoiceCancelPayload = z.object({ cardId: Id, utteranceId: Id.optional() });
+export type VoiceCancelPayload = z.infer<typeof VoiceCancelPayload>;
 
 // --- logging --------------------------------------------------------------------------------
 
@@ -948,6 +991,8 @@ export const TagConnection = z.enum(['ready', 'setup', 'offline']);
 export type TagConnection = z.infer<typeof TagConnection>;
 
 export const TaggedDevice = z.object({
+  /** Advances on an owner-confirmed identity change; clients discard older control caches. */
+  identityRevision: z.number().int().nonnegative().optional(),
   placement: RoomPlacement.optional(),
   cardId: Id,
   label: z.string().max(80),

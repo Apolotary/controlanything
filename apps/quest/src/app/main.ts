@@ -2,6 +2,9 @@
 import '@fontsource/chakra-petch/600.css';
 import '@fontsource/chakra-petch/700.css';
 import '@fontsource/share-tech-mono/400.css';
+import '@fontsource/inter/400.css';
+import '@fontsource/inter/500.css';
+import '@fontsource/inter/600.css';
 import './style.css';
 
 const params = new URLSearchParams(location.search);

@@ -2578,6 +2578,7 @@
                     "type": "string",
                     "enum": [
                       "right_height",
+                      "right_depth",
                       "right_roll",
                       "right_pinch_aperture",
                       "two_hand_distance"

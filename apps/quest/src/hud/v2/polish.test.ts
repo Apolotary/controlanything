@@ -19,7 +19,7 @@ function setup() {
   const spec: Gen3dSpec = {
     ...EXAMPLES['ceiling-dimmer']!, specId: 'lamp-controls', state: { armed: true },
     device: { ...EXAMPLES['ceiling-dimmer']!.device!, transport: 'ir' },
-    controls: [{ id: 'power', label: 'Power', kind: 'toggle', default: false, binding: { action: 'power' } }],
+    controls: [{ id: 'power', label: 'Power', kind: 'toggle', default: false, armed: true, binding: { action: 'power' } }],
   };
   const controls: ControlEvent[] = [], exits: unknown[] = [];
   hud.on('control', (event) => controls.push(event));
@@ -63,7 +63,7 @@ function setup() {
 }
 
 describe('HUD interaction polish', () => {
-  it('pins the card through a long head turn and shows one geometric edge arrow for its device', () => {
+  it('pins the card through a long head turn and shows one geometric edge arrow for its workspace', () => {
     const f = setup(), card = f.node('device-card');
     f.hud.upsertTarget({ ...f.target, id: 'other', label: 'Other light', position: [-0.6, 1.4, -1] });
     f.tap('device-lock');
@@ -86,6 +86,9 @@ describe('HUD interaction polish', () => {
     f.tap('device-lock');
     expect(card.userData.pinned).toBe(true);
     f.tap('target-label:other');
+    expect(card.userData.pinned).toBe(true);
+    f.hud.on('changeDevice', () => f.hud.setLocked(null));
+    f.tap('menu-toggle'); f.tap('menu-tools'); f.tap('change-device'); f.tap('target-label:other');
     expect(card.userData.pinned).toBe(false);
     expect((f.node('device-name') as Object3D & { text: string }).text).toBe('Other light');
   });
@@ -166,6 +169,7 @@ describe('HUD interaction polish', () => {
 
   it('cancels an early Exit release and emits once after a complete hold', () => {
     const f = setup();
+    f.hud.setDeck({ open: true }); f.step();
     let aim = f.press('exit-ar');
     f.step(250, { ...aim, pinching: true });
     expect(f.node('exit-ar').userData.holdProgress).toBeGreaterThan(0);

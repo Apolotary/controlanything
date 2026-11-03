@@ -18,6 +18,6 @@ export const THEME = {
   reticle: { diameter: 0.0168, radius: 0.0084, stroke: 0.0009, dotRadius: 0.0024, segments: 24, distance: 1 },
   motion: { duration: 0.18 },
   panel: { width: 0.38, height: 0.24, gap: 0.025, row: 0.056, textWidth: 0.33, headY: -0.14, toastY: -0.34, depth: 0.001, detailHeight: 0.32, detailLines: 8 },
-  render: { boxes: 10, plates: 20, text: 21 },
+  render: { boxes: 10, plates: 20, buttons: 22, text: 24 },
   limits: { drawCalls: 120, triangles: 60_000, textChars: 280, logs: 8, evidence: 4 },
 } as const;
