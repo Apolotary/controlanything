@@ -24,6 +24,7 @@ const opt = (name: string) => {
 const cmd = argv[0] ?? 'help';
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const fmt = (a?: Attitude) => (a ? `pan ${a.yaw.toFixed(1)}° tilt ${a.pitch.toFixed(1)}° roll ${a.roll.toFixed(1)}°` : 'no report');
+const fmtRep = (a?: Attitude & { at: number }) => (a ? `${fmt(a)} (${Date.now() - a.at} ms ago)` : 'no angle report');
 
 async function scan(): Promise<void> {
   console.log('Scanning 8 s (no connection is made)…');
@@ -66,7 +67,7 @@ async function test(): Promise<void> {
   await sleep(4000);
   const pushes = Object.entries(c.state.pushes).map(([k, n]) => `${k}×${n}`).join(' ');
   console.log(`  notifications by cmd set/id: ${pushes || 'none'}`);
-  console.log(`  attitude: ${fmt(c.freshReport())}`);
+  console.log(`  attitude: ${fmtRep(c.state.reported)}`);
   console.log(`  battery:  ${c.state.battery ? `${c.state.battery.percent}%${c.state.battery.charging ? ' charging' : ''}` : 'no report'}`);
   if (!flag('move')) {
     console.log('\nRead-only check done. Add --move for the small sweep.');
@@ -89,7 +90,7 @@ async function test(): Promise<void> {
     const r = await c.aim(a, 1000);
     console.log(`→ ${label.padEnd(10)} sent ${c.tx[c.tx.length - 1]?.hex} (${r.durationMs} ms)`);
     await sleep(r.durationMs + 600);
-    console.log(`  gimbal says ${fmt(c.freshReport())}`);
+    console.log(`  gimbal says ${fmtRep(c.state.reported)}`);
   }
   console.log('\nSweep done. Did the phone turn right/left and tip? Tell the agent which direction "+pan" went.');
   return finish(0);

@@ -117,6 +117,12 @@ export function batteryPushPacket(percent: number, charging: boolean, seq: numbe
   return buildDuml({ sender: DEV_GIMBAL, receiver: DEV_APP, seq, cmdType: 0x00, cmdSet: SET_CENTER, cmdId: CMD_BATTERY_PUSH, payload: Uint8Array.from([clamp(Math.round(percent), 0, 100), 0, charging ? 1 : 0]) });
 }
 
+/**
+ * The attitude push layout (cmd 0x04/0x05: pitch, roll, yaw) comes from the DUML gimbal dissector, not from an OM 4
+ * capture. Until a hardware run confirms it, a report that disagrees with the target is logged, not a failure.
+ */
+export const ATTITUDE_LAYOUT_CONFIRMED = false;
+
 export type OsmoReport = { kind: 'attitude'; attitude: Attitude } | { kind: 'battery'; percent: number; charging: boolean };
 
 /** What a notification says, when we understand it. */

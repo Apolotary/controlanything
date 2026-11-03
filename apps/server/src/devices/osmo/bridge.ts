@@ -19,7 +19,7 @@ import { dirname, join } from 'node:path';
 import { type AnyMessage, type BleArgs, type BleOp, type ExecAckPayload, type ExecCommandPayload, makeMessage, type MessageType, type PayloadOf, type Port, VALUE_PLACEHOLDER } from '@ce/protocol';
 import WebSocket from 'ws';
 import { DumlStream, toHex } from './duml';
-import { type Attitude, clampAttitude, decodeReport, moveDurationMs, OSMO_LIMITS, rotatePacket } from './om';
+import { ATTITUDE_LAYOUT_CONFIRMED, type Attitude, clampAttitude, decodeReport, moveDurationMs, OSMO_LIMITS, rotatePacket } from './om';
 import { createLink, type GimbalLink, type LinkKind, WebBluetoothGimbalLink } from './links';
 
 export const OSMO_PORT_ID = 'dji-osmo';
@@ -369,9 +369,12 @@ export class OsmoBridge {
     const off = Math.max(Math.abs(rep.yaw - target.yaw), Math.abs(rep.pitch - target.pitch));
     const reached = off <= OSMO_REACHED_DEG;
     params.offDeg = r1(off);
+    // an unconfirmed report layout can disagree because we read it wrong, not because the gimbal missed
+    const miss = !reached && ATTITUDE_LAYOUT_CONFIRMED;
     return ack({
-      ok: reached, ...(reached ? {} : { error: 'device_error' as const }), sentAt: sent.sentAt, latencyMs: Date.now() - t0,
-      detail: reached ? `gimbal reports ${describe(rep)} (asked ${describe(target)}) ✓` : `gimbal reports ${describe(rep)}, ${r1(off)}° from the target ${describe(target)}`,
+      ok: !miss, ...(miss ? { error: 'device_error' as const } : {}), sentAt: sent.sentAt, latencyMs: Date.now() - t0,
+      detail: reached ? `gimbal reports ${describe(rep)} (asked ${describe(target)}) ✓`
+        : `gimbal reports ${describe(rep)}, ${r1(off)}° from the target ${describe(target)}${miss ? '' : ' (report layout unconfirmed: sent, not proven)'}`,
       applied: { source: 'port', params, at: rep.at },
     });
   }
