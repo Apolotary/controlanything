@@ -2168,7 +2168,7 @@ export class QuestApp {
       const t = this.targets.get(id);
       const label = t?.label ?? live?.label;
       // SAM may relabel the Mac's box "electronic device"; the on-device detector's own class (laptop/tv) still counts.
-      const detector = t && !isLiveId(id) ? this.live?.detectorLabelOf(id) : undefined;
+      const detector = t && !isLiveId(id) ? this.live?.detectorLabelOf?.(id) : undefined;
       if (this.isScreenBox(label) || this.isScreenBox(live?.rawLabel) || this.isScreenBox(detector)) {
         const position = t ? t.position.clone() : live ? new Vector3().fromArray(live.position) : undefined;
         this.selectVisualSynth(undefined, { label: (live?.rawLabel ?? (this.isScreenBox(detector) ? detector : label))!, frameId: t?.frameId, detId: t?.detId, position });
