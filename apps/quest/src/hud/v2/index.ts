@@ -218,6 +218,9 @@ export class LeanHud implements Hud {
   constructor(scene: Scene, private readonly camera: Camera, _nonDominant: 'left' | 'right' = 'left', private readonly lab = false) {
     this.root.name = 'hud-v2';
     this.palette = new WristPalette(this.surfaces, _nonDominant);
+    // First child of the HUD root, so name lookups ('visual-synth', 'deck:panic', 'exit-ar') find the palette before
+    // the hidden lab menu's same-named buttons (e2e scripts and the judge path use these names).
+    this.root.add(this.palette);
     this.palette.register({ key: 'visual-synth', label: 'Visual synth', order: 0, primary: true, onSelect: () => this.events.emit('visualSynth', {}) });
     this.palette.register({ key: 'deck:panic', label: 'Stop', order: 80, onSelect: () => {
       this.events.emit('deck', { key: 'panic', phase: 'press' }); this.events.emit('deck', { key: 'panic', phase: 'release' });
@@ -264,7 +267,7 @@ export class LeanHud implements Hud {
     this.modalLayer.add(this.modal);
     this.annotationLayer.name = 'device-annotations';
     this.annotationLayer.add(this.boxes);
-    this.root.add(this.annotationLayer, this.card, this.modalLayer, this.deck, this.deck.panel, this.coach, this.notice, this.reticles, this.tether, this.palette);
+    this.root.add(this.annotationLayer, this.card, this.modalLayer, this.deck, this.deck.panel, this.coach, this.notice, this.reticles, this.tether);
     this.root.add(this.helperPairing);
     this.root.add(this.assistant);
     this.root.add(this.projectPanel);

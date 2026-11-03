@@ -72,7 +72,7 @@ async function pinch(name) {
   await quest.mouse.move(point.x, point.y); await quest.mouse.down(); await frames(); await quest.mouse.up(); await frames(6);
 }
 async function trySynth() {
-  if (!await quest.evaluate(() => window.__ce.hud.root.getObjectByName('main-menu')?.visible)) await pinch('menu-toggle');
+  // The wrist palette is docked open in the emulator (mouse); no menu to open first.
   await pinch('visual-synth');
 }
 async function shot(name, page) { await page.screenshot({ path: join(OUT, `${name}.png`) }); }

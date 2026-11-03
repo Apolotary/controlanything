@@ -456,7 +456,9 @@ export class InputSampler {
       return null;
     }
     // A mono XR view carries the authoritative inverse projection for emulator clicks.
-    const rayCamera = camera instanceof ArrayCamera && camera.cameras.length === 1 ? camera.cameras[0] : camera;
+    // The view drawn on the canvas (IWER mono reports a second, 0 px wide view).
+    const drawn = camera instanceof ArrayCamera ? camera.cameras.filter((c) => (c.viewport?.z ?? 0) > 0) : [];
+    const rayCamera = camera instanceof ArrayCamera && (drawn.length === 1 || camera.cameras.length === 1) ? drawn[0] ?? camera.cameras[0]! : camera;
     rayCamera.updateWorldMatrix(true, false);
     this.raycaster.setFromCamera(this.pointer.ndc, rayCamera);
     const hand = this.desktopHand;

@@ -39,12 +39,7 @@ export class SpatialInput {
       multi.toggleSubPointer('grab', true);
       for (const kind of ['ray', 'touch', 'grab'] as const) this.pointerHands.set(multi.getPointer(kind).id, hand);
     }
-    const getCamera = (): PerspectiveCamera => {
-      if (!this.renderer.xr.isPresenting) return this.camera;
-      const xr = this.renderer.xr.getCamera() as ArrayCamera;
-      // A mono emulator view carries the authoritative projection for mouse rays.
-      return (xr.cameras.length === 1 ? xr.cameras[0] : this.camera) as PerspectiveCamera;
-    };
+    const getCamera = (): PerspectiveCamera => this.renderer.xr.isPresenting ? visibleXrCamera(this.renderer.xr.getCamera() as ArrayCamera) ?? this.camera : this.camera;
     this.html = opts.mouse === false ? null : forwardHtmlEvents(renderer.domElement, getCamera, scene, { intersectEveryFrame: true });
   }
 
@@ -105,6 +100,21 @@ export class SpatialInput {
     this.input.multiPointers.left.dispose();
     this.input.multiPointers.right.dispose();
   }
+}
+
+/**
+ * The XR view actually drawn on the canvas. IWER's "mono" emulator still reports two views, but only the first has a
+ * viewport (the second is 0 px wide); the union camera three copies into the scene camera is offset from it, which put
+ * mouse rays up to ~25 px off the picture. Mouse rays must use the drawn view.
+ */
+export function visibleXrCamera(xr: ArrayCamera): PerspectiveCamera | undefined {
+  let best: PerspectiveCamera | undefined, width = 0;
+  for (const camera of xr.cameras) {
+    const w = (camera as PerspectiveCamera & { viewport?: { z: number } }).viewport?.z ?? 0;
+    if (w > width) { width = w; best = camera as PerspectiveCamera; }
+  }
+  if (xr.cameras.length === 1) return xr.cameras[0] as PerspectiveCamera;
+  return xr.cameras.filter((c) => ((c as PerspectiveCamera & { viewport?: { z: number } }).viewport?.z ?? 0) > 0).length === 1 ? best : undefined;
 }
 
 export function createSpatialInput(scene: Scene, camera: PerspectiveCamera, renderer: WebGLRenderer, opts?: { mouse?: boolean }): SpatialInput {

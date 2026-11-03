@@ -2728,6 +2728,19 @@ export class QuestApp {
         case 'm':
           this.setMode(this.modes.mode === 'annotate' ? 'control' : 'annotate');
           break;
+        case 'g':
+          // judge path: the wrist palette's Visual synth
+          this.selectVisualSynth();
+          break;
+        case '1':
+        case '2':
+        case '3':
+          // judge path: the palette's Electronics · Objects · All row
+          this.setLiveCategory((['electronics', 'objects', 'everything'] as const)[Number(e.key) - 1]!);
+          break;
+        case 'b':
+          (this.hud as Hud & { palette?: { item(key: string): PaletteItem | undefined } }).palette?.item('buddy')?.onSelect();
+          break;
         case 'c':
           // cycle the object filter
           if (this.live) this.setLiveCategory(CATEGORIES[(CATEGORIES.findIndex((x) => x.id === this.live!.category) + 1) % CATEGORIES.length]!.id);
