@@ -255,6 +255,17 @@ export class LiveDetector {
     return anchor?.shown && track ? this.toTarget(track, anchor) : undefined;
   }
 
+  /** The live detector's own class label (e.g. "laptop") for a SAM target that took over one of its boxes. */
+  detectorLabelOf(samId: string): string | undefined {
+    for (const [n, anchor] of this.anchors) {
+      if (anchor.claimedBy !== samId) continue;
+      const track = this.tracker.get(n);
+      const label = track ? deviceClass(track.cls)?.label : undefined;
+      if (label) return label;
+    }
+    return undefined;
+  }
+
   /** The SAM target that has taken over this live box, if any. */
   claimOf(id: string): string | undefined {
     const n = trackIdOf(id);

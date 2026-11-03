@@ -2167,9 +2167,11 @@ export class QuestApp {
       const live = isLiveId(id) ? this.live?.targetSnapshot(this.live?.claimOf(id) ?? id) : undefined;
       const t = this.targets.get(id);
       const label = t?.label ?? live?.label;
-      if (this.isScreenBox(label) || this.isScreenBox(live?.rawLabel)) {
+      // SAM may relabel the Mac's box "electronic device"; the on-device detector's own class (laptop/tv) still counts.
+      const detector = t && !isLiveId(id) ? this.live?.detectorLabelOf(id) : undefined;
+      if (this.isScreenBox(label) || this.isScreenBox(live?.rawLabel) || this.isScreenBox(detector)) {
         const position = t ? t.position.clone() : live ? new Vector3().fromArray(live.position) : undefined;
-        this.selectVisualSynth(undefined, { label: (live?.rawLabel ?? label)!, frameId: t?.frameId, detId: t?.detId, position });
+        this.selectVisualSynth(undefined, { label: (live?.rawLabel ?? (this.isScreenBox(detector) ? detector : label))!, frameId: t?.frameId, detId: t?.detId, position });
         return;
       }
     }
