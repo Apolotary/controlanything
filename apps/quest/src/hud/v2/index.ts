@@ -561,6 +561,10 @@ export class LeanHud implements Hud {
       this.card.add(legacy);
       legacy.add(this.cardPlate, this.heading, this.status, this.verdict, this.progress, this.setupProgress, this.details, this.controls);
       legacy.add(this.screenGuide);
+      // The legacy 0.40 × 0.32 card-background widget would overhang this card and swallow the right dial; the
+      // uikit card consumes its own background.
+      const surface = this.widgets.findIndex((widget) => widget.group === this.card);
+      if (surface >= 0) { (this.card.userData.hit as Object3D | undefined)?.removeFromParent(); this.widgets.splice(surface, 1); }
       this.look = { card, rig, spatial: null, unregister: [] };
     }
     const look = this.look;

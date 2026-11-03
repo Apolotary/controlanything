@@ -129,7 +129,7 @@ export class DeviceCard extends Group {
     if (toggle) {
       this.toggle!.name = toggle.name;
       // White = on (inspiration §6); dark glass = off.
-      this.toggle!.setProperties({ variant: toggle.on ? 'primary' : 'secondary', backgroundColor: toggle.on ? undefined : withOpacity('#ffffff', 0.14) });
+      this.toggle!.setProperties({ variant: toggle.on ? 'primary' : 'secondary', backgroundColor: toggle.on ? withOpacity('#ffffff', 0.92) : withOpacity('#ffffff', 0.14) });
       this.toggleLabel!.setProperties({ text: toggle.label });
       this.setIcon(this.toggleIcon!, toggle.on ? 'stop' : 'hand', (kind) => { this.toggleIconKind = kind; }, this.toggleIconKind);
     }
