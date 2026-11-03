@@ -1486,6 +1486,7 @@ export class QuestApp {
   }
 
   private setHandControl(targetId: string, enabled: boolean): void {
+    if (enabled) this.tangible?.yieldTo('Perform');
     this.clearHandControl();
     const tag = this.modes.tags.get(targetId);
     const spec = tag?.cardId ? this.gestureSpecs.get(tag.cardId) : undefined;

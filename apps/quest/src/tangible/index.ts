@@ -163,6 +163,14 @@ export class Tangible {
     this.publish();
   }
 
+  /** Another controller (hand Perform) takes the device: one 'end' per control, the ring fades, a short status. */
+  yieldTo(other: string): void {
+    if (this.state === 'idle') return;
+    const was = this.state;
+    this.release(other);
+    if (was === 'bound') this.h.toast(`Object released · ${other} is on`, 'info');
+  }
+
   /** The followed object's world pose while tracked (a crop hint for the buddy). */
   heldObject(): { position: Vector3; sizeM: [number, number, number]; label: string } | null {
     if (this.state !== 'bound' || !this.tracker.visible()) return null;
