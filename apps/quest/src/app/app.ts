@@ -559,7 +559,7 @@ export class QuestApp {
       if (!this.modes.tags.has(id)) this.eraseAnnotation(id);
     };
     this.refreshHome();
-    if (kind === 'v2') this.handFeedback.setAppearance({ accent: HUD_V2_THEME.color.accent, showHover: true });
+    if (kind === 'v2') this.handFeedback.setAppearance({ accent: '#FFFFFF', showHover: true }); // white fingertips, like the new look
     this.scene.add(hud.root);
     if (error) this.page.log(error, 'warn');
     this.page.log(`HUD: ${kind === 'v2' ? 'compact v2' : kind === 'gen3d' ? 'original renderer (v1)' : 'shell debug HUD'}`);
