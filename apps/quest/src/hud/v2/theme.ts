@@ -21,3 +21,21 @@ export const THEME = {
   render: { boxes: 10, plates: 20, buttons: 22, text: 24 },
   limits: { drawCalls: 120, triangles: 60_000, textChars: 280, logs: 8, evidence: 4 },
 } as const;
+
+/**
+ * WP3 look: Meta Horizon OS widgets (pmndrs uikit-horizon, dark scheme) with Google XR Blocks' grayGlass
+ * tokens and the inspiration video's white = on. Units for `px` values are millimetres (uikit pixelSize 0.001).
+ * Layers draw in a fixed order and never depth-sort against each other: device ring < dials < labels < card.
+ */
+export const LOOK = {
+  pixelSize: 0.001,
+  plate: { top: '#2F2F37', bottom: '#16161B', alpha: 0.94, rim: '#FFFFFF', rimAlpha: 0.18, radius: 28 },
+  text: { primary: '#FFFFFF', secondary: 'rgba(255,255,255,0.64)', onLight: '#121216' },
+  card: { width: 340, padding: 20, gap: 14, toggle: 64, titleSize: 22, subtitleSize: 15 },
+  pill: { height: 30, fontSize: 14, light: '#FFFFFF', dark: 'rgba(255,255,255,0.10)' },
+  dial: { sweepDeg: 110, track: 0.016, knob: 0.0135, gap: 0.03, minW: 0.18, maxW: 0.7, minH: 0.12, maxH: 0.45, trackAlpha: 0.26, smoothing: 14 },
+  ring: { stroke: 0.0035, margin: 0.035, radius: 0.03, ticks: 5, pulseS: 0.9, sweepS: 2.4 },
+  hand: { clutchRadius: 0.055, valueRadius: 0.032 },
+  render: { ring: 26, dials: 27, labels: 28, card: 30, hands: 101 },
+  motion: { appearS: 0.3, ackMs: 700 },
+} as const;
