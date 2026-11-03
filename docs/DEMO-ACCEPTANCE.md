@@ -10,7 +10,7 @@ Target: **Enter AR → pinch the MacBook → setup ring → arcs → fist + push
 |---|---|---|---|
 | M1 | One server on :8787, live mode, Mac silent | `curl -s localhost:8787/api/health` shows `"mode":"live"`. Server started with `CE_MAC_SILENT=1`. No other dev servers or e2e browsers running. | |
 | M2 | Quest and Mac paired once; `.data` kept | The companion shows **Paired with Quest 3**. Don't clear the data dir before the take. | |
-| M3 | Companion in its own Chrome window, full screen | Open `http://localhost:8787/companion/` in a separate Chrome window, then View → Enter Full Screen (⌃⌘F). The window shows only the pairing/status card. Details is behind the **Details** button. | |
+| M3 | Companion in its own Chrome window, full screen | Open `http://localhost:8787/companion/` in a separate Chrome window, then View → Enter Full Screen (⌃⌘F). The window shows only the pairing/status card. Details is behind the **Details** button. Close every other companion tab first: only one tab runs the executor, and a stray tab keeps that role. | |
 | M4 | Do Not Disturb on, no other apps on that Space | Notifications don't stop the renderer (measured), but they show up in a screen recording. | |
 | M5 | Fallback ready | `http://localhost:8787/companion/?visuals=1` opens the visual synth by itself once paired. Press **f** or double-click for element full screen. **Back to companion** returns. | |
 | M6 | Screen recording ready, sound off | QuickTime or ⌘⇧5, recording the full screen, microphone off. | |
@@ -65,6 +65,7 @@ Measure with `node scripts/quest-cdp.mjs --fps 450` (≈5 s at 90 Hz) in each st
 | Notification banner on screen | **Pass**: 121 fps, page stays visible | `display notification` (silent) during the measurement |
 | Brief hide (Space switch, reload) | Commands still apply for 15 s (`visualPresence.recent()`). The advertised port flips honestly; the server's 15 s grace keeps setup alive. | Code path. Re-check on the real run. |
 | Renderer self-report in `exec.ack` | **Pass** (fixture): Warp CC 110 → receipt `warp 0.866, visible true, frame 103`, `applied.source: renderer` | :8794 fixture server, headless Chrome |
+| Server setup driven by renderer receipts | **Pass** (fixture, `CE_DEMO=1`, real companion, no headset camera): select → visuals auto-open → 5/5 *verified by renderer* → template forge → auto-armed, under 1 s | :8794 fixture server, fake Quest socket |
 | Silent | No AudioContext or audio element in the renderer; `CE_MAC_SILENT=1` on the server | — |
 
 ## 6. If something fails
