@@ -1,4 +1,4 @@
-# XcodeGen spec for the ControlEverything iPhone client.
+# XcodeGen spec for the ControlAnything iPhone client.
 # Regenerate the project after adding/removing files:  cd apps/iphone && xcodegen generate
 name: ControlEverything
 options:
@@ -26,7 +26,7 @@ targets:
     info:
       path: ControlEverything/Info.plist
       properties:
-        CFBundleDisplayName: ControlEverything
+        CFBundleDisplayName: ControlAnything
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         LSRequiresIPhoneOS: true
@@ -39,8 +39,8 @@ targets:
         UIUserInterfaceStyle: Dark
         UIRequiresPersistentWiFi: true
         UIAppFonts: []
-        NSCameraUsageDescription: "Scan the server's QR code, approve your own devices by their QR, and send snapshots of your devices to your ControlEverything server."
-        NSLocalNetworkUsageDescription: "ControlEverything talks to the server running on your Mac on this Wi-Fi network."
+        NSCameraUsageDescription: "Scan the server's QR code, approve your own devices by their QR, and send snapshots of your devices to your ControlAnything server."
+        NSLocalNetworkUsageDescription: "ControlAnything talks to the server running on your Mac on this Wi-Fi network."
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         CFBundleURLTypes:

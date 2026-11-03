@@ -250,7 +250,7 @@ const char* sentLine(uint32_t now, char* buf, size_t cap) {
 void drawBoot(uint32_t now) {
   topBar("IR NODE", CE_FW_VERSION, now);
   text("CONTROL", 12, 30, F24, kCyan);
-  text("EVERYTHING", 12, 56, F24, kFg);
+  text("ANYTHING", 12, 56, F24, kFg);
   char b[48];
   snprintf(b, sizeof(b), "%s  %s", app::S.board, app::S.chip);
   text(b, 12, 86, F12, kDim);

@@ -232,7 +232,7 @@ def pairing_ticket(display_code, qr_url, device_name="DevTerm", server="", expir
     """The LINK REQUEST ticket: QR + passcode, so the Quest can look at the paper (or the code is typed)."""
     now = time.time() if now is None else now
     r = Receipt("link-request")
-    r.add(Title("CONTROL EVERYTHING"))
+    r.add(Title("CONTROL ANYTHING"))
     r.add(Text("· LINK REQUEST ·", align="center", bold=True))
     r.add(Rule())
     if qr_url:

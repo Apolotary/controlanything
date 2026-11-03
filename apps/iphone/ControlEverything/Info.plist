@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>ControlEverything</string>
+	<string>ControlAnything</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -39,9 +39,9 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Scan the server's QR code, approve your own devices by their QR, and send snapshots of your devices to your ControlEverything server.</string>
+	<string>Scan the server's QR code, approve your own devices by their QR, and send snapshots of your devices to your ControlAnything server.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>ControlEverything talks to the server running on your Mac on this Wi-Fi network.</string>
+	<string>ControlAnything talks to the server running on your Mac on this Wi-Fi network.</string>
 	<key>UIAppFonts</key>
 	<array/>
 	<key>UIApplicationSceneManifest</key>

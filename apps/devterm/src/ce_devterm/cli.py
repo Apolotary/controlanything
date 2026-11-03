@@ -56,7 +56,7 @@ def _common():
 
 def build_parser():
     common = _common()
-    p = argparse.ArgumentParser(prog="ce-devterm", description="ControlEverything client for the ClockworkPi DevTerm.", parents=[common])
+    p = argparse.ArgumentParser(prog="ce-devterm", description="ControlAnything client for the ClockworkPi DevTerm.", parents=[common])
     p.add_argument("--version", action="version", version="ce-devterm %s (Python %s)" % (__version__, platform.python_version()))
     sub = p.add_subparsers(dest="cmd")
     sub.add_parser("run", help="the terminal UI (default)", parents=[common])
@@ -154,7 +154,7 @@ def run_headless(app, args):
     if app.server is None:
         print("ce-devterm: no server. Pass --server MAC_IP (or --demo for this machine).", file=sys.stderr)
         return 2
-    print(ansi("bone", "CONTROL EVERYTHING", color) + " · %s · headless · %s" % (app.state.name, app.server.display))
+    print(ansi("bone", "CONTROL ANYTHING", color) + " · %s · headless · %s" % (app.state.name, app.server.display))
     print("printer: %s" % app.printer.describe())
     if not app.identity.paired:
         rc = _pair_cli(app, args)

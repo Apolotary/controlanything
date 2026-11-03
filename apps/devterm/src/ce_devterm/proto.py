@@ -1,4 +1,4 @@
-"""The ControlEverything wire envelope (packages/protocol): {v: 1, type, id, ts, from, to?, payload}.
+"""The ControlAnything wire envelope (packages/protocol): {v: 1, type, id, ts, from, to?, payload}.
 
 The hub stamps `from`, validates known types with the shared schemas (additionalProperties: false, so
 we never add fields the schema does not list) and relays experimental `x.*` types unchecked.

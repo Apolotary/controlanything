@@ -20,7 +20,7 @@
 #   out of or in connection with the Software or the use or other dealings in the
 #   Software.
 #
-# Vendored into ce-devterm (ControlEverything DevTerm client) as a single file.
+# Vendored into ce-devterm (ControlAnything DevTerm client) as a single file.
 # Changes from upstream: docstrings shortened, the Kanji/ECI helpers that the
 # client never uses were dropped, and the code is kept Python 3.7 compatible.
 # The encoding logic is unchanged.

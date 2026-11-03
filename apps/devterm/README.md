@@ -42,7 +42,7 @@ capabilities `display speaker wifi local printer`). It then shows:
   like a typed passcode. `--qr url` encodes the server's pairing link instead, for phones;
 - the passcode in big letters, which you can type on the Mac or the iPhone instead (or press `y` in
   the server terminal);
-- on a DevTerm, a printed **pairing ticket** with the QR, the code and "CONTROL EVERYTHING · LINK
+- on a DevTerm, a printed **pairing ticket** with the QR, the code and "CONTROL ANYTHING · LINK
   REQUEST", so you can show the paper to the headset.
 
 The client polls `GET /api/pair/status`. It stores the token in `~/.config/controleverything/device.json`

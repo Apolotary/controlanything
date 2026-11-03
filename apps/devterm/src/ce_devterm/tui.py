@@ -406,7 +406,7 @@ class Tui(object):
 
     def draw_header(self, y, w):
         t, g, st = self.theme, self.g, self.app.state
-        x = self.put(y, 0, " CONTROL EVERYTHING ", t["bone"] | curses.A_BOLD)
+        x = self.put(y, 0, " CONTROL ANYTHING ", t["bone"] | curses.A_BOLD)
         x += self.put(y, x, g.dot + " ", t["dim"])
         x += self.put(y, x, st.name[:28], t["bone"])
         right = []
@@ -659,7 +659,7 @@ class Tui(object):
 
     def draw_setup(self, h, w):
         t = self.theme
-        self.put(1, 2, "CONTROL EVERYTHING", t["bone"] | curses.A_BOLD)
+        self.put(1, 2, "CONTROL ANYTHING", t["bone"] | curses.A_BOLD)
         self.put(2, 2, "DevTerm client %s link setup" % self.g.dot, t["dim"])
         self.put(4, 2, "Where is the Mac running the server (npm run dev)?", t["bone"])
         self.put(5, 2, "It prints its address at start-up: http://<mac-ip>:8787", t["dim"])
@@ -669,8 +669,8 @@ class Tui(object):
         info = app.pair_info or {}
         sess = app.pair_session
         state = info.get("state")
-        self.put(0, 1, "CONTROL EVERYTHING", t["bone"] | curses.A_BOLD)
-        self.put(0, 20, "%s LINK REQUEST %s %s" % (g.dot, g.dot, app.server.display if app.server else ""), t["cyan"])
+        self.put(0, 1, "CONTROL ANYTHING", t["bone"] | curses.A_BOLD)
+        self.put(0, 18, "%s LINK REQUEST %s %s" % (g.dot, g.dot, app.server.display if app.server else ""), t["cyan"])
         if sess is None or not sess.display:
             msg = info.get("detail") or "asking the server for a code%s" % g.ellipsis
             self.put(3, 2, msg, t["volt"] if state != "error" else t["magenta"], maxw=w - 4)

@@ -40,7 +40,7 @@ class TuiTest(unittest.TestCase):
     def test_status_line_shows_link_and_running_model(self):
         text = screens.render(self.tui(), "hacks")
         first = text.splitlines()[0]
-        self.assertIn("CONTROL EVERYTHING", first)
+        self.assertIn("CONTROL ANYTHING", first)
         self.assertIn("LINKED", first)
         self.assertIn("muse-spark-1.3 · 25 s", first)
 

@@ -35,7 +35,7 @@ struct QRScannerView: View {
             if !CameraController.hasCamera {
                 unavailable("NO CAMERA ON THIS DEVICE", "The iOS Simulator has no camera. Type the address instead.")
             } else if authorized == false {
-                unavailable("CAMERA ACCESS IS OFF", "Allow it in Settings › ControlEverything, or type the address.")
+                unavailable("CAMERA ACCESS IS OFF", "Allow it in Settings › ControlAnything, or type the address.")
             } else {
                 CameraPreview()
                 ScannerReticle()

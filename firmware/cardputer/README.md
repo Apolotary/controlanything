@@ -1,7 +1,7 @@
 # ce-cardputer: the IR node
 
 Firmware for the **M5Stack Cardputer** and **Cardputer-Adv** that makes either one the
-ControlEverything IR node:
+ControlAnything IR node:
 
 - sends IR (raw timings, plus an on-device NEC / AEHA codec), at most 4 sends per second;
 - learns IR from a remote through an IR receiver on the Grove port;

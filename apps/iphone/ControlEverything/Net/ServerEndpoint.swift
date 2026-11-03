@@ -1,6 +1,6 @@
 import Foundation
 
-/// Where the ControlEverything server lives, and how a scanned or typed string becomes one.
+/// Where the ControlAnything server lives, and how a scanned or typed string becomes one.
 ///
 /// Accepted inputs (from the Mac companion's QR, a pairing QR, a deep link, or the keyboard):
 ///   http://192.168.1.20:8787            https://192.168.1.20:8443/quest/

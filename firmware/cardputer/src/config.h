@@ -1,4 +1,4 @@
-// Build-wide constants for the ControlEverything IR node.
+// Build-wide constants for the ControlAnything IR node.
 #pragma once
 #include <stdint.h>
 

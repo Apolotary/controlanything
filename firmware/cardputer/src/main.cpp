@@ -1,4 +1,4 @@
-// ControlEverything IR node: firmware for the M5Stack Cardputer and Cardputer-Adv.
+// ControlAnything IR node: firmware for the M5Stack Cardputer and Cardputer-Adv.
 //
 // The Mac companion drives it over USB serial (JSON lines, see proto.h and README.md):
 // IR sends with acks, IR learning through an IR receiver on Grove, a pairing QR, and a

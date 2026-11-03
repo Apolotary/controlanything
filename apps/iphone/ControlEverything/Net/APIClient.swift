@@ -52,7 +52,7 @@ nonisolated enum APIError: LocalizedError, Sendable {
     }
 }
 
-/// REST calls to /api on the ControlEverything server.
+/// REST calls to /api on the ControlAnything server.
 nonisolated struct APIClient: Sendable {
     var endpoint: ServerEndpoint
     var token: String?

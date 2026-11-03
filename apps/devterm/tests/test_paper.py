@@ -109,7 +109,7 @@ class ReceiptTest(unittest.TestCase):
     def test_pairing_ticket_has_the_brief_lines(self):
         r = receipt.pairing_ticket("K7Q-4M2", "https://mac:8443/p/x#K7Q4M2", "DevTerm", "mac:8787", (time.time() + 300) * 1000)
         text = r.text()
-        self.assertIn("CONTROL EVERYTHING", text)
+        self.assertIn("CONTROL ANYTHING", text)
         self.assertIn("LINK REQUEST", text)
         self.assertIn("K7Q-4M2", text)
         self.assertIn("type this code on the Mac", text)

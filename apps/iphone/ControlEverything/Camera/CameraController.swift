@@ -22,7 +22,7 @@ nonisolated enum CameraError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .unavailable: return "No camera on this device (the iOS Simulator has none)."
-        case .notAuthorized: return "Camera access is off. Allow it in Settings › ControlEverything."
+        case .notAuthorized: return "Camera access is off. Allow it in Settings › ControlAnything."
         case .captureFailed(let s): return "Capture failed: \(s)"
         case .badImage: return "Could not read that image."
         }
