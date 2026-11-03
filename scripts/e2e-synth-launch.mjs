@@ -1,5 +1,5 @@
 /** Actual companion + actual emulated HUD. No manual Open visuals click on the happy path.
- * Own silent fixture server 8807/8457; no physical camera, MIDI or audio. */
+ * Own silent fixture server on PORT (default 8807; HTTPS off); no physical camera, MIDI or audio. */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -13,7 +13,8 @@ import WebSocket from 'ws';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = join(ROOT, 'research/screens/synth-launch');
-const BASE = 'http://127.0.0.1:8807';
+const PORT = Number(process.env.PORT || 8807);
+const BASE = `http://127.0.0.1:${PORT}`;
 let server, browser, dataDir, observer, companion, quest;
 let log = '', phase = 'startup';
 const messages = [], browserErrors = [];
@@ -88,11 +89,11 @@ async function visibility(hidden) {
 }
 try {
   await mkdir(OUT, { recursive: true });
-  for (const app of ['quest', 'companion']) await access(join(ROOT, `apps/${app}/dist/index.html`));
-  await freePort(8807); await freePort(8457);
+  for (const app of ['quest', 'companion']) await access(join(process.env[`CE_${app.toUpperCase()}_DIST`]?.trim() || join(ROOT, `apps/${app}/dist`), 'index.html'));
+  await freePort(PORT);
   dataDir = await mkdtemp(join(tmpdir(), 'ce-synth-launch-'));
   server = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], { cwd: join(ROOT, 'apps/server'), stdio: ['ignore', 'pipe', 'pipe'], env: {
-    ...process.env, HTTP_PORT: '8807', HTTPS_PORT: '8457', HTTP_HOST: '127.0.0.1', HTTPS_HOST: '127.0.0.1', PUBLIC_HOST: '127.0.0.1',
+    ...process.env, HTTP_PORT: String(PORT), HTTPS_PORT: '0', HTTP_HOST: '127.0.0.1', PUBLIC_HOST: '127.0.0.1',
     CE_DATA_DIR: dataDir, MODEL_MODE: 'fixture', MODEL_API_KEY: '', CE_MAC_SILENT: '1', CE_MAC_LOCAL: '0', CE_REMO: '0', REMO_HOST: '', REMO_SEND: '0',
     CE_TRUST_FIRST_DEVICE: '1', CE_TRUST_LOOPBACK: '1', CE_CONSOLE_APPROVE: '0', MUSE_REPLAY: '1', MUSE_RECORD: '0', MUSE_RECORD_DIR: '', FIXTURE_DELAY_MS: '100', GEN3D_SKIN: '0', VITEST: '',
   } });
