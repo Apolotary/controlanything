@@ -10,7 +10,18 @@ import { Container, Image, Text } from '@pmndrs/uikit';
 import { glassPanel, horizonButton, isBrowser, LOOK } from '../hud/v2/look';
 import type { Panel } from '@pmndrs/uikit-horizon';
 
-const BUBBLE_W = 0.21;
+/** wide enough for a 64-character quip in at most 3 lines at 16 px (the bubble grows upward to fit) */
+const BUBBLE_W = 0.24;
+const SAY_MAX = 72;
+
+/** Never more than ~3 lines: cut at a word boundary. */
+export function fitLine(text: string, n = SAY_MAX): string {
+  const one = text.replace(/\s+/g, ' ').trim();
+  if (one.length <= n) return one;
+  const cut = one.slice(0, n - 1);
+  const sp = cut.lastIndexOf(' ');
+  return `${(sp > n * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,;:-]+$/, '')}…`;
+}
 const RENDER = { bubble: 32, card: 31 } as const;
 
 export class SpeechBubble extends Group {
@@ -41,7 +52,7 @@ export class SpeechBubble extends Group {
     s.moveTo(-0.009, 0); s.lineTo(0.009, 0); s.lineTo(0, -0.011); s.closePath();
     this.tail = new Mesh(new ShapeGeometry(s), new MeshBasicMaterial({ color: LOOK.plate.bottom, transparent: true, opacity: LOOK.plate.alpha, depthTest: false, depthWrite: false }));
     this.tail.renderOrder = RENDER.bubble;
-    this.tail.position.set(0.025, 0.0005, 0);
+    this.tail.position.set(0.04, 0.0005, 0);
     this.add(this.tail);
   }
 
@@ -49,6 +60,7 @@ export class SpeechBubble extends Group {
 
   /** Say a line for `holdS` seconds (Infinity = until replaced). */
   say(text: string, meta = '', holdS = 7): void {
+    text = fitLine(text);
     this.full = text;
     this.shown = 0;
     this.typeAcc = 0;
@@ -72,7 +84,7 @@ export class SpeechBubble extends Group {
     this.visible = this.open;
     if (!this.open) return;
     if (this.shown < this.full.length) {
-      this.typeAcc += dt * 45;
+      this.typeAcc += dt * 70;
       // re-layout at most every ~3 characters (uikit text layout is not free)
       if (this.typeAcc >= 3 || this.shown + this.typeAcc >= this.full.length) {
         this.shown = Math.min(this.full.length, this.shown + Math.floor(this.typeAcc));

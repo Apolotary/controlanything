@@ -21,7 +21,7 @@ import type { PoseRing } from '../scan/poses';
 import { buddyApi, type ReactResult } from './api';
 import { cropPresented, findPresenter, gazePresenter, type Presenter } from './crop';
 import { Mascot } from './mascot';
-import { HELLO_LINES, pick, POKE_LINES, QuestLog } from './quests';
+import { pick, POKE_LINES, QuestLog } from './quests';
 import { loadSticker, Shelf, type ShelfItem } from './shelf';
 import { BuddyCard, SpeechBubble } from './ui';
 import { Viewfinder } from './viewfinder';
@@ -36,6 +36,8 @@ export interface BuddyHost {
   cameraState: 'off' | 'starting' | 'on' | 'error';
   startCamera(): Promise<void>;
   live?: { running: boolean; aimables(): { id: string; position: Vector3; size: number }[] };
+  /** an everyday object bound as a controller and tracked right now (tangible lane); a crop hint, else null */
+  tangible?: { heldObject(): { position: Vector3; sizeM: [number, number, number]; label: string } | null };
   registerPaletteItem(item: PaletteItem): () => void;
   addFrameHook(hook: (f: ShellFrame, dtSec: number, timeMs: number, xrFrame?: XRFrame) => void): () => void;
   page: { log(msg: string, level?: 'info' | 'ok' | 'warn' | 'error'): void };
@@ -143,7 +145,7 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
   function build(): NonNullable<typeof built> {
     const mascot = new Mascot();
     const bubble = new SpeechBubble();
-    bubble.position.set(-0.025, 0.095, 0);
+    bubble.position.set(-0.04, 0.095, 0);
     let shelf: Shelf | null = null;
     try {
       shelf = typeof document !== 'undefined' ? new Shelf() : null;
@@ -278,7 +280,12 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     }
     let crop = null;
     try {
-      crop = await cropPresented({ camera: app.camera, poses: app.poses, encoder: app.encoder, liveBoxes: () => (app.live?.running ? app.live.aimables() : []) }, p, joints);
+      crop = await cropPresented({ camera: app.camera, poses: app.poses, encoder: app.encoder, liveBoxes: () => {
+        const boxes = app.live?.running ? app.live.aimables() : [];
+        const held = app.tangible?.heldObject();
+        if (held) boxes.push({ id: 'tangible', position: held.position.clone(), size: Math.max(...held.sizeM) });
+        return boxes;
+      } }, p, joints);
     } catch (e) {
       app.page.log(`[buddy] crop failed: ${(e as Error).message}`, 'warn');
     }
@@ -448,7 +455,7 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
       built.mascot.setMood('delighted', 2.5);
       built.mascot.play('wave');
       refreshCard();
-      say(`${pick(HELLO_LINES)} ${quests.ask()}`, '', 8);
+      say(`Hi! ${quests.ask()}`, '', 8);
       cooldownUntil = time + 1.5;
       wake();
       asleep = false;

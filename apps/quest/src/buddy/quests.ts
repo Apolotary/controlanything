@@ -21,8 +21,6 @@ export const ASK_LINES = [
 
 export const POKE_LINES = ['Hehe, that tickles!', 'Boop!', 'Hey! I was thinking.', 'Again! Again!', 'You found my off switch. Kidding.'] as const;
 
-export const HELLO_LINES = ['Hi! Hold something up for me to see.', 'Hello! Show me your stuff!', "I'm Muse. What's on your desk?"] as const;
-
 export class QuestLog {
   index = 0;
   done = 0;

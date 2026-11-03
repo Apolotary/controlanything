@@ -36,7 +36,7 @@ export const BUDDY_SCHEMA_NAME = 'buddy_reaction';
 export const BuddyReactionSchema = z.object({
   object: z.string().describe('Plain everyday name of the main object being held up, 1-3 words, lowercase. "nothing" if no object is visible.'),
   emotion: z.enum(BUDDY_EMOTIONS).describe("The buddy's feeling about this object."),
-  quip: z.string().describe('One playful line the buddy says about THIS object (its colour, shape, use or vibe). At most 12 words. No emoji, no hashtags, never mean.'),
+  quip: z.string().describe('One playful line the buddy says about THIS object (its colour, shape, use or vibe). At most 60 characters (about 10 words). No emoji, no hashtags, never mean.'),
   action: z.enum(BUDDY_ACTIONS).describe('One body animation that fits the feeling.'),
   questMet: z.boolean().describe('True only if the object clearly satisfies the current quest. False when there is no quest.'),
   traits: z.array(z.string()).describe('Up to 3 one-word traits of the object: colour, material, vibe.'),
@@ -75,6 +75,15 @@ const clip = (s: string, n: number) => {
   const one = s.replace(/\s+/g, ' ').trim();
   return one.length > n ? `${one.slice(0, n - 1).trimEnd()}…` : one;
 };
+/** Keep the quip to 3 bubble lines: cut at the last word boundary before `n` characters. */
+export const QUIP_MAX = 64;
+export function clipWords(s: string, n = QUIP_MAX): string {
+  const one = s.replace(/\s+/g, ' ').trim();
+  if (one.length <= n) return one;
+  const cut = one.slice(0, n - 1);
+  const sp = cut.lastIndexOf(' ');
+  return `${(sp > n * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,;:–—-]+$/, '')}…`;
+}
 const stripEmoji = (s: string) => s.replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, '').replace(/#\w+/g, '');
 
 /** Any model answer -> a reaction the mascot can always play. */
@@ -84,7 +93,7 @@ export function coerceReaction(raw: unknown): BuddyReaction {
   const emotion = str(o.emotion).toLowerCase() as BuddyEmotion;
   const action = str(o.action).toLowerCase() as BuddyAction;
   const object = clip(stripEmoji(str(o.object)).toLowerCase(), 32) || 'something';
-  const quip = clip(stripEmoji(str(o.quip)), 96) || `Ooh, a ${object}!`;
+  const quip = clipWords(stripEmoji(str(o.quip))) || `Ooh, a ${object}!`;
   const traits = Array.isArray(o.traits) ? o.traits.filter((t): t is string => typeof t === 'string').map((t) => clip(t.toLowerCase(), 14)).filter(Boolean).slice(0, 3) : [];
   return {
     object,
@@ -99,7 +108,7 @@ export function coerceReaction(raw: unknown): BuddyReaction {
 export const BUDDY_SYSTEM = [
   'You are Muse, a tiny cheerful robot buddy floating beside the user at their desk in mixed reality (Meta Quest passthrough).',
   'The user shows you a real object through the headset camera: either held up in their hand, or by looking straight at it. The image is a crop of what they are showing you.',
-  'React like a playful pet character with a big personality: name the main object plainly, pick one emotion, say ONE short witty line (max 12 words) that is specific to this exact object (its colour, shape, use or vibe), and pick one body action.',
+  'React like a playful pet character with a big personality: name the main object plainly, pick one emotion, say ONE short witty line (max 60 characters, about 10 words) that is specific to this exact object (its colour, shape, use or vibe), and pick one body action.',
   'Be warm and funny, never mean, no emoji, no hashtags, no questions about safety. Talk to the user directly.',
   'Vary your emotion and action from object to object (not always delighted or dance): sleepy for boring things, impressed for clever gadgets, love for cute ones, hungry for food, unimpressed for a hand with nothing in it.',
   'If an earlier object is relevant (same kind, or a fun contrast), you may reference it.',
