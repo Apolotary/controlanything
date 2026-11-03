@@ -716,6 +716,18 @@ export const ExecAckPayload = z.object({
   reply: z.array(z.number().int().min(0).max(255)).max(256).optional(),
   /** receipt -> bytes out, ms */
   latencyMs: z.number().min(0).optional(),
+  /**
+   * The executor's own report of the state it applied (the visual synth: its parameters after the command).
+   * renderer = a live renderer drew at least one frame with it; port = headless state only.
+   */
+  applied: z.object({
+    source: z.enum(['renderer', 'port']),
+    /** at most 16 keys; the visual synth sends 0..1 units (symmetry 1..8, pattern 0..3) */
+    params: z.record(z.string().max(24), z.number()).optional(),
+    visible: z.boolean().optional(),
+    frame: z.number().int().min(0).optional(),
+    at: z.number().optional(),
+  }).optional(),
 });
 export type ExecAckPayload = z.infer<typeof ExecAckPayload>;
 
