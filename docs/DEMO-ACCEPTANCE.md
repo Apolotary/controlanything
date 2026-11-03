@@ -70,6 +70,8 @@ Measure with `node scripts/quest-cdp.mjs --fps 450` (≈5 s at 90 Hz) in each st
 
 ## 6. If something fails
 
+- **Setup takes ~10–40 s instead of ~1 s:** the driver + controls prefetch starts when the companion connects and took ~40 s live (driver 15–19 s, then controls 21–29 s). Keep the companion connected for about a minute before the pinch.
+- **The pinch only names the Mac:** a generic SAM box ("electronic device", not a detector "laptop") is identified first (~11 s live), then reads *Pinch to play the Mac visual synth*. Pinch it once more.
 - **Visuals didn't open on pinch:** click **Open visuals** on the Mac card, or use `?visuals=1`. Then pinch again.
 - **Setup stuck at the camera check:** the renderer self-report should still pass it ("verified by renderer"). If not, read `/api/agent/steps` and keep the clip.
 - **Controls offline after a Mac hiccup:** bring the companion window to the front. Within 15 s nothing is lost.
