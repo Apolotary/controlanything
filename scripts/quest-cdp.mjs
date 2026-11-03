@@ -5,6 +5,7 @@
 //   node scripts/quest-cdp.mjs "window.__ce.renderer.info.render.calls"   evaluate an expression
 //   node scripts/quest-cdp.mjs --fps [frames=450]    XR frame time p50/p95/p99, fps, draws, triangles, renders/frame
 //   node scripts/quest-cdp.mjs --state               mode, HUD, socket, targets, setup, armed cards, render cost
+//   node scripts/quest-cdp.mjs --watch [s=180]       during a whole run: a JSON line every ~2 s (state + fps/p95/draws), then a per-state summary
 //   node scripts/quest-cdp.mjs --sweep [ms=6000]     HUD visibility flips per frame (blink hunt during a head sweep)
 //   node scripts/quest-cdp.mjs --hands [ms=4500]     hand joints and pinch distance sampling
 //   node scripts/quest-cdp.mjs --screenshot [out.png] compositor screenshot (with passthrough) via metacam, then adb pull
@@ -79,6 +80,21 @@ const STATE = `(() => { const c = window.__ce; if (!c) return { error: 'window._
     render: info ? { calls: info.render.calls, triangles: info.render.triangles, textures: info.memory.textures, geometries: info.memory.geometries, programs: info.programs?.length ?? null } : null,
     scene: { visibleObjects: objects, visibleDrawables: visibleMeshes, transparent },
     frameErrors: size(c.frameErrors), heapMB: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null }; })()`;
+
+// One ~1.5 s sample tagged with the app state: annotate | control | setup | armed | perform | perform-live.
+const WATCH = `new Promise((res) => { const c = window.__ce; const s = c?.session;
+  const hm = c?.handMapping; const armed = c?.armedCards?.size ?? c?.armedCards?.length ?? 0;
+  const state = !s ? 'no-xr' : hm ? (hm.live ? 'perform-live' : 'perform') : armed ? 'armed' : c.activeSetup ? 'setup' : (c.modes?.mode ?? 'unknown');
+  if (!s || s.visibilityState !== 'visible') return res({ state, xr: s?.visibilityState ?? null });
+  ${PCT}
+  const info = c.renderer.info; const t = [], calls = [];
+  const step = (time) => { t.push(time); calls.push(info.render.calls);
+    if (time - t[0] < 1500) return void s.requestAnimationFrame(step);
+    const dt = t.slice(1).map((x, i) => x - t[i]).sort((a, b) => a - b); const budget = 1000 / (s.frameRate || 72);
+    res({ state, fps: +(1000 * dt.length / (t.at(-1) - t[0])).toFixed(1), p95ms: +pct(dt, 0.95).toFixed(2), maxms: +dt.at(-1).toFixed(1),
+      missedPct: +(100 * dt.filter((x) => x > budget * 1.5).length / dt.length).toFixed(1), draws: Math.max(...calls), tris: info.render.triangles }); };
+  setTimeout(() => res({ state, error: 'no XR frames' }), 4000);
+  s.requestAnimationFrame(step); })`;
 
 const SWEEP = (ms) => `new Promise((res) => { const c = window.__ce; const s = c?.session; if (!s) return res({ error: 'no XR session' });
   const root = c.hud?.root ?? c.scene; const flips = new Map(); let last = new Map(); let frames = 0, changedFrames = 0; const t0 = performance.now();
@@ -163,6 +179,24 @@ function awake(on) {
   return { awake: on, wakefulness: adb('shell', 'dumpsys power | grep mWakefulness=').trim() };
 }
 
+async function watch(seconds) {
+  const end = Date.now() + seconds * 1000; const byState = new Map();
+  say(`watching for ${seconds} s (Ctrl-C to stop early)…`);
+  let stop = false; process.once('SIGINT', () => { stop = true; });
+  while (Date.now() < end && !stop) {
+    let sample;
+    try { sample = await evaluate(WATCH, 8000); } catch (error) { sample = { error: error.message }; }
+    const line = { t: new Date().toLocaleTimeString('en-GB'), ...sample };
+    console.log(JSON.stringify(line));
+    if (typeof sample.fps === 'number') byState.set(sample.state, [...(byState.get(sample.state) ?? []), sample]);
+    await new Promise((r) => setTimeout(r, typeof sample.fps === 'number' ? 400 : 1500));
+  }
+  const median = (a) => [...a].sort((x, y) => x - y)[a.length >> 1];
+  return Object.fromEntries([...byState].map(([state, samples]) => [state, { samples: samples.length,
+    fps: median(samples.map((x) => x.fps)), p95msWorst: Math.max(...samples.map((x) => x.p95ms)), p95msMedian: median(samples.map((x) => x.p95ms)),
+    missedPctMedian: median(samples.map((x) => x.missedPct)), drawsMax: Math.max(...samples.map((x) => x.draws)), trisMax: Math.max(...samples.map((x) => x.tris)) }]));
+}
+
 // --- main ------------------------------------------------------------------------------------
 
 const numberAfter = (name, fallback) => { const v = Number(option(name)); return Number.isFinite(v) && v > 0 ? v : fallback; };
@@ -170,6 +204,7 @@ let result;
 try {
   if (flag('--fps')) result = await evaluate(FPS(numberAfter('--fps', 450)), 30_000);
   else if (flag('--state')) result = await evaluate(STATE, 8000);
+  else if (flag('--watch')) result = await watch(numberAfter('--watch', 180));
   else if (flag('--sweep')) { const ms = numberAfter('--sweep', 6000); say(`sweep your head left-right for ${ms / 1000} s…`); result = await evaluate(SWEEP(ms), ms + 15_000); }
   else if (flag('--hands')) { const ms = numberAfter('--hands', 4500); result = await evaluate(HANDS(ms), ms + 8000); }
   else if (flag('--screenshot')) result = await screenshot(resolve(option('--screenshot')?.startsWith('--') || !option('--screenshot') ? `quest-${Date.now()}.png` : option('--screenshot')));
@@ -177,7 +212,7 @@ try {
 
   else {
     const expr = argv.find((a) => !a.startsWith('--') && a !== serial);
-    if (!expr) { console.error('usage: quest-cdp.mjs "<js>" | --fps [n] | --state | --sweep [ms] | --hands [ms] | --screenshot [out.png] | --awake on|off'); process.exit(2); }
+    if (!expr) { console.error('usage: quest-cdp.mjs "<js>" | --fps [n] | --state | --watch [s] | --sweep [ms] | --hands [ms] | --screenshot [out.png] | --awake on|off'); process.exit(2); }
     result = await evaluate(expr, 15_000);
   }
 } catch (error) {
