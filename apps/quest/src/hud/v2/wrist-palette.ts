@@ -1,10 +1,9 @@
-import { Group, Mesh, Object3D } from 'three';
+import { Group, Matrix4, Mesh, Object3D, Vector3 } from 'three';
 import type { HudFrame } from '../contract';
 import { GlassSurfaces } from './surface';
 import { DockHold, HandDockAnchor } from './hand-dock';
 import { makeText, setText, type SdfText } from './text';
 import { THEME } from './theme';
-import { WorldPanel } from './world-panel';
 
 /** One big wrist-palette button. Other lanes register theirs through `LeanHud.registerPaletteItem`. */
 export interface PaletteItem {
@@ -46,7 +45,12 @@ export class WristPalette extends Group {
   private readonly hold = new DockHold(600);
   private holdKey: string | null = null;
   private readonly wrist = new Object3D();
-  private readonly fallback = new WorldPanel({ distance: 0.6, height: -0.2, lateral: -0.2, follow: true });
+  /** Mouse dock: a lazy view-locked corner (lower right), so it never covers the device in the middle of the view. */
+  private readonly dockOffset = new Vector3(0.3, -0.24, -0.6);
+  private readonly dockTarget = new Vector3();
+  private readonly dockMatrix = new Matrix4();
+  private readonly dockUp = new Vector3();
+  private dockPlaced = false;
   private suppressed = false;
 
   constructor(private readonly surfaces: GlassSurfaces, nonDominant: 'left' | 'right' = 'left') {
@@ -141,12 +145,23 @@ export class WristPalette extends Group {
       if (key) group.userData.selected = this.item(group.userData.paletteKey)?.selected?.() === key;
     }
     this.anchor.update(frame, this, this.wrist, this.width);
-    if (this.anchor.source === 'mouse') this.fallback.update(this, frame.head, frame.time);
+    if (this.anchor.source === 'mouse') this.followDock(frame);
+    else this.dockPlaced = false;
     const show = !this.suppressed && this.anchor.open && this.anchor.opacity > 0.05 && this.buttons.length > 0;
     if (!show && this.visible) this.cancelExitHold();
     this.visible = show;
     // Appear: scale 0.92 → 1 with the anchor's eased opacity (xrblocks VisibilityTransition feel).
     this.scale.setScalar(0.92 + 0.08 * Math.min(1, this.anchor.opacity));
+  }
+
+  private followDock(frame: HudFrame): void {
+    this.dockTarget.copy(this.dockOffset).applyQuaternion(frame.head.quaternion).add(frame.head.position);
+    // xrblocks FollowHead: alpha = 1 - exp(-k·dt·60), here a ~0.2 s settle; the first frame snaps.
+    const alpha = this.dockPlaced ? 1 - Math.exp(-0.12 * Math.min(0.1, Math.max(0, frame.dt)) * 60) : 1;
+    this.position.lerp(this.dockTarget, alpha);
+    this.dockMatrix.lookAt(frame.head.position, this.position, this.dockUp.set(0, 1, 0).applyQuaternion(frame.head.quaternion));
+    this.quaternion.setFromRotationMatrix(this.dockMatrix);
+    this.dockPlaced = true;
   }
 
   beginHold(key: string, time: number): void { this.holdKey = key; this.hold.begin(time); }

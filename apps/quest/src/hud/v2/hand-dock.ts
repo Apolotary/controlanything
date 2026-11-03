@@ -181,8 +181,10 @@ export class HandDockAnchor {
     const hand = frame.hands[this.nonDominant];
     const controller = frame.hands.left;
     // In the emulator the mouse is the right hand; an articulated menu hand still owns the dock.
-    const menuHand = realHand(hand);
-    this.source = frame.pointer === 'mouse' && !(menuHand && (hand.palmUp || this.source === 'hand' && this.open)) ? 'mouse'
+    // ...but only when that hand is actually in front of the face and within reach: in the emulator the IWER hands stay
+    // where they were when the head jumps, and a palm "facing" the head from behind would hide the dock out of view.
+    const menuHand = realHand(hand) && this.inReach(frame, hand);
+    this.source = frame.pointer === 'mouse' && !(menuHand && (hand!.palmUp || this.source === 'hand' && this.open)) ? 'mouse'
       : hasHands ? 'hand' : controller?.controller && controller.grip ? 'controller' : null;
     // Treat unavailable tracking as attached so a hidden dock never jumps to a desk fallback.
     this.tracked = this.source !== 'mouse';
@@ -217,7 +219,7 @@ export class HandDockAnchor {
 
     const other = frame.hands[this.nonDominant === 'left' ? 'right' : 'left'];
     const held = this.open && this.fingerNear(other, hand);
-    const palmReady = hand.palmUp && (hand.palmUpMs ?? 0) >= DWELL_MS;
+    const palmReady = hand.palmUp && (hand.palmUpMs ?? 0) >= DWELL_MS && this.inReach(frame, hand);
     let nextOpen = this.open;
     if (palmReady || (this.open && (hand.palmUp || held))) {
       nextOpen = true;
@@ -315,6 +317,16 @@ export class HandDockAnchor {
     this.wristPosition.set(0, 0.012, 0).applyQuaternion(joint.quaternion).add(joint.position);
     wrist.position.lerp(this.wristPosition, alpha);
     wrist.quaternion.slerp(this.rotation, alpha);
+  }
+
+  /** The wrist is in front of the face (within ~70° of gaze) and within 0.8 m. */
+  private inReach(frame: HudFrame, hand: HandState): boolean {
+    const wrist = hand.joints.wrist;
+    if (!wrist) return false;
+    this.direction.subVectors(wrist.position, frame.head.position);
+    const distance = this.direction.length();
+    this.headForward.set(0, 0, -1).applyQuaternion(frame.head.quaternion);
+    return distance < 0.8 && distance > 0 && this.direction.dot(this.headForward) / distance > 0.35;
   }
 
   private fingerNear(hand: HandState | undefined, menuHand: HandState): boolean {
