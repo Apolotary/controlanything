@@ -60,6 +60,8 @@ export interface VerifyOptions {
   retainVolume?: boolean;
   /** visual synth: epoch ms after which the camera is skipped and the renderer self-report decides */
   cameraDeadline?: number;
+  /** visual synth: set after the first camera miss (too far, off-centre); later actions skip the camera, saying why */
+  cameraSkip?: string;
 }
 
 export interface VerifySummary {
@@ -377,10 +379,10 @@ async function observeVisual(deps: VerifyDeps, t: Target, driver: Driver, a: Dri
   const expected = base.expected.effect;
   const run = (o2: ExecOp, actionId: string) => d.exec(exec.deviceId, o2, { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId, waitForSlot: true, signal: o.signal, timeoutMs: 4000 });
   const timeLeft = () => (o.cameraDeadline ?? Infinity) - Date.now();
-  const useCamera = !!o.cameraDeviceId && timeLeft() > 1500;
+  const useCamera = !!o.cameraDeviceId && !o.cameraSkip && timeLeft() > 1500;
   let before: Awaited<ReturnType<typeof captureFrame>> | undefined;
   let poly = polygon;
-  let cameraNote: string | undefined = o.cameraDeviceId ? (useCamera ? undefined : 'skipped (time budget)') : 'no headset camera';
+  let cameraNote: string | undefined = o.cameraDeviceId ? (useCamera ? undefined : o.cameraSkip ?? 'skipped (time budget)') : 'no headset camera';
   // Continuous animation is not evidence: freeze, then a baseline away from the commanded value.
   await run({ kind: 'midi', msg: 'cc', channel: 1, number: 1, value: 0 }, `${a.actionId}:freeze-animation`);
   const baseline: ExecOp | undefined = op.msg === 'pc' && op.number !== undefined ? { ...op, number: (op.number + 1) % 3 }
@@ -420,7 +422,11 @@ async function observeVisual(deps: VerifyDeps, t: Target, driver: Driver, a: Dri
       const obs = observeCamera(before.img, after.img, poly, undefined, { exposureLocked: before.exposureLocked });
       const pass = cameraMatches(obs, expected);
       camera = { pass, observed: { ...cameraEvidence(obs, expected), sensorDeviceId: o.cameraDeviceId }, note: pass ? `camera saw ${obs.effect}${obs.secondary ? ` + ${obs.secondary}` : ''}` : `saw ${obs.effect === 'none' ? 'no change' : obs.effect}` };
-      if (!pass) cameraNote = `${camera.note} (Δ${obs.delta.toFixed(3)})`;
+      if (!pass) {
+        cameraNote = `${camera.note} (Δ${obs.delta.toFixed(3)})`;
+        // One miss means the screen is too far or off-centre for this camera: the renderer decides the rest, quickly.
+        o.cameraSkip = 'skipped after the first camera miss';
+      }
     } catch (e) {
       throwIfCancelled(o.signal);
       cameraNote = `no frame (${(e as Error).message.slice(0, 60)})`;

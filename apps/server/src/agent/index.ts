@@ -575,6 +575,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         hub.broadcast('device.card', r.card);
         log(`[tag] ${t.cardId} is ${r.card.name} (${r.card.maker} ${r.card.model}) · ${r.model} ${r.latencyMs} ms`);
         publishTags();
+        // A laptop/computer (by Muse) now reads "Pinch to play the Mac visual synth"; the next pinch selects it (evaluateConnection).
       } catch (e) {
         if (!abort.signal.aborted) log(`[tag] could not name ${t.cardId}: ${(e as Error).message}`);
       } finally {
@@ -795,6 +796,21 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     const frame = o.frameId ? scan.frame(o.frameId) : scan.latest(from.deviceId);
     return frame ? scan.tagDetection(frame.frame.frameId, o.detId, o.label ?? 'laptop') : undefined;
   };
+  const hostLine = (seen: DeviceCardPayload, r: Omit<IdentifyResult, 'card'>) =>
+    `${r.recordedFrom ?? r.model}${r.source === 'fixture' ? ' (FIXTURE)' : ''} identified the host: ${hostName(seen)} (${Math.round(seen.confidence * 100)} %)`;
+  const known = (s?: string) => s && !/^(unknown|unsure|n\/a)?$/i.test(s.trim()) ? s.trim() : '';
+  const hostName = (seen: DeviceCardPayload) => [known(seen.maker), known(seen.model)].filter(Boolean).join(' ') || seen.name;
+  /** The visual synth card keeps its authored identity; its evidence and work log gain the model's view of the Mac. */
+  const adoptHostIdentity = (t: Target, seen: DeviceCardPayload, identity: Omit<IdentifyResult, 'card'>) => {
+    if (!t.card) return;
+    tagIdentity.set(t.cardId, identity);
+    const line = hostLine(seen, identity);
+    t.card = { ...t.card, modelId: identity.recordedFrom ?? identity.model, evidence: [line.slice(0, 300), ...t.card.evidence.filter((e) => !/ identified the host: /.test(e))].slice(0, 12) };
+    tags.sync(t);
+    hub.broadcast('device.card', t.card);
+    steps.note('identify', line.slice(0, 200), { cardId: t.cardId, kind: 'opinion', model: identity.recordedFrom ?? identity.model, latencyMs: identity.latencyMs, source: identity.source });
+    publishTags();
+  };
   /** One quiet Muse identify call on the pinched Mac: the card keeps its authored identity, the evidence gains the model's view. */
   const identifyVisualHost = (t: Target, detection?: TargetDetection) => {
     if (!detection || identifying.has(t.cardId) || tagIdentity.has(t.cardId)) return;
@@ -803,17 +819,12 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     void (async () => {
       try {
         const crop = cropJpeg(decodeJpeg(detection.jpeg), detection.box);
-        const r = await identify(muse, detection, crop, detection.jpeg, { cardId: t.cardId, userText: 'This is the laptop whose screen shows the ControlAnything visual synth.', signal: AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)]) });
+        const r = await identify(muse, detection, crop, detection.jpeg, { cardId: t.cardId, signal: AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)]) });
         if (abort.signal.aborted || !tags.has(t.cardId) || !t.card) return;
         const { card: seen, ...identity } = r;
         tagIdentity.set(t.cardId, identity);
-        const line = `${r.recordedFrom ?? r.model}${r.source === 'fixture' ? ' (FIXTURE)' : ''} identified the host: ${`${seen.maker} ${seen.model || seen.name}`.trim()} (${Math.round(seen.confidence * 100)} %)`;
-        t.card = { ...t.card, modelId: r.recordedFrom ?? r.model, evidence: [line.slice(0, 300), ...t.card.evidence.filter((e) => !/ identified the host: /.test(e))].slice(0, 12) };
-        tags.sync(t);
-        hub.broadcast('device.card', t.card);
-        steps.note('identify', line.slice(0, 200), { cardId: t.cardId, kind: 'opinion', model: r.recordedFrom ?? r.model, latencyMs: r.latencyMs, source: r.source });
-        log(`[visual] ${line} · ${r.latencyMs} ms`);
-        publishTags();
+        adoptHostIdentity(t, seen, identity);
+        log(`[visual] ${hostLine(seen, identity)} · ${r.latencyMs} ms`);
       } catch (e) {
         if (!abort.signal.aborted) log(`[visual] could not identify the Mac: ${(e as Error).message}`);
       } finally {
@@ -826,6 +837,13 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     const card = visualSynthCard(executor);
     // Older builds keyed the card on the executor; keep one card in the room.
     for (const tag of tags.list()) if (tag.cardId !== card.cardId && virtualScreenExecutor(tag.card)) removeTag(tag.cardId);
+    // The Mac is the visual synth in this demo: a tagged laptop next to it would be a second card in the same sightline.
+    let inherited: { seen: DeviceCardPayload; identity: Omit<IdentifyResult, 'card'> } | undefined;
+    for (const other of targets.list()) if (other.cardId !== card.cardId && tags.has(other.cardId) && !virtualScreenExecutor(other.card) && isLaptopTarget(other, tags.get(other.cardId)?.label)) {
+      const identity = tagIdentity.get(other.cardId);
+      if (identity && other.card) inherited = { seen: other.card, identity };
+      removeTag(other.cardId);
+    }
     const saved = tags.get(card.cardId);
     if (!saved && tags.library().length >= 64) return undefined;
     let target = targets.get(card.cardId);
@@ -848,7 +866,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     target.detection = undefined;
     tags.add(target, label, position ?? saved?.position);
     canvas.select(from.deviceId, target.cardId);
-    hub.broadcast('device.card', target.card);
+    // Muse already named the tagged laptop: reuse that answer instead of calling it again.
+    if (inherited) adoptHostIdentity(target, inherited.seen, inherited.identity);
+    else hub.broadcast('device.card', target.card);
     publishTags();
     return target;
   };

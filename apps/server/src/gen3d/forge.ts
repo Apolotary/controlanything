@@ -41,8 +41,8 @@ export const REPAIR_EFFORT: ReasoningEffort = 'medium';
 export const MAX_REPAIRS = 2;
 /** a whitespace run this long outside a string means the decoder is looping (seen on Wonder, research/12) */
 export const WHITESPACE_GUARD = 400;
-/** A live visual-synth forge slower than this falls back to the authored template (CE_FORGE_TIMEOUT_MS overrides). */
-export const LIVE_FORGE_TIMEOUT_MS = Number(process.env.CE_FORGE_TIMEOUT_MS) > 0 ? Number(process.env.CE_FORGE_TIMEOUT_MS) : 20_000;
+/** A live visual-synth forge (first answer + one repair ≈ 19 s measured) slower than this falls back to the authored template (CE_FORGE_TIMEOUT_MS overrides). */
+export const LIVE_FORGE_TIMEOUT_MS = Number(process.env.CE_FORGE_TIMEOUT_MS) > 0 ? Number(process.env.CE_FORGE_TIMEOUT_MS) : 30_000;
 /** The model id a template fallback carries, so no card or log can mistake it for a Muse answer. */
 export const VISUAL_SYNTH_FALLBACK = 'template-fallback:visual-synth';
 
@@ -619,7 +619,7 @@ export function createForge(deps: ForgeDeps): Forge {
       reason = result.error ?? 'the live hack set failed its checks';
     } catch (e) {
       if (req.signal?.aborted || !(timedOut || !(e instanceof RequestCancelledError))) throw e;
-      reason = timedOut ? `no answer within ${LIVE_FORGE_TIMEOUT_MS / 1000} s` : (e as Error).message;
+      reason = timedOut ? `no valid hack set within ${LIVE_FORGE_TIMEOUT_MS / 1000} s` : (e as Error).message;
     } finally {
       clearTimeout(timer);
     }

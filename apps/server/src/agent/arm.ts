@@ -145,7 +145,7 @@ export class ArmService {
     const guidance = r.armed
       ? stateGuidance(target, 'armed')
       : { sentence: r.reason === 'no confirmation in time' ? 'Confirmation timed out' : 'Controls remain off', hint: 'Retry when you are ready, or pick another device.', action: 'retry' as const };
-    this.d.steps.note('arm', r.armed ? `armed by ${r.by ?? 'the owner'}` : `not armed: ${r.reason ?? 'declined'}`, { cardId: target.cardId, kind: 'proof', status: r.armed ? 'ok' : 'fail', evidence: r.armed ? 'human confirmed' : r.reason, ...guidance });
+    this.d.steps.note('arm', r.armed ? `armed by ${r.by ?? 'the owner'}` : `not armed: ${r.reason ?? 'declined'}`, { cardId: target.cardId, kind: 'proof', status: r.armed ? 'ok' : 'fail', evidence: r.armed ? (r.auto ? 'auto-armed after verification (CE_DEMO=1)' : 'human confirmed') : r.reason, ...guidance });
     const isRoom = target.cardId === 'room';
     this.d.targets.setState(target, r.armed && !isRoom ? 'armed' : target.specId ? 'forged' : 'verified', r.armed ? `${isRoom ? 'confirmed' : 'armed'} by ${r.by ?? 'the owner'}` : r.reason, guidance);
   }
