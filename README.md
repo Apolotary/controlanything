@@ -17,12 +17,12 @@ One MacBook and one Quest 3. The Mac is both the bridge and the device being pla
 
 1. **Enter AR.** Passthrough plus a calm HUD. The headset pairs with the Mac by looking at the QR code on its companion page (or you type the code).
 2. **Look at the MacBook.** A thin outline and a pill appear: *MacBook · pinch to control*.
-3. **Pinch it.** A setup ring circles the screen while the agent runs: identify → driver → verify → controls.
+3. **Pinch it.** A setup ring circles the screen while the agent runs: identify → driver → verify → controls. If SAM labelled the box only as a generic *electronic device*, the first pinch may just name it. Pinch again when the pill asks.
 4. **Play.** Two arc dials (Warp, Ripples) appear on the screen's edges, with a device card beside them. Pinch-drag a dial and the Mac's visuals follow.
 5. **Perform.** Tap *Perform* on the card. Then a left fist is the clutch, and your right hand's height and depth drive the dials.
 6. **Stop.** Open both palms toward the scene, or tap *Stop* on the wrist palette.
 
-That is three deliberate actions: Enter AR, pinch, Perform. To open the **wrist palette**, turn your left palm toward your face. It holds *Electronics · Objects · All* (what to track), *Visual synth*, *Buddy*, *Use an object*, *Stop* and *Exit*.
+That is three deliberate actions: Enter AR, pinch, Perform. To open the **wrist palette**, turn your left palm toward your face. It holds *Electronics · Objects · All* (what to track; in Annotate only), *Visual synth*, *Buddy*, *Use an object*, *Stop* and *Exit*.
 
 ## How Meta's models are used
 
@@ -40,7 +40,7 @@ Every server model call goes to Meta's Model API. The table lists only what the 
 | Mode | Pinch → controls armed |
 |---|---|
 | Live, cold | **29.0 s**: identify 8.2 s, driver 7.1 s, forge 7.8 s plus one forge repair 13.2 s. An earlier live probe took 41.9 s. |
-| Live, with the prefetch | **1.2 s**, measured by the builder after the verification pass. With `CE_DEMO=1` the server asks Muse for the driver and controls as soon as a Mac advertises the renderer, then re-validates them on the pinch. |
+| Live, with the prefetch | **1.2 s**, measured by the builder after the verification pass. This applies only once the Mac companion has been connected for about 40 s. With `CE_DEMO=1`, the server asks Muse for the driver and controls as soon as a Mac advertises the renderer, and that prefetch must finish first; the pinch then re-validates the result. Before the prefetch finishes, the first live setup takes about 10–25 s while Muse writes the driver. |
 | Fixture replay | **1.3 s**. |
 
 After setup, moving a control makes **no model call**. A control event resolves to a validated driver action, then to a MIDI, IR or Bluetooth op, rate-limited, in under 1 ms on the server.
@@ -93,7 +93,7 @@ npm run demo:sim            # builds what's missing; silent server with CE_DEMO=
 1. Open **[the sim room](http://localhost:8787/sim/?mute=1)** first. It stands in for your Mac: it pairs itself on localhost, and the laptop on its desk runs the visual synth.
 2. Open **[the desktop Quest emulator](http://localhost:8787/quest/?emulate=1&camera=sim&mute=1&mic=0)** and choose **Enter AR**. Click = pinch, right-drag = look, W/A/D/Q/E = move.
 3. **Click the laptop's box.** The setup ring runs, then the arc dials and the card appear. Drag a dial and watch the sim's laptop screen change.
-4. Click **Perform** on the card. **Stop** is on the wrist palette (lower right) or the `X` key. Keys: `G` Visual synth, `1/2/3` Electronics/Objects/All, `B` Buddy.
+4. Click **Perform** on the card. **Stop** is on the wrist palette (lower right) or the `X` key. Keys: `G` Visual synth, `1/2/3` Electronics/Objects/All (Annotate only), `B` Buddy.
 
 To see the real Mac app instead, open [the companion](http://localhost:8787/companion/) in a tab: it pairs, and pinching the screen opens its full-screen visuals. Model ids and latency are at [`/api/muse/calls`](http://localhost:8787/api/muse/calls). The agent's steps and evidence are at `/api/agent/steps` and `/api/agent/targets`.
 
