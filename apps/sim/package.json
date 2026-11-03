@@ -2,7 +2,7 @@
   "name": "@ce/sim",
   "version": "0.1.0",
   "private": true,
-  "description": "ControlEverything sim room: a photo-real virtual ceiling light, virtual IR remote and Web Audio synth that pair over /ws like real devices, so the whole demo runs without hardware.",
+  "description": "ControlAnything sim room: a photo-real virtual ceiling light, virtual IR remote and Web Audio synth that pair over /ws like real devices, so the whole demo runs without hardware.",
   "type": "module",
   "scripts": {
     "dev": "vite build --watch --emptyOutDir",

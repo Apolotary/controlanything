@@ -2,7 +2,7 @@
   "name": "@ce/quest",
   "version": "0.1.0",
   "private": true,
-  "description": "ControlEverything Quest 3 WebXR app: passthrough scan, pairing, generated 3D controls, voice, record/replay, desktop emulation.",
+  "description": "ControlAnything Quest 3 WebXR app: passthrough scan, pairing, generated 3D controls, voice, record/replay, desktop emulation.",
   "type": "module",
   "scripts": {
     "dev": "vite build --watch --emptyOutDir",

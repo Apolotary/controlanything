@@ -2,7 +2,7 @@
   "name": "@ce/companion",
   "version": "0.1.0",
   "private": true,
-  "description": "ControlEverything Mac companion (Chrome): workbench (agent log, driver, evidence, links), executors (Web MIDI, Cardputer over Web Serial), audio oracle, pairing approvals, ?spike=midi.",
+  "description": "ControlAnything Mac companion (Chrome): workbench (agent log, driver, evidence, links), executors (Web MIDI, Cardputer over Web Serial), audio oracle, pairing approvals, ?spike=midi.",
   "type": "module",
   "scripts": {
     "dev": "vite build --watch --emptyOutDir",

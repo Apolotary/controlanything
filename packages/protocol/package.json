@@ -2,7 +2,7 @@
   "name": "@ce/protocol",
   "version": "0.1.0",
   "private": true,
-  "description": "ControlEverything wire protocol: zod schemas, TS types and JSON Schema for every WebSocket message.",
+  "description": "ControlAnything wire protocol: zod schemas, TS types and JSON Schema for every WebSocket message.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",

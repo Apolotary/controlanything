@@ -294,7 +294,7 @@ export function templateLocalDraft(card: DeviceCardPayload, research: Research, 
         ]
       : executorKind === 'devterm'
         ? [
-            { actionId: 'print', label: 'Print receipt', kind: 'trigger', encode: { kind: 'local', op: 'print', arg: { title: 'CONTROL EVERYTHING', lines: ['link verified'] } }, expect: { sense: 'ack', effect: 'any' } },
+            { actionId: 'print', label: 'Print receipt', kind: 'trigger', encode: { kind: 'local', op: 'print', arg: { title: 'CONTROLANYTHING', lines: ['link verified'] } }, expect: { sense: 'ack', effect: 'any' } },
             { actionId: 'beep', label: 'Beep', kind: 'trigger', encode: { kind: 'local', op: 'beep', arg: 880 }, expect: { sense: 'audio', effect: 'louder' } },
           ]
         : [
