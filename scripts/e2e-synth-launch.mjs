@@ -54,13 +54,14 @@ async function frames(count = 3) {
     await quest.waitForFunction(previous => window.__ce.lastFrame?.time > previous, time);
   }
 }
-async function pinch(name) {
-  await quest.evaluate(name => {
+async function pinch(name, turn = true) {
+  // The wrist palette is a view-locked lazy dock: turning toward it moves it, so palette buttons are clicked in place.
+  if (turn) await quest.evaluate(name => {
     const app = window.__ce, node = app.hud.root.getObjectByName(name);
     if (!node) throw Error(`Missing HUD target ${name}`);
     app.emulator.lookAt(node.getWorldPosition(app.desktopCam.position.clone()));
   }, name);
-  await frames(5);
+  await frames(turn ? 5 : 20);
   const point = await quest.evaluate(name => {
     const app = window.__ce, node = app.hud.root.getObjectByName(name);
     for (let parent = node; parent; parent = parent.parent) if (!parent.visible) throw Error(`Hidden ${name}`);
@@ -74,7 +75,7 @@ async function pinch(name) {
 }
 async function trySynth() {
   // The wrist palette is docked open in the emulator (mouse); no menu to open first.
-  await pinch('visual-synth');
+  await pinch('visual-synth', false);
 }
 async function shot(name, page) { await page.screenshot({ path: join(OUT, `${name}.png`) }); }
 // A controlled browser lifecycle fault: headless Chrome does not consistently

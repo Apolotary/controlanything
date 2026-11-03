@@ -309,13 +309,12 @@ async function run() {
   });
 
   await phase('07-perform', async () => {
-    // Perform is the card's round toggle (a uikit button). The emulator mouse is the pinching hand; a quick click
-    // is used because a press held over several frames is currently lost in the emulator (reported to the shell lane).
+    // Perform is the card's round toggle (a uikit button); the emulator mouse is the pinching hand (a held press).
     for (let attempt = 0; attempt < 3 && !await quest.evaluate(() => !!window.__ce['handMapping']); attempt++) {
       const p = await screenPoint({ name: 'hand-control' });
       await quest.mouse.move(p.x - 6, p.y - 6); await frames(4);
       await quest.mouse.move(p.x, p.y); await frames(6);
-      await quest.mouse.down(); await quest.mouse.up(); await frames(10);
+      await quest.mouse.down(); await frames(2); await quest.mouse.up(); await frames(10);
     }
     await waitQuest(() => !!window.__ce['handMapping']);
     // Tracked hands: left fist = clutch, right hand rises.
