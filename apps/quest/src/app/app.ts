@@ -97,6 +97,7 @@ import { Page } from './page';
 import { frameReferenceSpace, endXr, startXr, xrSupport } from './xr';
 import { RoomAnchors } from '../anchors/room';
 import { matchSavedDevice } from '../anchors/matching';
+import { isTangibleLabel, Tangible } from '../tangible';
 
 export const APP_VERSION = 'quest@0.1.0';
 const GAZE_AIM = { marginDeg: 3 };
@@ -296,6 +297,7 @@ export class QuestApp {
         .catch((e) => this.page.log(`buddy unavailable: ${(e as Error).message}`, 'warn'));
     }
     await this.setupCamera();
+    this.setupTangible();
     this.refreshHome();
     if (this.live && this.params.get('debug') === '1') {
       this.readout = new LiveReadout();
@@ -593,7 +595,7 @@ export class QuestApp {
         this.page.log(`gen3d dev cursor unavailable: ${(e as Error).message}`, 'warn');
       }
     }
-    hud.on('exit', () => { void endXr(this.renderer).catch(() => this.hud.toast('Could not exit AR. Hold Exit to try again.', 'warn')); });
+    hud.on('exit', () => { this.tangible?.release('exit'); void endXr(this.renderer).catch(() => this.hud.toast('Could not exit AR. Hold Exit to try again.', 'warn')); });
     hud.on('selectTarget', (e) => this.lock(e.targetId, 'chip'));
     hud.on('mode', (e) => this.setMode(e.mode));
     hud.on('filter', (e) => this.setLiveCategory(e.filter));
@@ -797,6 +799,7 @@ export class QuestApp {
     this.projects?.close();
     if (send && mode === 'control') this.onboarding?.chooseControl();
     if (mode !== this.modes.mode) {
+      this.tangible?.release('mode change');
       if (this.activeSetup) {
         const tag = this.modes.byCard(this.activeSetup);
         if (tag) this.cancelControl(tag.targetId);
@@ -1952,7 +1955,7 @@ export class QuestApp {
   // --- HUD events ----------------------------------------------------------------------------------
 
   onDeck(key: string, phase: 'press' | 'release'): void {
-    if (key === 'panic' && phase === 'press') { this.cancelManualRegion(); this.projects?.pauseForNavigation(); }
+    if (key === 'panic' && phase === 'press') { this.tangible?.release('stop'); this.cancelManualRegion(); this.projects?.pauseForNavigation(); }
     if (key === 'mic' && phase === 'press' && this.lockedId) {
       this.clearHandControl();
       void this.assistant?.toggle(this.lockedId);
@@ -2250,6 +2253,37 @@ export class QuestApp {
   registerObjectAction(action: { key: string; label: string; visible?: (targetId: string) => boolean; onSelect: (targetId: string) => void }): () => void {
     const hud = this.hud as Hud & { registerObjectAction?: (a: typeof action) => () => void };
     return hud.registerObjectAction?.(action) ?? (() => {});
+  }
+
+  // tangible: an everyday object becomes a controller for the armed device (apps/quest/src/tangible)
+  tangible?: Tangible;
+  private setupTangible(): void {
+    let mirrorAt = 0;
+    const t = this.tangible = new Tangible({ parent: this.scene, camera: () => this.camera, poses: this.poses, frame: () => this.lastFrame,
+      modelUrl: `${import.meta.env.BASE_URL}models/yolox_nano.onnx`, log: (m, l) => this.page.log(m, l), toast: (m, l) => this.hud.toast(m, l),
+      ensureCamera: () => { if (this.cameraState !== 'on') void this.startCamera(); }, stopPerform: () => this.clearHandControl(),
+      resume: (d) => { if (d.cardId === 'visual-synth-mac' && !this.canControl(d.cardId)) this.selectVisualSynth(); else if (!this.canControl(d.cardId)) { this.setMode('control'); this.lock(d.targetId, 'api'); } },
+      device: () => {
+        const tags = [...this.modes.tags.values()], armed = (c?: string) => !!c && this.armedCards.has(c);
+        const tag = [this.lockedId ? this.modes.tags.get(this.lockedId) : undefined, tags.find((x) => x.cardId === 'visual-synth-mac'), ...tags].find((x) => armed(x?.cardId));
+        const cardId = tag?.cardId, ui = cardId && this.specByCard.get(cardId), gen = cardId && this.generated.get(cardId);
+        if (!tag || !cardId || !ui || !gen) return null;
+        const g = this.gen3dIdFor(ui);
+        return { cardId, targetId: tag.targetId, label: tag.name || tag.label, uiSpecId: ui, gen3dSpecId: g, controls: gen.controls, armed: tag.connection === 'ready',
+          controllable: this.canControl(cardId), value: (id) => { const v = this.controlValues.get(`${g}:${id}`); return typeof v === 'number' ? v : undefined; } };
+      },
+      send: (d, controlId, value, phase) => {
+        this.controlValues.set(`${d.gen3dSpecId}:${controlId}`, value);
+        this.controls.push({ specId: d.uiSpecId, controlId, value, phase, ts: Date.now() });
+        if (phase !== 'move' || performance.now() - mirrorAt > 150) { mirrorAt = performance.now(); this.hud.setControlValue(d.gen3dSpecId, controlId, value); }
+      } });
+    this.allowAnnotationLabels(['cup', 'bottle', 'book', 'phone', 'remote', 'mouse', 'ball']);
+    this.addFrameHook((_f, dt, time) => t.tick(time, dt * 1000));
+    const seen = (id: string) => this.targets.get(id) ?? this.live?.targetSnapshot(id) ?? this.observed.get(id)?.target;
+    this.registerObjectAction({ key: 'tangible', label: 'Use as controller', visible: (id) => isTangibleLabel(seen(id)?.label),
+      onSelect: (id) => { const x = seen(id); if (x) t.useTarget(x); } });
+    this.registerPaletteItem({ key: 'tangible:pick', label: 'Use an object', order: 60, visible: () => t.canPick(), onSelect: () => t.startPick() });
+    this.registerPaletteItem({ key: 'tangible:release', label: 'Release object', order: 61, visible: () => t.state !== 'idle', onSelect: () => t.release('palette') });
   }
 
   /** Per-frame callback, after the HUD update and before render. Returns an unregister function. */
