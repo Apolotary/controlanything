@@ -2,7 +2,7 @@
 
 **Look at a device, pinch it, and play it with your hands.**
 
-ControlAnything connects a Meta Quest 3 to the hardware and software around you. The headset segments the objects you look at with Meta's SAM 3.1. When you pinch one, a small server on your laptop asks Muse Spark to identify it, write a driver for it and build spatial controls on the spot, then checks that those controls really change the device before it hands them to you.
+ControlAnything connects a Meta Quest 3 to the hardware and software around you. What the headset sees goes to Meta's SAM 3.1, which outlines the devices in view. When you pinch one, a small server on your laptop asks Muse Spark to identify it, write a driver for it and build spatial controls on the spot, then checks that those controls really change the device before it hands them to you.
 
 <!-- VIDEO_URL -->
 **▶ 3-minute demo video:** _link coming soon_
