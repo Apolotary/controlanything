@@ -25,6 +25,7 @@ export class Page {
 
   presentation(emulator: boolean): void {
     document.body.dataset.layout = emulator ? 'emulator' : 'launcher';
+    if (new URLSearchParams(location.search).get('lab') === '1') document.body.dataset.lab = '1';
     const diagnostics = $<HTMLDetailsElement>('developer-tools');
     if (diagnostics) diagnostics.open = emulator;
     window.dispatchEvent(new Event('resize'));

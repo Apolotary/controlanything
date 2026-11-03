@@ -4,7 +4,8 @@ import { WorldPanel } from './world-panel';
 /** One world pose for the whole task. Content transitions never place another panel. */
 export class WorkspaceAnchor {
   private readonly pose = new Group();
-  private readonly placement = new WorldPanel({ distance: 0.65, height: -0.06, follow: false });
+  // Spawned once, ~0.6 m ahead and 15° below the eye line (tan 15° × 0.6 ≈ 0.16 m), facing the wearer.
+  private readonly placement = new WorldPanel({ distance: 0.6, height: -0.16, follow: false });
   private readonly offset = new Vector3();
 
   update(head: { position: Vector3; quaternion: Quaternion }, time: number): void {

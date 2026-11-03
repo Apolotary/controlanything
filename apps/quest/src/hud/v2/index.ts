@@ -1292,7 +1292,9 @@ export class LeanHud implements Hud {
     // The selected card names this device; its floating chip must not cross the conversation text.
     for (const [id, label] of this.labels) {
       const box = this.boxes.boxes.get(id);
-      label.visible = this.annotationLayer.visible && !!box?.visible && box.opacity > 0.001;
+      // Quiet rings; the pill label appears only on gaze/ray hover, for the selection, or once tagged.
+      label.visible = this.annotationLayer.visible && !!box?.visible && box.opacity > 0.001
+        && (id === this.candidate || id === this.locked || !!this.targets.get(id)?.tagged);
     }
     this.helperPairing.visible = !!this.helperPairingView && !this.modal.visible && !this.deck.panel.visible;
     this.coach.visible = !!this.onboarding && !this.assistant.visible && !this.helperPairingView && !this.modal.visible && !this.deck.panel.visible && !this.projectView;
@@ -1396,7 +1398,11 @@ export class LeanHud implements Hud {
     hit.userData.hover = new Set<number>();
     const on = (type: string, fn: (e: HudPointerEvent) => void) =>
       (hit as unknown as { addEventListener(t: string, f: (e: unknown) => void): void }).addEventListener(type, (e) => fn(e as HudPointerEvent));
-    on('pointerover', (e) => { (hit.userData.hover as Set<number>).add(e.pointerId); this.spatial?.markHover(e, true); });
+    on('pointerover', (e) => {
+      // The palette hand hovering its own palette is not a hover (only the other hand can press it).
+      if (palette && this.palette.anchor.source === 'hand' && this.spatial?.handOf(e.pointerId, e.pointerType) === this.palette.anchor.nonDominant) return;
+      (hit.userData.hover as Set<number>).add(e.pointerId); this.spatial?.markHover(e, true);
+    });
     on('pointerout', (e) => { (hit.userData.hover as Set<number>).delete(e.pointerId); this.spatial?.markHover(e, false); });
     on('pointerdown', (e) => this.pointerDown(widget, e));
     on('pointermove', (e) => this.pointerMove(widget, e));

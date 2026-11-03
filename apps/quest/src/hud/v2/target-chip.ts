@@ -6,6 +6,8 @@ type ChipTarget = Pick<HudTarget, 'label' | 'tagged' | 'identifying' | 'busy' | 
 export function targetChipLabel(target: ChipTarget, mode: AppMode, hovered = false): string {
   const rawName = target.label.trim();
   const name = rawName.length > 18 ? `${rawName.slice(0, 17).trimEnd()}…` : rawName;
+  // The Mac's screen is the demo device: its hover pill says what a pinch does.
+  if (!target.tagged && /\b(laptop|macbook|monitor|computer)\b/i.test(rawName)) return hovered ? 'MacBook · pinch to control' : 'MacBook';
   if (!target.tagged) return hovered ? `${name} · Pinch to tag` : name;
   if (target.locating) return `${name} · Locating…`;
   if (mode === 'annotate') {

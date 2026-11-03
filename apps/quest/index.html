@@ -20,35 +20,19 @@
         <div class="pair"><canvas id="pair-qr" width="140" height="140" aria-label="Pairing QR code"></canvas><div><div id="pair-code" class="code">———-———</div><p id="pair-msg" class="muted">Approve this headset on your Mac companion.</p></div></div>
       </section>
 
-      <div class="welcome-grid">
-        <section class="welcome">
-          <p class="eyebrow">Your space, made interactive</p>
-          <h1>Your room.<br /><span>Your controls.</span></h1>
-          <p class="intro">Choose a device. Ask Muse what you want it to do. Make it respond to your hands.</p>
-          <div class="launch-actions card">
-            <div class="prepare-step"><span class="step-number">1</span><div><h2>Get ready</h2><p class="muted">Allow the camera to see devices and the microphone to hear your requests.</p></div><button id="btn-prepare" type="button">Camera + mic</button></div>
-            <div class="enter-step"><span class="step-number">2</span><div><h2>Step into your room</h2><p class="muted">Your hands are the pointer. Aim, then pinch to select.</p></div></div>
-            <button id="btn-enter" class="primary" type="button" disabled>Enter AR</button>
-            <p id="xr-msg" class="small muted" role="status">Connecting your headset…</p>
-            <p class="small muted">Raise your left palm to bring the ControlAnything menu here. Exit AR is in that menu.</p>
-            <div class="row"><a id="link-canvas" href="/companion/canvas/?headset=1">Open Muse Canvas →</a></div>
-            <p class="small muted">Create and use a full webpage in your headset browser. No AR session needed.</p>
-          </div>
-        </section>
-        <aside class="demo-guide" aria-label="First demo">
-          <div class="demo-illustration" aria-hidden="true"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="demo-core">✳</div><div class="floating-control"><span>Warp</span><div class="visual-track"><i></i></div><span class="control-dot"></span></div><div class="demo-caption">A little movement. A visible change.</div></div>
-          <p class="eyebrow">Start here</p><h2>Try the visual synth</h2><p>Open the visuals on your Mac. In AR, choose <strong>Try visual synth</strong> from the ControlAnything menu.</p>
-          <ol class="demo-steps"><li>Center the Mac screen and set up control.</li><li>Review the checks, then enable controls.</li><li>Choose Perform. Hold your left fist and move your right hand.</li></ol>
-          <p class="small muted">Release your left fist to pause. Both palms stop.</p>
-        </aside>
-      </div>
-
+      <section class="enter-only">
+        <h1>Control<span>Anything</span></h1>
+        <p class="intro">Look at your Mac, pinch it, and play it with your hands.</p>
+        <button id="btn-enter" class="primary enter-big" type="button" disabled>Enter AR</button>
+        <p id="xr-msg" class="small muted" role="status">Connecting your headset…</p>
+        <p class="small muted">Turn your left palm toward you for the wrist menu.</p>
+      </section>
       <section id="approvals" class="card" hidden><h2>Waiting to join</h2><ul id="approval-list" class="list"></ul></section>
-      <section class="quick-help"><div><strong>Find devices</strong><span>Look around and tag something to explore.</span></div><div><strong>Use devices</strong><span>Choose a saved device and its controls.</span></div><div><strong>Ask Muse</strong><span>Speak a request about the selected device.</span></div></section>
-
-      <section class="card" aria-labelledby="recording-title"><h2 id="recording-title">Record a demonstration</h2><p class="small muted">Prepare the camera, press Record take, then enter AR. Exiting AR finishes the take. Camera video and WebXR hand/head tracking stay in the downloaded ZIP; no audio is recorded. Maximum 90 seconds.</p><div class="row"><button id="btn-record" type="button">Record take</button><button id="btn-save" type="button" disabled>Save take</button><a href="/companion/tracking/" target="_blank" rel="noopener">Open Motion lab</a></div><p id="recording-status" class="small muted" role="status">No recording in progress.</p></section>
-
-      <details id="developer-tools" class="developer-tools"><summary>Diagnostics &amp; recording <span>For troubleshooting</span></summary><div class="diagnostic-grid">
+      <div class="lab-only">
+        <button id="btn-prepare" type="button">Camera + mic</button>
+        <section class="card" aria-labelledby="recording-title"><h2 id="recording-title">Record a demonstration</h2><div class="row"><button id="btn-record" type="button">Record take</button><button id="btn-save" type="button" disabled>Save take</button><a href="/companion/tracking/" target="_blank" rel="noopener">Open Motion lab</a></div><p id="recording-status" class="small muted" role="status">No recording in progress.</p></section>
+      </div>
+      <details id="developer-tools" class="developer-tools lab-only"><summary>Diagnostics &amp; recording <span>For troubleshooting</span></summary><div class="diagnostic-grid">
         <section class="card"><h2>Status</h2><dl id="status" class="kv"></dl></section>
         <section class="card"><h2>Camera preview</h2><div class="frame-wrap"><canvas id="frame" width="320" height="240" aria-label="last scan frame with detections"></canvas></div><p id="frame-msg" class="small muted">No frame yet</p></section>
         <section class="card"><h2>Replay &amp; diagnostics</h2><div class="row"><button id="btn-scan" type="button">Scan</button></div><div class="row replay-row"><input id="take-file" type="file" accept=".zip,.jsonl" aria-label="Replay file" /><select id="take-mode" aria-label="replay mode"><option value="playback">playback</option><option value="pipeline">pipeline (live server)</option></select></div><p class="small muted">Desktop: <a id="link-emulate" href="?emulate=1">emulator</a> · <a href="?emulate=1&amp;scan=fixture">fixture scan</a> · <a href="?emulate=1&amp;camera=sim">sim room</a> · <a href="?spike=camera">camera check</a></p></section>

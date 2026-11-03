@@ -92,6 +92,7 @@ import { type HudKind, loadHud } from './hud-loader';
 import { handJointPositions, InputSampler } from './input';
 import { createSpatialInput, type SpatialInput } from './spatial-input';
 import type { PaletteItem } from '../hud/v2/wrist-palette';
+import { labEnabled } from './lab';
 import { Page } from './page';
 import { frameReferenceSpace, endXr, startXr, xrSupport } from './xr';
 import { RoomAnchors } from '../anchors/room';
@@ -303,7 +304,7 @@ export class QuestApp {
     if (this.params.get('record') === '1') this.page.log('To record a take, prepare the camera and press Record take before entering AR.');
     const xrOk = emulate || support.ar;
     this.page.setButton(this.page.enter, emulate ? 'Enter AR (emulated)' : 'Enter AR', false, !xrOk);
-    this.page.xrMessage(xrOk ? (emulate ? 'IWER emulates a Quest 3 in this browser. Click = pinch, right-drag = look.' : 'Tap "Camera + mic" first, then Enter AR.') : 'This browser has no immersive-ar. Use Quest Browser, or open with ?emulate=1.');
+    this.page.xrMessage(xrOk ? (emulate ? 'IWER emulates a Quest 3 in this browser. Click = pinch, right-drag = look.' : 'Camera and microphone are requested when you enter.') : 'This browser has no immersive-ar. Use Quest Browser, or open with ?emulate=1.');
   }
 
   private setupRenderer(): void {
@@ -877,6 +878,8 @@ export class QuestApp {
       tag.position = { x: target.position[0], y: target.position[1], z: target.position[2] };
       target = { ...target, label: tag.name || tag.label, tagged: true, connection: tag.connection, identifying: !tag.name?.trim(), busy: tag.busy };
     }
+    // Annotate shows only screens/keyboards/phones (and lane-allowed classes); everything else stays undrawn.
+    if (!this.annotationAllowed(target)) return;
     const tracked = this.targets.get(target.id);
     // Repainting a saved label is not another camera observation.
     this.observed.set(target.id, { target, at: tracked?.lastSeenAt ?? Date.now() });
@@ -1200,14 +1203,16 @@ export class QuestApp {
   }
 
   /** Choose the known virtual instrument, without identifying a laptop or enabling any controls. */
-  selectVisualSynth(deviceId?: string): boolean {
-    if (!this.session || !this.lastFrame) { this.hud.toast('Enter AR first, then choose Try visual synth.', 'info'); return false; }
+  selectVisualSynth(deviceId?: string, from?: { label?: string; frameId?: string; detId?: string; position?: Vector3 }): boolean {
+    if (!this.session || !this.lastFrame) { this.hud.toast('Enter AR first, then choose Visual synth.', 'info'); return false; }
+    from ??= this.visualSynthFrom;
+    this.visualSynthFrom = from;
     this.release();
     this.setMode('control');
     this.visualSynthIntent = { phase: 'pending', message: 'Opening visuals in your paired Mac companion…', deviceId, attemptedReadyKey: this.visualSynthReadyKey ?? '' };
-    this.hud.recenter?.();
     if (!this.ws.open) { this.visualSynthUnavailable('Reconnect to the server and keep your paired Mac companion tab visible.'); return false; }
-    const position = new Vector3(0, -.05, -1.2).applyQuaternion(this.lastFrame.head.quaternion).add(this.lastFrame.head.position);
+    // A pinched laptop/monitor box places the ring on the real screen; the wrist palette places it ahead.
+    const position = from?.position?.clone() ?? new Vector3(0, -.05, -1.2).applyQuaternion(this.lastFrame.head.quaternion).add(this.lastFrame.head.position);
     const requestId = `visual-${globalThis.crypto.randomUUID()}`;
     const timeout = setTimeout(() => {
       if (this.virtualSelection?.requestId !== requestId) return;
@@ -1216,7 +1221,9 @@ export class QuestApp {
     }, 10_000);
     this.virtualSelection = { requestId, position, timeout };
     const sent = this.ws.send('target.select', { virtual: 'visual-synth', requestId, deviceId,
-      position: { x: position.x, y: position.y, z: position.z } }, { to: 'server' });
+      position: { x: position.x, y: position.y, z: position.z },
+      ...(from?.label ? { label: from.label.slice(0, 80) } : {}),
+      ...(from?.frameId && from.detId ? { frameId: from.frameId, detId: from.detId } : {}) }, { to: 'server' });
     if (!sent) { this.clearVirtualSelection(false); this.visualSynthUnavailable('The request was not sent. Reconnect and try again.'); return false; }
     this.refreshHome();
     return true;
@@ -1225,7 +1232,26 @@ export class QuestApp {
   private clearVirtualSelection(clearIntent = true): void {
     if (this.virtualSelection) clearTimeout(this.virtualSelection.timeout);
     this.virtualSelection = undefined;
-    if (clearIntent) this.visualSynthIntent = undefined;
+    if (clearIntent) { this.visualSynthIntent = undefined; this.visualSynthFrom = undefined; }
+  }
+
+  /** The pinched screen (laptop/monitor/TV box) that started the current visual-synth selection. */
+  private visualSynthFrom?: { label?: string; frameId?: string; detId?: string; position?: Vector3 };
+
+  /** Annotate shows only these detector classes (plus any a lane allows, e.g. tangible cups). */
+  private readonly annotationLabels = new Set(['laptop', 'tv', 'monitor', 'keyboard', 'cell phone']);
+  allowAnnotationLabels(labels: string[]): void {
+    for (const label of labels) this.annotationLabels.add(label.toLowerCase());
+    for (const [id, seen] of this.observed) if (!this.annotationAllowed(seen.target)) this.eraseAnnotation(id);
+  }
+  private annotationAllowed(target: { label: string; rawLabel?: string; tagged?: boolean; cardId?: string }): boolean {
+    if (labEnabled() || target.tagged || target.cardId) return true;
+    const label = (target.rawLabel ?? target.label).trim().toLowerCase();
+    return this.annotationLabels.has(label) || /^(laptop|macbook|monitor|tv|television|screen|display|computer)\b/.test(label);
+  }
+  /** A laptop/monitor/TV box is the Mac's screen: pinching it selects the visual synth (WP1 golden path). */
+  private isScreenBox(label: string | undefined): boolean {
+    return !!label && /\b(laptop|macbook|monitor|tv|television|screen|display|computer)\b/i.test(label);
   }
 
   private visualSynthUnavailable(message: string): void {
@@ -1289,9 +1315,12 @@ export class QuestApp {
     this.hud.upsertTarget(toHudTarget(target));
     this.lock(target.id, 'virtual-synth', { send: false });
     this.replayLocatedSpec(result.cardId);
-    this.hud.recenter?.();
-    this.hud.toast(tag.connection === 'ready' ? this.gestureSpecs.has(result.cardId) ? 'Silent visuals selected. Choose Perform to use your hands.' : 'Silent visuals selected. Choose Set up gestures to use your hands.'
-      : 'Center the Mac visuals in the guide, then choose Set up control.', 'info');
+    if (result.autoSetup && tag.connection !== 'ready') {
+      // CE_DEMO=1: the server already started control.setup; track it as ours instead of asking for it again.
+      this.activeSetup = result.cardId;
+      this.cancelledCards.delete(result.cardId);
+      tag.busy = true; tag.sentence = 'Writing a controller for your Mac…';
+    }
     this.refreshHome();
   }
 
@@ -1773,8 +1802,12 @@ export class QuestApp {
 
   private onArmResult(p: PayloadOf<'arm.result'>): void {
     if (this.modes.mode !== 'control') return;
-    if (this.armRequest?.armId !== p.armId || this.armRequest.cardId !== p.cardId || this.activeSetup !== p.cardId) return;
-    if (p.armed && this.acceptedArm !== p.armId) return;
+    // CE_DEMO=1: the server arms after verification with no arm.request; accept it for our own active setup.
+    const auto = !!p.auto && p.armed && this.activeSetup === p.cardId;
+    if (!auto) {
+      if (this.armRequest?.armId !== p.armId || this.armRequest.cardId !== p.cardId || this.activeSetup !== p.cardId) return;
+      if (p.armed && this.acceptedArm !== p.armId) return;
+    }
     if (this.pendingArm === p.armId) { this.hud.showConfirm(null); this.pendingArm = undefined; }
     if (p.armed) this.armedCards.add(p.cardId);
     else this.armedCards.delete(p.cardId);
@@ -2092,6 +2125,10 @@ export class QuestApp {
       if (!h || this.consumed[hand]) { this.targetHistory[hand].reset(); continue; }
       const handAim = h.ray.dir.lengthSq() > 0.5 ? aimAt(h.ray.origin, h.ray.dir, list, HAND_AIM, this.handHit) : null;
       if (handAim) this.handFeedback.setHover(hand, this.targets.get(handAim.id) ?? this.live?.hoverTarget(handAim.id));
+      // A hand ray on a box is a deliberate hover: show its pill label now (gaze needs 250 ms).
+      if (handAim && handAim.id !== this.lockedId && handAim.id !== this.candidate.shown) {
+        this.candidate.id = this.candidate.shown = handAim.id; this.candidate.since = time; this.hud.setCandidate(handAim.id);
+      }
       const raw = h.rawRay ?? h.ray;
       const previous = h.justPinched ? this.targetHistory[hand].compensate(time, handAim?.id ?? null, raw.origin, raw.dir) : null;
       this.targetHistory[hand].record(time, handAim?.id ?? null, raw.origin, raw.dir);
@@ -2116,6 +2153,16 @@ export class QuestApp {
     // releases that workspace; annotation and explicit API selections remain available.
     if (this.modes.mode === 'control' && (this.visualSynthIntent || this.lockedId && this.lockedId !== id)
       && ['chip', 'touch', 'ray', 'gaze'].includes(how)) return;
+    if (['chip', 'touch', 'ray', 'gaze'].includes(how) && !this.modes.tags.get(id)?.cardId?.startsWith('visual-synth')) {
+      const live = isLiveId(id) ? this.live?.targetSnapshot(this.live?.claimOf(id) ?? id) : undefined;
+      const t = this.targets.get(id);
+      const label = t?.label ?? live?.label;
+      if (this.isScreenBox(label) || this.isScreenBox(live?.rawLabel)) {
+        const position = t ? t.position.clone() : live ? new Vector3().fromArray(live.position) : undefined;
+        this.selectVisualSynth(undefined, { label: (live?.rawLabel ?? label)!, frameId: t?.frameId, detId: t?.detId, position });
+        return;
+      }
+    }
     this.clearVirtualSelection();
     if (this.modes.mode === 'control' && !this.modes.tags.has(id)) return;
     if (isLiveId(id)) {
