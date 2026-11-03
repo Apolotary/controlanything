@@ -18,13 +18,13 @@ export class WorkspaceAnchor {
     this.placed = true;
   }
 
-  /** Spawn beside a selected device (right of it, at its height), never between the eyes and the device. */
+  /** Spawn beside a selected device (right of it, at its height, clear of the right dial), never between the eyes and the device. */
   spawnBeside(center: Vector3, halfWidth: number, head: { position: Vector3; quaternion: Quaternion }, time: number): void {
     if (this.placed) return;
     this.right.set(1, 0, 0).applyQuaternion(head.quaternion).setY(0);
     if (this.right.lengthSq() < 1e-6) this.right.set(1, 0, 0);
     this.right.normalize();
-    this.pose.position.copy(center).addScaledVector(this.right, halfWidth + 0.29);
+    this.pose.position.copy(center).addScaledVector(this.right, halfWidth + 0.36);
     // Pull 10 % toward the head so it reads as nearer than the device and stays reachable.
     this.pose.position.lerp(head.position, 0.1);
     this.matrix.lookAt(head.position.clone().setY(this.pose.position.y), this.pose.position, UP);

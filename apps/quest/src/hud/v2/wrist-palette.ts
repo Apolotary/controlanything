@@ -68,8 +68,12 @@ export class WristPalette extends Group {
   /** True when the visible item list changed and LeanHud must re-wire the buttons. */
   needsRebuild(): boolean { return this.visibleItems().map((i) => i.key).join('|') !== this.shownKeys; }
 
+  /** Stop and Exit (order ≥ 80) always stay; registered items fill the remaining slots in order. */
   private visibleItems(): PaletteItem[] {
-    return this.items.filter((i) => i.visible?.() ?? true).slice(0, PALETTE_MAX_ITEMS);
+    const shown = this.items.filter((i) => i.visible?.() ?? true);
+    const core = shown.filter((i) => (i.order ?? 50) >= 80);
+    const rest = shown.filter((i) => (i.order ?? 50) < 80).slice(0, Math.max(0, PALETTE_MAX_ITEMS - core.length));
+    return [...rest, ...core];
   }
 
   /** Rebuild the button column. The caller disposes the old groups' widgets first (LeanHud.clear). */

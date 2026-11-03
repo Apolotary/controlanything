@@ -2116,8 +2116,13 @@ export class QuestApp {
       this.candidate.id = id;
       this.candidate.since = time;
     }
-    const show = this.handAimId && this.handAimId !== this.lockedId ? this.handAimId
+    let show = this.handAimId && this.handAimId !== this.lockedId ? this.handAimId
       : id && id !== this.lockedId && time - this.candidate.since >= 250 ? id : null;
+    // Keep the hovered object's pill (and its action pills) while a pointer is on UI such as that pill,
+    // and for 800 ms after the aim leaves the box, so moving from the object to its pill can land a pinch.
+    if (show) this.candidateSeenAt = time;
+    else if (this.candidate.shown && this.candidate.shown !== this.lockedId
+      && (this.consumed.left || this.consumed.right || time - this.candidateSeenAt < 800)) show = this.candidate.shown;
     if (show !== this.candidate.shown) {
       this.candidate.shown = show;
       this.hud.setCandidate(show);
@@ -2149,6 +2154,7 @@ export class QuestApp {
     this.handAimId = handAimId;
   }
   private handAimId: string | null = null;
+  private candidateSeenAt = -Infinity;
 
   /** Select a device; annotation only records an explicit tag. */
   lock(id: string, how = 'api', opts: { send?: boolean } = {}): void {
