@@ -133,6 +133,8 @@ class CandidateRing extends Group {
   readonly tag: Pill;
   trackId = -1;
   label = '';
+  tagFor = '';
+  tagText = '';
   hovered = new Set<number>();
   fade = 0;
   live = false;
@@ -160,6 +162,7 @@ export interface BoundView {
   sizeM: number;
   /** 'searching' | 'tracking' | 'held' | 'lost' | 'waiting' (device not ready yet) */
   state: string;
+  /** full badge text ("Cup · Warp 64 · Ripples 30") */
   title: string;
   detail: string;
   lift: number;
@@ -241,7 +244,7 @@ export class TangibleVisuals extends Group {
     u.arcs!.value = v.state === 'waiting' ? 0.4 : 1; u.fade!.value = this.boundFade; u.sweep!.value = this.sweep;
     u.searching!.value = active ? 0 : 1; u.hover!.value = 0;
     this.badge.position.set(0, r + 0.05, 0.001);
-    this.badge.set(v.detail ? `${v.title} · ${v.detail}` : v.title, active, now);
+    this.badge.set(v.title, active, now);
     this.badge.setFade(this.boundFade);
     const ra = r + 0.022;
     this.liftTag.visible = this.slideTag.visible = this.boundFade > 0.05;
@@ -277,7 +280,8 @@ export class TangibleVisuals extends Group {
         u.half_!.value = half; u.radius!.value = r; u.arcs!.value = 0; u.searching!.value = 0;
         u.hover!.value += (hover - (u.hover!.value as number)) * k;
         c.tag.position.set(0, r + 0.032, 0.001);
-        c.tag.set(`${v.label} · pinch to use`, hover > 0, now);
+        if (c.label !== v.label) c.label = v.label;
+        c.tag.set(c.label === c.tagFor ? c.tagText : (c.tagFor = c.label, c.tagText = `${c.label} · pinch to use`), hover > 0, now);
       } else c.hit.visible = false;
       c.fade += ((v ? 1 : 0) - c.fade) * k;
       c.visible = c.fade > 0.01;

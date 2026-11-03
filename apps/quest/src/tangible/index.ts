@@ -74,6 +74,8 @@ export class Tangible {
   private readonly simP = new Vector3();
   private readonly held = { position: new Vector3(), sizeM: [0.1, 0.1, 0.1] as [number, number, number], label: '' };
   private sends = 0;
+  private textAt = -Infinity;
+  private textState = '';
   private cached: TangibleDevice | null = null;
   private cachedAt = -Infinity;
 
@@ -222,11 +224,17 @@ export class Tangible {
     const ts = this.tracker.state;
     const deviceReady = !!this.device?.controllable;
     v.state = !deviceReady ? 'waiting' : ts;
-    v.title = this.tracker.label;
-    v.detail = !deviceReady ? `waiting for ${this.device?.label ?? 'device'}`
-      : ts === 'lost' ? `show the ${this.tracker.label.toLowerCase()} again`
-      : ts === 'searching' ? 'finding it…'
-      : this.valueText();
+    // label text is rebuilt at most 5 Hz (and on state changes), so this path allocates no strings per frame
+    if (now - this.textAt > 200 || v.state !== this.textState) {
+      this.textAt = now; this.textState = v.state;
+      const name = this.tracker.label;
+      const detail = !deviceReady ? 'connecting…'
+        : ts === 'lost' ? `show the ${name.toLowerCase()} again`
+        : ts === 'searching' ? 'finding it…'
+        : this.valueText();
+      v.title = `${name} · ${detail}`;
+      v.detail = detail;
+    }
     this.visuals.updateBound(v, frame.head, now, dtMs);
     if (ts !== this.lastTrackState) { this.lastTrackState = ts; this.publish(); }
   }
