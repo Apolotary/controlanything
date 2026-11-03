@@ -1,0 +1,20 @@
+{
+  "kind": "buddy-reaction",
+  "reaction": {
+    "object": "speaker",
+    "emotion": "impressed",
+    "quip": "Loud black box, but I craved leafy green!",
+    "action": "tilt",
+    "questMet": false,
+    "traits": [
+      "black",
+      "boxy",
+      "loud"
+    ]
+  },
+  "quest": "something green",
+  "model": "muse-spark-1.3",
+  "latencyMs": 8276,
+  "recordedAt": "2026-11-03T19:04:24.849Z",
+  "crop": "reaction.speaker.f3fd1e9f.jpg"
+}

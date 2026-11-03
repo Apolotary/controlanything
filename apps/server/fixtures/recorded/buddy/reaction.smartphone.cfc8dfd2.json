@@ -1,0 +1,20 @@
+{
+  "kind": "buddy-reaction",
+  "reaction": {
+    "object": "smartphone",
+    "emotion": "impressed",
+    "quip": "Yes! Perfect one-hand fit, sleek black magic!",
+    "action": "clap",
+    "questMet": true,
+    "traits": [
+      "black",
+      "sleek",
+      "shiny"
+    ]
+  },
+  "quest": "something you can hold in one hand",
+  "model": "muse-spark-1.3",
+  "latencyMs": 8167,
+  "recordedAt": "2026-11-03T19:04:39.083Z",
+  "crop": "reaction.smartphone.cfc8dfd2.jpg"
+}

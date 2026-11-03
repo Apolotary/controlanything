@@ -30,6 +30,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { SERVER_NAME, SERVER_VERSION } from './config';
 import type { ServerContext } from './context';
 import { agentRouter } from './agent/routes';
+import { buddyRouter } from './buddy';
 import { libraryRouter } from './agent/libraryRoutes';
 import { gen3dRouter, skinsRouter } from './gen3d';
 import { MAX_AUDIO_BYTES, requestCancellation, RequestCancelledError, TranscribeInputError, TranscribeUpstreamError } from './muse';
@@ -212,6 +213,8 @@ export function createApp(ctx: ServerContext): express.Express {
   api.use('/skins', skinsRouter(ctx));
   // the discovery loop: targets, work log, exec monitor, curated profiles, select / arm / panic (see agent/routes.ts)
   api.use('/agent', agentRouter(ctx));
+  // the Muse buddy: show it real objects (POST /api/buddy/react, /api/buddy/sticker; see buddy/routes.ts)
+  api.use('/buddy', buddyRouter(ctx));
 
   // recorded takes: the headset app on this Mac hands its zip to the server (localhost only), which unpacks it into
   // apps/quest/public/takes/<take>/ so it replays at once (/sim/?take=<take>) and can be committed

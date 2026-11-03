@@ -1,0 +1,20 @@
+{
+  "kind": "buddy-reaction",
+  "reaction": {
+    "object": "headphones",
+    "emotion": "delighted",
+    "quip": "Yes! Those chunky headphones scream jam session time!",
+    "action": "dance",
+    "questMet": true,
+    "traits": [
+      "black",
+      "chunky",
+      "musical"
+    ]
+  },
+  "quest": "something that makes music",
+  "model": "muse-spark-1.3",
+  "latencyMs": 6806,
+  "recordedAt": "2026-11-03T19:04:37.712Z",
+  "crop": "reaction.headphones.7902b3ce.jpg"
+}

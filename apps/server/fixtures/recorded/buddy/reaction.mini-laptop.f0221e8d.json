@@ -1,0 +1,20 @@
+{
+  "kind": "buddy-reaction",
+  "reaction": {
+    "object": "mini laptop",
+    "emotion": "impressed",
+    "quip": "Yes! Tiny keys for big genius plans!",
+    "action": "clap",
+    "questMet": true,
+    "traits": [
+      "black",
+      "plastic",
+      "retro"
+    ]
+  },
+  "quest": "something with buttons",
+  "model": "muse-spark-1.3",
+  "latencyMs": 5500,
+  "recordedAt": "2026-11-03T19:04:36.419Z",
+  "crop": "reaction.mini-laptop.f0221e8d.jpg"
+}

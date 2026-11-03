@@ -289,6 +289,12 @@ export class QuestApp {
     await this.setupHud();
     this.spatial = createSpatialInput(this.scene, this.desktopCam, this.renderer);
     (this.hud as Hud & { setSpatialInput?: (s: SpatialInput) => void }).setSpatialInput?.(this.spatial);
+    // buddy: the Muse buddy mascot (src/buddy), wrist palette → Buddy; window.__ce.buddy for scripts; ?buddy=0 turns it off
+    if (this.params.get('buddy') !== '0') {
+      void import('../buddy')
+        .then(({ installBuddy }) => { (this as unknown as { buddy: unknown }).buddy = installBuddy(this); })
+        .catch((e) => this.page.log(`buddy unavailable: ${(e as Error).message}`, 'warn'));
+    }
     await this.setupCamera();
     this.refreshHome();
     if (this.live && this.params.get('debug') === '1') {
