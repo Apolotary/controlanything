@@ -106,7 +106,8 @@ export function prefetchVisualDriver(d: Pick<LoopDeps, 'spark' | 'wonder' | 'pro
 function takeVisualDraft(executorId: string) {
   const cached = visualDrafts.get(executorId);
   if (!cached || Date.now() - cached.at > PREFETCH_TTL_MS) return undefined;
-  visualDrafts.delete(executorId);
+  // Used once; the spent entry keeps its time so presence updates do not start another prefetch within the TTL.
+  visualDrafts.set(executorId, { at: cached.at, result: Promise.resolve(undefined) });
   return cached.result;
 }
 
