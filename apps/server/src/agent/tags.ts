@@ -14,7 +14,9 @@ export { TagStore } from './library-store';
 export type { AssetRef, LibraryRecord, SetupVersion, StoredTag } from './library-schema';
 
 export function isLaptopTarget(t: Target, label = ''): boolean {
-  return t.card?.category === 'computer' || /\b(laptop|computer|macbook|this mac)\b/i.test(`${t.card?.name ?? ''} ${t.detection?.label ?? ''} ${label}`);
+  if (virtualScreenExecutor(t.card)) return false; // the visual synth card itself is the instrument, not the laptop
+  // A screen showing the visual synth is the Mac too: Muse often names it by what is on screen.
+  return t.card?.category === 'computer' || /\b(laptop|computer|macbook|imac|notebook|this mac|monitor|display screen|computer screen|visual[\s-]?synth)\b/i.test(`${t.card?.name ?? ''} ${t.card?.model ?? ''} ${t.detection?.label ?? ''} ${label}`);
 }
 
 export function tagCapability(t: Target): LinkCapability | undefined {
@@ -45,7 +47,12 @@ export function evaluateConnection(t: Target, roster: Roster, label?: string): P
   if (t.card?.protocols.includes('hid') && !tagCapability(t)) return { connection: 'offline',
     hint: 'This is a typing keyboard. This demo does not control HID keyboards; choose Try visual synth from Menu.' };
   // The Mac in this demo is controlled through its visual synth: select and setup reroute a tagged laptop there.
-  if (isLaptopTarget(t, label) && !virtualScreenExecutor(t.card) && visualSynthHosts(roster.devices()).length) return { connection: 'setup', hint: 'Pinch to play the Mac visual synth' };
+  if (isLaptopTarget(t, label) && !virtualScreenExecutor(t.card) && visualSynthHosts(roster.devices()).length) {
+    // CE_DEMO: Muse named it the Mac, so the headset that just pinched it continues into the visual synth by itself.
+    return process.env.CE_DEMO === '1'
+      ? { connection: 'setup', hint: 'This is the Mac: opening its visual synth…', action: 'select-visual-synth' }
+      : { connection: 'setup', hint: 'Pinch to play the Mac visual synth' };
+  }
   if (isLaptopTarget(t, label) && !roster.devices().some((device) => device.online && isHelperDevice(device))) {
     const url = (roster.helperUrl?.() ?? 'http://localhost:8787/pair').replace(/^https?:\/\//, '');
     return { connection: 'offline', hint: `Open ${url} on this laptop`, action: 'open-companion' };

@@ -76,7 +76,8 @@ const LEARN_WINDOW_MS = 10_000;
 const LEARN_WINDOW_RETRY_MS = 15_000;
 
 /** CE_DEMO prefetch: the visual synth driver Muse writes as soon as a Mac advertises the renderer, used once. */
-const visualDrafts = new Map<string, { at: number; result: Promise<{ at: number; result: NonNullable<Awaited<ReturnType<typeof drive>>>; forged?: Promise<Awaited<ReturnType<Forge['generate']>> | undefined> } | undefined> }>();
+type VisualDraft = { at: number; result: NonNullable<Awaited<ReturnType<typeof drive>>>; forged?: Promise<Awaited<ReturnType<Forge['generate']>> | undefined> };
+const visualDrafts = new Map<string, { at: number; done: boolean; result: Promise<VisualDraft | undefined> }>();
 const PREFETCH_TTL_MS = 30 * 60_000;
 export function prefetchVisualDriver(d: Pick<LoopDeps, 'spark' | 'wonder' | 'profiles' | 'web' | 'midiCharts' | 'log' | 'forge'>, executor: { deviceId: string; kind: string },
   card: Parameters<typeof drive>[1], opts: { forge: boolean }): void {
@@ -101,14 +102,16 @@ export function prefetchVisualDriver(d: Pick<LoopDeps, 'spark' | 'wonder' | 'pro
         (e) => { d.log?.(`[gen3d] visual controls prefetch failed: ${(e as Error).message}`); return undefined; });
     return { at: Date.now(), result: r, forged };
   })().catch((e) => { d.log?.(`[drive] visual driver prefetch failed: ${(e as Error).message}`); return undefined; });
-  visualDrafts.set(executor.deviceId, { at, result });
+  const entry = { at, done: false, result };
+  void result.finally(() => { entry.done = true; });
+  visualDrafts.set(executor.deviceId, entry);
 }
 function takeVisualDraft(executorId: string) {
   const cached = visualDrafts.get(executorId);
   if (!cached || Date.now() - cached.at > PREFETCH_TTL_MS) return undefined;
   // Used once; the spent entry keeps its time so presence updates do not start another prefetch within the TTL.
-  visualDrafts.set(executorId, { at: cached.at, result: Promise.resolve(undefined) });
-  return cached.result;
+  visualDrafts.set(executorId, { at: cached.at, done: true, result: Promise.resolve(undefined) });
+  return cached;
 }
 
 const forgeDevice = (card: { cardId: string; name: string; maker: string; model: string; category: string; notes?: string }) =>
@@ -250,7 +253,13 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       // Muse may already have written this Mac's visual synth driver (and its controls) when the companion appeared
       // (CE_DEMO prefetch): the same calls and prompts, re-validated here against this run's executor and allowlist.
       const visualDrive = !!virtualScreenExecutor(card);
-      const prefetched = visualDrive && pass === 1 ? await flow.wait(takeVisualDraft(executor.deviceId) ?? Promise.resolve(undefined)) : undefined;
+      const inflight = visualDrive && pass === 1 ? takeVisualDraft(executor.deviceId) : undefined;
+      // Still being written: show that call as this setup's "writing the driver" phase instead of starting another.
+      const waiting = inflight && !inflight.done
+        ? d.steps.begin('drive', `Muse is writing the driver (started when the Mac appeared, ${Math.round((Date.now() - inflight.at) / 1000)} s ago)`, { ...base, kind: 'opinion', model: d.spark.model, sentence: 'Muse is writing the driver…' })
+        : undefined;
+      const prefetched = inflight ? await flow.wait(inflight.result) : undefined;
+      if (waiting) { if (prefetched) waiting.ok(`driver ready (${prefetched.result.model})`, { model: prefetched.result.model }); else waiting.fail('the early driver call did not finish; writing it now'); }
       driverId = prefetched?.result.validation.driver.driverId ?? newId('drv');
       const ids = { driverId, executor: { deviceId: executor.deviceId, port: executor.port?.id }, executorKind: executor.kind };
       const reviewed = research.profile?.reviewedChart;

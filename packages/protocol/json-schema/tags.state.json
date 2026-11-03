@@ -167,7 +167,8 @@
                   "retry",
                   "cancel",
                   "open-companion",
-                  "pair-device"
+                  "pair-device",
+                  "select-visual-synth"
                 ]
               },
               "specId": {

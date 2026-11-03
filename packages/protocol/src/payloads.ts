@@ -296,7 +296,8 @@ export type TargetCancelPayload = z.infer<typeof TargetCancelPayload>;
 export const TargetRetryPayload = TargetCancelPayload;
 export type TargetRetryPayload = z.infer<typeof TargetRetryPayload>;
 
-export const GuidanceAction = z.enum(['retry', 'cancel', 'open-companion', 'pair-device']);
+/** select-visual-synth (CE_DEMO): Muse named the pinched object the Mac; the headset continues into its visual synth. */
+export const GuidanceAction = z.enum(['retry', 'cancel', 'open-companion', 'pair-device', 'select-visual-synth']);
 export type GuidanceAction = z.infer<typeof GuidanceAction>;
 
 /** Short, plain guidance for the HUD; every field is optional for older clients. */

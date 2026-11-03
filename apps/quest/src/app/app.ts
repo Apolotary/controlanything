@@ -1061,7 +1061,17 @@ export class QuestApp {
     }
     for (const cardId of this.modes.removals) this.ws.send('tag.remove', { cardId }, { to: 'server' });
     this.refreshTags(); this.refreshHome();
+    // CE_DEMO: Muse identified the box just pinched in Annotate as the Mac; continue into the visual synth once.
+    for (const tag of this.modes.tags.values()) {
+      if (tag.action !== 'select-visual-synth' || (this.macPinchUntil.get(tag.targetId) ?? 0) < Date.now()) continue;
+      this.macPinchUntil.delete(tag.targetId);
+      const t = this.targets.get(tag.targetId);
+      this.selectVisualSynth(undefined, { label: tag.name ?? tag.label, frameId: t?.frameId, detId: t?.detId, position: t?.position.clone() });
+      break;
+    }
   }
+  /** Boxes pinched in Annotate in the last minute (targetId → deadline): a Muse "it is the Mac" continues them. */
+  private readonly macPinchUntil = new Map<string, number>();
 
   /** Identity corrections revoke the old controls while preserving the selected object's pose and conversation. */
   private invalidateIdentityControls(cardId: string, targetId: string): void {
@@ -2232,6 +2242,8 @@ export class QuestApp {
       if (t.cardId) this.modes.removals.delete(t.cardId);
       this.modes.add(id, payload);
       if (opts.send !== false) this.ws.send('tag.add', payload, { to: 'server' });
+      // If Muse names this box the Mac (CE_DEMO), the same pinch continues into its visual synth.
+      if (opts.send !== false) this.macPinchUntil.set(id, Date.now() + 60_000);
       this.recorder.input('tag', { targetId: id, label: t.label, how });
       this.lockedId = null;
       this.hud.setLocked(null);
