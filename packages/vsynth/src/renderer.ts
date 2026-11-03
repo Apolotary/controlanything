@@ -37,33 +37,40 @@ vec3 hsv(float h, float s, float v) {
   vec3 rgb = clamp(abs(fract(h + vec3(0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
   return v * mix(vec3(1), rgb, s);
 }
-// An analytic water surface: expanding, damped wavefronts with lighting from the
-// surface gradient. Depth CC motion launches the wavefronts; Warp is not involved.
+// An analytic water surface: expanding, damped wavefronts lit from the surface gradient.
+// Depth CC motion launches the wavefronts. Wavelengths are large (a fifth of the screen) so the
+// rings read through a headset's passthrough camera; Warp tints the pool and quickens its caustics,
+// so height control stays visible while Water is active.
 vec3 waterSurface(vec2 p) {
   vec2 gradient = vec2(0.0);
   float height = 0.0;
+  float crest = 0.0;
   for (int i = 0; i < 6; i++) {
     float age = max(0.0, water.x - ripples[i].z);
     vec2 offset = p - ripples[i].xy;
     float radius = max(.0001, length(offset));
-    float front = radius - age * .72;
-    float envelope = exp(-front * front * 24.0 - age * 1.15);
-    float wave = sin(front * 35.0);
+    float front = radius - age * .62;
+    float envelope = exp(-front * front * 7.0 - age * .85);
+    float wave = sin(front * 16.0);
     float strength = ripples[i].w * envelope;
     height += wave * strength;
-    gradient += offset / radius * strength * (35.0 * cos(front * 35.0) - 48.0 * front * wave);
+    gradient += offset / radius * strength * (16.0 * cos(front * 16.0) - 14.0 * front * wave);
+    crest += abs(strength) * smoothstep(.55, 1.0, wave);
   }
-  vec3 normal = normalize(vec3(-gradient * .52, 1.0));
+  float warp = colour.w;
+  vec3 normal = normalize(vec3(-gradient * .9, 1.0));
   vec3 light = normalize(vec3(-.45, .65, .9));
   float diffuse = max(0.0, dot(normal, light));
-  float sheen = pow(max(0.0, dot(normal, normalize(light + vec3(0, 0, 1)))), 36.0);
-  float caustic = pow(.5 + .5 * sin(p.x * 7.0 + height * 18.0 + .25 * water.x)
-    * cos(p.y * 9.0 - height * 20.0 - .18 * water.x), 5.0);
-  vec3 deep = vec3(.008, .065, .13), shallow = vec3(.025, .48, .66);
-  vec3 pool = mix(deep, shallow, .18 + .28 * water.y + .28 * diffuse);
-  pool += vec3(.18, .46, .50) * caustic * .18;
-  pool += vec3(.62, .90, 1.0) * sheen * .72;
-  pool *= .45 + colour.x * .75;
+  float sheen = pow(max(0.0, dot(normal, normalize(light + vec3(0, 0, 1)))), 24.0);
+  float caustic = pow(.5 + .5 * sin(p.x * (5.0 + 4.0 * warp) + height * 18.0 + .25 * water.x)
+    * cos(p.y * (6.0 + 5.0 * warp) - height * 20.0 - .18 * water.x), 4.0);
+  float hue = colour.y - .01 + warp * .30;
+  vec3 deep = hsv(hue + .04, .9, .14 + .08 * warp);
+  vec3 shallow = hsv(hue - .02, .72, .74);
+  vec3 pool = mix(deep, shallow, .2 + .3 * water.y + .3 * diffuse);
+  pool += hsv(hue - .05, .35, 1.0) * caustic * (.14 + .2 * warp);
+  pool += vec3(.75, .95, 1.0) * (sheen * .8 + crest * 2.4);
+  pool *= (.5 + colour.x * .7) * (1.0 - .07 * dot(p, p));
   return pool;
 }
 void main() {
@@ -104,6 +111,8 @@ export interface VisualSynthRenderer {
   getState(): VisualSynthParameters;
   /** Read-only evidence for the actual rendered effect; not a capability or control API. */
   getWaterDiagnostics(): { pattern: number; depth: number; seconds: number; waves: { x: number; y: number; age: number; strength: number }[] };
+  /** Frames drawn so far and whether the animation loop is running (for the renderer self-report). */
+  stats(): { frames: number; running: boolean };
   render(nowMs: number): void;
   /** Fixed phase and settled parameters, for camera evidence and screenshot comparisons. */
   renderAt(timeMs: number): void;
@@ -159,9 +168,11 @@ export function createVisualSynth(
   let waterSeconds = 0;
   const waterRipples = new WaterRipples();
   let frame = 0;
+  let frames = 0;
   let disposed = false;
   const draw = (parameters: VisualSynthParameters, phaseSeconds: number, waterTime = waterSeconds): void => {
     if (disposed || gl.isContextLost()) return;
+    frames++;
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.useProgram(program);
     gl.uniform2f(uniforms.resolution, canvas.width, canvas.height);
@@ -203,6 +214,7 @@ export function createVisualSynth(
         age: Math.max(0, waterSeconds - waterRipples.data[offset + 2]!), strength: waterRipples.data[offset + 3]!,
       }; }).filter(wave => Math.abs(wave.strength) > 0 && wave.age >= 0 && wave.age < 6),
     }),
+    stats: () => ({ frames, running: frame !== 0 }),
     render(nowMs) {
       const delta = previousMs === null ? 0 : Math.min(Math.max(nowMs - previousMs, 0), 100);
       previousMs = nowMs;

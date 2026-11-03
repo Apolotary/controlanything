@@ -572,8 +572,7 @@ describe('Calm companion behavior', () => {
     await flush();
     expect(byId('paired-summary').hidden).toBe(false);
     expect(byId('onboarding').dataset.state).toBe('paired');
-    expect(byId('onboarding-next').textContent).toContain('opens here automatically');
-    expect(byId('paired-next').textContent).toContain('set up and enable controls in Quest');
+    expect(byId('paired-next').textContent).toContain('pinch it');
     expect(byId('enable-midi').hidden).toBe(true);
     expect(byId('connection-steps').hidden).toBe(true);
     expect(byId('setup-activity').hidden).toBe(true);

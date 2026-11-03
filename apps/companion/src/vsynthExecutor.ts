@@ -1,15 +1,27 @@
 import type { ExecAckPayload, ExecCommandPayload, Port } from '@ce/protocol';
 import { createVisualSynthPort, VISUAL_SYNTH_IDENTITY_REPLY, VISUAL_SYNTH_PORT, VISUAL_SYNTH_PORT_ID } from '@ce/vsynth';
+import type { VisualSynthParameters, VisualSynthPort } from '@ce/vsynth';
 import { checkMidiOp } from './contracts';
 
 export const visualSynthPort: Port = { id: VISUAL_SYNTH_PORT_ID, name: VISUAL_SYNTH_PORT, kind: 'midi-out', manufacturer: 'ControlAnything', state: 'connected' };
 export const isVisualPort = (port?: string): boolean => port === visualSynthPort.id || port === visualSynthPort.name;
 
-/** Independent of Web MIDI permissions and all physical outputs. */
-export class VisualSynthExecutor {
-  constructor(private readonly port = createVisualSynthPort(), private readonly connected: () => boolean = () => true) {}
+type PortLike = Omit<VisualSynthPort, 'receiveMidiConfirmed'> & Partial<Pick<VisualSynthPort, 'receiveMidiConfirmed'>>;
+const params = (state: VisualSynthParameters): Record<string, number> => ({ ...state });
 
-  execute(cmd: ExecCommandPayload): ExecAckPayload {
+/**
+ * Independent of Web MIDI permissions and all physical outputs. Every applied CC/program change is
+ * acknowledged with the parameter state after the command (`applied`): from the drawing page when a
+ * live renderer confirms it within 150 ms, else from the headless port.
+ */
+export class VisualSynthExecutor {
+  constructor(
+    private readonly port: PortLike = createVisualSynthPort(),
+    /** A visible renderer exists now, or was visible within the presence grace window. */
+    private readonly connected: () => boolean = () => true,
+  ) {}
+
+  async execute(cmd: ExecCommandPayload): Promise<ExecAckPayload> {
     const ack = (ok: boolean, extra: Partial<ExecAckPayload> = {}): ExecAckPayload => ({ execId: cmd.execId, ok, sentAt: Date.now(), ...extra });
     if (cmd.op.kind !== 'midi' || !isVisualPort(cmd.port)) return ack(false, { error: 'no_port' });
     const op = cmd.op;
@@ -19,12 +31,23 @@ export class VisualSynthExecutor {
     if (cmd.dryRun) return ack(true, { detail: 'dry run' });
     if (op.msg !== 'panic' && !this.connected()) return ack(false, { error: 'no_port', detail: 'Open visuals from this companion and keep the visual screen visible.' });
     if (op.msg === 'sysex-identity') return ack(true, { reply: [...VISUAL_SYNTH_IDENTITY_REPLY] });
-    if (op.msg === 'panic') this.panic();
-    else {
-      const bytes = op.msg === 'cc' ? [0xb0, op.number!, op.value as number] : [0xc0, op.number!];
-      if (this.port.receiveMidi(bytes) === false) return ack(false, { error: 'bad_args', detail: 'Unmapped visual command' });
+    if (op.msg === 'panic') {
+      this.panic();
+      return ack(true, { applied: { source: 'port', params: params(this.port.getState()), at: Date.now() } });
     }
-    return ack(true, { detail: 'Visual command delivered; camera verification decides the effect' });
+    const bytes = op.msg === 'cc' ? [0xb0, op.number!, op.value as number] : [0xc0, op.number!];
+    const started = Date.now();
+    if (this.port.receiveMidiConfirmed) {
+      const result = await this.port.receiveMidiConfirmed(bytes);
+      if (!result.ok) return ack(false, { error: 'bad_args', detail: 'Unmapped visual command' });
+      const report = result.receipt;
+      return report
+        ? ack(true, { detail: 'Visual command applied by the Mac renderer', latencyMs: Math.max(0, report.at - started),
+          applied: { source: 'renderer', params: params(report.params), visible: report.visible, frame: report.frame, at: report.at } })
+        : ack(true, { detail: 'Visual command stored; no renderer confirmed it', applied: { source: 'port', params: params(this.port.getState()), at: Date.now() } });
+    }
+    if (this.port.receiveMidi(bytes) === false) return ack(false, { error: 'bad_args', detail: 'Unmapped visual command' });
+    return ack(true, { detail: 'Visual command stored', applied: { source: 'port', params: params(this.port.getState()), at: Date.now() } });
   }
 
   panic(): void { this.port.reset(); }

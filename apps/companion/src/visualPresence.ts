@@ -2,6 +2,8 @@
 export const VISUAL_PRESENCE_CHANNEL = 'ce-visual-synth-presence-v1';
 export const VISUAL_HEARTBEAT_MS = 1000;
 export const VISUAL_STALE_MS = 4000;
+/** A renderer hidden for less than this still takes commands (a notification, a Space switch, a reload). */
+export const VISUAL_GRACE_MS = 15_000;
 
 type Presence = { type: 'renderer'; owner: string; renderer: string; visible: boolean };
 function presence(value: unknown): value is Presence {
@@ -20,12 +22,16 @@ export class VisualSynthPresence {
   private readonly renderers = new Map<string, { owner: string; at: number }>();
   private readonly timer: ReturnType<typeof setInterval>;
   private reported = false;
+  /** Last time a visible renderer of each owner was seen. */
+  private readonly lastSeen = new Map<string, number>();
 
   constructor(private readonly owner: () => string | undefined, private readonly onChange: () => void) {
     if (this.channel) this.channel.onmessage = ({ data }) => {
       if (!presence(data)) return;
-      if (data.visible) this.renderers.set(data.renderer, { owner: data.owner, at: Date.now() });
-      else this.renderers.delete(data.renderer);
+      if (data.visible) {
+        this.renderers.set(data.renderer, { owner: data.owner, at: Date.now() });
+        this.lastSeen.set(data.owner, Date.now());
+      } else this.renderers.delete(data.renderer);
       this.update();
     };
     this.channel?.postMessage({ type: 'request' });
@@ -34,6 +40,13 @@ export class VisualSynthPresence {
 
   connected(owner = this.owner()): boolean {
     return !!owner && [...this.renderers.values()].some((renderer) => renderer.owner === owner && Date.now() - renderer.at < VISUAL_STALE_MS);
+  }
+
+  /** Connected now, or a visible renderer was seen within the grace window: commands still apply. */
+  recent(owner = this.owner(), graceMs = VISUAL_GRACE_MS): boolean {
+    if (this.connected(owner)) return true;
+    const seen = owner ? this.lastSeen.get(owner) : undefined;
+    return seen !== undefined && Date.now() - seen < graceMs;
   }
 
   private update(): void {

@@ -395,3 +395,20 @@ body.stage .passcode { font-size: 32px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Simple mode (default): one calm screen with pairing and status; ?details=1 or Details shows the full workbench. */
+.simple-bar { display: none; }
+.app.simple { display: flex; flex-direction: column; }
+.simple .sidebar, .simple .app-header, .simple #devices-panel, .simple #setup-workspace, .simple #object-canvas,
+.simple #connection-steps, .simple #drawer, .simple #activity-view { display: none !important; }
+.simple .main-shell { flex: 1; display: flex; flex-direction: column; }
+.simple .home-view { flex: 1; justify-content: center; align-items: center; padding: 56px 24px 24px; gap: 14px; }
+.simple .onboarding.panel, .simple .onboarding.has-paired { order: 0; width: min(440px, 100%); padding: 32px 28px 28px; border: 1px solid var(--border); border-radius: 20px; background: var(--bg-surface); align-items: center; text-align: center; gap: 14px; }
+.simple .onboarding.has-paired .paired-summary { grid-template-columns: 1fr; justify-items: center; text-align: center; gap: 10px; }
+.simple .onboarding.has-paired .paired-check { grid-row: auto; width: 44px; height: 44px; font-size: 22px; }
+.simple .onboarding.has-paired .paired-title { font-size: 20px; font-weight: 600; }
+.simple .onboarding.has-paired .paired-summary .onboarding-next { font-size: 14px; max-width: 360px; }
+.simple .setup-activity { order: 1; width: min(440px, 100%); border-radius: 20px; }
+.simple .simple-bar { display: flex; justify-content: center; gap: 8px; padding: 0 24px 32px; }
+.simple .simple-bar button { border-radius: 20px; padding: 8px 16px; }
+.simple .simple-bar .simple-stop { color: var(--status-danger); }

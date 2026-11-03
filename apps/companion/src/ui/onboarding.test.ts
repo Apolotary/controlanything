@@ -19,9 +19,7 @@ describe('companion first-run state', () => {
     for (const overrides of [{}, { midiEnabled: true }, { midiSupported: false }, { leader: false }, { ports: [usb] }, { activity: setupActivity('OP-1 Field', target('armed')) }]) {
       const view = companionView({ ...initial, ...overrides });
       expect(view).toMatchObject({ stage: 'paired', title: 'Paired with Quest 3', enableMidi: false });
-      expect(view.next).toContain('opens here automatically');
-      expect(view.next).toContain('Menu → Try visual synth');
-      expect(view.next).toContain('set up and enable controls in Quest');
+      expect(view.next).toContain('pinch it');
       expect(view.next).not.toMatch(/USB|MIDI/);
     }
   });

@@ -55,7 +55,7 @@ export function companionView(input: CompanionInput): CompanionView {
   if (!quest) return input.headsetPaired || input.devices.some((d) => d.kind === 'quest')
     ? { ...base, stage: 'headset', title: 'Waiting for Quest 3', next: `Keep this page open and open ${PRODUCT_NAME} in your headset.` }
     : { ...base, stage: 'headset', title: 'Pair with your headset', next: `Open ${PRODUCT_NAME} in Quest Browser, then approve its code on this Mac.` };
-  if (!input.midiSetupRequested) return { ...base, stage: 'paired', title: 'Paired with Quest 3', next: 'In Quest, choose Menu → Try visual synth. The visual screen opens here automatically. Keep this tab visible; set up and enable controls in Quest.' };
+  if (!input.midiSetupRequested) return { ...base, stage: 'paired', title: 'Paired with Quest 3', next: 'In your headset, look at this Mac and pinch it. The visuals open here by themselves; keep this window visible.' };
   if (!input.midiSupported && !input.ports.length) return { ...base, stage: 'midi-permission', title: 'Open this page in Chrome', next: 'Chrome or Edge can connect your synth over USB.' };
   if (!input.midiEnabled && !input.ports.length && input.leader) return { ...base, stage: 'midi-permission', title: 'Connect your synth', next: 'Allow USB MIDI access so your headset can find the synth.', enableMidi: true };
   if (!input.ports.length) return { ...base, stage: 'usb', title: 'Plug in a synth (USB)', next: input.leader ? 'Connect the synth to this Mac with a USB cable.' : 'Keep the first companion tab open; it connects your USB devices.' };

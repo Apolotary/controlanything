@@ -87,6 +87,10 @@ const refusals: LinkResultPayload[] = [];
 const replaying = params.get('replay') === '1';
 /** Larger status type for recordings; details remain available. */
 const stage = params.get('stage') === '1';
+/** Dedicated visuals mode: the paired companion opens its full-screen visual synth by itself. */
+const dedicatedVisuals = params.get('visuals') === '1';
+/** One calm screen (pairing + status) unless ?details=1, a replay, or the Details button. */
+let simple = !replaying && params.get('details') !== '1';
 let replayStarted = false;
 const linkRequests = new Map<string, LinkRequestPayload>();
 const specs = new Map<string, UiSpecPayload>();
@@ -146,7 +150,8 @@ const visualPresence = new VisualSynthPresence(() => identity?.deviceId, () => {
   conn?.resendHello();
   ['calm', 'device', 'links'].forEach(render);
 });
-const executor = new Executor(midiExec, bridge, oracle, new VisualSynthExecutor(undefined, () => visualPresence.connected()));
+// Commands keep applying through a short visibility blip (VISUAL_GRACE_MS); the advertised port stays honest.
+const executor = new Executor(midiExec, bridge, oracle, new VisualSynthExecutor(undefined, () => visualPresence.recent()));
 const currentVisualPort = (): Port => ({ ...visualSynthPort, state: visualPresence.connected() ? 'connected' : 'disconnected' });
 const visualLauncher = new VisualSynthLauncher({
   owner: () => identity?.deviceId,
@@ -167,6 +172,10 @@ const openVisuals = (): void => {
   // An in-page renderer needs no popup permission or second setup gesture.
   if (!visualLauncher.open()) { visualsOpening = false; visualsOpenTimedOut = true; clearVisualsOpenTimer(); }
   render('calm');
+};
+/** ?visuals=1 keeps the visual synth up whenever this tab is the paired executor on a live connection. */
+const autoOpenVisuals = (): void => {
+  if (dedicatedVisuals && identity && executor.leader && conn?.open && !serverDown && !visualLauncher.opened) openVisuals();
 };
 
 function visualScreenStatus(): { state: string; hint: string; tone: string } {
@@ -462,6 +471,8 @@ function renderOnboarding(): void {
   $('workbench').classList.toggle('pairing', pairing);
   $('onboarding').classList.toggle('has-paired', paired);
   $('paired-summary').hidden = !paired;
+  $('simple-visuals').hidden = !paired || visualLauncher.opened;
+  $('simple-stop').hidden = !paired;
   $('paired-next').textContent = ['paired', 'connecting', 'headset'].includes(view.stage) ? view.next : 'Keep this page open; your headset uses it to reach your devices.';
   $('onboarding').dataset.state = replaying ? 'demo' : view.stage;
   $('onboarding-title').textContent = replaying ? 'Recorded setup demo' : view.title;
@@ -1396,6 +1407,7 @@ function setupExecutors(): void {
   };
   executor.onLeader = (leader) => {
     visualLauncher.update();
+    autoOpenVisuals();
     conn?.resendHello();
     log('info', leader ? 'this tab is the executor' : 'standby');
     renderAll();
@@ -1620,6 +1632,7 @@ function connect(): void {
     pending.clear();
     log('info', `connected as ${m.payload.name} (${m.payload.kind}, ${m.payload.deviceId}) · ${m.payload.server} · ${m.payload.mode}`);
     ['calm', 'top', 'approve', 'banners', 'links'].forEach(render);
+    if (m.from === 'server') autoOpenVisuals();
     if (!replaying && canApprove) void api.pending(identity?.deviceToken).then((r) => {
       // A snapshot can finish after a live approval or denial. Do not restore a settled request.
       for (const p of r.pending) if (!settledPairings.has(p.pairingId)) pending.set(p.pairingId, p);
@@ -1856,6 +1869,10 @@ export async function bootWorkbench(): Promise<void> {
   $('product-name').textContent = PRODUCT_NAME;
   $('headset-qr').setAttribute('aria-label', `Open ${PRODUCT_NAME} in Quest Browser`);
   document.body.classList.toggle('stage', stage);
+  $('workbench').classList.toggle('simple', simple);
+  $('simple-visuals').addEventListener('click', () => { if (!visualLauncher.opened) openVisuals(); });
+  $('simple-details').addEventListener('click', () => { simple = false; $('workbench').classList.remove('simple'); renderAll(); });
+  $('simple-stop').addEventListener('click', () => $('panic').click());
   if (replaying) {
     const tag = el('a', { className: 'cornertag', text: 'Demo · display only', title: 'A scripted run injected into this page; nothing is executed or sent. Click to leave.' });
     tag.href = location.pathname;

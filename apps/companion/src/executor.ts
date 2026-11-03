@@ -113,7 +113,7 @@ export class Executor {
   async exec(cmd: ExecCommandPayload): Promise<ExecAckPayload> {
     const row = this.record(cmd);
     let ack: ExecAckPayload;
-    if (cmd.op.kind === 'midi') ack = this.visual && isVisualPort(cmd.port) ? this.visual.execute(cmd) : await this.midi.execute(cmd);
+    if (cmd.op.kind === 'midi') ack = this.visual && isVisualPort(cmd.port) ? await this.visual.execute(cmd) : await this.midi.execute(cmd);
     else if (cmd.op.kind === 'ir') {
       ack = this.bridge.online
         ? await this.bridge.exec(cmd)
