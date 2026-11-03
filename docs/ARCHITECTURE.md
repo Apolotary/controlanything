@@ -2,39 +2,67 @@
 
 How a thing the headset looked at becomes verified, generated controls. Companion to the [README](../README.md); the code is the source of truth (`packages/protocol`, `packages/gen3d`, `apps/server/src/agent`, `apps/server/src/oracle`).
 
-## 1. Principle
+## 1. Two modes, one golden path
 
-**Annotate first; Control only by request.** Entering AR selects Annotate: local YOLOX-Nano preview boxes plus background SAM device segmentation, All / Electronics filters, a default 3 m estimated range and a three-candidate budget. The COCO people class is dropped in the detector worker; server scan prompts and labels also exclude people. Underlying light/IR support remains available, although there is no separate Lights filter. Pinching sends `tag.add`; Muse Spark identifies the crop and the server persists the tag without starting setup. Estimated positions do not establish scene depth or wall occlusion.
+**Annotate** (entering AR). The headset shows what it can control:
+- on-device YOLOX-Nano boxes appear at once;
+- SAM 3.1 outlines and labels come back from the server;
+- the wrist palette's *Electronics · Objects · All* switch filters what is shown.
 
-Switching to Control stops annotation scanning and hides untagged detections. `tags.state` reports `ready` (verified, armed, executor online), `setup` (reachable but needs setup) or `offline` (with a connection hint). Only **Set up control** (`control.setup`) starts LINK → LEARN/RESEARCH → DRIVE → VERIFY → FORGE → ARM. It requires Control mode, a tag and an available bridge, including a MIDI port for a synth. The setup request authorizes physical verification; **Enable controls** is a separate confirmation. `target.select` in Annotate only tags/identifies; selecting in Control reopens existing controls, never starts setup.
+People are never boxed (the COCO person class is dropped in the detector worker; server prompts and labels exclude people). Pinching a box tags it (`tag.add`), and Muse Spark names it without starting setup.
 
-**AI prepares controls; driver execution is deterministic.** `control.event` → validated driver action → `exec.command` → MIDI / IR / local operation contains no model call. Voice transcription, research and control edits still call models. Dispatch checks the mode, tag, executor and setup/armed state; a successful transport acknowledgement alone cannot prove a visible or audible effect. Stop cancels setup and queued work, disarms controls and stops automations. Returning to Annotate cancels unfinished setup and stops automations while preserving completed arming for a later return to Control.
+**Control** (a pinch on the Mac's screen, or *Visual synth* on the palette). The headset sends `target.select { virtual: 'visual-synth' }`, and the server binds a card to the paired Mac's renderer. With `CE_DEMO=1` the same selection runs the whole chain:
+
+`LINK → RESEARCH → DRIVE → VERIFY ∥ FORGE → ARM`
+
+The setup ring on the screen shows its progress. The verified, silent target arms itself, and the arc dials appear. Without `CE_DEMO` the card asks for **Set up**, then **Enable controls**. Other devices (the OP-1 Field, the IR light, the Osmo) always take the explicit path: tag, Set up, Enable.
+
+**AI prepares controls; execution is deterministic.**
+- A `control.event` becomes a validated driver action, then `exec.command`, then MIDI, IR, BLE or a local op. No model call is involved.
+- Dispatch checks the mode, the tag, the executor and the armed state, and applies rate limits.
+- **Perform** maps tracked hands onto the same control events: left fist = clutch, right hand height and depth drive the dials.
+- **Stop** cancels setup and queued work, disarms the controls and stops automations. It is triggered by both palms out, the palette's Stop, or `X` in the emulator.
+
+**Verification is labelled by what actually confirmed it.** The HUD shows exactly one of four labels:
+- *seen ✓*: the headset camera saw the change;
+- *renderer ✓*: the camera missed, and the Mac's renderer receipt reports what it applied;
+- *acknowledged ✓*: only the executor's acknowledgement;
+- *not seen ✗*: failed.
+
+One camera miss on the visual synth hands the rest of that run to the renderer receipts. A transport acknowledgement alone never passes an action that a camera or microphone can observe on a lamp or synth.
+
+**Fallbacks are labelled, never silent.**
+
+| Fallback | Label |
+|---|---|
+| Recorded model replies | **FIXTURE**, with the model they were recorded from |
+| Curated driver template when the live driver call misses its budget | *curated template used (no Meta model wrote this driver)* |
+| Forge failure | *template fallback* |
+| Prefetched driver/controls | *driver written by … when the Mac appeared* |
+| Saved drivers | labelled from the library |
 
 ## 2. Components
 
 ```
-  Quest 3 (WebXR, apps/quest)           Mac: server (apps/server)                         Executors / sensors
-  ───────────────────────────           ──────────────────────────────────────────         ────────────────────────────
-  passthrough frame + pose ─scan.frame─▶ SCAN   sam-3.1 (parallel device prompts)
-  YOLOX boxes (local worker)
-  SAM outlines ◀──────────scan.result─ + QR decode (pairing by sight)
-  pinch to tag ─────────────tag.add────▶ IDENTIFY muse-spark-1.3 → persisted tag
-  switch mode ─────────────mode.set───▶ CONTROL mode (no setup yet)
-  Set up control ───────control.setup─▶ check tag + bridge + explicit request
-  "needs a companion" ◀───link.request── LINK   executor by capability; USB name + MIDI identity cross-check
-                                        LEARN  one press per remote button ──sense.request(ir-capture)──▶ Cardputer IR receiver / sim remote
-                                        RESEARCH curated charts + IR library (data/devices), web_search fallback
-                                        DRIVE  muse-spark-1.3 (low → medium repair) → matched template / missing-data result
-                                               validate: allowlists, ranges, rate caps
-                                        VERIFY each action once ──exec.command──▶ Mac companion ─Web MIDI─▶ OP-1 Field
-  before/after frames ──sense.result──▶        camera oracle (mask vs ring, R/B)      Mac companion ─Web Serial─▶ Cardputer ─IR─▶ ceiling light
-  (companion / synth audio) ─sense.result─▶    audio oracle (RMS, centroid)            Mac local (osascript: volume, music, say)
-  evidence strip ◀───────verify.result──                                               iPhone (torch, haptics, screen, say)
-  hacks + 3D controls ◀────────ui.spec── FORGE  muse-spark-1.3 → ce.hackset/1 → compile → ce.gen3d/1   DevTerm (print, beep, say, screen)
-  Enable controls ◀─arm.request / arm.confirm─▶ ARM   human confirmation (hold for irreversible)         Sim room (all of the above, virtual)
-  pinch / twist ────────control.event──▶ CONTROL hack → action → op → exec.command (no model)  ──▶ device reacts
-  Ask Muse PCM ──────────voice.audio──▶ muse-voice-transcribe-1.0 → voice.text → selected-device Muse planner
-  voice.confirm ─────────────────────▶ validate proposal → Forge gesture revision → ui.spec
+  Quest 3 (WebXR, apps/quest)              Mac: server (apps/server)                          Executors / sensors
+  ───────────────────────────              ─────────────────────────────────────────          ───────────────────────────
+  YOLOX boxes (local worker, ~15 ms)
+  passthrough frame + pose ──scan.frame──▶ SCAN     sam-3.1 outlines; jsQR reads pairing codes
+  outlines + pills ◀─────────scan.result─
+  pinch the Mac's screen ─target.select──▶ LINK     the paired Mac advertising ce-visual-synth
+                                           (CE_DEMO prefetch: DRIVE + FORGE start when the Mac appears)
+  setup ring ◀──────agent.step / status─── RESEARCH capability manifest (packages/vsynth) or device chart
+                                           DRIVE    muse-spark-1.3 writes the driver; validated vs manifest/allowlist
+                                           VERIFY   each action once ─exec.command─▶ Mac companion renderer (Web MIDI-style)
+  verify frames ─────────sense.result────▶          camera oracle; else renderer receipt; else ack (labelled)
+                                           FORGE    muse-spark-1.3 → ce.hackset/1 → compile → ce.gen3d/1 (∥ VERIFY)
+  arc dials + card ◀──────────ui.spec───── ARM      auto for verified silent targets (CE_DEMO), else Enable controls
+  dial drag / Perform hands ─control.event▶ CONTROL action → op → exec.command (no model) ──▶ visuals change
+  palette Buddy: crop ───/api/buddy──────▶ muse-spark-1.3 reaction · muse-image-1.0 sticker
+  palette Use an object: YOLOX-tracked mug/bottle ─control.event─▶ same CONTROL path
+  Ask Muse PCM (lab) ───────voice.audio──▶ muse-voice-transcribe-1.0
+                                           other executors: OP-1 Field via Web MIDI · Cardputer IR · DJI Osmo (BLE /
+                                           Web Bluetooth / mock) · iPhone · DevTerm · Sim room (all of them, virtual)
 ```
 
 | Component | Path | Role |
@@ -42,12 +70,16 @@ Switching to Control stops annotation scanning and hides untagged detections. `t
 | Protocol | `packages/protocol` | zod schemas + TS types for every WebSocket message, the Driver, the HackSet, pairing helpers; zod → JSON Schema (`json-schema/*.json`) for the Python and Swift clients and as the Muse `json_schema` response formats. |
 | gen3d | `packages/gen3d` | The `ce.gen3d/1` spec (semantic controls + 3D presentation), archetype expansion, validator/repair, patches, theme. |
 | Server | `apps/server` | One Node process on the Mac: HTTPS/WSS `:8443` + HTTP/WS `:8787`, the hub at `/ws`, pairing, the Meta model adapters (`src/muse/`), the brain (`src/agent/`), the oracles (`src/oracle/`), SCAN (`src/scan/`), the forge (`src/gen3d/`), voice relay (`src/voice/`), curated device data (`data/devices/`), static hosting of `/quest/`, `/companion/`, `/sim/`. |
-| Quest app | `apps/quest` | WebXR app: camera capture with pose history, on-device YOLOX worker, SAM scans in Annotate, a mode/filter bar, tagged outlines and one selected control card. Inter SDF text via troika-three-text; poke and ray/pinch input; stable open panels with explicit left-palm/controller recall. Logs and evidence are in Details. IWER provides desktop emulation; record/replay is available. |
-| Mac workbench | `apps/companion` | Owner/approver UI; executors for MIDI (Web MIDI) and the Cardputer (Web Serial JSON lines); the audio oracle (synth USB audio or mic); the agent view (steps with model ids, driver, evidence, links, daemons). One tab executes (Web Locks), others stand by. |
+| Quest app | `apps/quest` | WebXR app: camera capture with pose history, on-device YOLOX worker, SAM outlines in Annotate, the wrist palette, the setup ring, arc dials on the selected screen and a Horizon-style device card (`@pmndrs/uikit-horizon`). Pointing, poke and pinch through Meta's `@iwsdk/xr-input`. IWER provides desktop emulation; record/replay is available. Lab features (Canvas, Ask Muse, the old menu) stay behind `?lab=1`. |
+| Mac companion | `apps/companion` | One status card with a pairing QR (read by the headset camera) and the full-screen visual synth that opens by itself on a pinch; Motion lab at `/companion/tracking/`; owner/approver UI; executors for MIDI (Web MIDI) and the Cardputer (Web Serial JSON lines); the audio oracle (synth USB audio or mic); the agent view (steps with model ids, driver, evidence, links, daemons). One tab executes (Web Locks), others stand by. |
 | Cardputer firmware | `firmware/cardputer` | IR node: raw / NEC / AEHA transmit at ≤ 4 frames/s, IR learning through a Grove IR receiver, pairing screen, hack menu on physical keys, serial protocol v1. |
 | iPhone | `apps/iphone` | SwiftUI client: pairing, 2D controls and hack lists, handheld scanner / second verification camera, local executor (torch, haptics, screen, say, beep). |
 | DevTerm | `apps/devterm` | Python 3.7 stdlib zipapp: pairing (terminal QR, passcode, printed ticket), curses TUI (HACKS, EVIDENCE TAPE, DAEMONS, ROOM), local executor incl. 384-dot thermal receipts. |
-| Sim room | `apps/sim` | Virtual ceiling light + IR remote + synth; pairs as IR/MIDI executor and camera/audio sensor; renders frames from Blender-rendered light layers with the Quest 3 camera intrinsics; `npm run demo:sim` judge path; take replay. |
+| Sim room | `apps/sim` | Virtual laptop (running the visual synth), ceiling light + IR remote and synth; pairs as the Mac's renderer, IR/MIDI executor and camera/audio sensor; renders frames from Blender-rendered light layers with the Quest 3 camera intrinsics; `npm run demo:sim` judge path; take replay. |
+| Visual synth | `packages/vsynth` | The silent WebGL2 instrument the Mac shows (Warp, Ripples, Flow/Rings/Prism) and its capability manifest (CCs, programs, effects, rejects) that Muse writes the driver from; renderer receipts report what was applied. |
+| Buddy | `apps/quest/src/buddy`, `apps/server/src/buddy` | Desk mascot: quests, Muse Spark reactions to shown objects, Muse Image stickers. |
+| Tangible | `apps/quest/src/tangible` | Any tracked mug/bottle/book becomes a controller (YOLOX + One Euro); emits ordinary `control.event`s. |
+| DJI Osmo | `apps/server/src/devices/osmo` | DUML over BLE (bleak helper), Web Bluetooth or a mock; safety envelope; `CE_OSMO=ble|web|mock`. |
 
 ## 3. Protocol
 
@@ -86,11 +118,11 @@ IR codes are named by reference (`lib:<brand>/ch<n>/<key>` or `learned:<id>`); t
 
 ## 4. The agent state machine
 
-One `Target` per device (`TargetState`, `packages/protocol/src/primitives.ts`). Tagging stops at identification. The setup chain below begins only after an explicit `control.setup`; a newly available companion updates connection status and does not start setup automatically. Pipeline transitions use `target.status` and `agent.step`.
+One `Target` per device (`TargetState`, `packages/protocol/src/primitives.ts`). Tagging stops at identification. The setup chain below begins after an explicit `control.setup`, or, with `CE_DEMO=1`, after the pinch that selects the Mac's visual synth. With `CE_DEMO=1`, a newly available Mac renderer also starts a background **prefetch** of that driver and its controls, used once and re-validated on the pinch. Otherwise a companion appearing only updates connection status. Pipeline transitions use `target.status` and `agent.step`.
 
 ```
 ANNOTATE: scanned → identifying → identified (tag persisted; no setup)
-CONTROL:  explicit setup + tag + bridge → linking → linked → researching → driving
+CONTROL:  setup request (or the CE_DEMO pinch on the Mac) + bridge → linking → linked → researching → driving
           → verifying → verified → forging → forged → arming → armed ⇄ controlling
 no bridge → connection hint; connect it and request setup again
 setup failure/cancellation → failed
@@ -104,11 +136,11 @@ Stop → cancel pending work, disarm controls, stop automations
 | LINK `link.ts`, `executors.ts` | Executor by capability (midi / ir / local) from presence. USB: port name against the chart's hint, then the MIDI identity request (`F0 7E 7F 06 01 F7`) against the maker Spark read → `confirmed` / `consistent` / `mismatch` ("wrong device, refused") / `unknown` (a generic non-commercial id is inconclusive, not a mismatch). No executor → `link.request` with suggested clients, state `needs-companion`. | none |
 | LEARN `learn.ts` | For unknown remotes: `sense.request ir-capture` per button (全灯, 消灯, 明るく, 暗く, 常夜灯, 暖色, 白色), one press each; the capture becomes a `LearnedCode` with the button as a *hypothesis* label; the learn window closes 700 ms after the first captured press. Stored next to the curated data as `<device>.learned.json`. | none |
 | RESEARCH `research.ts` | Curated charts, explicitly reviewed per-instrument MIDI charts, the IR library and learned codes form the brief. Reviewed charts bind to exact card/maker/model and carry a manual citation, channel and CC ranges; importing one stores knowledge without commands or arming. Sourced web prose is cached for seven days but cannot create an executable CC allowlist. Explicit setup rerun refreshes research. See [MIDI charts](MIDI-CHARTS.md). | `muse-spark-1.3` + `web_search` (fallback) |
-| DRIVE `drive.ts` | `DriverDraft` via `json_schema` from the brief; validated; issues fed back. Production setup permits two attempts: Spark low → Spark medium repair. A matching curated template may be used with its source disclosed; unavailable device knowledge must remain unavailable. The writer module also contains a third Wonder attempt for callers/benchmarks that allow it, but the production setup's two-attempt cap never reaches it. | `muse-spark-1.3` in production; Wonder writer available separately |
-| VERIFY `verify.ts` | Each action once, for real, visible-first (off, on, dimmer, brighter, colour, night last; the lamp is relit before brightness probes). Camera: a verify frame before and after (SAM re-finds the outline on the before frame), settle time for IR lamps (~3 s fade). Audio: a note held while sweeping the CC; feature windows before/after. Two consecutive confirmations make a pass. IR library candidates are cycled (bounded); every miss is a `verify.result` with `pass: false`. | `sam-3.1` (outline only) |
+| DRIVE `drive.ts` | `DriverDraft` via `json_schema` from the brief; validated; issues fed back. For the visual synth the brief is its **capability manifest** (`packages/vsynth/src/manifest.ts`: CCs, programs, effects, rejects): Muse chooses the actions and the server validates them against the manifest (ids from the wire message, CC/program allowlist, ranges). The live call has a time budget; past it, or on an invalid draft, the curated template stands in and the step says so (*no Meta model wrote this driver*). Other devices: two attempts, Spark low → Spark medium repair; a matching curated template may be used with its source disclosed. | `muse-spark-1.3` |
+| VERIFY `verify.ts` | Each action once, for real. Lamps go visible-first (off, on, dimmer, brighter, colour, night last; the lamp is relit before brightness probes). The camera takes a verify frame before and after; SAM finds the outline again on the before frame. IR lamps get settle time (~3 s fade). Audio: a note is held while the CC sweeps, and feature windows are compared before and after. The **visual synth** asks the camera first. After one camera miss, the rest of the run uses the Mac renderer's receipt (*verified by renderer: …*), and then the executor's ack. Each result is labelled *seen ✓* / *renderer ✓* / *acknowledged ✓* / *not seen ✗*. Every miss is a `verify.result` with `pass: false`. | `sam-3.1` (outline only) |
 | FORGE `../gen3d/forge.ts` | Hack set (`ce.hackset/1`) bound to verified `actionId`s via `json_schema`, streamed; deterministic checks (schema → bindings → geometry → safety); ≤ 2 repairs at medium effort; compiled to `ce.gen3d/1`. Controls bound to unverified actions are `armed: false`. | `muse-spark-1.3`, effort low |
 | SKIN `../gen3d/skin.ts` | Optional device-inspired panel texture, generated alongside controls and published without delaying arming; `GEN3D_SKIN=0` disables it. | `muse-image-1.0` |
-| ARM `arm.ts` | Before the generated controls go live: `arm.request` to every client; an approver (paired quest / mac / iphone, or localhost) answers `arm.confirm`; `hold: true` for irreversible drivers; 120 s expiry. The explicit Set up control request is the go-ahead for VERIFY's test drives; tagging alone is not. | none |
+| ARM `arm.ts` | Before the generated controls go live, `arm.request` goes to every client. An approver (a paired quest / mac / iphone, or localhost) answers `arm.confirm`. Irreversible drivers use `hold: true`, and requests expire after 120 s. With `CE_DEMO=1`, a verified, reversible, silent target (the visual synth) arms itself, and the step reads *auto-armed after verification (CE_DEMO=1)*. | none |
 | CONTROL `control.ts`, `dispatch.ts` | `control.event` → hack → action → resolved op → `exec.command` with no await before the send; per-hack and per-executor token buckets; step planning for IR dimmers (≥ 334 ms between light changes); latest-wins coalescing under the limits; undo (inverse action or restore); panic. | none |
 
 Hack lifecycle on every surface (`HackStatus`): `ready` · `locked` (unverified) · `queued` · `uploading` (GEN · CHECK · SEND · SEEN) · `verified` · `failed`. Driver lifecycle (`DriverPhase`): `drafting` · `validating` · `verifying` · `verified` · `armed` · `disarmed` · `failed`.
@@ -120,7 +152,8 @@ Hack lifecycle on every surface (`HackStatus`): `ready` · `locked` (unverified)
 | **Camera** `camera.ts` | Two frames at (nearly) the same pose, the SAM polygon | **mask vs ring:** mean luma inside the polygon over a ring around it (ring = the outline's box grown by 35 %, minus the box grown by 8 %; `ringFactor 0.35`); cancels auto-exposure. **absolute:** mean luma of mask + ring, only when exposure is locked (sim, replay, AE off); sees dimmer *steps* of a lamp that lights its own ring. **R/B ratio** in the mask for colour temperature. | brighter/dimmer: ratio Δ ≥ 12 % (`luma: 0.12`) · step at fixed exposure: abs Δ ≥ 4 % (`abs: 0.04`) · warmer/cooler: R/B Δ ≥ 8 % (`rb: 0.08`) · on/off: ratio Δ ≥ 40 % (`onOff: 0.4`) or abs Δ ≥ 50 % (`onOffAbs: 0.5`). Two consecutive confirmations. < 200 ms. |
 | **Audio** `audio.ts` | Feature windows before/after (the synth's USB audio into the Mac, or the mic): RMS dBFS, spectral centroid Hz, octave bands | louder/quieter: RMS Δ; tone-up/tone-down: centroid moved in octaves; `silent` when both windows are under the floor | `rmsDb: 3` dB · `centroidOctaves: 0.2` · `silenceDb: −60`. Negative control: a CC outside the chart must read "no change". |
 | **Wire** `link.ts` | USB port descriptor, MIDI identity reply | maker/model match with the camera's DeviceCard | `confirmed` (both), `consistent` (name only), `mismatch` → refused |
-| **Ack** | `exec.ack` | the executor sent the bytes | never a pass on its own for anything the camera or mic can observe |
+| **Renderer receipt** | the visual synth's own report of the parameters it applied (frame, values) | what the Mac actually rendered | a pass labelled *renderer ✓*, never *seen* |
+| **Ack** | `exec.ack` | the executor sent the bytes | a pass only for silent virtual targets, labelled *acknowledged ✓*; never a pass on its own for a lamp or synth the camera or mic can observe |
 
 Every verdict is an `Evidence` record (`{ sent, expected, observed: { sense, metric, before, after, delta, threshold }, pass, attempt, note }`) and is shown on the HUD as a sentence: `sent dimmer → light got 38 % darker ✓` / `sent 0x2A → no change ✗`.
 
@@ -155,9 +188,28 @@ The schema and lower-level gen3d renderer are broader than the current main Ques
 | Agent runs | `GET /api/agent/steps` (work log with model ids), `/api/agent/exec` (every op and ack), `/api/agent/targets` (state, card, link, driver, verification, evidence), `/api/muse/calls` (every model call). | Tests replay the committed gen3d recordings through the current checks and require them to reach armed controls when the evidence passes. |
 | Learned codes | `apps/server/data/devices/<device>.learned.json`: capture timings, the hypothesis, the label the camera assigned, the evidence. | The sim lamp obeys exactly those codes once they exist, so the real remote's codes drive the virtual room too. |
 
-`npm test` covers the workspace suites (protocol, gen3d, oracles, codecs, the agent end to end over the real hub in sim mode, DevTerm contract tests against the JSON Schemas, Cardputer host tests separately). The muted Chrome checks `npm run e2e:judge` (12 phases) and `npm run e2e:flows` (18 phases) exercise the two-mode desktop flow; see the [judge path](../README.md#judge-path-no-hardware).
+`npm test` covers the workspace suites (protocol, gen3d, oracles, codecs, the agent end to end over the real hub in sim mode, DevTerm contract tests against the JSON Schemas, Cardputer host tests separately). The muted Chrome checks are `npm run e2e:judge` (golden path, `CE_DEMO=1`: pinch → ring → armed dials → dial drag → Perform → both-palms Stop) and `npm run e2e:vsynth` (explicit Set up → Enable, with a pixel check on the sim laptop). Both take `PORT=`. See the [judge path](../README.md#judge-path-no-hardware).
 
-## 8. Historical component measurements (Nov 2, 2026, live Meta Model API)
+## 8. Measurements
+
+**Golden path** (independent verification pass, Nov 4, desktop emulator, `CE_DEMO=1`):
+
+| Mode | Pinch → armed |
+|---|---|
+| Fixture | 1.3 s |
+| Live, cold | 29.0 s: Spark identify 8.2 s, driver 7.1 s, forge 7.8 s plus one forge repair 13.2 s. An earlier probe took 41.9 s. |
+| Live, with the driver/controls prefetch | 1.2 s, measured by the builder after the verification pass. |
+
+Other numbers from that pass:
+- 24 SAM 3.1 calls in one live run.
+- YOLOX-Nano at 12–13 fps, 15–19 ms per inference on WebGPU.
+- QR pairing by looking: 1.6 s after Enter AR.
+- Emulator draw calls 32–80 per state.
+
+No headset frame rate has been measured since the redesign.
+
+**Historical component measurements** (Nov 2, 2026, live Meta Model API):
+
 
 These are separate component runs, mostly against rendered/simulated inputs. They are not a measured total setup latency, a continuous live-headset demonstration, or physical hardware acceptance. Model/output validity is scoped to the cited runs rather than a guarantee for future requests.
 
@@ -176,9 +228,9 @@ These are separate component runs, mostly against rendered/simulated inputs. The
 | Voice (Muse Voice Transcribe, batch WAV) | 2.6 s for a 2.45 s utterance, exact transcript | probe |
 | Control loop | server side < 1 ms per `control.event`; budget 50 ms on the LAN | `agent/control.ts` |
 
-The real headset session observed Ask Muse speech and OP-1 MIDI port discovery, but did not demonstrate successful physical instrument control. The user confirmed the instrument is an OP-1 Field on November 3; firmware and physical effects remain unverified. Cardputer/IR effects and the revised real-headset interaction flow also need acceptance. Use [DEMO-ACCEPTANCE.md](DEMO-ACCEPTANCE.md) to record the next run and retain its actual model/source labels, timing and effect evidence.
+The real headset session observed Ask Muse speech and OP-1 MIDI port discovery, but did not demonstrate successful physical instrument control. The instrument is an OP-1 Field; its firmware and physical effects remain unverified. Cardputer/IR effects and the revised real-headset interaction flow also need acceptance. Use [DEMO-ACCEPTANCE.md](DEMO-ACCEPTANCE.md) to record the next run and retain its actual model/source labels, timing and effect evidence.
 
-## Object canvas
+## Object canvas (lab)
 
 `packages/protocol/src/canvas.ts` validates the game format (1–6 rounds, 2–3 choices, bounded text and scores, unique IDs) and contains its deterministic reducer. `apps/server/src/canvas/` generates drafts through Muse Spark and maintains atomic local `canvas-history.json` beside the device library: 64 objects, eight revisions each. Restore creates a new revision; generation and restore always return to preview. Starting or restarting is an explicit user action. Play state is shared in memory and returns to preview after server restart.
 
@@ -195,12 +247,12 @@ The saved library remains the source of truth for completed device interfaces. `
 `research/cache.ts` wraps web search with exact-question, endpoint/model/instructions/effort isolation, seven-day expiry and explicit refresh. Only nonempty live results with HTTP(S) citations qualify. Fixture responses, failed calls and uncited answers are never cached. Cached results preserve original model, citations and research timestamp; physical verification is always independent. Both stores live beside `library.json`; tests can keep them in memory.
 
 
-## Headset test follow-up
+## Lab features
 
-The direct virtual-instrument route is `target.select { virtual: "visual-synth", requestId }` followed by a sender-addressed `target.select.result`. The server requires Control mode and an online companion/sim with the explicit `ce-visual-synth` output. A stable card is bound to that executor and the requesting headset's camera; selection does not execute setup or arm controls. The client places a UI marker and a screen-aiming guide, not a fabricated object detection. Verification uses the centered camera region and freezes idle visual animation while testing commands, then restores it.
+The following stay in the code, reachable with `?lab=1` (palette → *More (lab)*), and are off the golden path:
+- Muse Canvas and object games;
+- Ask Muse voice requests and gesture mappings;
+- manual area identification;
+- the old menu.
 
-The Mac companion launches its visuals with an owner identifier. A low-frequency, same-origin renderer heartbeat advertises the virtual output only while that owner's display is visible. A closed or hidden renderer cannot acknowledge a successful virtual command. Sim fixtures retain their independent renderer path.
-
-Both detectors share a three-candidate annotation budget. Per-frame overlaps are suppressed before placement; separate visible boxes cannot be merged solely because their estimated 3D positions are close. A selection pinch does not confirm depth, and an estimated YOLO pose cannot drag an already measured target. Stale estimated tags fade in Find devices, while the selected Control card stays mounted when the user looks away. This reduces stale labels; it is not room-mesh occlusion or proof of object-detection accuracy.
-
-Hand feedback uses pooled joint instances and bone segments, with pinch and target feedback. Open menus, cards and the Ask Muse workspace stay fixed while being used; an explicit raised left palm/controller recall and Bring panels here recover their placement. Unverified actions are hidden from the main control card, and Ready requires a verified displayed action. Silent local Mac commands are unavailable instead of appearing to succeed.
+`npm run e2e:projects` and `npm run e2e:chords` exercise Canvas through its HUD event.
