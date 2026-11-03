@@ -1,8 +1,15 @@
 /**
- * Usage: npm run build && npm run e2e:judge (requires system Chrome; no browser download).
- * Runs a muted fixture demo on its own ports 8796/8446. Screenshots and failure diagnostics
- * go to research/screens/v2-flow/. Never reuses an existing server; removes its temporary data.
- * Optional YOLO preview is disabled: this checks the two-mode server scan and HUD judge path.
+ * The judge path, automated: npm run build && npm run e2e:judge (system Chrome; no browser download).
+ *
+ *   Enter AR → pinch the MacBook's box → setup ring → armed arc dials → drag Warp → Perform (left fist,
+ *   right hand up) → both palms out = Stop.
+ *
+ * Runs its own muted FIXTURE server (CE_DEMO=1, CE_MAC_SILENT=1, fresh data dir) on PORT (default 8796,
+ * HTTPS off), the sim room as the paired Mac (its laptop screen runs the visual synth) and the desktop Quest
+ * emulator with camera=sim. Never reuses an existing server. Screenshots/diagnostics: research/screens/judge/.
+ * The on-device detector is off (yolo=0): boxes come from the server's SAM fixtures, so this does not measure
+ * detector accuracy, headset frame rate or the real Mac display.
+ * Optional: CE_QUEST_DIST / CE_SIM_DIST / CE_COMPANION_DIST point the server at scratch builds.
  */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -15,16 +22,17 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright-core';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const SCREENS = join(ROOT, 'research/screens/v2-flow');
-const BASE = 'http://127.0.0.1:8796';
+const SCREENS = join(ROOT, 'research/screens/judge');
+const PORT = Number(process.env.PORT || 8796);
+const BASE = `http://127.0.0.1:${PORT}`;
 const UI_TIMEOUT = 30_000;
-const PIPELINE_TIMEOUT = 180_000;
+const PIPELINE_TIMEOUT = 120_000;
+const SCREEN = /visual[\s-]?synth|laptop|macbook|computer|monitor|screen|display/i;
 let server, browser, quest, sim, dataDir, cardId;
-let serverReady = false;
-let serverError;
 let serverLog = '';
 let currentPhase = '00-server';
 const browserLog = [];
+const timings = {};
 const abort = new AbortController();
 
 async function json(path) {
@@ -37,10 +45,7 @@ async function until(description, probe, timeout = UI_TIMEOUT) {
   const deadline = Date.now() + timeout;
   do {
     abort.signal.throwIfAborted();
-    if (serverError) throw serverError;
-    if (server && (server.exitCode !== null || server.signalCode !== null)) {
-      throw new Error(`Fixture server exited (${server.exitCode ?? server.signalCode})`);
-    }
+    if (server && (server.exitCode !== null || server.signalCode !== null)) throw new Error(`Fixture server exited (${server.exitCode ?? server.signalCode})`);
     const result = await probe();
     if (result) return result;
     await delay(200, undefined, { signal: abort.signal });
@@ -49,109 +54,66 @@ async function until(description, probe, timeout = UI_TIMEOUT) {
 }
 
 async function portMustBeFree(port) {
-  await new Promise((resolvePort, reject) => {
+  await new Promise((ok, fail) => {
     const socket = createConnection({ host: '127.0.0.1', port });
-    socket.once('connect', () => {
-      socket.destroy();
-      reject(new Error(`Port ${port} is occupied; stop its owner or run this check later.`));
-    });
-    socket.once('error', (error) => error.code === 'ECONNREFUSED' ? resolvePort() : reject(error));
-    socket.setTimeout(1500, () => {
-      socket.destroy();
-      reject(new Error(`Could not check port ${port}`));
-    });
+    socket.once('connect', () => { socket.destroy(); fail(new Error(`Port ${port} is occupied; set PORT=<free port>.`)); });
+    socket.once('error', (error) => error.code === 'ECONNREFUSED' ? ok() : fail(error));
+    socket.setTimeout(1500, () => { socket.destroy(); fail(new Error(`Could not check port ${port}`)); });
   });
 }
 
 async function startServer() {
-  for (const app of ['sim', 'quest']) {
-    await access(join(ROOT, `apps/${app}/dist/index.html`)).catch(() => {
-      throw new Error(`${app} is not built. Run npm run build before npm run e2e:judge.`);
-    });
+  for (const [app, env] of [['sim', 'CE_SIM_DIST'], ['quest', 'CE_QUEST_DIST']]) {
+    const dist = process.env[env]?.trim() || join(ROOT, `apps/${app}/dist`);
+    await access(join(dist, 'index.html')).catch(() => { throw new Error(`${app} is not built (${dist}). Run npm run build first.`); });
   }
-  await portMustBeFree(8796);
-  await portMustBeFree(8446);
-  const freshDir = await mkdtemp(join(tmpdir(), 'ce-e2e-judge-'));
-  if (abort.signal.aborted) {
-    await rm(freshDir, { recursive: true, force: true });
-    abort.signal.throwIfAborted();
-  }
-  dataDir = freshDir;
+  await portMustBeFree(PORT);
+  dataDir = await mkdtemp(join(tmpdir(), 'ce-e2e-judge-'));
   server = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
     cwd: join(ROOT, 'apps/server'),
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
-      HTTP_PORT: '8796', HTTPS_PORT: '8446',
-      HTTP_HOST: '127.0.0.1', HTTPS_HOST: '127.0.0.1', PUBLIC_HOST: '127.0.0.1',
+      HTTP_PORT: String(PORT), HTTPS_PORT: '0',
+      HTTP_HOST: '127.0.0.1', PUBLIC_HOST: '127.0.0.1',
       CE_DATA_DIR: dataDir, MODEL_MODE: 'fixture', MODEL_API_KEY: '', CE_SCAN_PROMPTS: '',
-      CE_MAC_SILENT: '1', CE_MAC_LOCAL: '0',
+      CE_DEMO: '1', CE_MAC_SILENT: '1', CE_MAC_LOCAL: '0', CE_OSMO: '',
       CE_REMO: '0', REMO_HOST: '', REMO_SEND: '0',
       CE_TRUST_FIRST_DEVICE: '1', CE_TRUST_LOOPBACK: '1', CE_CONSOLE_APPROVE: '0',
       MUSE_REPLAY: '1', MUSE_RECORD: '0', MUSE_RECORD_DIR: '',
-      FIXTURE_DELAY_MS: '300', GEN3D_REPLAY_SPEED: '0', VITEST: '',
+      FIXTURE_DELAY_MS: '300', GEN3D_REPLAY_SPEED: '0', GEN3D_SKIN: '0', VITEST: '',
     },
   });
-  server.on('error', (error) => { serverError = error; });
-  for (const stream of [server.stdout, server.stderr]) stream.on('data', (chunk) => {
-    serverLog = (serverLog + chunk.toString()).slice(-250_000);
-    // HTTP starts before HTTPS: wait until the entry point has finished starting both.
-    serverReady ||= serverLog.includes('ControlAnything server ');
-  });
-  await until('own HTTP/HTTPS fixture server startup', () => serverReady);
+  for (const stream of [server.stdout, server.stderr]) stream.on('data', (chunk) => { serverLog = (serverLog + chunk).slice(-250_000); });
+  await until('fixture server startup', () => serverLog.includes('ControlAnything server '));
+  await until('health', () => json('/api/health').catch(() => null));
   const health = await json('/api/health');
   assert.equal(health.mode, 'fixture');
   assert.equal(health.space.pairedDevices, 0, 'Server must start with an empty registry');
-  assert.equal(new URL(health.urls.https).port, '8446');
 }
 
 function watchPage(page, name) {
-  const log = (text) => {
-    browserLog.push(`${name}: ${text}`);
-    if (browserLog.length > 300) browserLog.shift();
-  };
+  const log = (text) => { browserLog.push(`${name}: ${text}`); if (browserLog.length > 300) browserLog.shift(); };
   page.on('pageerror', (error) => log(error.stack ?? error.message));
-  page.on('console', (message) => {
-    if (message.type() === 'error' || message.type() === 'warning') log(message.text());
-  });
-  page.on('requestfailed', (request) => log(`${request.method()} ${request.url()}: ${request.failure()?.errorText}`));
+  page.on('console', (message) => { if (message.type() === 'error') log(message.text()); });
 }
 
 async function waitQuest(predicate, arg, timeout = UI_TIMEOUT) {
   abort.signal.throwIfAborted();
   await quest.waitForFunction(predicate, arg, { timeout, polling: 100 });
-  abort.signal.throwIfAborted();
 }
 
-async function renderedFrames(count = 2) {
-  // Observe the app loop, including emulated XR frames, instead of sleeping for GPU timing.
+async function frames(count = 2) {
   for (let i = 0; i < count; i++) {
     const time = await quest.evaluate(() => window.__ce.lastFrame?.time ?? 0);
-    await waitQuest((previous) => window.__ce.lastFrame?.time > previous, time);
+    await waitQuest((previous) => (window.__ce.lastFrame?.time ?? 0) > previous, time);
   }
 }
 
 async function screenshot(name) {
-  await quest.bringToFront();
-  await waitQuest(() => {
-    let ready = true;
-    window.__ce.hud.root.traverse((node) => {
-      if (typeof node.sync !== 'function') return;
-      // Troika does not invoke sync callbacks for text that is already clean.
-      node.sync();
-      if (node._needsSync || node._isSyncing || (node.text && !node.textRenderInfo)) ready = false;
-    });
-    const { card, controls } = window.__ce.hud;
-    return ready && (!card.visible || card.scale.x > 0.99) && (!controls.visible || controls.scale.y > 0.99);
-  });
-  await renderedFrames();
-  // IWER moves the renderer canvas out of #stage when XR starts.
+  await frames(3);
   const canvas = await quest.evaluateHandle(() => window.__ce.renderer.domElement);
-  try {
-    await canvas.asElement().screenshot({ path: join(SCREENS, `${name}.png`), timeout: UI_TIMEOUT });
-  } finally {
-    await canvas.dispose();
-  }
+  try { await canvas.asElement().screenshot({ path: join(SCREENS, `${name}.png`), timeout: UI_TIMEOUT }); } finally { await canvas.dispose(); }
 }
 
 async function phase(name, action, capture = true) {
@@ -159,297 +121,221 @@ async function phase(name, action, capture = true) {
   currentPhase = name;
   const started = Date.now();
   await action();
-  abort.signal.throwIfAborted();
   if (capture) await screenshot(name);
-  console.log(`PASS ${name} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
+  timings[name] = +((Date.now() - started) / 1000).toFixed(1);
+  console.log(`PASS ${name} (${timings[name]}s)`);
 }
 
-async function pinch({ targetId, nodeName, turn = false }) {
-  await renderedFrames();
-  if (targetId && !turn) await waitQuest((id) => {
+/** Screen point of a visible named node (HUD or scene) or of a world position. */
+function screenPoint(spec) {
+  return quest.evaluate(({ name, world }) => {
     const app = window.__ce;
-    return app.visibleTargets.has(id) && (app.modes.tags.has(id) || Date.now() - (app.observed.get(id)?.at ?? 0) < 200);
-  }, targetId);
-  const point = await quest.evaluate(({ targetId, nodeName, turn }) => {
-    const app = window.__ce;
-    const object = nodeName ? app.hud.root.getObjectByName(nodeName)
-      : app.modes.tags.has(targetId) ? app.hud.root.getObjectByName(`target-label:${targetId}`) : null;
-    if (nodeName && !object) throw new Error(`HUD node not found: ${nodeName}`);
-    for (let node = turn ? null : object; node; node = node.parent) {
-      if (!node.visible) throw new Error(`HUD node is hidden: ${nodeName}`);
-    }
-    const world = object
-      ? object.getWorldPosition(app.desktopCam.position.clone())
-      : app.targets.get(targetId)?.position.clone();
-    if (!world) throw new Error(`Target not found: ${targetId}`);
-    if (turn) {
-      app.emulator.lookAt(world);
-      return null;
-    }
-    const camera = app.renderer.xr.isPresenting ? app.renderer.xr.getCamera().cameras[0] : app.desktopCam;
-    const ndc = world.project(camera);
+    const shown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
+    let position;
+    if (name) {
+      let node = null;
+      app.scene.traverse((o) => { if (!node && o.name === name && shown(o)) node = o; });
+      if (!node) throw new Error(`Node not visible: ${name}`);
+      position = node.getWorldPosition(app.desktopCam.position.clone());
+    } else position = app.desktopCam.position.clone().fromArray(world);
+    const ndc = position.project(app.renderer.xr.getCamera().cameras[0] ?? app.desktopCam);
+    if (Math.abs(ndc.x) > 0.98 || Math.abs(ndc.y) > 0.98) throw new Error(`Outside the emulator view: ${name ?? world}`);
     const rect = app.renderer.domElement.getBoundingClientRect();
-    if (Math.abs(ndc.x) > 0.98 || Math.abs(ndc.y) > 0.98 || Math.abs(ndc.z) > 1) {
-      throw new Error(`Outside emulator view: ${nodeName ?? targetId} (${ndc.x}, ${ndc.y})`);
-    }
     return { x: rect.left + (ndc.x + 1) * rect.width / 2, y: rect.top + (1 - ndc.y) * rect.height / 2 };
-  }, { targetId, nodeName, turn });
-  if (turn) {
-    const time = await quest.evaluate(() => window.__ce.lastFrame.time);
-    await waitQuest((time) => window.__ce.lastFrame.time >= time + 300, time);
-    return pinch({ targetId, nodeName });
-  }
-  await quest.mouse.move(point.x, point.y);
-  await quest.mouse.down();
-  try {
-    await renderedFrames();
-  } finally {
-    await quest.mouse.up();
-  }
-  await renderedFrames();
+  }, spec);
 }
 
-async function openMenu() {
-  if (await quest.evaluate(() => window.__ce.hud.root.getObjectByName('main-menu')?.visible)) return;
-  await pinch({ nodeName: 'menu-toggle', turn: true });
-  await waitQuest(() => window.__ce.hud.root.getObjectByName('main-menu')?.visible
-    && window.__ce.hud.deck.userData.open);
+async function click(spec) {
+  const point = await screenPoint(spec);
+  await quest.mouse.move(point.x, point.y); await frames(3);
+  await quest.mouse.down(); await frames(3); await quest.mouse.up(); await frames(6);
 }
 
-async function menuAction(nodeName, options = {}) {
-  await openMenu();
-  const route = await quest.evaluate(nodeName => {
-    const menu = window.__ce.hud.root.getObjectByName('main-menu'), node = menu.getObjectByName(nodeName);
-    if (!node?.userData.menuButton) throw new Error(`Unknown menu action: ${nodeName}`);
-    let visible = true;
-    for (let owner = node; owner; owner = owner.parent) if (!owner.visible) visible = false;
-    return visible ? null : menu.userData.toolsOpen ? 'menu-tools-back' : 'menu-tools';
-  }, nodeName);
-  if (route) await pinch({ nodeName: route, turn: true });
-  await waitQuest(nodeName => {
-    let node = window.__ce.hud.root.getObjectByName(nodeName);
-    if (!node) return false;
-    for (; node; node = node.parent) if (!node.visible) return false;
-    return true;
-  }, nodeName);
-  await pinch({ nodeName, turn: true, ...options });
-}
-
-async function target() {
+/** Ops the server sent since `since` (the monitor keeps the last 100). */
+const exec = async (since = 0) => ((await json('/api/agent/exec')).sent ?? []).filter((e) => e.at > since);
+const target = async () => {
   const result = await json(`/api/agent/targets/${encodeURIComponent(cardId)}`);
-  assert.notEqual(result.state, 'failed', `Agent failed: ${JSON.stringify(result)}`);
+  assert.notEqual(result.state, 'failed', `Agent failed: ${JSON.stringify(result).slice(0, 600)}`);
   return result;
+};
+
+/** Point on an arc dial at `frac` of its sweep. */
+const arcPoint = (side, frac) => quest.evaluate(({ side, frac }) => {
+  const app = window.__ce; let dial;
+  app.scene.traverse((o) => { if (o.name === `dial-${side}`) dial = o; });
+  const sweep = Math.atan2(Math.sin(dial.to - dial.from), Math.cos(dial.to - dial.from));
+  const a = dial.from + sweep * frac;
+  const world = dial.localToWorld(app.desktopCam.position.clone().set(dial.center.x + dial.radius * Math.cos(a), dial.radius * Math.sin(a), 0.002));
+  const p = world.project(app.renderer.xr.getCamera().cameras[0]);
+  const r = app.renderer.domElement.getBoundingClientRect();
+  return { x: r.left + (p.x + 1) * r.width / 2, y: r.top + (1 - p.y) * r.height / 2 };
+}, { side, frac });
+
+async function dragArc(side, from, to) {
+  const start = await arcPoint(side, from);
+  await quest.mouse.move(start.x, start.y); await frames(4); await quest.mouse.down(); await frames(4);
+  for (let i = 1; i <= 15; i++) { const p = await arcPoint(side, from + (to - from) * i / 15); await quest.mouse.move(p.x, p.y); await frames(2); }
+  await quest.mouse.up(); await frames(8);
 }
 
-async function assertDockIcons(mode, canStop = false) {
-  const pose = await quest.evaluate(() => {
-    const head = window.__ce.emulator.head();
-    return { position: head.position.toArray(), quaternion: head.quaternion.toArray() };
-  });
-  assert.equal(await quest.evaluate(() => window.__ce.hud.root.getObjectByName('main-menu')?.visible), false,
-    'Menu choices must stay closed until the user opens Menu');
-  await openMenu();
-  const menuState = () => quest.evaluate(() => {
-    const { hud } = window.__ce, menu = hud.root.getObjectByName('main-menu'), choices = [];
-    menu.traverse(node => {
-      if (!node.userData.menuButton) return;
-      for (let owner = node; owner; owner = owner.parent) if (!owner.visible) return;
-      choices.push(node.name);
-    });
-    return { choices: choices.sort(), hasLights: !!hud.root.getObjectByName('filter:lights'), anchor: hud.deck.userData.anchor,
-      mode: window.__ce.modes.mode, menuOpen: hud.deck.userData.open };
-  });
-  const primary = await menuState();
-  const expectedPrimary = ['visual-synth', 'ask-muse-general', 'menu-tools', 'exit-ar', 'menu-close'];
-  if (canStop) expectedPrimary.push('deck:panic');
-  assert.deepEqual(primary.choices, expectedPrimary.sort(), 'Primary menu must emphasize the synth and retain immediate Stop');
-  await pinch({ nodeName: 'menu-tools', turn: true });
-  const state = await menuState();
-  const expected = ['menu-tools-back', 'muse-canvas', 'mode-annotate', mode === 'annotate' ? 'mode-control' : 'change-device',
-    'identify-area', 'helper-pair', 'menu-recenter', 'exit-ar', 'menu-close'];
-  if (mode === 'annotate' && !canStop) expected.push('filter:everything', 'filter:electronics');
-  if (canStop) expected.push('deck:panic');
-  assert.deepEqual(state.choices, expected.sort(), `${mode} secondary menu must expose only its available actions`);
-  assert.equal(state.hasLights, false, 'Menu must omit the unsupported Lights-only detector filter');
-  assert.equal(state.anchor, 'world', 'Mouse emulator input must use the world-locked Menu pill');
-  assert.equal(state.mode, mode, 'Opening Menu must preserve the current mode');
-  assert.equal(state.menuOpen, true);
-  await quest.evaluate(() => {
-    const app = window.__ce;
-    app.emulator.lookAt(app.hud.root.getObjectByName('main-menu').getWorldPosition(app.desktopCam.position.clone()));
-  });
-  await renderedFrames();
-  await screenshot(`${currentPhase}-menu-open`);
-  await pinch({ nodeName: 'menu-close', turn: true });
-  await waitQuest(() => !window.__ce.hud.root.getObjectByName('main-menu')?.visible);
-  await quest.evaluate((pose) => {
-    const app = window.__ce, head = app.emulator.head();
-    app.emulator.setHead(head.position.fromArray(pose.position), head.quaternion.fromArray(pose.quaternion));
-  }, pose);
-  await renderedFrames();
-}
+/** Emulated tracked hands (IWER): pose both hands relative to the head. */
+const hands = (poses, wait = 20) => quest.evaluate(async ({ poses, wait }) => {
+  const app = window.__ce, remote = app.emulator.device.remote, head = app.emulator.head();
+  app.input.mouseAsHand = false; app.input.pointer.inside = app.input.pointer.down = app.input.pointer.latched = false;
+  await remote.dispatch('set_input_mode', { mode: 'hand' });
+  const xyz = (v) => ({ x: v.x, y: v.y, z: v.z });
+  for (const [side, { offset, pose, palm }] of Object.entries(poses)) {
+    const device = `hand-${side}`;
+    const position = head.position.clone().add(head.position.clone().fromArray(offset).applyQuaternion(head.quaternion));
+    const palmDir = palm === 'out' ? head.position.clone().set(0, 0, -1).applyQuaternion(head.quaternion) : head.position.clone().sub(position).normalize();
+    const fingers = head.position.clone().set(0, 1, 0).applyQuaternion(head.quaternion);
+    fingers.addScaledVector(palmDir, -fingers.dot(palmDir)).normalize();
+    await remote.dispatch('set_connected', { device, connected: true });
+    await remote.dispatch('set_select_value', { device, value: 0 });
+    await remote.dispatch('set_hand_pose', { device, poseId: pose });
+    await remote.dispatch('set_transform', { device, anchor: 'wrist', position: xyz(position), orientation: { fingers: xyz(fingers), palm: xyz(palmDir) } });
+  }
+  await new Promise((r) => { let k = 0; const f = () => (++k >= wait ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
+}, { poses, wait });
+
+const visualState = () => sim.evaluate(() => JSON.stringify(window.ceSimDebug.visualSynth.getState()));
 
 async function run() {
   await mkdir(SCREENS, { recursive: true });
   await phase('00-server', startServer, false);
-  await phase('01-emulator-ready', async () => {
-    const launched = await chromium.launch({
-      channel: 'chrome', headless: true,
-      args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--mute-audio'],
-    });
-    if (abort.signal.aborted) {
-      await launched.close();
-      abort.signal.throwIfAborted();
-    }
-    browser = launched;
+
+  await phase('01-enter-ar', async () => {
+    browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--mute-audio'] });
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
     context.setDefaultTimeout(UI_TIMEOUT);
-    context.setDefaultNavigationTimeout(UI_TIMEOUT);
-    await context.addInitScript(() => { window.__ceMute = true; });
+    await context.addInitScript(() => {
+      window.__ceMute = true; window.__audioAttempts = 0;
+      for (const key of ['AudioContext', 'webkitAudioContext']) if (window[key]) {
+        window[key] = new Proxy(window[key], { construct() { window.__audioAttempts++; throw new Error('No audio in the judge check'); } });
+      }
+    });
     sim = await context.newPage();
     watchPage(sim, 'sim');
-    await sim.goto(`${BASE}/sim/?mute=1&autopress=1`, { waitUntil: 'domcontentloaded' });
-    await sim.waitForFunction(() => window.ceSim?.leader()
-      && window.ceSimDebug?.device.conn?.open
-      && document.querySelector('#b-conn')?.textContent.includes('ONLINE'));
-    assert.equal(await sim.evaluate(() => window.ceSim.lamp().power), 'off');
+    await sim.goto(`${BASE}/sim/?mute=1`, { waitUntil: 'domcontentloaded' });
+    await sim.waitForFunction(() => window.ceSim?.leader() && window.ceSimDebug?.device.conn?.open);
+    const port = await sim.evaluate(() => window.ceSimDebug.device.conn.hello().ports.find((p) => p.id === 'ce-visual-synth'));
+    assert.equal(port?.state, 'connected', 'The sim (the paired Mac) advertises its visual synth');
 
     quest = await context.newPage();
     watchPage(quest, 'quest');
-    await quest.goto(`${BASE}/quest/?emulate=1&camera=sim&mute=1&mic=0&hud=v2&yolo=0`, { waitUntil: 'domcontentloaded' });
+    await quest.goto(`${BASE}/quest/?emulate=1&camera=sim&mute=1&mic=0&yolo=0`, { waitUntil: 'domcontentloaded' });
     await waitQuest(() => window.__ce?.welcome && window.__ce.ws.open && window.__ce.room?.sim?.canvas);
-    assert.equal(await quest.evaluate(() => window.__ce.hudKind), 'v2', 'HUD v2 must load without fallback');
     assert.equal(await quest.evaluate(() => window.__ce.welcome.mode), 'fixture');
+    assert.equal(await quest.evaluate(() => window.__ce.hudKind), 'v2');
     await quest.evaluate(() => {
-      window.__judgeEvents = [];
-      window.__judgeControls = [];
-      window.__judgeRequests = [];
-      const types = new Set(['mode.state', 'tags.state', 'target.status', 'device.card', 'agent.step', 'verify.result', 'ui.spec', 'arm.request', 'arm.result']);
-      window.__ce.ws.tap('in', ({ type, payload }) => {
-        if (!types.has(type)) return;
-        window.__judgeEvents.push({ type, payload });
-        if (window.__judgeEvents.length > 300) window.__judgeEvents.shift();
-      });
-      window.__ce.ws.tap('out', ({ type, payload }) => {
-        if (type === 'control.event') window.__judgeControls.push(payload);
-        window.__judgeRequests.push({ type, payload });
-        if (window.__judgeRequests.length > 500) window.__judgeRequests.shift();
-      });
+      window.__judge = { events: [], requests: [], ringSeen: false };
+      const types = new Set(['tags.state', 'device.card', 'agent.step', 'verify.result', 'ui.spec', 'arm.request', 'arm.result', 'panic']);
+      window.__ce.ws.tap('in', ({ type, payload }) => { if (types.has(type)) window.__judge.events.push({ type, payload }); });
+      window.__ce.ws.tap('out', ({ type, payload }) => { if (type !== 'scan.frame') window.__judge.requests.push({ type, payload }); });
+      const watch = () => {
+        let ring = null; window.__ce.scene.traverse((o) => { if (o.name === 'setup-ring') ring = o; });
+        if (ring) { let shown = true; for (let p = ring; p; p = p.parent) if (!p.visible) shown = false; if (shown) window.__judge.ringSeen = true; }
+        requestAnimationFrame(watch);
+      };
+      requestAnimationFrame(watch);
     });
     await quest.locator('#btn-enter').click();
     await waitQuest(() => window.__ce.renderer.xr.isPresenting && window.__ce.cameraState === 'on');
   });
 
-  let targetId, tagGaze;
-  await phase('02-annotate', async () => {
-    await waitQuest(() => window.__ce.modes.mode === 'annotate' && window.__ce.scanner.active
-      && window.__ce.targets.list().some((t) => /ceiling (light|lamp)/i.test(t.label)));
-    assert(await quest.evaluate(() => window.__judgeRequests.some((e) => e.type === 'mode.set' && e.payload.mode === 'annotate')),
-      'Entering AR explicitly starts in Annotate');
-    await assertDockIcons('annotate');
-    targetId = await quest.evaluate(() => window.__ce.targets.list().find((t) => /ceiling (light|lamp)/i.test(t.label)).id);
-    // Where the head looks while tagging: the FIXTURE verify outline is the tag frame's box, so verify must see the same view.
-    tagGaze = await quest.evaluate(() => {
-      const head = window.__ce.lastFrame.head;
-      const p = head.position.clone();
-      const dir = p.clone().set(0, 0, -1).applyQuaternion(head.quaternion);
-      return p.addScaledVector(dir, 3).toArray();
+  let screen;
+  await phase('02-annotate-sees-the-mac', async () => {
+    screen = await until('a box on the Mac screen', () => quest.evaluate((source) => {
+      const app = window.__ce, re = new RegExp(source, 'i');
+      if (app.modes.mode !== 'annotate') return null;
+      const t = app.targets.list().find((t) => re.test(t.label) && app.visibleTargets.has(t.id));
+      return t ? { id: t.id, label: t.label, position: t.position.toArray() } : null;
+    }, SCREEN.source), 60_000);
+    const palette = await quest.evaluate(() => {
+      const p = window.__ce.hud.root.getObjectByName('wrist-palette');
+      return { visible: !!p?.visible, keys: p ? p.buttons.map((b) => b.name) : [] };
     });
+    assert(palette.visible, 'The wrist palette docks in view in the desktop emulator');
+    for (const key of ['visual-synth', 'deck:panic', 'exit-ar']) assert(palette.keys.includes(key), `Palette offers ${key} (has ${palette.keys})`);
+    console.log(`  box: "${screen.label}"; palette: ${palette.keys.join(' · ')}`);
   });
-  await phase('03-tag-light', async () => {
-    await pinch({ targetId });
-    await waitQuest((id) => window.__ce.modes.tags.has(id) && window.__ce.modes.tags.get(id).cardId, targetId);
-    cardId = await quest.evaluate((id) => window.__ce.modes.tags.get(id).cardId, targetId);
-    assert(await quest.evaluate((id) => window.__judgeRequests.some((e) => e.type === 'tag.add' && e.payload.targetId === id), targetId),
-      'Pinching an annotation must tag the device');
+
+  await phase('03-pinch-the-mac', async () => {
+    // Stand ~1 m from the screen, as a seated wearer would.
+    await quest.evaluate((c) => {
+      const app = window.__ce, target = app.desktopCam.position.clone().fromArray(c), head = app.emulator.head();
+      const dir = target.clone().sub(head.position).setY(0).normalize();
+      const pos = target.clone().addScaledVector(dir, -0.95); pos.y = target.y + 0.4;
+      app.emulator.setHead(pos, head.quaternion); app.emulator.lookAt(target);
+    }, screen.position);
+    await frames(20);
+    const pinchedAt = Date.now();
+    await click({ world: screen.position });
+    await waitQuest(() => [...window.__ce.modes.tags.values()].some((t) => t.cardId?.startsWith('visual-synth')));
+    cardId = await quest.evaluate(() => [...window.__ce.modes.tags.values()].find((t) => t.cardId?.startsWith('visual-synth')).cardId);
+    assert(await quest.evaluate(() => window.__judge.requests.some((r) => r.type === 'target.select' && r.payload.virtual === 'visual-synth')),
+      'Pinching the Mac screen selects its visual synth');
+    timings.pinchedAt = pinchedAt;
   });
-  await phase('04-identify', async () => {
-    await waitQuest((id) => window.__judgeEvents.some((e) => e.type === 'tags.state'
-      && e.payload.tags.some((tag) => tag.cardId === id && /light|lamp/i.test(tag.name ?? tag.label))), cardId);
-    assert.equal(await quest.evaluate(() => window.__ce.modes.mode), 'annotate');
-    assert.equal(await quest.evaluate(() => window.__judgeRequests.some((e) => ['target.select', 'control.setup', 'control.event', 'arm.confirm'].includes(e.type))), false,
-      'Annotation must not request setup, arming, or physical control');
-    assert.equal(await quest.evaluate(() => window.__judgeEvents.some((e) => ['agent.step', 'verify.result', 'ui.spec', 'arm.request'].includes(e.type))), false,
-      'Tagging must not start the control pipeline');
-    assert.equal(await sim.evaluate(() => window.ceSim.lamp().power), 'off');
+
+  await phase('04-setup-ring', async () => {
+    await until('Muse setup steps for the visual synth', () => quest.evaluate((id) =>
+      window.__judge.events.filter((e) => e.type === 'agent.step' && e.payload.cardId === id).length >= 3, cardId), PIPELINE_TIMEOUT);
+  }, false);
+
+  let verifiedBy;
+  await phase('05-armed-dials', async () => {
+    await until('controls armed (CE_DEMO=1 arms a verified, silent target itself)', async () => (await target()).armed, PIPELINE_TIMEOUT);
+    await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'ready', cardId);
+    await waitQuest(() => { let n = 0; window.__ce.scene.traverse((o) => { if (/^dial-(left|right)$/.test(o.name)) { let v = true; for (let p = o; p; p = p.parent) if (!p.visible) v = false; if (v) n++; } }); return n === 2; });
+    timings.pinchToArmed = +((Date.now() - timings.pinchedAt) / 1000).toFixed(1);
+    const results = await quest.evaluate((id) => window.__judge.events.filter((e) => e.type === 'verify.result' && e.payload.cardId === id).map((e) => e.payload), cardId);
+    assert(results.some((r) => r.pass), 'At least one action passed verification');
+    const notes = results.filter((r) => r.pass).map((r) => r.observed?.note ?? r.observed?.sense ?? '').join(' | ');
+    // Honest label: the camera only when it saw the change; else the Mac renderer's own report; else a bare ack.
+    verifiedBy = /verified by renderer/i.test(notes) ? 'renderer report' : results.some((r) => r.pass && r.observed?.sense === 'camera') ? 'camera' : 'acknowledgement';
+    assert(await quest.evaluate(() => window.__judge.ringSeen), 'The setup ring showed progress on the screen');
+    assert.equal(await quest.evaluate(() => !!window.__ce.pendingArm), false, 'CE_DEMO=1 needs no Enable tap');
+    console.log(`  pinch → armed ${timings.pinchToArmed}s; verified by: ${verifiedBy}; evidence: ${notes.slice(0, 160)}`);
   });
-  await phase('05-control-mode', async () => {
-    await menuAction('mode-control');
-    await waitQuest(() => window.__ce.modes.mode === 'control' && !window.__ce.scanner.active);
-    await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'setup', cardId);
-    await assertDockIcons('control');
-    assert.equal(await quest.evaluate(() => window.__judgeRequests.some((e) => e.type === 'control.setup')), false,
-      'Switching mode alone must not start setup');
+
+  await phase('06-dial-moves-the-visuals', async () => {
+    // The dials are Warp (CC71) and Water ripples (CC21); either side must reach the Mac's renderer.
+    const since = Date.now(), before = await visualState();
+    await dragArc('left', 0.1, 0.95);
+    const sent = await until('a dial CC reached the executor', async () => (await exec(since)).find((e) => [21, 71].includes(e.op?.number)));
+    await sim.waitForFunction((s) => JSON.stringify(window.ceSimDebug.visualSynth.getState()) !== s, before);
+    console.log(`  CC${sent.op.number} → the sim Mac's screen changed`);
   });
-  await phase('06-set-up-control', async () => {
-    await pinch({ targetId, turn: true });
-    await pinch({ nodeName: 'control-setup' });
-    await waitQuest((id) => window.__judgeRequests.some((e) => e.type === 'control.setup' && e.payload.cardId === id), cardId);
-    // A user keeps the light in view while it is tested; FIXTURE SAM re-finds it at the tag-time image position.
-    await quest.evaluate((gaze) => { const app = window.__ce; app.emulator.lookAt(app.desktopCam.position.clone().fromArray(gaze)); }, tagGaze);
+
+  await phase('07-perform', async () => {
+    // Perform is the card's round toggle (a uikit button). The emulator mouse is the pinching hand; a quick click
+    // is used because a press held over several frames is currently lost in the emulator (reported to the shell lane).
+    for (let attempt = 0; attempt < 3 && !await quest.evaluate(() => !!window.__ce['handMapping']); attempt++) {
+      const p = await screenPoint({ name: 'hand-control' });
+      await quest.mouse.move(p.x - 6, p.y - 6); await frames(4);
+      await quest.mouse.move(p.x, p.y); await frames(6);
+      await quest.mouse.down(); await quest.mouse.up(); await frames(10);
+    }
+    await waitQuest(() => !!window.__ce['handMapping']);
+    // Tracked hands: left fist = clutch, right hand rises.
+    const since = Date.now(), left = { offset: [-0.2, -0.25, -0.4], pose: 'fist' };
+    await hands({ left: { ...left, pose: 'open' }, right: { offset: [0.2, -0.25, -0.4], pose: 'open' } });
+    await hands({ left, right: { offset: [0.2, -0.25, -0.4], pose: 'open' } });
+    for (let i = 1; i <= 15; i++) await hands({ left, right: { offset: [0.2, -0.25 + i * 0.016, -0.4], pose: 'open' } }, 4);
+    await until('hand movement sends control changes', async () => (await exec(since)).length > 0);
+    console.log(`  ${(await exec(since)).length} control changes from the left-fist clutch + right hand`);
   });
-  await phase('07-learn-remote', async () => {
-    await until('all seven remote buttons captured', async () => {
-      const t = await target();
-      return t.research?.learned?.length === 7;
-    }, PIPELINE_TIMEOUT);
-    assert(await sim.evaluate(() => window.ceSimDebug.device.logLines.some((l) => l.kind === 'learn' && l.text.includes('captured press'))), 'Sim must capture the virtual remote');
+
+  await phase('08-both-palms-stop', async () => {
+    await hands({ left: { offset: [-0.22, -0.05, -0.45], pose: 'open', palm: 'out' }, right: { offset: [0.22, -0.05, -0.45], pose: 'open', palm: 'out' } });
+    await until('server disarmed', async () => !(await target()).armed);
+    await waitQuest(() => window.__judge.events.some((e) => e.type === 'panic') || !window.__ce['handMapping']);
+    for (const page of [sim, quest]) for (const frame of page.frames()) {
+      assert.equal(await frame.evaluate(() => window.__audioAttempts ?? 0), 0, 'No page may construct an audio graph');
+    }
   });
-  await phase('08-verify', async () => {
-    await until('physical verification completed', async () => {
-      const t = await target();
-      return ['verified', 'forging', 'forged', 'arming'].includes(t.state)
-        && Object.values(t.verification).includes('pass') && t;
-    }, PIPELINE_TIMEOUT);
-    await waitQuest((id) => window.__judgeEvents.some((e) => e.type === 'verify.result'
-      && e.payload.cardId === id && e.payload.pass && e.payload.observed?.sense === 'camera'), cardId);
-  });
-  await phase('09-controls-ready', async () => {
-    await waitQuest((id) => {
-      const app = window.__ce;
-      return app.pendingArm && app.hud.confirm
-        && [...app.hud.specs.values()].some((m) => m.targetId === id && m.spec.controls.length > 0);
-    }, targetId, PIPELINE_TIMEOUT);
-    assert.equal((await target()).armed, false, 'Server must gate controls until ARM');
-  });
-  await phase('10-arm', async () => {
-    assert.equal(await quest.evaluate(() => !!window.__ce.hud.confirm.hold), false, 'Light should use one-tap confirmation');
-    await pinch({ nodeName: 'confirm-yes' });
-    await waitQuest((id) => window.__judgeEvents.some((e) => e.type === 'arm.result' && e.payload.cardId === id && e.payload.armed)
-      && [...window.__ce.hud.specs.values()].some((m) => m.targetId === window.__ce.lockedId && m.armed), cardId);
-    assert.equal((await target()).armed, true);
-    await assertDockIcons('control', true);
-  });
-  await phase('11-control-changes-light', async () => {
-    await sim.waitForFunction(() => window.ceSim.lamp().power === 'on' && window.ceSimDebug.device.animator.settled);
-    const before = await sim.evaluate(() => window.ceSim.lamp());
-    const control = await quest.evaluate((cardId) => {
-      const app = window.__ce;
-      const ui = window.__judgeEvents.findLast((e) => e.type === 'ui.spec' && e.payload.cardId === cardId)?.payload;
-      const mounted = app.hud.specs.get(ui?.gen3d?.specId);
-      if (!mounted?.armed || mounted.targetId !== app.lockedId) return null;
-      const hack = ui.hackset?.hacks.find((h) => h.kind === 'action' && h.commands.some((c) => c.action === 'off'));
-      const off = mounted.spec.controls.find((c) => c.armed !== false && (c.kind === 'trigger' || c.kind === 'toggle')
-        && (hack ? c.id === hack.id || c.binding?.args?.hack === hack.id : c.binding?.action === 'off'));
-      if (!off) return null;
-      const node = app.hud.root.getObjectByName(`control:${off.id}`)
-        ?? app.hud.root.getObjectByName(`action:${hack?.id ?? off.id}`);
-      if (!node) return null;
-      for (let current = node; current; current = current.parent) if (!current.visible) return null;
-      const id = node.name.startsWith('action:') ? hack?.id ?? off.id : off.id;
-      return { id, nodeName: node.name, specId: ui.specId, sent: window.__judgeControls.length };
-    }, cardId);
-    assert(control, 'Armed device HUD must expose its off action by hack id or command role');
-    // Looking at the controls after verification is complete leaves its camera evidence undisturbed.
-    await pinch({ nodeName: control.nodeName, turn: true });
-    await waitQuest(({ id, specId, sent }) => window.__judgeControls.slice(sent)
-      .some((event) => event.specId === specId && event.widgetId === id && event.value === true), control);
-    await sim.waitForFunction(() => window.ceSim.lamp().power === 'off' && window.ceSimDebug.device.animator.settled);
-    const after = await sim.evaluate(() => window.ceSim.lamp());
-    assert.notDeepEqual(after, before);
-    assert.equal(await sim.evaluate(() => window.ceSimDebug.device.lastIr?.source), 'exec', 'Lamp must change through the server executor');
-    console.log(`  lamp: ${before.power} -> ${after.power} (HUD ${control.id})`);
-  });
+  await writeFile(join(SCREENS, 'summary.json'), JSON.stringify({ fixture: true, demo: true, verifiedBy, timings }, null, 2));
 }
 
 async function diagnostics() {
@@ -459,46 +345,30 @@ async function diagnostics() {
   const state = {};
   if (quest && !quest.isClosed()) {
     state.quest = await quest.evaluate(() => ({
-      camera: window.__ce?.cameraState, hud: window.__ce?.hudKind,
       mode: window.__ce?.modes.mode, tags: window.__ce?.modes.tags && [...window.__ce.modes.tags.values()],
-      lockedId: window.__ce?.lockedId, pendingArm: window.__ce?.pendingArm,
-      targets: window.__ce?.targets.list(), events: window.__judgeEvents, requests: window.__judgeRequests, controls: window.__judgeControls,
-      specs: window.__ce?.hud.specs && [...window.__ce.hud.specs.values()].map((m) => ({
-        specId: m.spec.specId, targetId: m.targetId, armed: m.armed,
-        controls: m.spec.controls.map((c) => ({ id: c.id, action: c.binding?.action, armed: c.armed })),
-      })),
-      log: document.querySelector('#log')?.textContent,
+      targets: window.__ce?.targets.list().map((t) => ({ id: t.id, label: t.label })), judge: window.__judge,
     })).catch((e) => ({ error: e.message }));
     await quest.screenshot({ path: join(SCREENS, `${currentPhase}-FAIL.png`), timeout: 5000 }).catch(() => {});
   }
-  if (sim && !sim.isClosed()) state.sim = await sim.evaluate(() => ({
-    lamp: window.ceSim?.lamp(), learn: window.ceSim?.learn(), logs: window.ceSimDebug?.device.logLines,
-  })).catch((e) => ({ error: e.message }));
+  if (cardId) state.target = await target().catch((e) => ({ error: e.message }));
   await writeFile(join(SCREENS, 'failure.json'), JSON.stringify(state, null, 2));
 }
 
 async function cleanup() {
   if (server?.pid && server.exitCode === null && server.signalCode === null) {
-    const exited = new Promise((resolveExit) => server.once('exit', resolveExit));
+    const exited = new Promise((done) => server.once('exit', done));
     server.kill('SIGTERM');
     const force = setTimeout(() => server.kill('SIGKILL'), 5000);
     try { await exited; } finally { clearTimeout(force); }
   }
-  try {
-    await browser?.close();
-  } finally {
-    if (dataDir) await rm(dataDir, { recursive: true, force: true });
-  }
+  try { await browser?.close(); } finally { if (dataDir) await rm(dataDir, { recursive: true, force: true }); }
 }
 
 const interrupted = new Promise((_, reject) => abort.signal.addEventListener('abort', () => reject(abort.signal.reason), { once: true }));
-const stop = (signal) => {
-  process.exitCode = signal === 'SIGINT' ? 130 : 143;
-  abort.abort(new Error(`Interrupted by ${signal}`));
-};
+const stop = (signal) => { process.exitCode = signal === 'SIGINT' ? 130 : 143; abort.abort(new Error(`Interrupted by ${signal}`)); };
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
-const deadline = setTimeout(() => abort.abort(new Error('Judge path exceeded 8 minutes')), 8 * 60_000);
+const deadline = setTimeout(() => abort.abort(new Error('Judge path exceeded 6 minutes')), 6 * 60_000);
 try {
   await Promise.race([run(), interrupted]);
   console.log(`PASS judge path; screenshots: ${SCREENS}`);
