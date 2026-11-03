@@ -120,6 +120,8 @@ export function proposeGestureMap(driver: ForgeDriver, verification?: Verificati
     posture('R_FIST', [/\bprev(?:ious)?\b/]);
   } else {
     axis('right_height', [/\bwarp\b/, /\bcutoff\b/, /\bfilter\b/, /\btimbre\b/, /\bengine param(?:eter)? 1\b/], { curve: 's-curve' });
+    // The visual synth's golden path: push/pull plays the water ripples with no extra Ask Muse round-trip.
+    axis('right_depth', [/\b(?:water )?ripples?\b/, /\bwater\b/], { smoothingMinCutoff: 2.5, smoothingBeta: 0.7, maxRateHz: Math.min(20, driver.maxRateHz ?? 20) });
     axis('right_roll', [/\bzoom\b/, /\bpitch\s*bend\b/, /\bresonance\b/, /\bengine param(?:eter)? 2\b/], { bipolar: true });
     axis('right_pinch_aperture', [/\bhue\b/, /\bresonance\b/, /\b(?:fx|effect) mix\b/, /\bengine param(?:eter)? 3\b/]);
     axis('two_hand_distance', [/\breverb\b/, /\b(?:fx|effect) mix\b/]);

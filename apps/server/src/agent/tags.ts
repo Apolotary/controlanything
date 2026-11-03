@@ -7,7 +7,7 @@ import { synthConnectionGuidance } from './guidance';
 import type { Target } from './types';
 import { isHelperDevice } from '../helpers';
 import type { StoredTag } from './library-schema';
-import { virtualScreenExecutor, VIRTUAL_SCREEN_GUIDANCE } from './visual-synth';
+import { virtualScreenExecutor, visualSynthHosts, VIRTUAL_SCREEN_GUIDANCE } from './visual-synth';
 
 export { TagStore } from './library-store';
 export type { AssetRef, LibraryRecord, SetupVersion, StoredTag } from './library-schema';
@@ -42,6 +42,8 @@ export function tagCapability(t: Target): LinkCapability | undefined {
 export function evaluateConnection(t: Target, roster: Roster, label?: string): Pick<TaggedDevice, 'connection' | 'hint' | 'action'> {
   if (t.card?.protocols.includes('hid') && !tagCapability(t)) return { connection: 'offline',
     hint: 'This is a typing keyboard. This demo does not control HID keyboards; choose Try visual synth from Menu.' };
+  // The Mac in this demo is controlled through its visual synth: select and setup reroute a tagged laptop there.
+  if (isLaptopTarget(t, label) && !virtualScreenExecutor(t.card) && visualSynthHosts(roster.devices()).length) return { connection: 'setup', hint: 'Pinch to play the Mac visual synth' };
   if (isLaptopTarget(t, label) && !roster.devices().some((device) => device.online && isHelperDevice(device))) {
     const url = (roster.helperUrl?.() ?? 'http://localhost:8787/pair').replace(/^https?:\/\//, '');
     return { connection: 'offline', hint: `Open ${url} on this laptop`, action: 'open-companion' };
@@ -68,7 +70,8 @@ export function evaluateConnection(t: Target, roster: Roster, label?: string): P
   const virtualExecutor = virtualScreenExecutor(t.card);
   const assigned = virtualExecutor ?? t.driver?.executor.deviceId ?? t.link?.executorDeviceId ?? selectedLocal;
   if (cap === 'local' && roster.silentLocal && (assigned === MAC_LOCAL_ID || !assigned && roster.macLocal)) {
-    return { connection: 'offline', hint: 'Mac audio is disabled in this demo. Playback and speech do not run. Choose Try visual synth from Menu.' };
+    const url = (roster.helperUrl?.() ?? 'http://localhost:8787/pair').replace(/^https?:\/\//, '');
+    return { connection: 'offline', hint: `Open ${url} on this Mac to play its visual synth`, action: 'open-companion' };
   }
   const portId = t.driver?.executor.port ?? t.link?.port?.id;
   if (cap === 'midi') {
@@ -78,11 +81,15 @@ export function evaluateConnection(t: Target, roster: Roster, label?: string): P
       && (!assigned || d.deviceId === assigned) && (d.role === 'companion' || d.capabilities.includes('midi')));
     const guidance = synthConnectionGuidance(companionOnline);
     offline = { connection: 'offline', hint: guidance.hint, ...(guidance.action ? { action: guidance.action } : {}) };
-    if (virtualExecutor) offline = { connection: 'offline', hint: 'Open the paired Mac companion and its visual synth. Keep both tabs open.', action: 'open-companion' };
+    if (virtualExecutor) offline = roster.devices().some((d) => d.deviceId === virtualExecutor && d.online)
+      ? { connection: 'offline', hint: 'Opening the Mac visuals…' }
+      : { connection: 'offline', hint: 'Open the paired Mac companion and its visual synth.', action: 'open-companion' };
   }
   const wantsVisual = isVisualSynthPort(portId) || /visual[\s-]synth/i.test(`${t.card?.name ?? ''} ${t.detection?.label ?? ''}`);
   const online = present.filter((d) => d.online && d.capabilities.includes(cap));
-  const reachable = online.some((d) => {
+  // A renderer or companion that blinked away (app switch, notification) keeps its card for a short grace.
+  const inGrace = !!virtualExecutor && !!roster.visualGrace?.(virtualExecutor);
+  const reachable = inGrace || online.some((d) => {
     if (assigned && d.deviceId !== assigned) return false;
     // The virtual visual synth port reaches only the visual synth; it never makes a physical synth look connected.
     if (cap === 'midi') return d.ports?.some((p) => p.kind === 'midi-out' && p.state !== 'disconnected' && (!portId || p.id === portId)

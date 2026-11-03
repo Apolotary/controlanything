@@ -97,6 +97,23 @@ export class ArmService {
     });
   }
 
+  /**
+   * CE_DEMO=1 one-shot setup: arm a verified, reversible target without a confirmation tap. The result is broadcast
+   * with auto=true so clients can enter the armed state without an arm.request of their own.
+   */
+  auto(target: Target, driver: Driver, by: string): ArmResultPayload {
+    this.cancel(target, 'armed automatically');
+    const armId = newId('arm');
+    if (this.d.canArm && !this.d.canArm(target)) {
+      const r: ArmResultPayload = { armId, cardId: target.cardId, driverId: driver.driverId, armed: false, by, reason: 'control is not authorized for this device', auto: true };
+      this.finish(target, r);
+      return r;
+    }
+    const r: ArmResultPayload = { armId, cardId: target.cardId, driverId: driver.driverId, armed: true, by, auto: true };
+    this.finish(target, r);
+    return r;
+  }
+
   /** Feed an arm.confirm from the hub. */
   onConfirm(p: ArmConfirmPayload, by: Approver): boolean {
     const pend = this.pending.get(p.armId);

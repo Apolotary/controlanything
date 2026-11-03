@@ -26,6 +26,8 @@ export interface Roster {
   helperUrl?: () => string;
   /** a sensor whose last sense.request timed out recently (a headset tab that stopped answering) */
   unhealthy?: (deviceId: string) => boolean;
+  /** the visual synth host lost its renderer or connection only moments ago (presence grace) */
+  visualGrace?: (deviceId: string) => boolean;
 }
 
 export function macLocalInfo(): DeviceInfo {

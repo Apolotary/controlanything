@@ -40,7 +40,7 @@ describe('selected-device Ask Muse', () => {
     h.device.driver!.actions.push({ actionId: 'cc21', label: 'Water ripples', kind: 'set', range: { min: 0, max: 127, step: 1 }, encode: { kind: 'midi', msg: 'cc', number: 21 }, expect: { sense: 'camera', effect: 'any' } });
     h.device.verification.cc21 = 'pass';
     await h.assistant.ask(request, 'quest'); h.assistant.confirm({ cardId: 'synth', proposalId: h.proposal().assistant!.proposalId!, accept: true }, 'quest');
-    expect(h.device.spec?.gestureMap?.axes[0]?.axis).toBe('right_height');
+    expect(h.device.spec?.gestureMap?.axes.map((a) => a.axis).sort()).toEqual(['right_depth', 'right_height']);
     const oldMap = h.device.spec?.gestureMap;
     await h.assistant.ask({ ...request, utteranceId: 'water-request', text: 'Can you update the visual synth so pushing my hand backwards and forwards creates water ripples?' }, 'quest');
     expect(h.last().assistant).toMatchObject({ state: 'proposal', mapping: [expect.stringContaining('Push/pull')] });

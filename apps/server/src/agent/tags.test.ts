@@ -120,12 +120,6 @@ describe('tag connection evaluation', () => {
     expect(tagCapability(typing)).toBe('midi');
   });
 
-  it('says the silent Mac executor cannot provide real audio or playback', () => {
-    const laptop = target('computer');
-    const status = evaluateConnection(laptop, { devices: () => [device()], macLocal: true, silentLocal: true });
-    expect(status).toEqual({ connection: 'offline', hint: 'Mac audio is disabled in this demo. Playback and speech do not run. Choose Try visual synth from Menu.' });
-  });
-
   it('asks for the cable without a pairing action while the companion has no MIDI permission or is a standby', () => {
     expect(evaluateConnection(target(), { devices: () => [device({ capabilities: [], ports: [] })], macLocal: false })).toEqual({
       connection: 'offline', hint: 'Plug the synth into your Mac',

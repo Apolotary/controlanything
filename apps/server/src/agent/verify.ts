@@ -5,7 +5,7 @@
  * IR from the library: when nothing reacts, the next candidate brand is tried (bounded); an honest miss is
  * expected and reported as evidence with pass=false. Every attempt is a verify.result broadcast.
  */
-import type { Driver, DriverAction, Effect, Evidence, ExecOp, Polygon, ScanFramePayload, SenseResultPayload, VerifyState } from '@ce/protocol';
+import type { Driver, DriverAction, Effect, Evidence, ExecAckPayload, ExecOp, Polygon, ScanFramePayload, SenseResultPayload, VerifyState } from '@ce/protocol';
 import { newId } from '@ce/protocol';
 import { cancellableDelay as sleep, throwIfCancelled } from '../muse/cancellation';
 import { isVisualSynthPort } from '../devices/visualSynth';
@@ -58,6 +58,8 @@ export interface VerifyOptions {
   value?: number;
   /** A requested runtime combo keeps its chosen volume; discovery probes restore it. */
   retainVolume?: boolean;
+  /** visual synth: epoch ms after which the camera is skipped and the renderer self-report decides */
+  cameraDeadline?: number;
 }
 
 export interface VerifySummary {
@@ -75,8 +77,8 @@ function effectFor(a: DriverAction): Effect {
 }
 
 /** Ask the camera for one verify frame. */
-async function captureFrame(d: Dispatcher, sensorDeviceId: string, cardId: string, signal?: AbortSignal): Promise<{ img: DecodedImage; jpeg: string; width: number; height: number; exposureLocked: boolean; fixtures?: ScanFramePayload['fixtureDetections']; pose?: { position: { x: number; y: number; z: number } } }> {
-  const [r] = await d.sense(sensorDeviceId, 'frame', { cardId, signal, timeoutMs: 6000 });
+async function captureFrame(d: Dispatcher, sensorDeviceId: string, cardId: string, signal?: AbortSignal, timeoutMs = 6000): Promise<{ img: DecodedImage; jpeg: string; width: number; height: number; exposureLocked: boolean; fixtures?: ScanFramePayload['fixtureDetections']; pose?: { position: { x: number; y: number; z: number } } }> {
+  const [r] = await d.sense(sensorDeviceId, 'frame', { cardId, signal, timeoutMs });
   if (!r?.frame) throw new ExecError(`no frame from ${sensorDeviceId}${r?.error ? ` (${r.error})` : ''}`, 'device');
   const src = r.frame.camera?.source;
   // absolute luma is only comparable at a fixed exposure: synthetic/replay frames, or a headset that locked it
@@ -134,6 +136,42 @@ export function spokenLine(op: ExecOp): string | undefined {
   if (typeof op.arg === 'string') return op.arg;
   if (op.arg && typeof op.arg === 'object' && 'text' in op.arg) return String((op.arg as Record<string, unknown>).text);
   return undefined;
+}
+
+/** The whole visual-synth verification is bounded; past this the camera is skipped and the renderer report decides. */
+export const VISUAL_VERIFY_BUDGET_MS = 10_000;
+/** One camera frame for the visual synth may take this long before the renderer report decides instead. */
+const VISUAL_FRAME_TIMEOUT_MS = 2500;
+/** The visual synth's CC → parameter table (packages/vsynth VISUAL_SYNTH_CONTROLS); symmetry is stepped 1..8. */
+const VISUAL_CC_PARAM: Record<number, string> = { 7: 'brightness', 10: 'hue', 11: 'saturation', 1: 'speed', 74: 'zoom', 71: 'warp', 21: 'ripple', 20: 'symmetry' };
+
+/**
+ * The visual synth's renderer self-report (exec.ack.applied) as evidence: the commanded value must be the
+ * renderer's state after the command. An ok ack without a report still counts, labelled as an acknowledgement only.
+ */
+export function rendererEvidence(op: ExecOp, ack: ExecAckPayload, camera?: string): { pass: boolean; observed: Evidence['observed']; note: string } {
+  const applied = ack.applied;
+  const why = camera ? `camera: ${camera}; ` : '';
+  let expected: { param: string; value: number } | undefined;
+  if (op.kind === 'midi' && op.msg === 'cc' && op.number !== undefined && typeof op.value === 'number' && VISUAL_CC_PARAM[op.number]) {
+    const param = VISUAL_CC_PARAM[op.number];
+    expected = { param, value: param === 'symmetry' ? 1 + Math.round((op.value / 127) * 7) : op.value / 127 };
+  } else if (op.kind === 'midi' && op.msg === 'pc' && op.number !== undefined) expected = { param: 'pattern', value: op.number };
+  const got = expected && applied?.params ? applied.params[expected.param] : undefined;
+  const base = { sense: 'ack' as const, metric: 'ack' as const, threshold: 1 / 127 };
+  if (!ack.ok) return { pass: false, observed: { ...base, before: 0, after: 0, delta: 0, note: 'the Mac refused the command' }, note: 'executor refused' };
+  if (!applied || !expected || got === undefined) {
+    return { pass: true, observed: { ...base, before: 0, after: 1, delta: 1, note: `${why}Mac acknowledged (no renderer report)`.slice(0, 200) }, note: `Mac acknowledged · ${why}no renderer report`.slice(0, 300) };
+  }
+  const delta = Math.abs(got - expected.value);
+  const pass = delta <= 1 / 127 + 1e-6 && applied.visible !== false;
+  const by = applied.source === 'renderer' ? 'verified by renderer' : 'Mac acknowledged (port state, renderer not drawing)';
+  const shown = `${expected.param} ${expected.param === 'pattern' || expected.param === 'symmetry' ? got : got.toFixed(2)}`;
+  return {
+    pass,
+    observed: { ...base, before: expected.value, after: got, delta, note: `${why}${by}: ${shown}${applied.visible === false ? ' (renderer hidden)' : ''}${applied.frame !== undefined ? ` · frame ${applied.frame}` : ''}`.slice(0, 200) },
+    note: (pass ? `${by}: ${shown}` : `renderer reported ${shown}, expected ${expected.value.toFixed(2)}${applied.visible === false ? ' (renderer hidden)' : ''}`).slice(0, 300),
+  };
 }
 
 /**
@@ -230,6 +268,7 @@ async function observeOnce(deps: VerifyDeps, t: Target, driver: Driver, a: Drive
     return { evidence: { ...base, execId: ack.execId, sent: { op, at: ack.sentAt }, observed: { sense: 'ack', metric: 'ack', before: 0, after: 1, delta: 1, threshold: 1, sensorDeviceId: exec.deviceId, note: 'spoken; no microphone clip available' }, pass: false, note: 'said, but no microphone could hear it' } };
   }
 
+  if (sense === 'camera' && isVisualSynthPort(exec.port) && op.kind === 'midi') return observeVisual(deps, t, driver, a, o, op, base, polygon);
   if (sense === 'camera') {
     if (!o.cameraDeviceId) throw new ExecError('no camera sensor online', 'offline');
     let before = await captureFrame(d, o.cameraDeviceId, t.cardId, o.signal);
@@ -326,6 +365,73 @@ async function observeOnce(deps: VerifyDeps, t: Target, driver: Driver, a: Drive
   }
 }
 
+/**
+ * The silent visual synth: one camera check (no second confirmation), bounded in time; when the camera sees no
+ * change (too far, off-centre, card in the way) or cannot answer in time, the renderer's own report decides and the
+ * evidence says which one did. Verification can never zero the demo while the Mac acknowledges the commands.
+ */
+async function observeVisual(deps: VerifyDeps, t: Target, driver: Driver, a: DriverAction, o: VerifyOptions, op: Extract<ExecOp, { kind: 'midi' }>,
+  base: Pick<Evidence, 'evidenceId' | 'cardId' | 'driverId' | 'actionId' | 'attempt' | 'expected'>, polygon?: Polygon): Promise<{ evidence: Evidence; polygon?: Polygon }> {
+  const d = deps.dispatcher;
+  const exec = driver.executor;
+  const expected = base.expected.effect;
+  const run = (o2: ExecOp, actionId: string) => d.exec(exec.deviceId, o2, { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId, waitForSlot: true, signal: o.signal, timeoutMs: 4000 });
+  const timeLeft = () => (o.cameraDeadline ?? Infinity) - Date.now();
+  const useCamera = !!o.cameraDeviceId && timeLeft() > 1500;
+  let before: Awaited<ReturnType<typeof captureFrame>> | undefined;
+  let poly = polygon;
+  let cameraNote: string | undefined = o.cameraDeviceId ? (useCamera ? undefined : 'skipped (time budget)') : 'no headset camera';
+  // Continuous animation is not evidence: freeze, then a baseline away from the commanded value.
+  await run({ kind: 'midi', msg: 'cc', channel: 1, number: 1, value: 0 }, `${a.actionId}:freeze-animation`);
+  const baseline: ExecOp | undefined = op.msg === 'pc' && op.number !== undefined ? { ...op, number: (op.number + 1) % 3 }
+    : op.msg === 'cc' && typeof op.value === 'number' ? { ...op, value: op.value < 64 ? 127 : 0 } : undefined;
+  if (baseline) await run(baseline, `${a.actionId}:baseline`);
+  if (useCamera) {
+    try {
+      await sleep(250, o.signal);
+      before = await captureFrame(d, o.cameraDeviceId!, t.cardId, o.signal, Math.min(VISUAL_FRAME_TIMEOUT_MS, timeLeft()));
+      if (!poly) {
+        const r = await refreshPolygon(deps.sam, t, before.jpeg, before.width, before.height, o.signal, before.pose);
+        poly = r.polygon;
+        o.onStep?.(r.fresh ? `outline re-found by ${r.model}` : t.detection ? 'outline from the scan frame' : 'User-aimed center of the camera; no detected outline', `${poly.length} points`);
+      }
+    } catch (e) {
+      throwIfCancelled(o.signal);
+      before = undefined;
+      cameraNote = `no frame (${(e as Error).message.slice(0, 60)})`;
+    }
+  }
+  let ack: ExecAckPayload | undefined;
+  for (let tries = 0; !ack; tries++) {
+    try {
+      ack = await run(op, a.actionId);
+    } catch (e) {
+      if (!(e instanceof ExecError && e.code === 'device' && e.ack)) throw e;
+      // A renderer that blinked away (focus, notification) answers no_port; give it one short chance to return.
+      if (e.ack.error === 'no_port' && tries === 0) { await sleep(1500, o.signal); continue; }
+      ack = e.ack;
+    }
+  }
+  let camera: { pass: boolean; observed: Evidence['observed']; note: string } | undefined;
+  if (before && poly && ack.ok) {
+    try {
+      await sleep(deps.settleMs?.(t, a) ?? 350, o.signal);
+      const after = await captureFrame(d, o.cameraDeviceId!, t.cardId, o.signal, Math.min(VISUAL_FRAME_TIMEOUT_MS, Math.max(500, timeLeft())));
+      const obs = observeCamera(before.img, after.img, poly, undefined, { exposureLocked: before.exposureLocked });
+      const pass = cameraMatches(obs, expected);
+      camera = { pass, observed: { ...cameraEvidence(obs, expected), sensorDeviceId: o.cameraDeviceId }, note: pass ? `camera saw ${obs.effect}${obs.secondary ? ` + ${obs.secondary}` : ''}` : `saw ${obs.effect === 'none' ? 'no change' : obs.effect}` };
+      if (!pass) cameraNote = `${camera.note} (Δ${obs.delta.toFixed(3)})`;
+    } catch (e) {
+      throwIfCancelled(o.signal);
+      cameraNote = `no frame (${(e as Error).message.slice(0, 60)})`;
+    }
+  }
+  const sent = { op, at: ack.sentAt };
+  if (camera?.pass) return { evidence: { ...base, execId: ack.execId, sent, observed: camera.observed, pass: true, note: `${camera.note} · verified by camera` }, polygon: poly };
+  const r = rendererEvidence(op, ack, cameraNote);
+  return { evidence: { ...base, execId: ack.execId, sent, observed: { ...r.observed, sensorDeviceId: exec.deviceId }, pass: r.pass, note: r.note }, polygon: poly };
+}
+
 /** Swap the IR encodes of a driver to another library candidate set (same keys), keeping ids and labels. */
 export function retargetIr(driver: Driver, candidates: IrCandidate[], brand: string, channel: number): Driver | undefined {
   const table = candidates.filter((c) => c.brand === brand && c.channel === channel);
@@ -345,6 +451,7 @@ export function retargetIr(driver: Driver, candidates: IrCandidate[], brand: str
  * runs again, up to maxIrCandidates brands. Returns the (possibly retargeted) driver and the evidence.
  */
 export async function verifyDriver(deps: VerifyDeps, t: Target, driver: Driver, o: VerifyOptions): Promise<VerifySummary> {
+  if (isVisualSynthPort(driver.executor.port) && o.cameraDeadline === undefined) o = { ...o, cameraDeadline: Date.now() + VISUAL_VERIFY_BUDGET_MS };
   const evidence: Evidence[] = [];
   const verification: Record<string, VerifyState> = {};
   for (const a of driver.actions) verification[a.actionId] = 'untested';
@@ -457,8 +564,10 @@ export async function verifyDriver(deps: VerifyDeps, t: Target, driver: Driver, 
     }
     // one real attempt (with its built-in double confirmation); a miss gets one retry
     let passed = false;
+    // the visual synth gets one check per action: its renderer report already decides a camera miss
+    const attempts = isVisualSynthPort(current.executor.port) ? 1 : 2;
     try {
-      for (let attempt = 1; attempt <= 2 && !passed; attempt++) {
+      for (let attempt = 1; attempt <= attempts && !passed; attempt++) {
         const { evidence: e, polygon: p } = await verifyOnce(deps, t, current, a, attempt, o, polygon);
         polygon = p ?? polygon;
         push(e);

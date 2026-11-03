@@ -7,7 +7,7 @@
  *   voice.audio / voice.text -> VoiceRelay · gen3d.generate / gen3d.edit -> the forge
  */
 import { dirname, join } from 'node:path';
-import { type DeviceCardPayload, EXPERIMENTAL_TYPE, newId, type TargetCancelPayload, type TargetRetryPayload, type Hack, type MessageType, type PayloadOf, type TargetSelectPayload, type UiSpecPayload, type Mode, type TagAddPayload, type TagsStatePayload, type LibraryStatePayload, type RoomPlacement } from '@ce/protocol';
+import { type DeviceCardPayload, type DeviceInfo, type Vec3, EXPERIMENTAL_TYPE, newId, type TargetCancelPayload, type TargetRetryPayload, type Hack, type MessageType, type PayloadOf, type TargetSelectPayload, type UiSpecPayload, type Mode, type TagAddPayload, type TagsStatePayload, type LibraryStatePayload, type RoomPlacement } from '@ce/protocol';
 import type { ServerContext } from '../context';
 import { loadProfiles, type Profiles } from '../devices/profiles';
 import { MidiChartStore } from '../devices/midi-charts';
@@ -22,7 +22,7 @@ import { CanvasService, registerCanvasFixture } from '../canvas/service';
 import { createSam, type Sam } from '../scan/sam';
 import { VoiceRelay, type VoiceActions } from '../voice/relay';
 import { DeviceAssistant, registerAssistantFixtures } from '../voice/assistant';
-import { visualSynthCard, visualSynthCompanions, visualSynthHosts, virtualScreenExecutor, VIRTUAL_SCREEN_GUIDANCE } from './visual-synth';
+import { isLaptopLabel, VISUAL_PRESENCE_GRACE_MS, VISUAL_SYNTH_CARD_ID, visualSynthCard, visualSynthCompanions, visualSynthHosts, virtualScreenExecutor, VIRTUAL_SCREEN_GUIDANCE } from './visual-synth';
 import { currentControlSpec, verifiedControlCount } from './control-readiness';
 import { IdentityCorrections } from './identity-correction';
 import { ConnectedPeripherals, GENERAL_ASSISTANT_CARD } from './connected-peripheral';
@@ -36,7 +36,7 @@ import { fixtureDriverDraft, WONDER_MODEL } from './drive';
 import { macLocalInfo, type Roster } from './executors';
 import { cropJpeg, fixtureDeviceCard, identify, type IdentifyResult } from './identify';
 import { decodeJpeg } from '../oracle/image';
-import { runLoop } from './loop';
+import { demoMode, runLoop } from './loop';
 import { CANCELLED_GUIDANCE, type TimedPhase } from './guidance';
 import { subscribeForge } from './forgeBridge';
 import { restoreSavedForge } from './restoreForge';
@@ -47,10 +47,10 @@ import { loadRecordedSpeech } from './recordedSpeech';
 import { ScanService } from './scan';
 import { StepLog } from './steps';
 import { TargetStore } from './targets';
-import { TagStore, evaluateConnection, tagCapability, tagSnapshot } from './tags';
+import { TagStore, evaluateConnection, isLaptopTarget, tagCapability, tagSnapshot } from './tags';
 import { interactionReferences } from './interaction-references';
 import { helperPairUrls } from '../net';
-import type { Target } from './types';
+import type { Target, TargetDetection } from './types';
 
 // Derive from the payload map so newly added protocol schemas participate in narrowing.
 type AgentMessage = { [K in MessageType]: { type: K; payload: PayloadOf<K> } }[MessageType];
@@ -145,8 +145,21 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const silentSpeech = macLocal.silent ? loadRecordedSpeech(undefined, log) : undefined;
   if (macLocal.silent) log('[silent] CE_MAC_SILENT=1: say / Music are not run and the volume is kept in memory; acks and evidence say so');
   // a sensor whose last reply timed out (a dead headset tab) yields to a healthy one for ~30 s
+  // Presence grace: when a visual synth host's renderer (or the whole companion) drops, remember when.
+  let visualUp = new Set<string>();
+  const visualLost = new Map<string, number>();
+  const trackVisualPresence = (): boolean => {
+    const now = Date.now();
+    const up = new Set(visualSynthCompanions(hub.devices()).map((device) => device.deviceId));
+    let lost = false;
+    for (const id of visualUp) if (!up.has(id)) { visualLost.set(id, now); lost = true; }
+    for (const id of up) visualLost.delete(id);
+    visualUp = up;
+    return lost;
+  };
   const roster: Roster = { devices: () => hub.devices(), macLocal: macLocal.available, silentLocal: macLocal.silent,
-    helperUrl: () => helperPairUrls(ctx.bound.http ?? ctx.config.http.port)[0], unhealthy: (id) => dispatcher.unhealthy(id) };
+    helperUrl: () => helperPairUrls(ctx.bound.http ?? ctx.config.http.port)[0], unhealthy: (id) => dispatcher.unhealthy(id),
+    visualGrace: (id) => { const at = visualLost.get(id); return at !== undefined && Date.now() - at < VISUAL_PRESENCE_GRACE_MS; } };
   const steps = new StepLog(hub, log);
   const targets = new TargetStore(hub, log);
   const tags = new TagStore(opts.tagsFile === null ? undefined : opts.tagsFile ?? join(ctx.config.dataDir, 'library.json'));
@@ -571,6 +584,11 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   };
   const addTag = (p: TagAddPayload, from: { deviceId: string; name?: string }): Target | undefined => {
     if (mode !== 'annotate' || /\b(person|people|human|man|woman|child|face|hand|body)\b/i.test(p.label)) return undefined;
+    // Golden path: tagging the Mac (laptop/screen) gives its visual synth card, never a "Mac audio" dead end.
+    if (!p.cardId && isLaptopLabel(p.label)) {
+      const routed = routeToVisualSynth(from, { position: p.position, label: p.label, frameId: p.frameId, detId: p.detId ?? p.targetId });
+      if (routed) return routed;
+    }
     const frame = p.frameId ? scan.frame(p.frameId) : scan.latest(from.deviceId);
     const match = frame?.detections.find((d) => (p.detId && d.detId === p.detId) || (p.targetId && (d.trackId === p.targetId || d.detId === p.targetId)));
     const savedId = p.cardId ?? p.targetId;
@@ -669,6 +687,12 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (t.driver) send('driver.status', { driverId: t.driver.driverId, cardId: t.cardId, phase: t.armed ? 'armed' : 'disarmed', actions: t.driver.actions.map((a) => ({ actionId: a.actionId, verified: t.verification[a.actionId] ?? 'untested' })), modelId: t.driver.modelId });
   };
   const setup = (cardId: string, from: { deviceId: string; name?: string }, rerun = false): Target | undefined => {
+    const laptop = targets.get(cardId);
+    if (laptop && tags.has(cardId) && mode === 'control' && !virtualScreenExecutor(laptop.card) && isLaptopTarget(laptop, tags.get(cardId)?.label)) {
+      const visual = routeToVisualSynth(from, { position: tags.get(cardId)?.position, label: tags.get(cardId)?.label, replaces: cardId });
+      if (visual && visualSynthCompanions(hub.devices()).some((d) => d.deviceId === virtualScreenExecutor(visual.card))) return setup(visual.cardId, from, rerun);
+      if (visual) return visual;
+    }
     const t = targets.get(cardId);
     const connection = t && tags.has(cardId) ? evaluateConnection(t, roster) : undefined;
     if (!t || !tags.has(cardId) || mode !== 'control' || connection?.connection === 'offline') {
@@ -704,6 +728,13 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     setups.add(t.cardId);
     // A completed setup that was declined only needs a fresh ARM confirmation.
     if (!rerun && !visualSynthNeedsUpgrade(t.driver) && midiPermissionsCurrent(t) && t.specId && t.driver && verifiedControlCount(specs.get(t.specId), t) > 0) {
+      if (demoMode() && virtualScreenExecutor(t.card) && !t.driver.actions.some((a) => a.confirm === 'hold')) {
+        showControls(t, from.deviceId);
+        arm.auto(t, t.driver, 'ControlAnything demo (CE_DEMO=1, verified silent visuals)');
+        setups.delete(t.cardId);
+        publishTags();
+        return t;
+      }
       const abort = new AbortController();
       t.abort = abort;
       showControls(t, from.deviceId);
@@ -759,63 +790,162 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (mode === 'annotate') { identifyTag(t); return t; }
     return setup(t.cardId, from);
   };
-  const select = (p: TargetSelectPayload, from: { deviceId: string; name?: string }): Target | undefined => {
-    if (p.cardId && tags.has(p.cardId)) canvas.select(from.deviceId, p.cardId);
-    if (p.virtual === 'visual-synth') {
-      const reply = (ok: boolean, cardId?: string, reason?: string) => {
-        if (p.requestId) hub.sendToDevice(from.deviceId, 'target.select.result', { requestId: p.requestId, ok, cardId, reason });
-      };
-      if (mode !== 'control') { reply(false, undefined, 'Choose Use devices, then Try visual synth.'); return; }
-      const candidates = visualSynthCompanions(hub.devices());
-      const executor = p.deviceId ? candidates.find((device) => device.deviceId === p.deviceId) : candidates.length === 1 ? candidates[0] : undefined;
-      if (!executor) {
-        const hosts = visualSynthHosts(hub.devices());
-        const previousOwners = new Set(targets.list()
-          .filter((target) => tags.has(target.cardId) && target.selectedBy === from.deviceId)
-          .map((target) => virtualScreenExecutor(target.card)).filter((id) => hosts.some((host) => host.deviceId === id)));
-        // selectedBy is session-local. On restart, recover only a unique saved
-        // visual target whose explicit owner and preferred connection agree.
-        const savedVisualTags = tags.list().filter((tag) => virtualScreenExecutor(tag.card));
-        const savedOwners = new Set(savedVisualTags.map((tag) => virtualScreenExecutor(tag.card)));
-        if (savedVisualTags.some((tag) => tag.selection?.preferDeviceId !== virtualScreenExecutor(tag.card))) savedOwners.clear();
-        const rememberedOwners = previousOwners.size ? previousOwners : savedOwners;
-        const remembered = rememberedOwners.size === 1 ? hosts.find((host) => rememberedOwners.has(host.deviceId)) : undefined;
-        const host = p.deviceId ? hosts.find((device) => device.deviceId === p.deviceId) : hosts.length === 1 ? hosts[0] : remembered;
-        if (host && p.requestId) {
-          hub.sendToDevice(host.deviceId, 'visual.open', { requestId: p.requestId });
-          // The existing Quest presence recovery retries selection after a real
-          // visible renderer advertises its port. Opening itself is not Ready.
-          reply(false, undefined, 'Waiting for the Mac visuals to open in your paired companion. Bring that browser tab to the front; selection will continue automatically.');
-          return;
+  /** The pinched frame (or the sender's latest scan frame) as a detection for Muse to identify. Never a verify ROI. */
+  const visualDetection = (from: { deviceId: string }, o: { frameId?: string; detId?: string; label?: string }): TargetDetection | undefined => {
+    const frame = o.frameId ? scan.frame(o.frameId) : scan.latest(from.deviceId);
+    return frame ? scan.tagDetection(frame.frame.frameId, o.detId, o.label ?? 'laptop') : undefined;
+  };
+  /** One quiet Muse identify call on the pinched Mac: the card keeps its authored identity, the evidence gains the model's view. */
+  const identifyVisualHost = (t: Target, detection?: TargetDetection) => {
+    if (!detection || identifying.has(t.cardId) || tagIdentity.has(t.cardId)) return;
+    const abort = new AbortController();
+    identifying.set(t.cardId, abort);
+    void (async () => {
+      try {
+        const crop = cropJpeg(decodeJpeg(detection.jpeg), detection.box);
+        const r = await identify(muse, detection, crop, detection.jpeg, { cardId: t.cardId, userText: 'This is the laptop whose screen shows the ControlAnything visual synth.', signal: AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)]) });
+        if (abort.signal.aborted || !tags.has(t.cardId) || !t.card) return;
+        const { card: seen, ...identity } = r;
+        tagIdentity.set(t.cardId, identity);
+        const line = `${r.recordedFrom ?? r.model}${r.source === 'fixture' ? ' (FIXTURE)' : ''} identified the host: ${`${seen.maker} ${seen.model || seen.name}`.trim()} (${Math.round(seen.confidence * 100)} %)`;
+        t.card = { ...t.card, modelId: r.recordedFrom ?? r.model, evidence: [line.slice(0, 300), ...t.card.evidence.filter((e) => !/ identified the host: /.test(e))].slice(0, 12) };
+        tags.sync(t);
+        hub.broadcast('device.card', t.card);
+        steps.note('identify', line.slice(0, 200), { cardId: t.cardId, kind: 'opinion', model: r.recordedFrom ?? r.model, latencyMs: r.latencyMs, source: r.source });
+        log(`[visual] ${line} · ${r.latencyMs} ms`);
+        publishTags();
+      } catch (e) {
+        if (!abort.signal.aborted) log(`[visual] could not identify the Mac: ${(e as Error).message}`);
+      } finally {
+        if (identifying.get(t.cardId) === abort) identifying.delete(t.cardId);
+      }
+    })();
+  };
+  /** The one visual synth card (stable id), rebound to whichever paired Mac hosts the renderer now. */
+  const bindVisualSynth = (executor: DeviceInfo, from: { deviceId: string }, position?: Vec3, label = 'Visual synth'): Target | undefined => {
+    const card = visualSynthCard(executor);
+    // Older builds keyed the card on the executor; keep one card in the room.
+    for (const tag of tags.list()) if (tag.cardId !== card.cardId && virtualScreenExecutor(tag.card)) removeTag(tag.cardId);
+    const saved = tags.get(card.cardId);
+    if (!saved && tags.library().length >= 64) return undefined;
+    let target = targets.get(card.cardId);
+    if (!target) target = restoreTarget({ ...(saved ?? {}), cardId: card.cardId, card, selectedBy: from.deviceId, state: saved?.armed ? 'armed' : 'identified' });
+    const running = !!(target.abort && !target.abort.signal.aborted);
+    const previous = target.driver?.executor.deviceId;
+    if (previous && previous !== executor.deviceId && !running) {
+      // A re-paired Mac keeps its card; the old companion's proof does not carry over, so it is set up again.
+      arm.cancel(target, 'Mac re-paired'); control.cancel(target);
+      target.armed = false; target.driver = undefined; target.specId = undefined; target.controlCount = undefined;
+      target.verification = {}; target.evidence = []; target.link = undefined;
+      tags.setEnabled(card.cardId, false);
+      targets.setState(target, 'identified', 'Mac re-paired', { sentence: 'Mac re-paired', hint: 'Set up control again', action: 'retry' });
+    }
+    const identified = target.card?.evidence.find((e) => / identified the host: /.test(e));
+    target.card = { ...card, ...(target.card?.modelId ? { modelId: target.card.modelId } : {}), evidence: identified ? [identified, ...card.evidence] : card.evidence };
+    target.selectedBy = from.deviceId;
+    target.selection = { preferDeviceId: executor.deviceId, userText: 'Use the built-in silent visual synth on this Mac screen.' };
+    // A known software instrument has no fabricated physical detection: verification aims at the centre of view.
+    target.detection = undefined;
+    tags.add(target, label, position ?? saved?.position);
+    canvas.select(from.deviceId, target.cardId);
+    hub.broadcast('device.card', target.card);
+    publishTags();
+    return target;
+  };
+  /** Pick the paired Mac that hosts the visual synth: an open renderer first, else the only (or remembered) host. */
+  const visualHost = (from: { deviceId: string }, deviceId?: string): { executor?: DeviceInfo; host?: DeviceInfo; reason?: string } => {
+    const candidates = visualSynthCompanions(hub.devices());
+    const executor = deviceId ? candidates.find((device) => device.deviceId === deviceId) : candidates.length === 1 ? candidates[0] : undefined;
+    if (executor) return { executor, host: executor };
+    const hosts = visualSynthHosts(hub.devices());
+    const previousOwners = new Set(targets.list()
+      .filter((target) => tags.has(target.cardId) && target.selectedBy === from.deviceId)
+      .map((target) => virtualScreenExecutor(target.card)).filter((id) => hosts.some((host) => host.deviceId === id)));
+    const savedVisualTags = tags.list().filter((tag) => virtualScreenExecutor(tag.card));
+    const savedOwners = new Set(savedVisualTags.map((tag) => virtualScreenExecutor(tag.card)));
+    const rememberedOwners = previousOwners.size ? previousOwners : savedOwners;
+    const remembered = rememberedOwners.size === 1 ? hosts.find((host) => rememberedOwners.has(host.deviceId)) : undefined;
+    // With several renderers open, the one this headset used last wins.
+    if (!deviceId && candidates.length > 1 && remembered && candidates.some((c) => c.deviceId === remembered.deviceId)) return { executor: remembered, host: remembered };
+    const host = deviceId ? hosts.find((device) => device.deviceId === deviceId) : hosts.length === 1 ? hosts[0] : remembered;
+    if (host) return { host };
+    return { reason: candidates.length > 1 && !deviceId
+      ? 'More than one Mac has visuals open. Keep only the screen you want open, then try again.'
+      : hosts.length > 1 && !deviceId ? 'More than one paired companion can open visuals. Keep only the Mac companion you want connected, then try again.'
+      : 'Open ControlAnything on the Mac (paired companion) and keep it visible.' };
+  };
+  /** Tag / setup reroute: bind the visual synth (renderer open or not) and open the Mac visuals if needed. */
+  const routeToVisualSynth = (from: { deviceId: string }, o: { position?: Vec3; label?: string; frameId?: string; detId?: string; replaces?: string }): Target | undefined => {
+    const { executor, host } = visualHost(from);
+    if (!host) return undefined;
+    const target = bindVisualSynth(executor ?? host, from, o.position);
+    if (!target) return undefined;
+    if (o.replaces && o.replaces !== target.cardId) removeTag(o.replaces);
+    identifyVisualHost(target, visualDetection(from, o));
+    if (!executor) {
+      hub.sendToDevice(host.deviceId, 'visual.open', { requestId: newId('visual-') });
+      if (mode === 'control') visualIntent = { from, at: Date.now() };
+    }
+    return target;
+  };
+  /** CE_DEMO=1: a selection that waited for the Mac renderer continues by itself once the renderer is up. */
+  let visualIntent: { from: { deviceId: string; name?: string }; at: number } | undefined;
+  const continueVisualIntent = () => {
+    const intent = visualIntent;
+    if (!intent || !demoMode() || mode !== 'control' || Date.now() - intent.at > 60_000) return;
+    if (!visualHost(intent.from).executor) return;
+    visualIntent = undefined;
+    selectVisualSynth({ virtual: 'visual-synth' }, intent.from);
+  };
+  /** Explicit (or rerouted) selection of the Mac visual synth. In CE_DEMO=1 it also starts setup. */
+  const selectVisualSynth = (p: TargetSelectPayload, from: { deviceId: string; name?: string }, replaces?: string): Target | undefined => {
+    const reply = (ok: boolean, cardId?: string, reason?: string, autoSetup?: boolean) => {
+      if (p.requestId) hub.sendToDevice(from.deviceId, 'target.select.result', { requestId: p.requestId, ok, cardId, reason, ...(autoSetup ? { autoSetup } : {}) });
+    };
+    // The headset switches itself to Control before it selects; a rerouted pinch may still arrive from Annotate.
+    if (mode !== 'control') setMode('control');
+    const { executor, host, reason } = visualHost(from, p.deviceId);
+    const detection = visualDetection(from, { frameId: p.frameId, detId: p.detId, label: p.label });
+    if (!executor) {
+      if (host) {
+        // Bind now so the card (and Muse's identify) is there while the Mac opens its visuals.
+        const pending = bindVisualSynth(host, from, p.position);
+        if (pending) {
+          if (replaces && replaces !== pending.cardId) removeTag(replaces);
+          identifyVisualHost(pending, detection);
         }
-        reply(false, undefined, candidates.length > 1 && !p.deviceId
-          ? 'More than one Mac has visuals open. Keep only the screen you want open, then try again.'
-          : hosts.length > 1 && !p.deviceId ? 'More than one paired companion can open visuals. Keep only the Mac companion you want connected, then try again.'
-          : 'Open your paired Mac companion in Chrome, keep that tab visible, then choose Try visual synth again.');
+        hub.sendToDevice(host.deviceId, 'visual.open', { requestId: p.requestId ?? newId('visual-') });
+        visualIntent = { from, at: Date.now() };
+        // The headset's presence recovery retries selection once the renderer advertises its port.
+        reply(false, undefined, 'Opening the Mac visuals… selection continues automatically.');
         return;
       }
-      const card = visualSynthCard(executor);
-      const saved = tags.get(card.cardId);
-      if (!saved && tags.library().length >= 64) { reply(false, undefined, 'Your device library is full. Forget an unused device, then try again.'); return; }
-      let target = targets.get(card.cardId);
-      if (!target) target = targets.create({ ...(saved ?? {}), cardId: card.cardId, card, selectedBy: from.deviceId,
-        state: saved?.armed ? 'armed' : 'identified' });
-      target.card = card;
-      canvas.select(from.deviceId, target.cardId);
-      target.selectedBy = from.deviceId;
-      target.selection = { preferDeviceId: executor.deviceId, userText: 'Use the built-in silent visual synth on this Mac screen.' };
-      // A known software instrument has no fabricated physical detection or image crop.
-      target.detection = undefined;
-      tags.add(target, 'Visual synth', p.position);
-      hub.broadcast('device.card', card);
-      publishTags();
-      if (target.specId) showControls(target, from.deviceId);
-      reply(true, card.cardId, VIRTUAL_SCREEN_GUIDANCE);
-      return target;
+      reply(false, undefined, reason);
+      return;
     }
+    visualIntent = undefined;
+    const target = bindVisualSynth(executor, from, p.position);
+    if (!target) { reply(false, undefined, 'Your device library is full. Forget an unused device, then try again.'); return; }
+    if (replaces && replaces !== target.cardId) removeTag(replaces);
+    identifyVisualHost(target, detection);
+    if (target.specId) showControls(target, from.deviceId);
+    const running = setups.has(target.cardId) || !!(target.abort && !target.abort.signal.aborted);
+    const auto = demoMode() && !canControl(target);
+    reply(true, target.cardId, auto ? 'Setting up the Mac visuals…' : VIRTUAL_SCREEN_GUIDANCE, auto || running);
+    if (auto && !running) setup(target.cardId, from);
+    return target;
+  };
+  const select = (p: TargetSelectPayload, from: { deviceId: string; name?: string }): Target | undefined => {
+    if (p.cardId && tags.has(p.cardId)) canvas.select(from.deviceId, p.cardId);
+    if (p.virtual === 'visual-synth') return selectVisualSynth(p, from);
     if (mode === 'control') {
       const existing = p.cardId ? targets.get(p.cardId) : undefined;
       if (!existing || !tags.has(existing.cardId)) return undefined;
+      // A tagged laptop is the Mac's visual synth in this demo; the visual card itself sets up on select (CE_DEMO).
+      if (!virtualScreenExecutor(existing.card) && isLaptopTarget(existing, tags.get(existing.cardId)?.label) && visualSynthHosts(hub.devices()).length) {
+        return selectVisualSynth({ ...p, virtual: 'visual-synth', position: p.position ?? tags.get(existing.cardId)?.position, label: tags.get(existing.cardId)?.label }, from, existing.cardId);
+      }
+      if (virtualScreenExecutor(existing.card)) return selectVisualSynth({ ...p, virtual: 'visual-synth', position: p.position ?? tags.get(existing.cardId)?.position }, from);
       if (canControl(existing)) showControls(existing, from.deviceId);
       publishTags();
       return existing;
@@ -836,19 +966,30 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (!existing && !det) return undefined;
     return addTag({ targetId: existing?.cardId, frameId: p.frameId, detId: p.detId, label: existing?.card?.name.slice(0, 80) ?? existing?.detection?.label ?? det!.label }, from);
   };
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
+  const enforcePresence = () => {
+    for (const t of targets.list()) {
+      if (!tags.has(t.cardId) || connected(t)) continue;
+      if (setups.has(t.cardId)) stop(t, 'companion disconnected');
+      control.cancel(t, { preserveArmed: true });
+    }
+  };
   const unsubscribePresence = hub.onPresence((presence) => {
+    if (trackVisualPresence()) {
+      // Re-check once the grace has run out: a renderer that stayed away loses its setup and live controls then.
+      clearTimeout(graceTimer);
+      graceTimer = setTimeout(() => { trackVisualPresence(); enforcePresence(); publishTags(); }, VISUAL_PRESENCE_GRACE_MS + 250);
+      graceTimer.unref?.();
+    }
     if (presence.deviceId && !hub.devices().some((device) => device.deviceId === presence.deviceId && device.online)) {
       assistant?.disconnect(presence.deviceId);
       voice.disconnect(presence.deviceId);
       canvas.disconnect(presence.deviceId);
     }
     if (presence.deviceId && (presence.reason === 'join' || presence.reason === 'update')) hub.sendToDevice(presence.deviceId, 'mode.state', { mode });
-    for (const t of targets.list()) {
-      if (!tags.has(t.cardId) || connected(t)) continue;
-      if (setups.has(t.cardId)) stop(t, 'companion disconnected');
-      control.cancel(t, { preserveArmed: true });
-    }
+    enforcePresence();
     publishTags();
+    continueVisualIntent();
     if (presence.reason === 'join' && presence.deviceId) {
       for (const state of canvas.snapshots()) if (tags.has(state.cardId)) hub.sendToDevice(presence.deviceId, 'canvas.state', state);
       for (const t of targets.list()) {
@@ -1033,6 +1174,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     setup,
     panic,
     close: () => {
+      clearTimeout(graceTimer);
       canvas.invalidate();
       voice.invalidate();
       assistant?.invalidate();

@@ -63,6 +63,11 @@ export interface LoopDeps {
   silentSpeech?: VerifyDeps['silentSpeech'];
 }
 
+/** The visual synth's live driver call gets this long before the curated template stands in. */
+const VISUAL_DRIVE_BUDGET_MS = Number(process.env.CE_DRIVE_TIMEOUT_MS) > 0 ? Number(process.env.CE_DRIVE_TIMEOUT_MS) : 20_000;
+/** CE_DEMO=1: the one-shot demo. The silent visual synth arms itself after verification (no Enable modal). */
+export const demoMode = (): boolean => process.env.CE_DEMO === '1';
+
 /** One learn window per remote button: the user has to find the button after the prompt appears. */
 const LEARN_WINDOW_MS = 10_000;
 /** The second pass (after the library codes missed) gives a slower hand more time. */
@@ -207,11 +212,24 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
         ...(reviewed ? { allowedChannels: new Set([reviewed.channel]), ccRanges: new Map(research.profile!.parameters.filter((p) => p.cc !== null && p.range).map((p) => [p.cc!, { min: p.range![0], max: p.range![1] }])), midiCcOnly: true } : {}),
         irLibrary: research.irLibrary, learned: research.learned, executorKind: executor.kind, emitsLight: cap === 'ir' || card.category === 'lighting' };
       const dstep = d.steps.begin('drive', 'writing the driver', { ...base, kind: 'opinion', model: d.spark.model });
-      const result = await flow.wait(drive({ spark: d.spark, wonder: d.wonder, log }, card, research, cap, ids, vctx, {
-        signal,
-        onAttempt: (a) => !signal.aborted && d.steps.note('drive', a.ok ? `driver attempt ${a.attempt} valid` : a.error ? `driver attempt ${a.attempt} failed: ${a.error}` : `driver attempt ${a.attempt} rejected`, { ...base, kind: 'proof', status: a.ok ? 'ok' : 'fail', model: a.model, effort: a.effort, latencyMs: a.latencyMs, detail: a.issues || a.error, ...(a.error ? { sentence: a.attempt === 1 ? 'That did not work; trying once more…' : 'The model could not prepare the commands', hint: 'You can retry or choose another device', action: 'retry' as const } : {}) }),
-        maxAttempts: 2,
-      }));
+      // The visual synth's live driver call is bounded: a slow Muse answer falls back to the curated template below.
+      const visualDrive = !!virtualScreenExecutor(card);
+      const driveBudget = new AbortController();
+      const driveTimer = visualDrive ? setTimeout(() => driveBudget.abort(), VISUAL_DRIVE_BUDGET_MS) : undefined;
+      let result: Awaited<ReturnType<typeof drive>>;
+      try {
+        result = await flow.wait(drive({ spark: d.spark, wonder: d.wonder, log }, card, research, cap, ids, vctx, {
+          signal: AbortSignal.any([signal, driveBudget.signal]),
+          onAttempt: (a) => !signal.aborted && d.steps.note('drive', a.ok ? `driver attempt ${a.attempt} valid` : a.error ? `driver attempt ${a.attempt} failed: ${a.error}` : `driver attempt ${a.attempt} rejected`, { ...base, kind: 'proof', status: a.ok ? 'ok' : 'fail', model: a.model, effort: a.effort, latencyMs: a.latencyMs, detail: a.issues || a.error, ...(a.error ? { sentence: a.attempt === 1 ? 'That did not work; trying once more…' : 'The model could not prepare the commands', hint: 'You can retry or choose another device', action: 'retry' as const } : {}) }),
+          maxAttempts: visualDrive ? 1 : 2,
+        }));
+      } catch (e) {
+        if (signal.aborted || !driveBudget.signal.aborted) throw e;
+        d.steps.note('drive', `no driver from ${d.spark.model} within ${VISUAL_DRIVE_BUDGET_MS / 1000} s; using the curated template`, { ...base, kind: 'proof', status: 'fail', model: d.spark.model });
+        result = undefined;
+      } finally {
+        clearTimeout(driveTimer);
+      }
       let driver: Driver;
       // provenance is the server's record (chart file, learned captures, web citations), whatever the model wrote
       const provenance = [...research.provenance, ...(result?.validation.driver.provenance ?? [])].filter((p, i, arr) => arr.findIndex((q) => q.source === p.source && q.ref === p.ref) === i).slice(0, 12);
@@ -366,13 +384,17 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
     }
     t.specId = fr.uiSpec.specId;
     t.controlCount = fr.uiSpec.gen3d.controls.length;
-    fstep.ok(`${fr.uiSpec.hackset.hacks.length} hacks, ${fr.uiSpec.gen3d.controls.length} controls (rev ${fr.uiSpec.rev})`, { model: fr.model, effort: fr.effort, latencyMs: fr.latencyMs, source: fr.source, recordedFrom: fr.recordedFrom, evidence: fr.uiSpec.hackset.hacks.map((h) => h.name).join(' · ').slice(0, 64) });
+    if (fr.fallback) d.steps.note('forge', `live forge failed (${fr.fallback.slice(0, 120)}): template fallback`, { ...base, kind: 'proof', status: 'fail', model: d.spark.model, evidence: 'template fallback' });
+    fstep.ok(`${fr.uiSpec.hackset.hacks.length} hacks, ${fr.uiSpec.gen3d.controls.length} controls (rev ${fr.uiSpec.rev})${fr.fallback ? ' · template fallback' : ''}`, { model: fr.model, effort: fr.effort, latencyMs: fr.latencyMs, source: fr.source, recordedFrom: fr.recordedFrom, evidence: (fr.fallback ? 'template fallback' : fr.uiSpec.hackset.hacks.map((h) => h.name).join(' · ')).slice(0, 64) });
     d.targets.setState(t, 'forged', `${fr.uiSpec.hackset.hacks.length} hacks ready`);
     flow.check();
 
     // ---------------------------------------------------------------- ARM
     flow.clear();
-    const armed = await flow.wait(d.arm.request(t, summary.driver, undefined, signal));
+    // CE_DEMO=1: the silent visual synth (no irreversible action) arms itself once verified; everything else asks.
+    const auto = demoMode() && isVisualSynthPort(summary.driver.executor.port) && !summary.driver.actions.some((a) => a.confirm === 'hold');
+    const armed = auto ? d.arm.auto(t, summary.driver, 'ControlAnything demo (CE_DEMO=1, verified silent visuals)')
+      : await flow.wait(d.arm.request(t, summary.driver, undefined, signal));
     if (armed.armed) d.hub.broadcast('driver.status', { driverId, cardId: t.cardId, phase: 'armed', actions: summary.driver.actions.map((a) => ({ actionId: a.actionId, verified: summary.verification[a.actionId] ?? 'untested' })), modelId: summary.driver.modelId });
   } catch (e) {
     const reason = signal.aborted ? signal.reason : e;

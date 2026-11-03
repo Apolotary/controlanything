@@ -41,6 +41,10 @@ export const REPAIR_EFFORT: ReasoningEffort = 'medium';
 export const MAX_REPAIRS = 2;
 /** a whitespace run this long outside a string means the decoder is looping (seen on Wonder, research/12) */
 export const WHITESPACE_GUARD = 400;
+/** A live visual-synth forge slower than this falls back to the authored template (CE_FORGE_TIMEOUT_MS overrides). */
+export const LIVE_FORGE_TIMEOUT_MS = Number(process.env.CE_FORGE_TIMEOUT_MS) > 0 ? Number(process.env.CE_FORGE_TIMEOUT_MS) : 20_000;
+/** The model id a template fallback carries, so no card or log can mistake it for a Muse answer. */
+export const VISUAL_SYNTH_FALLBACK = 'template-fallback:visual-synth';
 
 // --- public types --------------------------------------------------------------------------------
 
@@ -137,6 +141,8 @@ export interface ForgeResult {
   recordedFrom?: string;
   /** replay: the request text of the recorded run that was played back */
   recordedRequest?: string;
+  /** set when the live forge failed or timed out and the authored template stood in (the reason) */
+  fallback?: string;
   latencyMs: number;
   usage: StreamUsage;
   costUsd: number;
@@ -596,7 +602,34 @@ export function createForge(deps: ForgeDeps): Forge {
 
   const latestRev = (e: Entry) => Math.max(0, ...e.revs.map((r) => r.rev));
 
+  /**
+   * The visual synth's golden path never ends with "verified, but no controls": a live forge that errors or takes
+   * longer than LIVE_FORGE_TIMEOUT_MS falls back to the authored template, labelled as such everywhere.
+   */
   async function forge(req: ForgeRequest): Promise<ForgeResult> {
+    const drv = ForgeDriver.safeParse(req.driver);
+    if (transport.source !== 'live' || !drv.success || !isVisualSynth(drv.data)) return forgeOnce(req);
+    const live = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; live.abort(); }, LIVE_FORGE_TIMEOUT_MS);
+    let reason: string;
+    try {
+      const result = await forgeOnce({ ...req, signal: req.signal ? AbortSignal.any([req.signal, live.signal]) : live.signal });
+      if (result.ok) return result;
+      reason = result.error ?? 'the live hack set failed its checks';
+    } catch (e) {
+      if (req.signal?.aborted || !(timedOut || !(e instanceof RequestCancelledError))) throw e;
+      reason = timedOut ? `no answer within ${LIVE_FORGE_TIMEOUT_MS / 1000} s` : (e as Error).message;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (req.signal?.aborted) throw new RequestCancelledError();
+    log(`[gen3d] live forge for ${drv.data.name} failed (${reason}); using the visual synth template fallback`);
+    const fallback = await forgeOnce(req, reason);
+    return { ...fallback, fallback: reason };
+  }
+
+  async function forgeOnce(req: ForgeRequest, fallbackReason?: string): Promise<ForgeResult> {
     const dev = ForgeDevice.safeParse(req.device);
     const drv = ForgeDriver.safeParse(req.driver);
     if (!dev.success || !drv.success) {
@@ -605,9 +638,9 @@ export function createForge(deps: ForgeDeps): Forge {
     }
     const device = dev.data;
     const driver = drv.data;
-    const template = transport.source === 'fixture' && isVisualSynth(driver);
+    const template = (transport.source === 'fixture' || fallbackReason !== undefined) && isVisualSynth(driver);
     const runId = req.runId ?? newId('forge_');
-    const model = template ? VISUAL_SYNTH_FIXTURE : req.model ?? defaultModel;
+    const model = template ? (fallbackReason !== undefined ? VISUAL_SYNTH_FALLBACK : VISUAL_SYNTH_FIXTURE) : req.model ?? defaultModel;
     const firstEffort = req.effort ?? DEFAULT_EFFORT;
     const verification = verificationOf(driver, req.verification);
     const request = req.request?.trim() || `generate a hack set for the ${device.name}`;
@@ -675,9 +708,9 @@ export function createForge(deps: ForgeDeps): Forge {
           req.signal,
         );
         last = res;
-        modelUsed = res.recordedFrom ?? res.model ?? model;
+        modelUsed = template && fallbackReason !== undefined ? VISUAL_SYNTH_FALLBACK : res.recordedFrom ?? res.model ?? model;
         usage = addUsage(usage, res.usage);
-        step({ stepId: gen.stepId, startedAt: gen.startedAt, endedAt: Date.now(), phase: 'forge', status: res.degenerate ? 'fail' : 'ok', title: template ? 'Visual synth fixture template assembled' : res.degenerate ? 'Muse looped on whitespace; retrying' : `Muse answered in ${(res.latencyMs / 1000).toFixed(1)} s`, detail: res.usage ? `in ${res.usage.promptTokens} (cached ${res.usage.cachedTokens}) · out ${res.usage.completionTokens} (reasoning ${res.usage.reasoningTokens})` : undefined, model: modelUsed, effort, latencyMs: res.latencyMs, source: res.source, recordedFrom: res.recordedFrom });
+        step({ stepId: gen.stepId, startedAt: gen.startedAt, endedAt: Date.now(), phase: 'forge', status: res.degenerate ? 'fail' : 'ok', title: template ? (fallbackReason !== undefined ? `Live forge failed (${fallbackReason.slice(0, 80)}); template fallback assembled` : 'Visual synth fixture template assembled') : res.degenerate ? 'Muse looped on whitespace; retrying' : `Muse answered in ${(res.latencyMs / 1000).toFixed(1)} s`, detail: res.usage ? `in ${res.usage.promptTokens} (cached ${res.usage.cachedTokens}) · out ${res.usage.completionTokens} (reasoning ${res.usage.reasoningTokens})` : undefined, model: modelUsed, effort, latencyMs: res.latencyMs, source: res.source, recordedFrom: res.recordedFrom });
 
         // 1. schema
         let draft: ForgeDraft | undefined;
