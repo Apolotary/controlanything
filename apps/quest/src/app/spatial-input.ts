@@ -40,7 +40,8 @@ export class SpatialInput {
       for (const kind of ['ray', 'touch', 'grab'] as const) this.pointerHands.set(multi.getPointer(kind).id, hand);
     }
     const getCamera = (): PerspectiveCamera => this.renderer.xr.isPresenting ? visibleXrCamera(this.renderer.xr.getCamera() as ArrayCamera) ?? this.camera : this.camera;
-    this.html = opts.mouse === false ? null : forwardHtmlEvents(renderer.domElement, getCamera, scene, { intersectEveryFrame: true });
+    // 800 ms click window like xr-input's ray/poke (pmndrs defaults to 300 ms, which a slow emulator frame can exceed).
+    this.html = opts.mouse === false ? null : forwardHtmlEvents(renderer.domElement, getCamera, scene, { intersectEveryFrame: true, clickThresholdMs: 800 });
   }
 
   /** Call once per frame inside the animation loop, after the camera pose is current. */
