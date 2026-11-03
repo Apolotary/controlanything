@@ -149,7 +149,10 @@ export class PairingManager {
     };
     const trustFirst = this.opts.trustFirstDevice && this.registry.size === 0;
     // requireApproval: the companion pairs on behalf of a Cardputer and wants the QR moment to really happen
-    if ((ctx.autoApprove || trustFirst) && !req.requireApproval) {
+    // Once the room has a headset, a new helper (Mac companion etc.) is approved by that headset (QR look or code),
+    // never by same-machine trust: otherwise a stale companion tab silently re-pairs itself after being revoked.
+    const headsetOwnsRoom = req.kind !== 'quest' && req.kind !== 'sim' && this.registry.list().some((d) => d.kind === 'quest');
+    if (((ctx.autoApprove && !headsetOwnsRoom) || trustFirst) && !req.requireApproval) {
       const device = this.complete(p, ctx.autoApprove ? 'localhost' : 'trust-first-device');
       const deviceToken = this.takeToken(p.pairingId);
       return { ...base, status: 'approved', deviceId: device.deviceId, deviceToken };

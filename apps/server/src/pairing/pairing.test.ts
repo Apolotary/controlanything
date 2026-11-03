@@ -153,6 +153,14 @@ describe('PairingManager', () => {
     expect(pairing.start(cardputer, { origin: '10.0.0.10' }).status).toBe('pending');
   });
 
+  it('needs the headset to approve a localhost helper once a headset owns the room', () => {
+    const ctx = setup();
+    expect(ctx.pairing.start({ name: 'Quest 3', kind: 'quest' }, { origin: '127.0.0.1', autoApprove: true })).toMatchObject({ status: 'approved' });
+    const mac = ctx.pairing.start({ name: 'Mac companion', kind: 'mac' }, { origin: '127.0.0.1', autoApprove: true });
+    expect(mac).toMatchObject({ status: 'pending' });
+    expect(mac.deviceToken).toBeUndefined();
+  });
+
   it('auto-approves localhost and (optionally) the first device', () => {
     const local = setup().pairing.start({ name: 'Mac', kind: 'mac' }, { origin: '127.0.0.1', autoApprove: true });
     expect(local).toMatchObject({ status: 'approved' });

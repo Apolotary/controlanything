@@ -226,9 +226,10 @@ describe('pairing over WebSocket and relay', () => {
 
   it('routes `to`, keeps to:"server" off the wire, relays x.* and lets the server talk back', async () => {
     const h = await start();
-    const a = await pairLocally(h, 'Quest', 'quest');
+    // Helpers pair locally before the headset owns the room (afterwards the headset must approve them).
     const b = await pairLocally(h, 'Mac');
     const d = await pairLocally(h, 'DevTerm', 'devterm');
+    const a = await pairLocally(h, 'Quest', 'quest');
     const qa = await connect(h, a.deviceToken);
     const mb = await connect(h, b.deviceToken);
     const dc = await connect(h, d.deviceToken);
