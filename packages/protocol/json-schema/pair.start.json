@@ -46,7 +46,8 @@
             "cardputer",
             "web",
             "sim",
-            "remo"
+            "remo",
+            "gimbal"
           ]
         },
         "capabilities": {

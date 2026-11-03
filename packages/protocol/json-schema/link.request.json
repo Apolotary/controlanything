@@ -81,7 +81,8 @@
               "cardputer",
               "web",
               "sim",
-              "remo"
+              "remo",
+              "gimbal"
             ]
           }
         },
@@ -110,7 +111,8 @@
                   "cardputer",
                   "web",
                   "sim",
-                  "remo"
+                  "remo",
+                  "gimbal"
                 ]
               },
               "online": {

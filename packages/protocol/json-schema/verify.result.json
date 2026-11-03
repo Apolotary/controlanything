@@ -272,6 +272,71 @@
                     "op"
                   ],
                   "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "ble"
+                    },
+                    "profile": {
+                      "type": "string",
+                      "enum": [
+                        "dji-osmo"
+                      ]
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "pan",
+                        "tilt",
+                        "nudge",
+                        "recenter",
+                        "stop"
+                      ]
+                    },
+                    "arg": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "minimum": -180,
+                          "maximum": 180
+                        },
+                        {
+                          "type": "string",
+                          "const": "$value"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "yaw": {
+                              "type": "number",
+                              "minimum": -180,
+                              "maximum": 180
+                            },
+                            "pitch": {
+                              "type": "number",
+                              "minimum": -180,
+                              "maximum": 180
+                            },
+                            "durationMs": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 10000
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "profile",
+                    "op"
+                  ],
+                  "additionalProperties": false
                 }
               ]
             },

@@ -62,7 +62,8 @@
             "midi",
             "ir",
             "local",
-            "sim"
+            "sim",
+            "ble"
           ]
         },
         "port": {
