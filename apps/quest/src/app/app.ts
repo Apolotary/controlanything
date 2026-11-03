@@ -1247,11 +1247,12 @@ export class QuestApp {
   private annotationAllowed(target: { label: string; rawLabel?: string; tagged?: boolean; cardId?: string }): boolean {
     if (labEnabled() || target.tagged || target.cardId) return true;
     const label = (target.rawLabel ?? target.label).trim().toLowerCase();
-    return this.annotationLabels.has(label) || /^(laptop|macbook|monitor|tv|television|screen|display|computer)\b/.test(label);
+    // SAM's generic "electronic device" prompt can claim the Mac's YOLO box; the sim's screen is "… Visual Synth".
+    return this.annotationLabels.has(label) || /^(laptop|macbook|monitor|tv|television|screen|display|computer|electronic device)\b|visual[\s-]?synth/.test(label);
   }
   /** A laptop/monitor/TV box is the Mac's screen: pinching it selects the visual synth (WP1 golden path). */
   private isScreenBox(label: string | undefined): boolean {
-    return !!label && /\b(laptop|macbook|monitor|tv|television|screen|display|computer)\b/i.test(label);
+    return !!label && /\b(laptop|macbook|monitor|tv|television|screen|display|computer|visual[\s-]?synth)\b/i.test(label);
   }
 
   private visualSynthUnavailable(message: string): void {
@@ -2115,20 +2116,20 @@ export class QuestApp {
       this.candidate.id = id;
       this.candidate.since = time;
     }
-    const show = id && id !== this.lockedId && time - this.candidate.since >= 250 ? id : null;
+    const show = this.handAimId && this.handAimId !== this.lockedId ? this.handAimId
+      : id && id !== this.lockedId && time - this.candidate.since >= 250 ? id : null;
     if (show !== this.candidate.shown) {
       this.candidate.shown = show;
       this.hud.setCandidate(show);
     }
+    let handAimId: string | null = null;
     for (const hand of HANDS) {
       const h = f.hands[hand];
       if (!h || this.consumed[hand]) { this.targetHistory[hand].reset(); continue; }
       const handAim = h.ray.dir.lengthSq() > 0.5 ? aimAt(h.ray.origin, h.ray.dir, list, HAND_AIM, this.handHit) : null;
       if (handAim) this.handFeedback.setHover(hand, this.targets.get(handAim.id) ?? this.live?.hoverTarget(handAim.id));
-      // A hand ray on a box is a deliberate hover: show its pill label now (gaze needs 250 ms).
-      if (handAim && handAim.id !== this.lockedId && handAim.id !== this.candidate.shown) {
-        this.candidate.id = this.candidate.shown = handAim.id; this.candidate.since = time; this.hud.setCandidate(handAim.id);
-      }
+      // A hand ray on a box is a deliberate hover: next frame its pill label shows at once (gaze needs 250 ms).
+      if (handAim) handAimId = handAim.id;
       const raw = h.rawRay ?? h.ray;
       const previous = h.justPinched ? this.targetHistory[hand].compensate(time, handAim?.id ?? null, raw.origin, raw.dir) : null;
       this.targetHistory[hand].record(time, handAim?.id ?? null, raw.origin, raw.dir);
@@ -2145,7 +2146,9 @@ export class QuestApp {
       if (!pick) continue;
       this.lock(pick, handAim ? 'ray' : 'gaze');
     }
+    this.handAimId = handAimId;
   }
+  private handAimId: string | null = null;
 
   /** Select a device; annotation only records an explicit tag. */
   lock(id: string, how = 'api', opts: { send?: boolean } = {}): void {
@@ -2153,7 +2156,8 @@ export class QuestApp {
     // releases that workspace; annotation and explicit API selections remain available.
     if (this.modes.mode === 'control' && (this.visualSynthIntent || this.lockedId && this.lockedId !== id)
       && ['chip', 'touch', 'ray', 'gaze'].includes(how)) return;
-    if (['chip', 'touch', 'ray', 'gaze'].includes(how) && !this.modes.tags.get(id)?.cardId?.startsWith('visual-synth')) {
+    // In Annotate, a pinch on the Mac's screen (tagged or not) opens the visual synth; in Control it is already selected.
+    if (['chip', 'touch', 'ray', 'gaze'].includes(how) && (this.modes.mode === 'annotate' || !this.modes.tags.get(id)?.cardId?.startsWith('visual-synth'))) {
       const live = isLiveId(id) ? this.live?.targetSnapshot(this.live?.claimOf(id) ?? id) : undefined;
       const t = this.targets.get(id);
       const label = t?.label ?? live?.label;

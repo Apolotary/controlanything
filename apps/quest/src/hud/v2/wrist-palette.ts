@@ -42,7 +42,7 @@ export class WristPalette extends Group {
   private readonly hold = new DockHold(600);
   private holdKey: string | null = null;
   private readonly wrist = new Object3D();
-  private readonly fallback = new WorldPanel({ distance: 0.55, height: -0.2, lateral: -0.26, follow: true });
+  private readonly fallback = new WorldPanel({ distance: 0.6, height: -0.3, lateral: -0.36, follow: true });
   private suppressed = false;
 
   constructor(private readonly surfaces: GlassSurfaces, nonDominant: 'left' | 'right' = 'left') {

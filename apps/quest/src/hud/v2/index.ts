@@ -373,7 +373,7 @@ export class LeanHud implements Hud {
     this.camera.getWorldQuaternion(this.headQuaternion);
     this.refreshHome();
     this.refreshCard();
-    this.dragHandle(this.card, 'device-drag', 0.26, 0.151);
+    this.dragHandle(this.card, 'device-drag', 0.26, 0.125);
     this.dragHandle(this.assistant, 'assistant-drag', 0.38, 0.23);
     this.dragHandle(this.deck.panel, 'menu-title-drag', 0.27, 0.324, -0.05, 0.05);
     this.dragHandle(this.deck.panel, 'menu-drag', 0.39, 0.26, 0, 0.05, 0.052);
@@ -1353,6 +1353,9 @@ export class LeanHud implements Hud {
     this.visualSelection.visible = !!selection && !this.deck.panel.visible && !this.modal.visible && !this.helperPairingView && !this.projectView;
     this.projectPanel.visible = !!this.projectView && !this.deck.panel.visible && !this.modal.visible && !this.helperPairingView;
     // Spawn the shared workspace pose the first time a panel needs it (~0.6 m, 15° below eye line), then never move it.
+    // A selected device's card spawns beside its box (never between the eyes and the device).
+    const selectedBox = this.card.visible && target ? this.boxes.boxes.get(target.id) : undefined;
+    if (selectedBox && !this.workspaceAnchor.isPlaced) this.workspaceAnchor.spawnBeside(selectedBox.center, selectedBox.w / 2, this.headPose, this.time * 1000);
     if (this.card.visible || this.modal.visible || this.assistant.visible || this.projectPanel.visible || !!selection || !!this.helperPairingView || this.deck.panel.visible) {
       this.workspaceAnchor.update(this.headPose, this.time * 1000);
     }
@@ -1405,7 +1408,8 @@ export class LeanHud implements Hud {
     const box = target && this.boxes.boxes.get(target.id);
     this.workspaceAnchor.place(this.card);
     this.card.scale.set(Math.max(0.001, unfold), 1, 1);
-    if (box) this.placeTether(box.id); else this.tether.hide();
+    // The card spawns right beside its device (ring + dials on the box), so no tether line.
+    this.tether.hide();
     this.workspaceAnchor.place(this.modal);
     this.workspaceAnchor.place(this.assistant);
     this.assistant.scale.setScalar(1);
@@ -1576,6 +1580,11 @@ export class LeanHud implements Hud {
     const grip = makeText({ text: explicitMove ? 'Move panel · hold pinch' : '', size: explicitMove ? 0.014 : 0.011, color: explicitMove ? THEME.color.text : THEME.color.muted, anchorX: 'center', maxWidth: width - 0.02, singleLine: true });
     grip.name = `${name}-label`; grip.position.z = THEME.panel.depth;
     if (explicitMove) { const plate = this.surfaces.create(width, height, 'button', true); plate.name = 'button-plate'; handle.add(plate); }
+    else if (name === 'device-drag') {
+      // Horizon-style grab bar: a small white pill at 30 % above the card.
+      const bar = new Mesh(this.trackGeometry, new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3, depthWrite: false, toneMapped: false }));
+      bar.name = 'grab-bar'; bar.scale.set(0.08, 0.008, 1); bar.renderOrder = THEME.render.buttons; handle.add(bar);
+    }
     handle.userData.dragHandle = true;
     handle.add(grip); panel.add(handle);
     this.widgets.push({ group: handle, w: width, h: height, kind: 'handle', drag: true, lastMove: 0,
