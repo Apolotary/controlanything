@@ -61,7 +61,7 @@ export class ScreenRing extends Mesh<PlaneGeometry, ShaderMaterial> {
           // Perimeter parameter: 0 at top centre, increasing clockwise.
           float t = fract(atan(p.x / box.x, p.y / box.y) / 6.2831853 + 1.0);
           float te = aa * 4.0 / (box.x + box.y);
-          float filled = 1.0 - smoothstep(progress - te, progress + te, t);
+          float filled = (1.0 - smoothstep(progress - te, progress + te, t)) * step(0.001, progress);
           float comet = working * pow(clamp(1.0 - fract(fract(time / ${LOOK.ring.sweepS.toFixed(2)}) - t) / 0.18, 0.0, 1.0), 2.0);
           float lineA = line * max(mix(baseAlpha, fillAlpha, filled), comet * 0.9);
           float shadow = (1.0 - smoothstep(stroke * 0.5 + 0.003 - aa, stroke * 0.5 + 0.003 + aa, abs(d))) * 0.3;
