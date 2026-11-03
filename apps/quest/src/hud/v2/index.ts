@@ -1483,7 +1483,10 @@ export class LeanHud implements Hud {
       const group = widget.group;
       let hit = group.userData.hit as Mesh | undefined;
       if (!hit || hit.parent !== group) hit = this.bindHit(widget);
-      hit.visible = this.interactive(widget, this.cursors[0]!);
+      // pmndrs pointer-events ignores Object3D.visible for the forwarded mouse and grab pointers: gate with pointerEvents too.
+      const live = this.interactive(widget, this.cursors[0]!);
+      hit.visible = live;
+      (hit as unknown as { pointerEvents: string }).pointerEvents = live ? 'auto' : 'none';
       // The palette hand hovering its own palette is not a hover (only the other hand can press it).
       const ownHand = this.isPaletteWidget(widget) && this.palette.anchor.source === 'hand' ? this.palette.anchor.nonDominant : null;
       let hovered = false;
@@ -1502,6 +1505,7 @@ export class LeanHud implements Hud {
     // Higher order wins over nearer surfaces: the palette, then buttons/controls/handles, then passive plates.
     (hit as unknown as { pointerEventsOrder: number }).pointerEventsOrder = palette ? 2 : widget.button || widget.drag || widget.kind === 'control' ? 1 : 0;
     hit.userData.hover = new Set<number>();
+    (hit as unknown as { pointerEvents: string }).pointerEvents = 'none';
     const on = (type: string, fn: (e: HudPointerEvent) => void) =>
       (hit as unknown as { addEventListener(t: string, f: (e: unknown) => void): void }).addEventListener(type, (e) => fn(e as HudPointerEvent));
     on('pointerover', (e) => { (hit.userData.hover as Set<number>).add(e.pointerId); this.spatial?.markHover(e, true); });
