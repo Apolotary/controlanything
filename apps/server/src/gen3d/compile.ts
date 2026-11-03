@@ -34,8 +34,8 @@ const GAP_M = 0.03;
 export const MIN_PITCH_M = 0.1;
 const HACK_LIST_W = 0.22;
 
-const CHANNEL: Record<ForgeDriver['transport'], Channel> = { midi: 'usb', ir: 'ir', local: 'wifi' };
-const TRANSPORT: Record<ForgeDriver['transport'], NonNullable<Gen3dSpec['device']>['transport']> = { midi: 'usb-midi', ir: 'ir', local: 'other' };
+const CHANNEL: Record<ForgeDriver['transport'], Channel> = { midi: 'usb', ir: 'ir', local: 'wifi', ble: 'ble' };
+const TRANSPORT: Record<ForgeDriver['transport'], NonNullable<Gen3dSpec['device']>['transport']> = { midi: 'usb-midi', ir: 'ir', local: 'other', ble: 'other' };
 
 export const STATUS: Record<VerifyState, HackStatus & NonNullable<HackItem['status']>> = { untested: 'ready', pending: 'uploading', pass: 'verified', fail: 'failed' };
 

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { compileHackset, rearmSpec } from './compile';
 import { applyEdit, type EditSet, syncHackset } from './editPatch';
 import { EXAMPLE_DRIVER, EXAMPLE_OUTPUT } from './forgePrompt';
-import { verificationOf } from './forgeTypes';
+import { type ForgeDriver, verificationOf } from './forgeTypes';
 import { bannedWord, draftIssues } from './forgeVerify';
 import { draftToHack, ForgeDraft, HACKSET_VERSION, type HackSet } from './hackset';
 import { FORGE_LIGHT_DEVICE, FORGE_LIGHT_DRIVER, FORGE_LIGHT_VERIFIED, FORGE_OP1_DRIVER } from './sampleDevices';
@@ -107,6 +107,35 @@ describe('compile hack set -> ce.gen3d/1', () => {
     const op1 = compileHackset({ specId: 's', rev: 1, title: 'OP-1', hackset: { ...lightHackset(), hacks: [0, 1, 2, 3].map((i) => ({ ...draftToHack(LIGHT_DRAFT.hacks[0]), id: `h_k${i}`, control: { archetype: 'knob' as const, size: 'm' as const, param: 'p_lvl' } })) }, device: FORGE_LIGHT_DEVICE, driver: FORGE_LIGHT_DRIVER, verification: verificationOf(FORGE_LIGHT_DRIVER, FORGE_LIGHT_VERIFIED), modelIds: ['muse-spark-1.3'], source: 'live' });
     expect(op1.ok).toBe(true);
     expect(op1.spec.parts.filter((p) => p.archetype === 'knob').map((p) => p.transform!.position![0])).toEqual([-0.15, -0.05, 0.05, 0.15]);
+  });
+
+  it('compiles a BLE gimbal: pan/tilt as one xy control plus a Recenter one-shot', () => {
+    const driver: ForgeDriver = {
+      driverId: 'drv_osmo',
+      cardId: 'card_osmo',
+      transport: 'ble',
+      actions: [
+        { actionId: 'pan', label: 'Pan', kind: 'set', range: { min: -120, max: 120, step: 1 }, expect: { sense: 'ack', effect: 'any' } },
+        { actionId: 'tilt', label: 'Tilt', kind: 'set', range: { min: -45, max: 45, step: 1 }, expect: { sense: 'ack', effect: 'any' } },
+        { actionId: 'recenter', label: 'Recenter', kind: 'trigger', expect: { sense: 'ack', effect: 'any' } },
+      ],
+    };
+    const cmd = (action: string, param = '') => ({ action, delayMs: 0, param, value: 0 });
+    const draft: ForgeDraft = {
+      title: 'Gimbal',
+      hacks: [
+        { blurb: 'pan and tilt the phone', commands: [cmd('pan', 'p_pan'), cmd('tilt', 'p_tilt')], confirm: 'none', control: { accent: '', archetype: 'xy', param: 'p_pan', size: 'm' }, id: 'h_aim', inverse: { commands: [], restore: 'p_pan' }, kind: 'control', max_rate_hz: 3, name: 'Aim camera', oracle: { expect: 'serial_ack', reason: '', type: 'serial' }, params: [{ default: 0, id: 'p_pan', max: 120, min: -120, name: 'Pan', step: 1, unit: '°' }, { default: 0, id: 'p_tilt', max: 45, min: -45, name: 'Tilt', step: 1, unit: '°' }], reversible: true },
+        { blurb: 'pan 90° to the left', commands: [{ action: 'pan', delayMs: 0, param: '', value: -90 }], confirm: 'none', control: { accent: '', archetype: 'none', param: '', size: 'm' }, id: 'h_left', inverse: { commands: [cmd('recenter')], restore: '' }, kind: 'action', max_rate_hz: 1, name: 'Look left', oracle: { expect: 'serial_ack', reason: '', type: 'serial' }, params: [], reversible: true },
+        { blurb: 'point straight ahead', commands: [cmd('recenter')], confirm: 'none', control: { accent: '', archetype: 'none', param: '', size: 'm' }, id: 'h_center', inverse: { commands: [cmd('recenter')], restore: '' }, kind: 'action', max_rate_hz: 1, name: 'Recenter', oracle: { expect: 'serial_ack', reason: '', type: 'serial' }, params: [], reversible: true },
+      ],
+    };
+    expect(draftIssues(draft, driver).filter((i) => i.severity === 'error')).toEqual([]);
+    const hs: HackSet = { spec: HACKSET_VERSION, device: { id: 'card_osmo', name: 'Gimbal', channel: { type: 'ble' } }, hacks: draft.hacks.map(draftToHack) };
+    const r = compileHackset({ specId: 'spec_osmo', rev: 1, title: 'Gimbal', hackset: hs, device: { cardId: 'card_osmo', name: 'Gimbal', category: 'other' }, driver, verification: verificationOf(driver, { pan: 'pass', tilt: 'pass', recenter: 'pass' }), modelIds: ['muse-spark-1.3'], source: 'live' });
+    expect(r.errors).toEqual([]);
+    expect(r.spec.controls.find((c) => c.id === 'h_aim')).toMatchObject({ kind: 'xy', binding: { action: 'pan' }, yBinding: { action: 'tilt' }, armed: true });
+    expect(r.spec.parts.find((p) => p.controlId === 'h_aim')?.archetype).toBe('xy-orb');
+    expect(r.spec.device?.transport).toBe('other');
   });
 
   it('rearms from new evidence without touching anything else', () => {

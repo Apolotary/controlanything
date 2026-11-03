@@ -42,7 +42,7 @@ export const ForgeDriver = z.object({
   /** the device.card this driver controls */
   cardId: z.string().min(1).max(64),
   name: z.string().max(120).optional(),
-  transport: z.enum(['midi', 'ir', 'local']),
+  transport: z.enum(['midi', 'ir', 'local', 'ble']),
   executor: z.object({ deviceId: z.string().max(64), port: z.string().max(120).optional() }).optional(),
   actions: z.array(ForgeAction).min(1).max(64),
   maxRateHz: z.number().min(0.1).max(200).optional(),

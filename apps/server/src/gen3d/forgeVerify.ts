@@ -214,7 +214,10 @@ export function draftIssues(draft: ForgeDraft, driver: ForgeDriver): Issue[] {
   const visualControls = driver.actions.some((action) => action.actionId === 'cc21') ? 2 : 1;
   const wantControls = visual ? visualControls : Math.min(2, controllable);
   const controls = draft.hacks.filter((h) => h.kind === 'control').length;
-  if (controls < wantControls) out.push(issue('composition', 'control_count', 'hacks', `${controls} controls; make at least ${wantControls} (this driver has ${controllable} set/toggle actions)`));
+  // one control may drive several actions (an xy pad on pan + tilt): enough when every set/toggle action is covered
+  const covered = new Set(draft.hacks.filter((h) => h.kind === 'control').flatMap((h) => h.commands.filter((c) => c.param).map((c) => c.action)));
+  const allCovered = driver.actions.filter((a) => a.kind !== 'trigger').every((a) => covered.has(a.actionId));
+  if (controls < wantControls && !allCovered) out.push(issue('composition', 'control_count', 'hacks', `${controls} controls; make at least ${wantControls} (this driver has ${controllable} set/toggle actions)`));
   const wantActions = visual ? 0 : Math.min(2, driver.actions.length);
   const actions = draft.hacks.filter((h) => h.kind === 'action').length;
   if (visual && (controls !== visualControls || actions > 3 || new Set(draft.hacks.filter((h) => h.kind === 'control').map((h) => h.commands[0]?.action)).size !== visualControls)) out.push(issue('composition', 'visual_synth_card', 'hacks', `Use exactly ${visualControls} distinct controls: Warp${visualControls === 2 ? ' and Water ripples' : ''}, and at most three pattern buttons`));
