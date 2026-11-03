@@ -80,7 +80,7 @@ import { ControlSender } from './controls';
 import { ModeState } from './modes';
 import { HelperOnboarding, type HelperInfo } from './onboarding';
 import type { AppMode, HudTarget, ObjectFilter } from '../hud/contract';
-import { annotationFadeMs, annotationRange, matchesAnnotationFilter, inAnnotationRange } from '../scan/policy';
+import { annotationFadeMs, annotationRange, inAnnotationRange } from '../scan/policy';
 import { type Emulator, installEmulator } from './emulator';
 import { HandFeedback } from './hand-feedback';
 import { GestureSession } from '../gestures/session';
@@ -167,7 +167,8 @@ export class QuestApp {
   private pendingForget?: { id: string; cardId: string; targetId: string };
   private pendingPlacement?: { target: Target; devices: LibraryDevice[]; index: number };
   readonly modes = new ModeState();
-  filter: ObjectFilter = 'everything';
+  /** The wrist palette's Electronics · Objects · All switch (Electronics for the Mac demo). */
+  filter: ObjectFilter = 'electronics';
   private readonly observed = new Map<string, { target: HudTarget; at: number }>();
   private readonly visibleTargets = new Set<string>();
   /** Renderer residency survives temporary menu/modal hiding; interaction visibility does not. */
@@ -489,7 +490,7 @@ export class QuestApp {
       },
     });
     const track = this.params.get('track');
-    if (track === 'electronics' || track === 'lights' || track === 'everything') this.filter = track;
+    if (track === 'electronics' || track === 'objects' || track === 'lights' || track === 'everything') this.filter = track;
     live.category = this.filter;
     live.rangeM = annotationRange(this.params.get('range'));
     this.scanner.setCategory(this.filter);
@@ -524,10 +525,10 @@ export class QuestApp {
 
   setLiveCategory(c: Category): void {
     if (this.modes.mode !== 'annotate') return;
-    this.filter = c === 'lights' || c === 'everything' ? c : 'electronics';
+    this.filter = c === 'lights' || c === 'everything' || c === 'objects' ? c : 'electronics';
     this.live?.setCategory(this.filter);
     this.scanner.setCategory(this.filter);
-    this.refreshAnnotations();
+    this.refreshAnnotationFilter();
     this.refreshHome();
     this.recorder.input('track', { category: this.filter });
   }
@@ -985,7 +986,7 @@ export class QuestApp {
     if (this.modes.mode === 'annotate') {
       const candidates = [...this.observed.values()].filter(({ target, at }) => !this.manualRegion?.active && !this.manualScanPending
         && (!this.manualFocusIds || this.manualFocusIds.has(target.id)) && !this.modes.tags.has(target.id)
-        && now - at <= annotationFadeMs(isLiveId(target.id)) && (target.score ?? 0) >= 0.5 && (this.manualFocusIds?.has(target.id) || matchesAnnotationFilter(target.rawLabel ?? target.label, this.filter))
+        && now - at <= annotationFadeMs(isLiveId(target.id)) && (target.score ?? 0) >= 0.5 && (this.manualFocusIds?.has(target.id) || this.annotationAllowed(target))
         && inAnnotationRange(target.position, head, range) && inFront(target));
       const rank = (target: HudTarget) => {
         const x = target.position[0] - head.x, y = target.position[1] - head.y, z = target.position[2] - head.z;
@@ -1248,14 +1249,23 @@ export class QuestApp {
   private visualSynthFrom?: { label?: string; frameId?: string; detId?: string; position?: Vector3 };
 
   /** Annotate shows only these detector classes (plus any a lane allows, e.g. tangible cups). */
-  private readonly annotationLabels = new Set(['laptop', 'tv', 'monitor', 'keyboard', 'cell phone']);
+  /** Annotate categories: Electronics = screens, keyboards, phones, remotes; Objects = everyday things (plus lane-allowed
+   *  labels, e.g. tangible cups); All = any class but people. People are never boxed. */
+  private readonly annotationLabels = new Set(['laptop', 'tv', 'screen', 'monitor', 'keyboard', 'cell phone', 'phone', 'remote']);
+  private readonly objectLabels = new Set(['cup', 'mug', 'bottle', 'book', 'ball', 'sports ball', 'clock', 'glass', 'wine glass', 'bowl', 'banana', 'apple', 'orange', 'vase', 'scissors', 'teddy bear', 'mouse']);
   allowAnnotationLabels(labels: string[]): void {
-    for (const label of labels) this.annotationLabels.add(label.toLowerCase());
+    for (const label of labels) this.objectLabels.add(label.toLowerCase());
+    this.refreshAnnotationFilter();
+  }
+  private refreshAnnotationFilter(): void {
     for (const [id, seen] of this.observed) if (!this.annotationAllowed(seen.target)) this.eraseAnnotation(id);
+    this.refreshAnnotations(true);
   }
   private annotationAllowed(target: { label: string; rawLabel?: string; tagged?: boolean; cardId?: string }): boolean {
-    if (labEnabled() || target.tagged || target.cardId) return true;
     const label = (target.rawLabel ?? target.label).trim().toLowerCase();
+    if (/\b(person|people|human)\b/.test(label)) return false;
+    if (labEnabled() || target.tagged || target.cardId || this.filter === 'everything') return true;
+    if (this.filter === 'objects') return this.objectLabels.has(label) || /\b(cup|mug|bottle|book|ball)s?\b/.test(label);
     // SAM's generic "electronic device" prompt can claim the Mac's YOLO box; the sim's screen is "… Visual Synth".
     return this.annotationLabels.has(label) || /^(laptop|macbook|monitor|tv|television|screen|display|computer|electronic device)\b|visual[\s-]?synth/.test(label);
   }

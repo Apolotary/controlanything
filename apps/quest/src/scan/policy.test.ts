@@ -6,8 +6,8 @@ const head = { x: 0, y: 1.6, z: 0 };
 const target = { label: 'Ceiling light', score: 0.9, position: { x: 0, y: 1.6, z: -2 }, lastSeenAt: 1000 };
 
 describe('annotation policy', () => {
-  it('offers All, Lights and Electronics, with every device class included by default', () => {
-    expect(CATEGORIES.map((category) => category.label)).toEqual(['All', 'Lights', 'Electronics']);
+  it('offers Electronics, Objects and All, with every device class included by default', () => {
+    expect(CATEGORIES.map((category) => category.label)).toEqual(['Electronics', 'Objects', 'All']);
     for (const label of ['TV', 'laptop', 'cell phone', 'remote', 'keyboard', 'synthesizer', 'mouse', 'speakers', 'ceiling light', 'microwave']) {
       expect(matchesAnnotationFilter(label)).toBe(true);
     }

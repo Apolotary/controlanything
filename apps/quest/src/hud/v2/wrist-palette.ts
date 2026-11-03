@@ -19,10 +19,14 @@ export interface PaletteItem {
   /** Hidden while false (re-evaluated every frame). */
   visible?: () => boolean;
   onSelect: () => void;
+  /** A compact segmented row instead of one button (e.g. Electronics · Objects · All); poke or pinch a segment. */
+  segments?: { key: string; label: string; width: number }[];
+  selected?: () => string;
+  onSegment?: (key: string) => void;
 }
 
-export const PALETTE_MAX_ITEMS = 5;
-const BUTTON_W = 0.15, BUTTON_H = 0.046, GAP = 0.01;
+export const PALETTE_MAX_ITEMS = 6;
+const BUTTON_W = 0.15, BUTTON_H = 0.046, GAP = 0.01, SEGMENT_H = 0.036;
 
 /**
  * The wrist palette: turn the left palm toward your face and up to five big buttons appear beside the hand
@@ -32,7 +36,7 @@ const BUTTON_W = 0.15, BUTTON_H = 0.046, GAP = 0.01;
  */
 export class WristPalette extends Group {
   readonly anchor: HandDockAnchor;
-  readonly width = BUTTON_W + 0.02;
+  width = BUTTON_W + 0.02;
   /** Button groups in display order; LeanHud wires a widget to each after `rebuild`. */
   buttons: Group[] = [];
   private items: PaletteItem[] = [];
@@ -81,22 +85,47 @@ export class WristPalette extends Group {
     const shown = this.visibleItems();
     this.shownKeys = shown.map((i) => i.key).join('|');
     this.cancelExitHold();
-    const height = shown.length * BUTTON_H + Math.max(0, shown.length - 1) * GAP + 0.02;
+    const rows = shown.map((item) => item.segments ? SEGMENT_H : BUTTON_H);
+    const height = rows.reduce((a, b) => a + b, 0) + Math.max(0, shown.length - 1) * GAP + 0.02;
+    const rowWidth = Math.max(BUTTON_W, ...shown.map((item) => item.segments ? item.segments.reduce((a, seg) => a + seg.width, 0) + (item.segments.length - 1) * 0.004 : 0));
+    this.width = rowWidth + 0.02;
     this.userData.height = height;
     this.plate.scale.set(this.width, height, 1);
     this.plate.material = this.surfaces.material(this.width, height, 'plate');
-    this.buttons = shown.map((item, i) => {
+    const buttons: Group[] = [];
+    let y = height / 2 - 0.01;
+    shown.forEach((item, i) => {
+      const rowH = rows[i]!;
+      if (item.segments) {
+        // One row of small pills; each segment is its own button (named `${key}:${segment}`).
+        const row = new Group(); row.name = item.key; row.position.set(0, y - rowH / 2, THEME.panel.depth); this.content.add(row);
+        const total = item.segments.reduce((a, seg) => a + seg.width, 0) + (item.segments.length - 1) * 0.004;
+        let x = -total / 2;
+        for (const seg of item.segments) {
+          const group = new Group(); group.name = `${item.key}:${seg.key}`;
+          group.position.set(x + seg.width / 2, 0, 0); x += seg.width + 0.004;
+          group.userData.width = seg.width; group.userData.height = SEGMENT_H; group.userData.menuButton = true;
+          group.userData.paletteKey = item.key; group.userData.segmentKey = seg.key;
+          const pill = this.surfaces.create(seg.width, SEGMENT_H, 'button', true); pill.name = 'button-plate';
+          const text = makeText({ text: seg.label, size: 0.0125, weight: 600, anchorX: 'center', maxWidth: seg.width - 0.006, singleLine: true });
+          text.position.z = THEME.panel.depth;
+          group.add(pill, text); row.add(group); buttons.push(group);
+        }
+        y -= rowH + GAP;
+        return;
+      }
       const group = new Group(); group.name = item.key;
-      group.position.set(0, height / 2 - 0.01 - BUTTON_H / 2 - i * (BUTTON_H + GAP), THEME.panel.depth);
+      group.position.set(0, y - BUTTON_H / 2, THEME.panel.depth);
+      y -= BUTTON_H + GAP;
       group.userData.width = BUTTON_W; group.userData.height = BUTTON_H; group.userData.menuButton = true;
       group.userData.primary = !!item.primary; group.userData.paletteKey = item.key;
       const button = this.surfaces.create(BUTTON_W, BUTTON_H, item.primary ? 'primary' : 'button', true);
       button.name = 'button-plate';
       const text = makeText({ text: item.hold ? `${item.label} · hold` : item.label, size: 0.017, weight: 600, anchorX: 'center', maxWidth: BUTTON_W - 0.016, singleLine: true });
       text.name = 'palette-label'; text.position.z = THEME.panel.depth;
-      group.add(button, text); this.content.add(group);
-      return group;
+      group.add(button, text); this.content.add(group); buttons.push(group);
     });
+    this.buttons = buttons;
     return this.buttons;
   }
 
@@ -106,6 +135,11 @@ export class WristPalette extends Group {
   setSuppressed(suppressed: boolean): void { this.suppressed = suppressed; }
 
   update(frame: HudFrame): void {
+    // Segmented rows: the selected segment reads as selected (LeanHud's button feedback paints it).
+    for (const group of this.buttons) {
+      const key = group.userData.segmentKey as string | undefined;
+      if (key) group.userData.selected = this.item(group.userData.paletteKey)?.selected?.() === key;
+    }
     this.anchor.update(frame, this, this.wrist, this.width);
     if (this.anchor.source === 'mouse') this.fallback.update(this, frame.head, frame.time);
     const show = !this.suppressed && this.anchor.open && this.anchor.opacity > 0.05 && this.buttons.length > 0;

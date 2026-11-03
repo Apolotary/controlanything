@@ -7,7 +7,7 @@ import type { Channel, ControlEvent, Gen3dSpec, HackItem, HudStatus, LogRow, Mod
 import type { CanvasActionPayload, CanvasStatePayload, ObjectInformation, ProjectSpatialScene, SetupProgressView, TaggedDevice } from '@ce/protocol';
 
 export type AppMode = 'annotate' | 'control';
-export type ObjectFilter = 'electronics' | 'lights' | 'everything';
+export type ObjectFilter = 'electronics' | 'objects' | 'lights' | 'everything';
 export type DeviceConnection = 'ready' | 'setup' | 'offline' | 'unknown';
 export interface HomeState { mode: AppMode; filter: ObjectFilter; tagged: number; status: string; canStop?: boolean; visualSynthSelection?: { phase: 'pending' | 'unavailable'; message: string } }
 export type MappingOutcome = 'working' | 'review' | 'applied' | 'unchanged' | 'failed' | 'cancelled';

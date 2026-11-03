@@ -21,7 +21,7 @@ import type { PoseRing } from '../poses';
 import { ANNOTATION_MIN_SCORE, ANNOTATION_RANGE_M, inAnnotationRange } from '../policy';
 import { cameraPoseFromHead, pixelToRay, type PoseLike, questIntrinsics, scaleIntrinsics, worldToPixel } from '../projection';
 import { isGenericLabel, toHudTarget, type Target } from '../targets';
-import { allowedClasses, type Category, CATEGORIES, deviceClass } from './classes';
+import { allowedClasses, type Category, CATEGORIES, classLabel, deviceClass } from './classes';
 import type { Box } from './prep';
 import type { WorkerDet, WorkerIn, WorkerOut, YoloEp } from './protocol';
 import { claimSamTarget, overlapsHand, type ProjectedJoint } from './quality';
@@ -698,7 +698,7 @@ export class LiveDetector {
     const picked = t.id === this.picked;
     return {
       id: hudId(t.id),
-      label: deviceClass(t.cls)?.label ?? 'Device',
+      label: classLabel(t.cls),
       subtitle: picked ? 'identifying…' : 'live',
       status: picked ? 'locked' : 'scanned',
       position: v(a.position),

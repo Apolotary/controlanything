@@ -210,6 +210,7 @@ export class LeanHud implements Hud {
   private spatial: SpatialInput | null = null;
   readonly palette: WristPalette;
   private readonly holds = new Map<number, PointerHold>();
+  private readonly fading = new Map<string, number>();
   private readonly taps = new Map<number, Widget>();
   private readonly hitGeometry = new PlaneGeometry(1, 1);
   private readonly hitMaterial = new MeshBasicMaterial({ visible: false });
@@ -223,6 +224,10 @@ export class LeanHud implements Hud {
     } });
     this.palette.register({ key: 'exit-ar', label: 'Exit', order: 90, hold: true, onSelect: () => this.events.emit('exit', {}) });
     if (lab) this.palette.register({ key: 'lab-menu', label: 'More (lab)', order: 95, onSelect: () => this.setMenuOpen(!this.deck.panel.visible) });
+    // What to track (spec: "switch tracking to electronics"): one compact segmented row, Annotate only.
+    this.palette.register({ key: 'track', label: 'Track', order: -10, onSelect: () => {}, visible: () => this.home.mode === 'annotate',
+      segments: [{ key: 'electronics', label: 'Electronics', width: 0.086 }, { key: 'objects', label: 'Objects', width: 0.064 }, { key: 'everything', label: 'All', width: 0.04 }],
+      selected: () => this.home.filter, onSegment: (key) => this.events.emit('filter', { filter: key as HomeState['filter'] }) });
     this.card.name = 'device-card';
     this.edge.name = 'device-edge-pill';
     const arrow = new Shape();
@@ -895,6 +900,7 @@ export class LeanHud implements Hud {
   }
   upsertTarget(t: HudTarget): void {
     if (t.label.trim().toLowerCase() === 'person') { this.removeTarget(t.id); return; }
+    if (this.fading.delete(t.id)) this.boxes.setOpacity(t.id, 1);
     const previous = this.targets.get(t.id);
     this.targets.set(t.id, t);
     this.point.fromArray(t.position);
@@ -949,7 +955,10 @@ export class LeanHud implements Hud {
     this.boxes.registerLabel(t.id, label, width);
   }
   removeTarget(id: string): void {
-    this.targets.delete(id); this.boxes.remove(id);
+    // A box leaving Annotate (filter switch, stale detection) fades out over 250 ms instead of popping.
+    if (this.home.mode === 'annotate' && this.targets.has(id) && this.boxes.isVisible(id)) this.fading.set(id, this.time);
+    else { this.fading.delete(id); this.boxes.remove(id); }
+    this.targets.delete(id);
     const label = this.labels.get(id); if (label) { label.removeFromParent(); this.clear(label); this.labels.delete(id); }
     if (this.locked === id) { this.locked = null; this.setAssistant(null); this.setSetupProgress(null); this.setCanvas(null); this.pinned = false; this.card.userData.pinned = false; this.refreshCard(); }
   }
@@ -1474,9 +1483,10 @@ export class LeanHud implements Hud {
   private rebuildPalette(): void {
     this.clear(this.palette.contentGroup);
     for (const group of this.palette.rebuild()) {
-      const item = this.palette.item(group.name)!;
+      const item = this.palette.item(group.userData.paletteKey ?? group.name)!;
+      const segment = group.userData.segmentKey as string | undefined;
       this.widgets.push({ group, w: group.userData.width, h: group.userData.height, kind: 'deck', button: true, lastMove: 0,
-        start: () => { if (item.hold) this.palette.beginHold(item.key, this.time * 1000); else item.onSelect(); },
+        start: () => { if (segment) item.onSegment?.(segment); else if (item.hold) this.palette.beginHold(item.key, this.time * 1000); else item.onSelect(); },
         end: item.hold ? () => this.palette.cancelExitHold() : undefined });
     }
   }
@@ -1502,7 +1512,8 @@ export class LeanHud implements Hud {
     const hit = new Mesh(this.hitGeometry, this.hitMaterial);
     hit.name = 'ui-hit';
     const palette = this.isPaletteWidget(widget);
-    const w = Math.max(THEME.control.minHitSize, widget.w) + THEME.control.hitPadding * 2;
+    // Segments of one row sit 4 mm apart: their hit planes keep their exact widths so neighbours never overlap.
+    const w = widget.group.userData.segmentKey ? widget.w : Math.max(THEME.control.minHitSize, widget.w) + THEME.control.hitPadding * 2;
     const h = Math.max(THEME.control.minHitSize, widget.h) + THEME.control.hitPadding * 2;
     hit.position.set(widget.group.userData.hitOffsetX ?? 0, 0, THEME.panel.depth * 2);
     hit.scale.set(w, h, 1);
@@ -1560,7 +1571,8 @@ export class LeanHud implements Hud {
     widget.move(this.localPoint(e, hold.plane));
   }
   private pointerUp(widget: Widget, e: HudPointerEvent, cancelled: boolean): void {
-    if (this.taps.get(e.pointerId) === widget && cancelled) this.taps.delete(e.pointerId);
+    // A tap completes on lift-off over the same button (taps never capture, so this up is over this widget).
+    if (this.taps.get(e.pointerId) === widget) { if (cancelled) this.taps.delete(e.pointerId); else this.pointerClick(widget, e); }
     const hold = this.holds.get(e.pointerId);
     if (!hold || hold.widget !== widget) return;
     this.holds.delete(e.pointerId);
@@ -1669,7 +1681,8 @@ export class LeanHud implements Hud {
     let owner: Object3D | null = widget.group;
     while (owner && owner !== this.root) { if (owner.userData.disabled) return false; owner = owner.parent; }
     if (owner !== this.root) return false;
-    const menu = !!this.deck.getObjectById(widget.group.id) || !!this.deck.panel.getObjectById(widget.group.id);
+    // The wrist palette is the escape hatch: it stays pressable over any panel or dialog.
+    const menu = !!this.deck.getObjectById(widget.group.id) || !!this.deck.panel.getObjectById(widget.group.id) || !!this.palette.getObjectById(widget.group.id);
     if (this.deck.panel.visible && !menu) return false;
     if (this.helperPairing.visible && !this.helperPairing.getObjectById(widget.group.id) && !menu) return false;
     if (this.visualSelection.visible && !this.visualSelection.getObjectById(widget.group.id) && !menu) return false;
@@ -1834,6 +1847,11 @@ export class LeanHud implements Hud {
     }
     this.boxes.setActive(this.locked ?? this.candidate);
     this.boxes.setSelected(this.locked);
+    for (const [id, start] of this.fading) {
+      const opacity = 1 - (this.time - start) / 0.25;
+      if (opacity <= 0 || this.targets.has(id)) { this.fading.delete(id); if (!this.targets.has(id)) this.boxes.remove(id); }
+      else this.boxes.setOpacity(id, opacity);
+    }
     this.boxes.update(frame.dt, this.head, frame, this.home.mode);
     for (const [id, label] of this.labels) {
       const box = this.boxes.boxes.get(id); if (!box) continue;
