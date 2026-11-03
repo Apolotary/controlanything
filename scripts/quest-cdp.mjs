@@ -8,6 +8,7 @@
 //   node scripts/quest-cdp.mjs --sweep [ms=6000]     HUD visibility flips per frame (blink hunt during a head sweep)
 //   node scripts/quest-cdp.mjs --hands [ms=4500]     hand joints and pinch distance sampling
 //   node scripts/quest-cdp.mjs --screenshot [out.png] compositor screenshot (with passthrough) via metacam, then adb pull
+// Video: record in the headset (Meta button → Camera → Record video); this Quest's metacam service only takes screenshots over adb.
 //   node scripts/quest-cdp.mjs --awake on|off        keep the headset awake on the desk (proximity sensor override)
 //
 // Options: --serial <adb serial> (default: $ANDROID_SERIAL or the only device), --json (machine output only).
@@ -173,6 +174,7 @@ try {
   else if (flag('--hands')) { const ms = numberAfter('--hands', 4500); result = await evaluate(HANDS(ms), ms + 8000); }
   else if (flag('--screenshot')) result = await screenshot(resolve(option('--screenshot')?.startsWith('--') || !option('--screenshot') ? `quest-${Date.now()}.png` : option('--screenshot')));
   else if (flag('--awake')) result = awake(option('--awake') !== 'off');
+
   else {
     const expr = argv.find((a) => !a.startsWith('--') && a !== serial);
     if (!expr) { console.error('usage: quest-cdp.mjs "<js>" | --fps [n] | --state | --sweep [ms] | --hands [ms] | --screenshot [out.png] | --awake on|off'); process.exit(2); }

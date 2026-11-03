@@ -22,8 +22,8 @@ Target: **Enter AR → pinch the MacBook → setup ring → arcs → fist + push
 | Q1 | USB + adb reverse | `adb devices` lists the Quest. `adb reverse tcp:8787 tcp:8787`. | |
 | Q2 | Page open | Quest Browser on `http://localhost:8787/quest/`. Reload only while AR is off. | |
 | Q3 | CDP reachable | `node scripts/quest-cdp.mjs --state` prints the mode, HUD and socket (the adb forward is created on demand). | |
-| Q4 | Headset awake while on the desk (optional) | `node scripts/quest-cdp.mjs --awake on`. Undo it before wearing: `--awake off`. | |
-| Q5 | Compositor capture | Headset recording (Camera → Record video) or `metavr@1.8.1`. Test a 5 s clip first. | |
+| Q4 | Headset awake on the desk (optional, for measuring without wearing) | `node scripts/quest-cdp.mjs --awake on`; undo with `--awake off` before wearing. Unworn, the headset may drop to Home after a while; the XR session survives (hidden) and resumes when you return to the browser. | |
+| Q5 | Compositor capture | Video: Meta button → Camera → **Record video** (passthrough + AR UI). Stills: `node scripts/quest-cdp.mjs --screenshot out.jpg` (metacam, passthrough included; verified Nov 4). Test a 5 s clip first. | |
 
 ## 3. Golden path (one continuous take)
 
