@@ -21,6 +21,8 @@ export { LOOK } from './theme';
 export { Button as HorizonButton, ButtonIcon, ButtonLabel, Panel } from '@pmndrs/uikit-horizon';
 
 export const isBrowser = typeof document !== 'undefined';
+/** Our bundled Inter MSDF (Latin + · • … ’ — ✓; built from the licensed Inter in public/fonts). uikit's default atlas is ASCII-only. */
+export const FONT = { fontFamilies: { ce: { medium: '/quest/fonts/muse-reader-inter.json' } }, fontFamily: 'ce' } as const;
 if (isBrowser) setPreferredColorScheme('dark');
 
 /** A small, tree-shaken icon set (Lucide, ISC). Add names here rather than importing the whole pack. */
@@ -62,7 +64,7 @@ export function glassPanel(options: { width: number; height?: number; renderOrde
     backgroundColor: withOpacity('#ffffff', LOOK.plate.alpha), panelMaterialClass: GrayGlassMaterial,
     borderWidth: 1.5, borderColor: withOpacity(LOOK.plate.rim, LOOK.plate.rimAlpha),
     renderOrder: renderOrder ?? LOOK.render.card, depthTest: false, depthWrite: false, color: LOOK.text.primary,
-    ...rest,
+    ...FONT, ...rest,
   } as never);
 }
 

@@ -71,7 +71,7 @@ export class DeviceCard extends Group {
     this.userData.view = this.view;
     if (!browser) return;
     const { card } = LOOK;
-    this.root = glassPanel({ width: this.widthM });
+    this.root = glassPanel({ width: this.widthM, pointerEventsOrder: 1, anchorY: 'center' } as never);
     const header = new Container({ flexDirection: 'row', alignItems: 'center', gap: 12 });
     const titles = new Container({ flexDirection: 'column', flexGrow: 1, flexShrink: 1, gap: 4 });
     this.title = new Text({ text: '', fontSize: card.titleSize, fontWeight: 'semi-bold', color: LOOK.text.primary, wordBreak: 'keep-all' });
@@ -113,10 +113,14 @@ export class DeviceCard extends Group {
   /** uikit root for the shared spatial-input updater. */
   get uiRoot(): { update(dtMs: number): void } | undefined { return this.root; }
 
+  private viewKey = '';
   set(view: CardView): void {
+    const key = JSON.stringify(view);
+    if (key === this.viewKey) return;
+    this.viewKey = key;
     this.view = view; this.userData.view = view;
-    const key = view.agent ? `${view.agent.state}` : '';
-    if (key !== this.agentKey) { this.agentKey = key; this.agentSince = this.now; }
+    const agentKey = view.agent ? view.agent.state : '';
+    if (agentKey !== this.agentKey) { this.agentKey = agentKey; this.agentSince = this.now; }
     if (!this.root) return;
     this.title!.setProperties({ text: view.title });
     this.subtitle!.setProperties({ text: view.subtitle });

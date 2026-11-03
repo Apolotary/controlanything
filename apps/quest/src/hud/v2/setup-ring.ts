@@ -63,8 +63,10 @@ export class ScreenRing extends Mesh<PlaneGeometry, ShaderMaterial> {
           float te = aa * 4.0 / (box.x + box.y);
           float filled = 1.0 - smoothstep(progress - te, progress + te, t);
           float comet = working * pow(clamp(1.0 - fract(fract(time / ${LOOK.ring.sweepS.toFixed(2)}) - t) / 0.18, 0.0, 1.0), 2.0);
-          float alpha = line * max(mix(baseAlpha, fillAlpha, filled), comet * 0.9);
-          vec3 color = vec3(1.0);
+          float lineA = line * max(mix(baseAlpha, fillAlpha, filled), comet * 0.9);
+          float shadow = (1.0 - smoothstep(stroke * 0.5 + 0.003 - aa, stroke * 0.5 + 0.003 + aa, abs(d))) * 0.3;
+          float alpha = lineA + shadow * (1.0 - lineA);
+          vec3 color = vec3(lineA / max(alpha, 1e-4));
           // One dot per verified action: lit = passed; the newest one swells while it pulses.
           for (int i = 0; i < MAX_TICKS; i++) {
             if (float(i) >= tickCount) break;
@@ -76,7 +78,7 @@ export class ScreenRing extends Mesh<PlaneGeometry, ShaderMaterial> {
             float rim = 1.0 - smoothstep(0.0012, 0.0012 + aa, abs(dt - r));
             float tickAlpha = lit > 0.5 ? dot : max(rim * 0.9, dot * 0.25);
             alpha = max(alpha, tickAlpha);
-            color = mix(color, lit > 0.5 ? vec3(1.0) : vec3(0.82), dot);
+            color = mix(color, lit > 0.5 ? vec3(1.0) : vec3(0.82), max(dot, rim * (1.0 - lit)));
           }
           // Pass pulse: one soft halo leaves the ring and fades (0.9 s).
           float halo = (1.0 - pulse) * (1.0 - smoothstep(0.0, 0.004 + pulse * 0.03, abs(d - pulse * 0.03)));

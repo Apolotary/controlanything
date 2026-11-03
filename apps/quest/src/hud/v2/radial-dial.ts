@@ -1,7 +1,7 @@
 import { Group, Matrix4, Mesh, MeshBasicMaterial, Quaternion, RingGeometry, ShaderMaterial, Vector3, type Object3D } from 'three';
 import { Container, Text } from '@pmndrs/uikit';
 import { arcFraction } from './control-shape';
-import { FlatMaterial, isBrowser } from './look';
+import { FONT, FlatMaterial, isBrowser } from './look';
 import { ScreenRing, type RingMode } from './setup-ring';
 import { LOOK } from './theme';
 
@@ -73,19 +73,22 @@ export class ArcDial extends Group {
           float band = 1.0 - smoothstep(-aa, aa, d);
           float te = aa / (radius * abs(sweep));
           float filled = 1.0 - smoothstep(value - te, value + te, tc);
-          float alpha = band * mix(trackAlpha + hover * 0.12, 0.96, filled);
-          vec3 color = vec3(1.0);
-          // Soft halo while hovered or live: shows the band is grabbable / driven by the hand.
+          // Premultiplied layers: dark contact shadow (reads over a bright wall) < track/fill < halo < knob.
+          float shadow = (1.0 - smoothstep(-aa, aa, d - 0.0035)) * 0.34;
+          float trackA = band * mix(trackAlpha + hover * 0.12, 0.96, filled);
+          float alpha = trackA + shadow * (1.0 - trackA);
+          vec3 color = vec3(trackA);
           float halo = (1.0 - smoothstep(0.0, thick * 0.9, max(d, 0.0))) * (1.0 - band) * (hover * 0.28 + live * 0.22);
-          alpha = max(alpha, halo);
+          color = color * (1.0 - halo) + vec3(halo); alpha = halo + alpha * (1.0 - halo);
           // Knob: dark disk in a white ring (inspiration f017/f021).
           float av = from + sweep * value;
           float dk = length(vP - radius * vec2(cos(av), sin(av)));
           float kr = knobR * (1.0 + hover * 0.15);
           float outer = 1.0 - smoothstep(kr - aa, kr + aa, dk);
           float inner = 1.0 - smoothstep(kr * 0.64 - aa, kr * 0.64 + aa, dk);
+          color = color * (1.0 - outer) + vec3(outer); alpha = outer + alpha * (1.0 - outer);
           color = mix(color, vec3(0.07, 0.07, 0.09), inner);
-          alpha = max(alpha, outer);
+          color /= max(alpha, 1e-4);
           gl_FragColor = vec4(color, alpha * fade);
           #include <colorspace_fragment>
         }`,
@@ -237,14 +240,15 @@ export class DialRig extends Group {
     if (!isBrowser) return;
     this.labels = new Container({
       sizeX: 0.6, sizeY: 0.05, pixelSize: LOOK.pixelSize, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-      renderOrder: LOOK.render.labels, depthTest: false, depthWrite: false, pointerEvents: 'none',
+      renderOrder: LOOK.render.labels, depthTest: false, depthWrite: false, pointerEvents: 'none', ...FONT,
     } as never);
     this.labels.name = 'dial-labels';
     for (let i = 0; i < 2; i++) {
-      const slot = new Container({ width: 150, flexDirection: 'row', justifyContent: 'center' });
-      const box = new Container({ height: LOOK.pill.height, paddingX: 12, borderRadius: 1000, alignItems: 'center', flexDirection: 'row',
+      const slot = new Container({ width: 200, flexDirection: 'row', justifyContent: 'center' });
+      // Far labels (the device is ~1 m away) are 1.4× the card's pill size.
+      const box = new Container({ height: 42, paddingX: 16, borderRadius: 1000, alignItems: 'center', flexDirection: 'row',
         backgroundColor: LOOK.pill.light, panelMaterialClass: FlatMaterial });
-      const text = new Text({ text: '', fontSize: LOOK.pill.fontSize, fontWeight: 'semi-bold', color: LOOK.text.onLight, whiteSpace: 'nowrap' } as never);
+      const text = new Text({ text: '', fontSize: 20, fontWeight: 'medium', color: LOOK.text.onLight, whiteSpace: 'nowrap' } as never);
       box.add(text); slot.add(box); this.labels.add(slot);
       this.pills.push({ box, text, shown: '' });
     }
@@ -285,9 +289,9 @@ export class DialRig extends Group {
       this.ring.setSize(W, H); this.left.layout(W, H); this.right.layout(W, H);
       if (this.labels) {
         this.left.topEnd(this.end);
-        const span = Math.abs(this.end.x) * 2 + 0.15;
+        const span = Math.abs(this.end.x) * 2 + 0.2;
         this.labels.setProperties({ sizeX: span });
-        this.labels.position.set(0, this.end.y + LOOK.dial.knob + 0.03, 0.004);
+        this.labels.position.set(0, this.end.y + LOOK.dial.knob + 0.036, 0.004);
       }
     }
     this.desired.copy(facing);

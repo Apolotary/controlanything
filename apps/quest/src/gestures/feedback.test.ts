@@ -9,7 +9,7 @@ function frame(time = 0): ShellFrame {
     ray: { origin: new Vector3(), dir: new Vector3(0, 0, -1) }, pinchPoint: new Vector3(),
     controller: false, palmUp: false, palmUpMs: 0, pinching: false, justPinched: false, justReleased: false,
   });
-  return { time, dt: 1000 / 90, head: { position: new Vector3(0, 1.4, 0), quaternion: new Quaternion(), ray: { origin: new Vector3(), dir: new Vector3(0, 0, -1) } }, hands: { left: hand(-0.2), right: hand(0.2) } };
+  return { time, dt: 1 / 90, head: { position: new Vector3(0, 1.4, 0), quaternion: new Quaternion(), ray: { origin: new Vector3(), dir: new Vector3(0, 0, -1) } }, hands: { left: hand(-0.2), right: hand(0.2) } };
 }
 const state = (engaged: boolean, value = 25): GestureFeedbackState => ({ engaged, axes: [{ axis: 'right_height', actionId: 'cc71', label: 'Warp', value, normalized: value / 100 }] });
 

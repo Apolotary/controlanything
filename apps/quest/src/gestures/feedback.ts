@@ -95,7 +95,7 @@ export class GestureFeedback {
     this.root.visible = state !== null;
     liveGesture.active = state !== null;
     if (!state) { this.wasLive = false; this.lastText = -Infinity; liveGesture.engaged = false; return; }
-    const dt = Math.min(0.1, Math.max(0, frame.dt / 1000));
+    const dt = Math.min(0.1, Math.max(0, frame.dt));
     const changed = this.engaged !== state.engaged || this.trackingLost !== !!state.trackingLost;
     this.engaged = state.engaged; this.trackingLost = !!state.trackingLost;
     this.wasLive ||= state.engaged;

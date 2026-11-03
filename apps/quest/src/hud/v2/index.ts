@@ -29,6 +29,10 @@ import { labEnabled } from '../../app/lab';
 import { PinchTargetHistory, expandedRayBounds, rayTargetWithinAngle } from '../../app/precision';
 import { EdgePlacement } from './comfort';
 import { acceptsCommandResult, commandTimedOut, commandSubtitle, routeLabel, type CommandState } from './command-state';
+import { DeviceCard, type CardAction, type CardAgent, type CardView } from './device-card';
+import { DialRig, type DialMode, type DialModel } from './radial-dial';
+import { setupChecks, setupFraction } from './setup-ring';
+import { liveGesture } from '../../gestures/feedback';
 export { whenSdfReady } from './text';
 export { THEME } from './theme';
 
@@ -529,102 +533,206 @@ export class LeanHud implements Hud {
     const signature = `${this.locked}/${m?.spec.specId}/${m?.armed}/${m?.spec.controls.filter((c) => this.isArmed(m, c)).map((c) => c.id).join(',')}/${menu?.items.map((item) => item.id).join(',')}/${this.deviceState?.mappingActionId}`;
     if (signature !== this.controlsSignature) { this.controlsStarted = this.time; this.controlsSignature = signature; }
     this.clear(this.controls);
-    if (!this.card.visible) return;
-    const lock = this.button(this.controls, 'device-lock', '', 0.171, THEME.card.titleY, 0.048, 'handle', () => {
-      this.pinned = !this.pinned;
-      this.card.userData.pinned = this.pinned;
-      lock.group.userData.selected = this.pinned;
-      this.refreshStatus();
-    });
-    lock.group.userData.selected = this.pinned;
-    const lockIcon = new Mesh(this.lockGeometry, this.materials.accent);
-    lockIcon.position.z = THEME.panel.depth; lock.group.add(lockIcon);
+    // The Horizon card (device-card.ts) replaces the legacy card contents; no Details, JSON or paragraphs.
+    this.detailsOpen = false;
+    this.refreshLook();
+  }
+  // --- WP3 look: Horizon device card + spatial arc dials on the selected screen ---------------------------
+  private look?: { card: DeviceCard; rig: DialRig; spatial: SpatialInput | null; unregister: (() => void)[] };
+  private readonly lookFacing = new Quaternion();
+  private lookClock = 0;
+  private ensureLook(): { card: DeviceCard; rig: DialRig; spatial: SpatialInput | null; unregister: (() => void)[] } {
+    if (!this.look) {
+      const card = new DeviceCard({
+        toggle: () => {
+          const state = this.deviceState?.targetId === this.locked ? this.deviceState : null;
+          if (this.locked && state?.performAvailable) this.events.emit('handControl', { targetId: this.locked, enabled: !state.handControl });
+        },
+        action: (id) => this.lookAction(id),
+      });
+      // Centred on the legacy card origin, so the workspace anchor, drag bar and tether keep working.
+      card.position.set(0, 0, THEME.panel.depth * 4);
+      this.card.add(card);
+      const rig = new DialRig();
+      for (const dial of rig.dials) dial.onChange = (id, fraction, phase) => this.lookDial(id, fraction, phase);
+      this.root.add(rig);
+      // Retire the legacy card chrome into a hidden holder: names stay addressable, nothing renders or takes input.
+      const legacy = new Group(); legacy.name = 'legacy-card-chrome'; legacy.visible = false;
+      this.card.add(legacy);
+      legacy.add(this.cardPlate, this.heading, this.status, this.verdict, this.progress, this.setupProgress, this.details, this.controls);
+      legacy.add(this.screenGuide);
+      this.look = { card, rig, spatial: null, unregister: [] };
+    }
+    const look = this.look;
+    if (look.spatial !== this.spatial) {
+      for (const off of look.unregister.splice(0)) off();
+      look.spatial = this.spatial;
+      if (this.spatial) {
+        const spatial = this.spatial;
+        const cardRoot = look.card.uiRoot, labels = look.rig.uiRoot;
+        if (cardRoot) look.unregister.push(spatial.addUiRoot(cardRoot, () => visible(look.card)));
+        if (labels) look.unregister.push(spatial.addUiRoot(labels, () => visible(look.rig)));
+        // Forwarded mouse hover over our surfaces keeps the legacy mouse cursor from also acting.
+        for (const target of [look.card, look.rig.left.hit, look.rig.right.hit]) {
+          const over = (e: unknown) => this.spatial?.markHover(e as { pointerId: number; pointerType?: string }, true);
+          const out = (e: unknown) => this.spatial?.markHover(e as { pointerId: number; pointerType?: string }, false);
+          target.addEventListener('pointerover' as never, over as never); target.addEventListener('pointerout' as never, out as never);
+          look.unregister.push(() => { target.removeEventListener('pointerover' as never, over as never); target.removeEventListener('pointerout' as never, out as never); });
+        }
+      }
+    }
+    return look;
+  }
+  private lookAction(id: string): void {
+    const target = this.selected(), m = this.mounted();
+    if (!target) return;
+    if (id === 'control-setup') this.events.emit('setup', { targetId: target.id });
+    else if (id === 'control-cancel') this.events.emit('cancel', { targetId: target.id });
+    else if (id === 'control-pair') this.events.emit('pair', { targetId: target.id });
+    else if (id === 'control-pair-cancel') this.events.emit('pairCancel', { targetId: target.id });
+    else if (id === 'control-pair-code') this.openPairCode();
+    else if (id === 'gesture-setup') this.events.emit('gestureSetup', { targetId: target.id });
+    else if (id.startsWith('control:') && m) {
+      const c = m.spec.controls.find((control) => control.id === id.slice(8));
+      if (!c || !this.isArmed(m, c)) return;
+      m.values.set(c.id, c.kind === 'toggle' ? !m.values.get(c.id) : true);
+      this.updatePower(m, c, m.values.get(c.id)!);
+      m.selectedButton = c.id;
+      this.emitControl(m, c, 'start');
+      if (c.kind === 'trigger') m.values.set(c.id, false);
+      this.emitControl(m, c, 'end');
+    } else if (id.startsWith('action:') && m) {
+      const menu = this.menus.get(this.locked ?? this.menuTarget ?? '');
+      const item = menu?.items.find((entry) => entry.id === id.slice(7));
+      if (!menu || !item) return;
+      this.selectedAction = item.id;
+      this.updatePower(m, { kind: 'trigger', label: item.label, binding: { action: item.id } }, true);
+      this.emitHack(m, { targetId: this.locked ?? this.menuTarget!, itemId: item.id, controlId: item.controlId, index: menu.items.indexOf(item) });
+    }
+    this.refreshLook();
+  }
+  private lookDial(id: string, fraction: number, phase: 'start' | 'move' | 'end'): void {
+    const m = this.mounted(), c = m?.spec.controls.find((control) => control.id === id);
+    if (!m || !c || !this.isArmed(m, c)) return;
+    const value = controlValue(fraction, c.range ?? { min: 0, max: 1 });
+    m.values.set(c.id, value);
+    if (isBrightness(c)) m.power = true;
+    this.emitControl(m, c, phase);
+    this.refreshDials();
+  }
+  private dialModel(m: Mounted, c: Control | undefined): DialModel | null {
+    if (!c) return null;
+    const range = c.range ?? { min: 0, max: 1 }, raw = m.values.get(c.id) ?? c.default ?? range.min;
+    const value = typeof raw === 'object' ? raw.x : Number(raw);
+    const fraction = Math.min(1, Math.max(0, (value - range.min) / (range.max - range.min || 1)));
+    const label = /ripple/i.test(c.label) ? 'Ripples' : title(c.label, 12);
+    return { id: c.id, label, fraction, display: String(Math.round(value)) };
+  }
+  private refreshDials(): void {
+    const look = this.look, m = this.mounted();
+    if (!look) return;
+    if (!m) { look.rig.setDials(null, null); return; }
+    look.rig.setDials(this.dialModel(m, this.primaryContinuous(m)), this.dialModel(m, this.otherContinuous(m)));
+  }
+  private lookTitle(): string {
+    const target = this.selected(), m = this.mounted(), menu = this.menus.get(this.locked ?? this.menuTarget ?? '');
+    const name = target?.label ?? menu?.title ?? m?.spec.title ?? 'Device';
+    return /visual.?synth/i.test(name) ? 'Visual synth' : title(name, 24);
+  }
+  private lookAgent(working: boolean): CardAgent | null {
+    const view = this.assistantView;
+    const model = this.upload?.modelId ?? this.setupProgressView?.source?.match(/^Live · (.+)$/)?.[1];
+    if (view && (view.targetId === this.locked || view.targetId === 'muse-general')) {
+      if (view.state === 'listening') return { state: 'listening', text: view.transcript ?? '' };
+      if (view.state === 'thinking' || view.state === 'setup') return { state: 'thinking', text: view.transcript ?? '', model };
+      if (view.state === 'error') return { state: 'error', text: view.text ?? '' };
+      if (view.state !== 'idle') return { state: 'reply', text: view.text ?? '', model };
+    }
+    if (working && this.setupProgressView) return { state: 'reply', text: this.setupProgressView.title, model };
+    return null;
+  }
+  private lookView(): CardView {
+    const target = this.selected(), m = this.mounted();
     const state = this.deviceState?.targetId === this.locked ? this.deviceState : null;
     const connection = this.selectedConnection();
-    if (this.hasSetupProgress() || this.hasCanvas()) { this.details.visible = false; return; }
-    if (state?.busy && !(connection === 'offline' && (state.action === 'open-companion' || state.action === 'pair-device'))) {
-      this.button(this.controls, 'control-cancel', 'Cancel', 0, THEME.card.buttonsY, 0.16, 'handle', () => this.events.emit('cancel', { targetId: target!.id }));
-      return;
-    }
-    if (connection !== 'ready') {
-      if (connection === 'setup') this.button(this.controls, 'control-setup', 'Set up control', 0, THEME.card.buttonsY, 0.24, 'handle', () => this.events.emit('setup', { targetId: target!.id }));
-      if (connection === 'offline' && (state?.action === 'open-companion' || state?.action === 'pair-device')) {
-        if (state.pairingSeconds) this.button(this.controls, 'control-pair-cancel', 'Cancel', -0.09, THEME.card.buttonsY, 0.16, 'handle', () => this.events.emit('pairCancel', { targetId: target!.id }));
-        else {
-          const pairLabel = state.hint?.includes('/pair on this laptop') ? 'Pair' : state.action === 'open-companion' ? 'Connect Mac' : 'Connect device';
-          const primary = this.button(this.controls, 'control-pair', pairLabel, 0, THEME.card.buttonsY, 0.24, 'handle', () => this.events.emit('pair', { targetId: target!.id }));
-          this.selectButton(primary.group, true, 0.24);
+    const name = this.lookTitle();
+    const visual = /visual/i.test(name) || !!state?.silentVisual;
+    const route = visual ? 'via Mac' : routeLabel(m?.spec.device?.transport, target?.channel).replace(/ \(.*\)$/, '');
+    const working = this.setupWorking() || !!state?.busy;
+    const actions: CardAction[] = [];
+    let subtitle: string, toggle: CardView['toggle'] = null;
+    if (state?.pairingSeconds) {
+      subtitle = `Look at the Mac's code · ${state.pairingSeconds}s`;
+      actions.push({ id: 'control-pair-cancel', label: 'Cancel', icon: 'cancel' }, { id: 'control-pair-code', label: 'Type code', icon: 'keyboard' });
+    } else if (working) {
+      const checks = setupChecks(this.setupProgressView);
+      subtitle = checks.passed ? `Setting up… ${checks.passed} of ${checks.total} checked` : 'Setting up…';
+      actions.push({ id: 'control-cancel', label: 'Cancel', icon: 'cancel' });
+    } else if (connection === 'offline' && (state?.action === 'open-companion' || state?.action === 'pair-device')) {
+      subtitle = 'Not connected';
+      const pairLabel = state.hint?.includes('/pair on this laptop') ? 'Pair' : state.action === 'open-companion' ? 'Connect Mac' : 'Connect';
+      actions.push({ id: 'control-pair', label: pairLabel, icon: 'link', primary: true }, { id: 'control-pair-code', label: 'Type code', icon: 'keyboard' });
+    } else if (connection === 'offline') subtitle = 'Offline · open the Mac app';
+    else if (connection === 'unknown') subtitle = 'Connecting…';
+    else if (connection === 'setup') {
+      const failed = !!this.setupProgressView?.stages.some((stage) => stage.status === 'failed');
+      subtitle = failed ? 'Setup stopped' : 'Ready to set up';
+      actions.push({ id: 'control-setup', label: failed ? 'Try again' : 'Set up', icon: failed ? 'retry' : 'setup', primary: true });
+    } else {
+      if (m?.armed && state?.performAvailable) toggle = { on: !!state.handControl, label: state.handControl ? 'Stop' : 'Perform', name: 'hand-control' };
+      subtitle = state?.handControl ? state.performingLive ? `Live · ${route}` : 'Paused · hold left fist'
+        : m?.command?.phase === 'sending' ? 'Sending…'
+          : m?.command?.phase === 'fail' ? 'Not delivered · try again'
+            : m?.armed ? `${m.power === false ? 'Off' : 'On'} · ${route}` : 'Confirm to enable controls';
+      if (m?.armed && state && !state.performAvailable && m.spec.controls.some((control) => this.isArmed(m, control))) actions.push({ id: 'gesture-setup', label: 'Set up gestures', icon: 'hand' });
+      const presets = m ? m.spec.controls.filter((c) => this.isArmed(m, c) && (c.kind === 'trigger' || c.kind === 'toggle')) : [];
+      const iconFor = (label: string): CardAction['icon'] => /flow|wave/i.test(label) ? 'waves' : /ring|circle/i.test(label) ? 'rings' : /prism|triangle/i.test(label) ? 'prism' : undefined;
+      if (m && presets.length) for (const c of presets.slice(0, 3 - actions.length)) {
+        actions.push({ id: `control:${c.id}`, label: this.actionLabel(c.label), icon: iconFor(c.label),
+          selected: c.kind === 'toggle' ? Boolean(m.values.get(c.id)) : m.selectedButton === c.id });
+      } else if (m?.armed) {
+        const menu = this.menus.get(this.locked ?? this.menuTarget ?? '');
+        for (const item of (menu?.items ?? []).filter((entry) => entry.kind !== 'control' && entry.status === 'verified').slice(0, 3 - actions.length)) {
+          actions.push({ id: `action:${item.id}`, label: this.actionLabel(item.label), icon: iconFor(item.label), selected: this.selectedAction === item.id });
         }
-        if (state.pairingSeconds) this.button(this.controls, 'control-pair-code', 'Type code', 0.09, THEME.card.buttonsY, 0.16, 'handle', () => this.openPairCode());
-        else this.button(this.controls, 'control-pair-code', 'Type code', 0, THEME.card.detailsY, 0.16, 'handle', () => this.openPairCode());
-        if (state.pairingSeconds) this.label(this.controls, state.action === 'open-companion' ? 'or type the code shown on your Mac' : 'or type the code shown on the device', THEME.card.detailsY, THEME.font.detail).name = 'pair-code-hint';
       }
-      return;
     }
-    if (state?.handControl && m?.armed && state.performAvailable) {
-      const stop = this.button(this.controls, 'hand-control', 'Stop hands', 0, THEME.card.buttonsY, 0.26, 'handle',
-        () => this.events.emit('handControl', { targetId: target!.id, enabled: false }));
-      this.selectButton(stop.group, true, 0.26);
-      this.details.visible = false;
-      return;
+    return { title: name, subtitle, toggle, actions: actions.slice(0, 3), agent: this.lookAgent(working) };
+  }
+  private refreshLook(): void {
+    if (!this.look) return;
+    this.look.card.set(this.lookView());
+    this.refreshDials();
+  }
+  /** Per frame, after place(): the Horizon card replaces the legacy card chrome; the dials ride the selected box. */
+  private updateLook(frame: HudFrame): void {
+    const look = this.ensureLook(), dt = Math.min(0.1, Math.max(0, frame.dt));
+    this.lookClock += dt;
+    if (this.lookClock >= 0.1) { this.lookClock = 0; look.card.set(this.lookView()); }
+    const target = this.selected(), m = this.mounted();
+    const state = this.deviceState?.targetId === this.locked ? this.deviceState : null;
+    const box = target ? this.boxes.boxes.get(target.id) : undefined;
+    const workspace = this.home.mode === 'control' && !!target?.tagged && !this.modal.visible && !this.deck.panel.visible && !this.helperPairingView && !this.projectView;
+    const connection = this.selectedConnection();
+    const ready = connection === 'ready' && !!m?.armed && !this.setupWorking() && !state?.busy;
+    const mode: DialMode = !workspace || !box ? 'hidden' : ready ? state?.handControl ? 'perform' : 'armed' : 'setup';
+    look.rig.setMode(mode);
+    if (box && mode !== 'hidden') {
+      this.boxes.facingQuaternion(this.head, box.center, this.lookFacing, box.facing);
+      look.rig.place(box.center, box.w, box.h, this.lookFacing, dt);
     }
-    this.button(this.controls, 'details-toggle', this.detailsOpen ? 'Close details' : 'Details', 0, THEME.card.detailsY, 0.15, 'handle', () => {
-      this.detailsOpen = !this.detailsOpen;
-      this.details.visible = this.detailsOpen;
-      this.refreshDetails();
-      this.refreshCard();
-    });
-    if (this.detailsOpen) {
-      const other = m && this.otherContinuous(m);
-      if (m && other) this.mainControl(m, other, 0.025);
-      this.refreshDetails();
-      this.button(this.controls, 'device-forget', 'Forget device', 0, THEME.card.buttonsY, 0.18, 'handle', () => this.events.emit('forget', { targetId: target!.id }));
-      return;
+    if (mode === 'setup') {
+      const checks = setupChecks(this.setupProgressView);
+      look.rig.ring.setProgress(ready ? 1 : setupFraction(this.setupProgressView), checks.passed, checks.total, this.setupWorking() || !!state?.busy);
     }
-    if (m) this.refreshCommandUi(m);
-    const main = m ? this.primaryContinuous(m) : undefined;
-    const buttons: Control[] = [];
-    if (m) for (const c of m.spec.controls) {
-      if (!this.isArmed(m, c)) continue;
-      if (c.kind === 'trigger' || c.kind === 'toggle') buttons.push(c);
+    if (mode === 'perform' && liveGesture.active && m) for (const dial of look.rig.dials) {
+      const c = dial.model ? m.spec.controls.find((control) => control.id === dial.model!.id) : undefined;
+      const live = c?.binding?.action ? liveGesture.values.get(c.binding.action) : undefined;
+      if (live !== undefined) dial.target = live;
     }
-    const presetOrder = (c: Control) => {
-      const action = c.binding?.action.split('.').at(-1) ?? '';
-      if (/^(full[ _-]?on|full|on)$/i.test(action) || /full[ _-]?on/i.test(c.label)) return 0;
-      if (/^off$/i.test(action) || /\boff\b/i.test(c.label)) return 1;
-      return /^night(?:[ _-]?light)?$/i.test(action) || /night/i.test(c.label) ? 2 : 3;
-    };
-    buttons.sort((a, b) => presetOrder(a) - presetOrder(b));
-    buttons.splice(3);
-    if (m && main) this.mainControl(m, main);
-    if (m?.command?.phase !== 'fail' && m?.armed && state?.performAvailable) {
-      const perform = this.button(this.controls, 'hand-control', state.handControl ? 'Stop hands' : 'Perform', -0.075, THEME.card.detailsY, 0.19, 'handle', () => this.events.emit('handControl', { targetId: target!.id, enabled: !state.handControl }));
-      this.selectButton(perform.group, !!state.handControl, 0.19);
-      const details = this.controls.getObjectByName('details-toggle');
-      if (details) details.position.x = 0.115;
-    } else if (m?.armed && state && !state.performAvailable && m.spec.controls.some((control) => this.isArmed(m, control))) {
-      const setup = this.button(this.controls, 'gesture-setup', 'Set up gestures', -0.075, THEME.card.detailsY, 0.21, 'handle', () => this.events.emit('gestureSetup', { targetId: target!.id }));
-      setup.group.userData.primary = true;
-      const details = this.controls.getObjectByName('details-toggle');
-      if (details) details.position.x = 0.115;
-    }
-    if (m && buttons.length) buttons.forEach((c, index) => this.controlButton(m, c, index, buttons.length));
-    else if (menu && m?.armed) {
-      const shown = menu.items.filter((item) => item.kind !== 'control' && item.status === 'verified').slice(0, 3);
-      shown.forEach((item, index) => {
-        const widget = this.button(this.controls, `action:${item.id}`, this.actionLabel(item.label), (index - (shown.length - 1) / 2) * (THEME.control.buttonWidth + THEME.control.buttonGap), THEME.card.buttonsY, THEME.control.buttonWidth, 'hack', () => {
-          this.selectedAction = item.id;
-          for (const action of shown) {
-            const group = this.controls.getObjectByName(`action:${action.id}`) as Group;
-            this.selectButton(group, action.id === item.id);
-          }
-          this.updatePower(m, { kind: 'trigger', label: item.label, binding: { action: item.id } }, true);
-          this.emitHack(m, { targetId: this.locked ?? this.menuTarget!, itemId: item.id, controlId: item.controlId, index: menu.items.indexOf(item) });
-        });
-        widget.group.userData.action = true; widget.group.userData.controlId = item.id;
-        this.selectButton(widget.group, this.selectedAction === item.id);
-      });
-    }
+    const registered = !!look.spatial;
+    look.rig.update(dt, mode !== 'hidden', !registered);
+    look.card.update(dt * 1000, this.card.visible && visible(this.card), !registered);
   }
   private selectButton(group: Group, selected: boolean, width = THEME.control.buttonWidth as number): void {
     group.userData.selected = selected;
@@ -760,19 +868,9 @@ export class LeanHud implements Hud {
       ? this.menus.get(m.command.hack.targetId)?.items.find((item) => item.id === m.command!.hack!.itemId)?.status === 'verified'
       : !!m.command && m.spec.controls.some((control) => control.id === m.command!.controlId && this.isArmed(m, control));
     const failed = m.command?.phase === 'fail' && canRetry;
-    const retry = this.controls.getObjectByName('command-retry');
-    if (retry) retry.visible = failed;
-    else if (failed && !this.detailsOpen) {
-      this.button(this.controls, 'command-retry', 'Retry', 0, THEME.card.detailsY, 0.16, 'control', () => {
-        const command = m.command;
-        if (command?.hack) { this.emitHack(m, command.hack); return; }
-        const control = m.spec.controls.find((c) => c.id === command?.controlId);
-        if (!command || !control || !this.isArmed(m, control)) return;
-        m.values.set(control.id, command.value); this.updatePower(m, control, command.value); this.emitControl(m, control, 'end');
-      });
-    }
-    const details = this.controls.getObjectByName('details-toggle');
-    if (details) details.visible = !failed;
+    // Failure shows on the card's status line; tapping the preset or dial again retries.
+    void failed;
+    this.refreshLook();
     this.refreshStatus();
   }
   setCommandResult(specId: string, controlId: string, ts: number, ok: boolean): void {
@@ -928,7 +1026,7 @@ export class LeanHud implements Hud {
     if (c && (!isBrightness(c) || previous !== value)) this.updatePower(m, c, value);
     if (this.mounted() === m) {
       if (c && thumb) this.positionThumb(m, c, thumb);
-      this.refreshButtons(m); this.refreshStatus();
+      this.refreshButtons(m); this.refreshStatus(); this.refreshDials();
     }
   }
   showConfirm(confirm: ConfirmRequest | null): void {
@@ -1704,6 +1802,7 @@ export class LeanHud implements Hud {
     this.assistant.updateUi(frame.dt * 1000);
     this.hasFrame = true;
     this.head.copy(frame.head.position); this.headQuaternion.copy(frame.head.quaternion);
+    this.updateLook(frame);
     // Wrist palette: palm toward the face (or the controller menu button) shows it; Perform hides it.
     const performing = !!this.deviceState?.handControl || !!this.projectView?.running;
     const movingPanel = [...this.holds.values()].some((hold) => hold.widget.drag);
