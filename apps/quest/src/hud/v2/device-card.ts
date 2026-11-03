@@ -129,7 +129,10 @@ export class DeviceCard extends Group {
     if (toggle) {
       this.toggle!.name = toggle.name;
       // White = on (inspiration §6); dark glass = off.
-      this.toggle!.setProperties({ variant: toggle.on ? 'primary' : 'secondary', backgroundColor: toggle.on ? withOpacity('#ffffff', 0.92) : withOpacity('#ffffff', 0.14) });
+      // Explicit hover/active layers: the kit's variant-computed hover colour can lag a variant switch.
+      this.toggle!.setProperties(toggle.on
+        ? { variant: 'primary', color: '#272727', backgroundColor: withOpacity('#ffffff', 0.92), hover: { backgroundColor: '#d9d9d9', color: '#272727' }, active: { backgroundColor: '#c0c0c0', color: '#272727' } }
+        : { variant: 'secondary', color: withOpacity('#ffffff', 0.92), backgroundColor: withOpacity('#ffffff', 0.14), hover: { backgroundColor: withOpacity('#ffffff', 0.22), color: '#ffffff' }, active: { backgroundColor: withOpacity('#ffffff', 0.3), color: '#ffffff' } } as never);
       this.toggleLabel!.setProperties({ text: toggle.label });
       this.setIcon(this.toggleIcon!, toggle.on ? 'stop' : 'hand', (kind) => { this.toggleIconKind = kind; }, this.toggleIconKind);
     }
@@ -138,7 +141,10 @@ export class DeviceCard extends Group {
     this.slots.forEach((slot, index) => {
       const action = actions[index];
       slot.id = action?.id;
-      slot.button.setProperties({ display: action ? 'flex' : 'none', variant: action?.selected || action?.primary ? 'primary' : 'secondary' });
+      const on = !!(action?.selected || action?.primary);
+      slot.button.setProperties((on
+        ? { display: action ? 'flex' : 'none', variant: 'primary', color: '#272727', backgroundColor: withOpacity('#ffffff', 0.92), hover: { backgroundColor: '#d9d9d9', color: '#272727' }, active: { backgroundColor: '#c0c0c0', color: '#272727' } }
+        : { display: action ? 'flex' : 'none', variant: 'secondary', color: withOpacity('#ffffff', 0.92), backgroundColor: withOpacity('#ffffff', 0.08), hover: { backgroundColor: withOpacity('#ffffff', 0.16), color: '#ffffff' }, active: { backgroundColor: withOpacity('#ffffff', 0.24), color: '#ffffff' } }) as never);
       if (!action) return;
       slot.button.name = action.id;
       slot.label.setProperties({ text: action.label });
