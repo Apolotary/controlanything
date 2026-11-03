@@ -21,6 +21,7 @@ import type { PoseRing } from '../scan/poses';
 import { buddyApi, type ReactResult } from './api';
 import { cropPresented, findPresenter, gazePresenter, type Presenter } from './crop';
 import { Mascot } from './mascot';
+import { BuddyPlacer, type CardSide, MOVE_DEG } from './placement';
 import { pick, POKE_LINES, QuestLog } from './quests';
 import { loadSticker, Shelf, type ShelfItem } from './shelf';
 import { BuddyCard, SpeechBubble } from './ui';
@@ -93,7 +94,6 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
   let time = 0;
   let openedAt = 0;
   let closingAt = -1;
-  let following = false;
   let yaw = 0;
   let dwell = 0;
   let cooldownUntil = 0;
@@ -106,9 +106,13 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
   const quests = new QuestLog();
   const seen: string[] = [];
 
-  const home = new Vector3();
-  const fwd = new Vector3();
-  const right = new Vector3();
+  // world-locked: it stays where it spawned, and only glides away when the selected device's card/dials get close
+  const placer = new BuddyPlacer();
+  const glideTo = new Vector3();
+  const tmpFwd = new Vector3();
+  let gliding = false;
+  let placeT = 0;
+  let cardSide: CardSide = 'left';
   const lastPresenter = new Vector3();
   const lookTarget = new Vector3();
   const presenterBuf: Presenter = { kind: 'gaze', point: new Vector3(), distance: 0, score: 0 };
@@ -161,14 +165,48 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     return { mascot, bubble, card, viewfinder, shelf };
   }
 
-  function placeHome(f: ShellFrame): void {
-    fwd.set(0, 0, -1).applyQuaternion(f.head.quaternion as Quaternion);
-    fwd.y = 0;
-    if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1);
-    fwd.normalize();
-    right.set(-fwd.z, 0, fwd.x);
-    home.copy(f.head.position).addScaledVector(fwd, 0.55).addScaledVector(right, 0.15);
-    home.y -= 0.2;
+  /** Quest card (and bubble) on the given side of the mascot, or tucked away while a device is being played. */
+  function setSide(side: CardSide): void {
+    cardSide = side;
+    stage.userData.cardSide = side;
+    if (!built) return;
+    const tucked = side === 'tucked';
+    built.card.setVisible(!tucked && phase !== 'closed');
+    if (!tucked) {
+      built.card.setSide(side);
+      built.card.position.set(side === 'left' ? -0.11 : 0.11, 0, 0);
+    }
+    const bx = tucked ? 0 : side === 'left' ? -0.04 : 0.04;
+    built.bubble.position.set(bx, 0.095, 0);
+    built.bubble.setTail(-bx);
+  }
+
+  /**
+   * World-locked, except: when the selected device's card/dials come within 3° of it in your view, it glides to the
+   * best free spot (≥ 8° of empty view around them, quest card on the far side, or tucked away while you play).
+   */
+  function keepClear(f: ShellFrame, force: boolean): void {
+    placer.collect(app.scene, time);
+    const q = f.head.quaternion as Quaternion;
+    if (!force && !placer.count && cardSide === 'tucked') {
+      // the device UI is gone: bring the quest card back on the side facing the middle of the view, in place
+      tmpFwd.set(0, 0, -1).applyQuaternion(q);
+      // (stage - head) · head-right, where right = (-fwd.z, 0, fwd.x)
+      const lateral = -(stage.position.x - f.head.position.x) * tmpFwd.z + (stage.position.z - f.head.position.z) * tmpFwd.x;
+      setSide(lateral >= 0 ? 'left' : 'right');
+      return;
+    }
+    const clear = placer.clearanceAt(gliding ? glideTo : stage.position, cardSide, f.head.position, q);
+    stage.userData.clearanceDeg = clear;
+    if (!force && clear >= MOVE_DEG) return;
+    const best = placer.choose(f.head.position, q);
+    if (!force && best.clearanceDeg < clear + 2) return;
+    glideTo.copy(best.position);
+    gliding = !force;
+    if (force) stage.position.copy(best.position);
+    setSide(best.side);
+    stage.userData.clearanceDeg = best.clearanceDeg;
+    if (!force) app.page.log(`[buddy] stepped aside for the device controls (${Number.isFinite(best.clearanceDeg) ? `${Math.round(best.clearanceDeg)}° clear` : 'clear'}${best.side === 'tucked' ? ', card tucked' : ''})`);
   }
 
   function skipQuest(): void {
@@ -337,13 +375,16 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
       return;
     }
 
-    // --- placement: a pet on a soft leash (it stays put until you move away, then floats over) ---
-    placeHome(f);
+    // --- placement: world-locked; steps aside (glides) only when the selected device's card/dials come within 30 cm ---
     const steady = phase === 'noticing' || phase === 'countdown' || phase === 'capturing';
-    const d = stage.position.distanceTo(home);
-    if (!steady && (following || d > 0.28)) {
-      following = d > 0.03;
-      stage.position.lerp(home, 1 - Math.exp(-2.2 * dt));
+    placeT += dt;
+    if (placeT >= 0.4 && !steady && closingAt < 0) {
+      placeT = 0;
+      keepClear(f, false);
+    }
+    if (gliding) {
+      stage.position.lerp(glideTo, 1 - Math.exp(-5 * dt));
+      if (stage.position.distanceToSquared(glideTo) < 1e-5) gliding = false;
     }
     const targetYaw = Math.atan2(f.head.position.x - stage.position.x, f.head.position.z - stage.position.z);
     let dy = targetYaw - yaw;
@@ -447,11 +488,11 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
       stage.visible = true;
       built.card.setVisible(true);
       if (lastF) {
-        placeHome(lastF);
-        stage.position.copy(home);
-        yaw = Math.atan2(lastF.head.position.x - home.x, lastF.head.position.z - home.z);
+        keepClear(lastF, true);
+        yaw = Math.atan2(lastF.head.position.x - stage.position.x, lastF.head.position.z - stage.position.z);
       }
-      following = false;
+      gliding = false;
+      placeT = 0;
       built.mascot.setMood('delighted', 2.5);
       built.mascot.play('wave');
       refreshCard();

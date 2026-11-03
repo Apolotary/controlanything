@@ -77,6 +77,11 @@ export class SpeechBubble extends Group {
     this.open = false;
   }
 
+  /** Point the tail at the mascot from wherever the bubble sits. */
+  setTail(x: number): void {
+    this.tail?.position.setX(x);
+  }
+
   update(dtMs: number): void {
     const dt = dtMs / 1000;
     this.time += dt;
@@ -141,6 +146,11 @@ export class BuddyCard extends Group {
     this.userData.view = view;
     this.title?.setProperties({ text: `Show me ${view.quest}` });
     this.subtitle?.setProperties({ text: view.status || `${view.done} done · ${view.collected} collected` });
+  }
+
+  /** Which side of the mascot the card hangs on (it grows away from the mascot). */
+  setSide(side: 'left' | 'right'): void {
+    this.root?.setProperties({ anchorX: side === 'left' ? 'right' : 'left' } as never);
   }
 
   setVisible(v: boolean): void {
