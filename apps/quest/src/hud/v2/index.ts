@@ -1484,7 +1484,11 @@ export class LeanHud implements Hud {
       let hit = group.userData.hit as Mesh | undefined;
       if (!hit || hit.parent !== group) hit = this.bindHit(widget);
       hit.visible = this.interactive(widget, this.cursors[0]!);
-      group.userData.hovered = (hit.userData.hover as Set<number>).size > 0;
+      // The palette hand hovering its own palette is not a hover (only the other hand can press it).
+      const ownHand = this.isPaletteWidget(widget) && this.palette.anchor.source === 'hand' ? this.palette.anchor.nonDominant : null;
+      let hovered = false;
+      for (const id of hit.userData.hover as Set<number>) if (!ownHand || this.spatial?.handOf(id) !== ownHand) { hovered = true; break; }
+      group.userData.hovered = hovered;
     }
   }
   private bindHit(widget: Widget): Mesh {
@@ -1500,11 +1504,7 @@ export class LeanHud implements Hud {
     hit.userData.hover = new Set<number>();
     const on = (type: string, fn: (e: HudPointerEvent) => void) =>
       (hit as unknown as { addEventListener(t: string, f: (e: unknown) => void): void }).addEventListener(type, (e) => fn(e as HudPointerEvent));
-    on('pointerover', (e) => {
-      // The palette hand hovering its own palette is not a hover (only the other hand can press it).
-      if (palette && this.palette.anchor.source === 'hand' && this.spatial?.handOf(e.pointerId, e.pointerType) === this.palette.anchor.nonDominant) return;
-      (hit.userData.hover as Set<number>).add(e.pointerId); this.spatial?.markHover(e, true);
-    });
+    on('pointerover', (e) => { (hit.userData.hover as Set<number>).add(e.pointerId); this.spatial?.markHover(e, true); });
     on('pointerout', (e) => { (hit.userData.hover as Set<number>).delete(e.pointerId); this.spatial?.markHover(e, false); });
     on('pointerdown', (e) => this.pointerDown(widget, e));
     on('pointermove', (e) => this.pointerMove(widget, e));
