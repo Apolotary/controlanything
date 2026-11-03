@@ -5,7 +5,8 @@
  * and rate limits. Every finding carries a path so the model can repair the draft.
  */
 import { type ActionEncode, type Driver, type DriverAction, type DriverDraft, type IrCapture, type IrOp, RATE_LIMITS, VALUE_PLACEHOLDER } from '@ce/protocol';
-import { isVisualSynthPort, VISUAL_SYNTH_NAME } from './visualSynth';
+import { VISUAL_SYNTH_MANIFEST } from '@ce/vsynth/manifest';
+import { isVisualSynthPort, misnamedVisual, VISUAL_SYNTH_NAME } from './visualSynth';
 import { fillRaw, sameCode } from './ir';
 import { OSMO_LIMITS } from './osmo/om';
 import type { IrLibrary } from './profiles';
@@ -129,27 +130,23 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
       if (e.kind !== 'step' && !hasPlaceholder(e)) err('missing_placeholder', `${path}.encode`, `"set" action ${a.actionId} must put "${VALUE_PLACEHOLDER}" in its op (value or arg)`);
     } else if (hasPlaceholder(e)) err('unexpected_placeholder', `${path}.encode`, `"${a.kind}" action ${a.actionId} cannot use "${VALUE_PLACEHOLDER}"`);
     if (visual) {
+      // The renderer's published manifest is the allowlist; Muse chooses among it (labels, ranges, curves, patterns).
       if (a.expect?.sense !== 'camera') err('physical_oracle_required', `${path}.expect`, 'Visual synth actions require camera evidence');
       if (a.expect?.effect !== 'any') err('visual_effect', `${path}.expect.effect`, 'Visual synth actions verify a visible change with effect any');
-      if (a.actionId === 'cc71' || a.actionId === 'cc21') {
-        const cc = a.actionId === 'cc71' ? 71 : 21;
-        const label = cc === 71 ? 'Warp' : 'Water ripples';
-        // This virtual instrument has a fixed semantic contract. A generated
-        // label must not make the old Warp action masquerade as Water ripples.
-        a.label = label;
-        if (a.kind !== 'set' || e.kind !== 'midi' || e.channel !== 1 || e.msg !== 'cc' || e.number !== cc || e.value !== VALUE_PLACEHOLDER) {
-          err('visual_action', `${path}.encode`, `${a.actionId} must be a set action sending ${label} CC${cc} with value $value on channel 1`);
+      if (e.kind !== 'midi' || e.channel !== 1) err('visual_action', `${path}.encode`, 'The visual synth accepts MIDI on channel 1 only');
+      else if (e.msg === 'cc') {
+        const control = VISUAL_SYNTH_MANIFEST.controls.find((c) => c.cc === e.number);
+        if (!control) err('visual_cc', `${path}.encode.number`, `CC ${e.number} is not in the visual synth manifest (${VISUAL_SYNTH_MANIFEST.controls.map((c) => `${c.cc} ${c.label}`).join(', ')})`);
+        if (a.kind !== 'set' || e.value !== VALUE_PLACEHOLDER) err('visual_action', `${path}.encode`, `${a.actionId} must be a set action sending its CC with value $value`);
+        if (a.range && (a.range.min < 0 || a.range.max > 127 || !Number.isInteger(a.range.min) || !Number.isInteger(a.range.max) || (a.range.step !== undefined && (!Number.isInteger(a.range.step) || a.range.step < 1)))) {
+          err('visual_range', `${path}.range`, 'Visual synth CC ranges are integer wire values inside 0-127 with an integer step');
         }
-        if (a.range?.min !== 0 || a.range.max !== 127 || a.range.step !== 1) {
-          err('visual_range', `${path}.range`, `${label} uses range 0-127 with step 1`);
-        }
-        a.curve = 'linear';
-      } else {
-        const pattern = /^pattern([0-2])$/.exec(a.actionId);
-        if (!pattern || a.kind !== 'trigger' || e.kind !== 'midi' || e.channel !== 1 || e.msg !== 'pc' || e.number !== Number(pattern[1])) {
-          err('visual_action', `${path}.encode`, 'Each pattern0, pattern1, pattern2 trigger must send its matching program change 0, 1, 2 on channel 1');
-        }
-      }
+        if (control && misnamedVisual(a.label, control.parameter)) err('visual_label', `${path}.label`, `"${a.label}" names another parameter; CC ${control.cc} is ${control.label}`);
+      } else if (e.msg === 'pc') {
+        const program = VISUAL_SYNTH_MANIFEST.programs.find((p) => p.program === e.number);
+        if (!program || a.kind !== 'trigger') err('visual_program', `${path}.encode`, `Pattern triggers send a manifest program change (${VISUAL_SYNTH_MANIFEST.programs.map((p) => `${p.program} ${p.name}`).join(', ')})`);
+        else if (misnamedVisual(a.label, program.name === 'Water' ? 'ripple' : program.name.toLowerCase())) err('visual_label', `${path}.label`, `"${a.label}" names another pattern; program ${program.program} is ${program.name}`);
+      } else err('visual_message', `${path}.encode.msg`, 'The visual synth accepts only manifest CCs and program changes (no notes)');
     }
     // per-op allowlists
     if (e.kind === 'midi') {
@@ -221,10 +218,9 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
   }
 
   if (visual) {
-    const expected = ['cc71', 'cc21', 'pattern0', 'pattern1', 'pattern2'];
-    if (actions.length !== expected.length || expected.some((id) => !actions.some((a) => a.actionId === id))) {
-      err('visual_controls', 'actions', 'The visual demo uses exactly cc71 Warp, cc21 Water ripples and pattern0, pattern1, pattern2');
-    }
+    // Muse picks the controls; the card has room for up to four continuous controls and three pattern buttons.
+    const sets = actions.filter((a) => a.kind === 'set').length, triggers = actions.filter((a) => a.kind === 'trigger').length;
+    if (sets < 1 || sets > 4 || triggers > 3) err('visual_controls', 'actions', `Use 1-4 continuous CC controls and at most 3 pattern triggers (got ${sets} and ${triggers})`);
   }
 
   // rate limits

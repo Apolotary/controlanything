@@ -65,6 +65,8 @@ export interface LoopDeps {
 
 /** The visual synth's live driver call gets this long before the curated template stands in. */
 const VISUAL_DRIVE_BUDGET_MS = Number(process.env.CE_DRIVE_TIMEOUT_MS) > 0 ? Number(process.env.CE_DRIVE_TIMEOUT_MS) : 20_000;
+/** Effort for the visual synth's driver and hack set. Measured live: minimal was no faster (~1.3 k output tokens either way) and its driver was rejected once; low stays valid. */
+const VISUAL_EFFORT = (['minimal', 'low', 'medium'] as const).find((e) => e === process.env.CE_VISUAL_EFFORT) ?? 'low';
 /** CE_DEMO=1: the one-shot demo. The silent visual synth arms itself after verification (no Enable modal). */
 export const demoMode = (): boolean => process.env.CE_DEMO === '1';
 
@@ -72,6 +74,44 @@ export const demoMode = (): boolean => process.env.CE_DEMO === '1';
 const LEARN_WINDOW_MS = 10_000;
 /** The second pass (after the library codes missed) gives a slower hand more time. */
 const LEARN_WINDOW_RETRY_MS = 15_000;
+
+/** CE_DEMO prefetch: the visual synth driver Muse writes as soon as a Mac advertises the renderer, used once. */
+const visualDrafts = new Map<string, { at: number; result: Promise<{ at: number; result: NonNullable<Awaited<ReturnType<typeof drive>>>; forged?: Promise<Awaited<ReturnType<Forge['generate']>> | undefined> } | undefined> }>();
+const PREFETCH_TTL_MS = 30 * 60_000;
+export function prefetchVisualDriver(d: Pick<LoopDeps, 'spark' | 'wonder' | 'profiles' | 'web' | 'midiCharts' | 'log' | 'forge'>, executor: { deviceId: string; kind: string },
+  card: Parameters<typeof drive>[1], opts: { forge: boolean }): void {
+  const cached = visualDrafts.get(executor.deviceId);
+  if (cached && Date.now() - cached.at < PREFETCH_TTL_MS) return;
+  const at = Date.now();
+  const result = (async () => {
+    const research = await doResearch({ profiles: d.profiles, web: d.web, midiCharts: d.midiCharts }, card, 'midi', { allowWeb: false });
+    if (!research.allowedCcs?.size) return undefined;
+    const ids = { driverId: newId('drv'), executor: { deviceId: executor.deviceId, port: 'ce-visual-synth' }, executorKind: executor.kind };
+    const r = await drive({ spark: d.spark, wonder: d.wonder, log: d.log }, card, research, 'midi', ids,
+      { expectedTransport: 'midi', allowedCcs: research.allowedCcs, executorKind: executor.kind, emitsLight: false },
+      { maxAttempts: 2, firstEffort: VISUAL_EFFORT, signal: AbortSignal.timeout(45_000) });
+    d.log?.(`[drive] prefetched the visual synth driver for ${executor.deviceId}: ${r?.validation.ok ? `${r.model} ${(r.latencyMs / 1000).toFixed(1)} s` : 'not valid'}`);
+    if (!r?.validation.ok) return undefined;
+    // Its controls too, while nobody is waiting: unverified until the pinch's verification rearms them.
+    const forge = opts.forge ? d.forge() : undefined;
+    const driver = { ...r.validation.driver, modelId: r.model, source: r.source };
+    const forged = forge?.generate({ device: forgeDevice(card), driver, verification: Object.fromEntries(driver.actions.map((a) => [a.actionId, 'pending' as const])),
+      effort: VISUAL_EFFORT, repairEffort: 'low', runId: `prefetch-${ids.driverId}`, signal: AbortSignal.timeout(60_000) })
+      .then((f) => { d.log?.(`[gen3d] prefetched visual synth controls: ${f.ok ? `${f.model} ${(f.latencyMs / 1000).toFixed(1)} s${f.fallback ? ' (template fallback)' : ''}` : f.error}`); return f; },
+        (e) => { d.log?.(`[gen3d] visual controls prefetch failed: ${(e as Error).message}`); return undefined; });
+    return { at: Date.now(), result: r, forged };
+  })().catch((e) => { d.log?.(`[drive] visual driver prefetch failed: ${(e as Error).message}`); return undefined; });
+  visualDrafts.set(executor.deviceId, { at, result });
+}
+function takeVisualDraft(executorId: string) {
+  const cached = visualDrafts.get(executorId);
+  if (!cached || Date.now() - cached.at > PREFETCH_TTL_MS) return undefined;
+  visualDrafts.delete(executorId);
+  return cached.result;
+}
+
+const forgeDevice = (card: { cardId: string; name: string; maker: string; model: string; category: string; notes?: string }) =>
+  ({ cardId: card.cardId, name: card.name.slice(0, 80), maker: card.maker.slice(0, 80), model: card.model.slice(0, 80), category: card.category, notes: card.notes?.slice(0, 600) });
 
 /** Run the loop for a target that has a detection (from SCAN) or a card (a paired device the user pointed at). */
 export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string; preferDeviceId?: string; identifyOnly?: boolean; identified?: Omit<IdentifyResult, 'card'>; refreshResearch?: boolean } = {}): Promise<void> {
@@ -164,6 +204,7 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
     const receiver = cap === 'ir' ? pickSensor(d.roster, 'ir', { preferDeviceId: executor.deviceId }) : undefined;
     let driverId = '';
     let verified: VerifySummary | undefined;
+    let early: Promise<Awaited<ReturnType<Forge['generate']>> | undefined> | undefined;
     for (let pass = 1; pass <= 2 && !verified; pass++) {
       if (cap === 'ir' && receiver && !learned?.length && (wantLearn || pass > 1)) {
         flow.enter('learn');
@@ -205,7 +246,11 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       // ---------------------------------------------------------------- DRIVE
       flow.enter('drive');
       d.targets.setState(t, 'driving');
-      driverId = newId('drv');
+      // Muse may already have written this Mac's visual synth driver (and its controls) when the companion appeared
+      // (CE_DEMO prefetch): the same calls and prompts, re-validated here against this run's executor and allowlist.
+      const visualDrive = !!virtualScreenExecutor(card);
+      const prefetched = visualDrive && pass === 1 ? await flow.wait(takeVisualDraft(executor.deviceId) ?? Promise.resolve(undefined)) : undefined;
+      driverId = prefetched?.result.validation.driver.driverId ?? newId('drv');
       const ids = { driverId, executor: { deviceId: executor.deviceId, port: executor.port?.id }, executorKind: executor.kind };
       const reviewed = research.profile?.reviewedChart;
       const vctx = { expectedTransport: cap, allowedCcs: research.allowedCcs,
@@ -213,15 +258,20 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
         irLibrary: research.irLibrary, learned: research.learned, executorKind: executor.kind, emitsLight: cap === 'ir' || card.category === 'lighting' };
       const dstep = d.steps.begin('drive', 'writing the driver', { ...base, kind: 'opinion', model: d.spark.model });
       // The visual synth's live driver call is bounded: a slow Muse answer falls back to the curated template below.
-      const visualDrive = !!virtualScreenExecutor(card);
       const driveBudget = new AbortController();
       const driveTimer = visualDrive ? setTimeout(() => driveBudget.abort(), VISUAL_DRIVE_BUDGET_MS) : undefined;
       let result: Awaited<ReturnType<typeof drive>>;
-      try {
+      const revalidated = prefetched ? validateDriver(prefetched.result.draft, ids, vctx) : undefined;
+      const usedPrefetch = !!(prefetched && revalidated?.ok);
+      if (prefetched && revalidated?.ok) {
+        result = { ...prefetched.result, validation: revalidated };
+        d.steps.note('drive', `driver written by ${prefetched.result.model} when the Mac appeared (${(prefetched.result.latencyMs / 1000).toFixed(1)} s, ${Math.round((Date.now() - prefetched.at) / 1000)} s ago)`, { ...base, kind: 'opinion', status: 'ok', model: prefetched.result.model, effort: prefetched.result.effort, latencyMs: prefetched.result.latencyMs, source: prefetched.result.source, evidence: 'prefetched driver' });
+      } else try {
         result = await flow.wait(drive({ spark: d.spark, wonder: d.wonder, log }, card, research, cap, ids, vctx, {
           signal: AbortSignal.any([signal, driveBudget.signal]),
           onAttempt: (a) => !signal.aborted && d.steps.note('drive', a.ok ? `driver attempt ${a.attempt} valid` : a.error ? `driver attempt ${a.attempt} failed: ${a.error}` : `driver attempt ${a.attempt} rejected`, { ...base, kind: 'proof', status: a.ok ? 'ok' : 'fail', model: a.model, effort: a.effort, latencyMs: a.latencyMs, detail: a.issues || a.error, ...(a.error ? { sentence: a.attempt === 1 ? 'That did not work; trying once more…' : 'The model could not prepare the commands', hint: 'You can retry or choose another device', action: 'retry' as const } : {}) }),
-          maxAttempts: visualDrive ? 1 : 2,
+          maxAttempts: 2,
+          ...(visualDrive ? { firstEffort: VISUAL_EFFORT } : {}),
         }));
       } catch (e) {
         if (signal.aborted || !driveBudget.signal.aborted) throw e;
@@ -261,6 +311,21 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       d.hub.broadcast('driver.spec', driver);
       d.hub.broadcast('driver.status', { driverId, cardId: t.cardId, phase: 'verifying', actions: driver.actions.map((a) => ({ actionId: a.actionId, label: a.label.slice(0, 40), verified: 'pending' as const })), modelId: driver.modelId });
       flow.check();
+
+      // The visual synth's hack set does not depend on the verify outcome (controls show disarmed until verified,
+      // then rearm): forge it while the commands are being checked, so the dials stream in during verification.
+      const earlyForge = d.forge();
+      if (prefetched?.forged && usedPrefetch) {
+        early = prefetched.forged.then((r) => (r?.ok && r.uiSpec?.driverId === driver.driverId ? r : undefined));
+        d.steps.note('forge', 'controls forged by Muse when the Mac appeared; verifying them now', { ...base, kind: 'opinion', model: d.spark.model, evidence: 'prefetched controls' });
+      }
+      if (isVisualSynthPort(driver.executor.port) && earlyForge && !early) {
+        const pending = Object.fromEntries(driver.actions.map((a) => [a.actionId, 'pending' as const]));
+        d.steps.note('forge', 'forging the controls while verification runs', { ...base, kind: 'opinion', model: d.spark.model });
+        early = earlyForge.generate({ device: forgeDevice(card), driver, verification: pending, effort: VISUAL_EFFORT, repairEffort: 'low', runId: base.runId, signal,
+          onProgress: (p) => Object.assign(p, stepGuidance(p.phase as AgentPhase, p.status)) })
+          .then((r) => (r.ok && r.uiSpec ? r : undefined), (e) => { if (!signal.aborted) log(`[forge] early forge failed: ${(e as Error).message}`); return undefined; });
+      }
 
       // ---------------------------------------------------------------- VERIFY
       flow.enter('verify');
@@ -371,12 +436,16 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
         log(`[forge] no scan crop for the skin: ${(e as Error).message}`);
       }
     }
-    const fr = await flow.retry(async () => {
-      const result = await forge.generate({ device: { cardId: card.cardId, name: card.name.slice(0, 80), maker: card.maker.slice(0, 80), model: card.model.slice(0, 80), category: card.category, notes: card.notes?.slice(0, 600) }, driver: summary.driver, verification: summary.verification, ...(crop ? { crop } : {}), runId: base.runId, signal, onProgress: (p) => Object.assign(p, stepGuidance(p.phase as AgentPhase, p.status)) });
-      flow.check();
-      if (!result.ok || !result.uiSpec) throw new Error(result.error ?? 'forge failed');
-      return result;
-    }, retryNotice);
+    const parallel = early ? await flow.wait(early) : undefined;
+    // A parallel hack set was forged before the evidence existed: rearm it with the real verification (statuses, gesture map).
+    const fr = parallel?.uiSpec && parallel.uiSpec.driverId === summary.driver.driverId
+      ? { ...parallel, uiSpec: forge.rearm(parallel.uiSpec.specId, summary.verification) }
+      : await flow.retry(async () => {
+        const result = await forge.generate({ device: forgeDevice(card), driver: summary.driver, verification: summary.verification, ...(crop ? { crop } : {}), runId: base.runId, signal, onProgress: (p) => Object.assign(p, stepGuidance(p.phase as AgentPhase, p.status)) });
+        flow.check();
+        if (!result.ok || !result.uiSpec) throw new Error(result.error ?? 'forge failed');
+        return result;
+      }, retryNotice);
     if (!fr.ok || !fr.uiSpec) {
       fstep.fail(fr.error ?? 'forge failed', { model: fr.model, effort: fr.effort, latencyMs: fr.latencyMs, source: fr.source, recordedFrom: fr.recordedFrom });
       fail(`verified, but no controls could be generated: ${fr.error ?? 'forge failed'}`);

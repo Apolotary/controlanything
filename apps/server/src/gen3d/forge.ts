@@ -43,6 +43,8 @@ export const MAX_REPAIRS = 2;
 export const WHITESPACE_GUARD = 400;
 /** A live visual-synth forge (first answer + one repair ≈ 19 s measured) slower than this falls back to the authored template (CE_FORGE_TIMEOUT_MS overrides). */
 export const LIVE_FORGE_TIMEOUT_MS = Number(process.env.CE_FORGE_TIMEOUT_MS) > 0 ? Number(process.env.CE_FORGE_TIMEOUT_MS) : 30_000;
+/** Any driver bound to the silent visual synth's port, whatever actions Muse chose for it. */
+const onVisualSynth = (driver: ForgeDriver): boolean => driver.executor?.port === 'ce-visual-synth' || driver.executor?.port === 'ControlAnything Visual Synth' || isVisualSynth(driver);
 /** The model id a template fallback carries, so no card or log can mistake it for a Muse answer. */
 export const VISUAL_SYNTH_FALLBACK = 'template-fallback:visual-synth';
 
@@ -116,6 +118,8 @@ export interface ForgeRequest {
   request?: string;
   model?: string;
   effort?: ReasoningEffort;
+  /** effort for the repair attempts (default REPAIR_EFFORT) */
+  repairEffort?: ReasoningEffort;
   runId?: string;
   signal?: AbortSignal;
   onProgress?: (p: ForgeProgress) => void;
@@ -608,7 +612,7 @@ export function createForge(deps: ForgeDeps): Forge {
    */
   async function forge(req: ForgeRequest): Promise<ForgeResult> {
     const drv = ForgeDriver.safeParse(req.driver);
-    if (transport.source !== 'live' || !drv.success || !isVisualSynth(drv.data)) return forgeOnce(req);
+    if (transport.source !== 'live' || !drv.success || !onVisualSynth(drv.data)) return forgeOnce(req);
     const live = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; live.abort(); }, LIVE_FORGE_TIMEOUT_MS);
@@ -629,6 +633,37 @@ export function createForge(deps: ForgeDeps): Forge {
     return { ...fallback, fallback: reason };
   }
 
+  /** The fallback hack set for whatever driver Muse wrote: one slider per set action, one button per trigger. */
+  function templateSession(driver: ForgeDriver): TransportSession {
+    const common = { confirm: 'none' as const, max_rate_hz: 3, oracle: { expect: 'screen_changed' as const, reason: '', type: 'camera' as const }, reversible: true };
+    const short = (text: string, n: number) => text.trim().slice(0, n) || 'Control';
+    const slug = (id: string) => id.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 20);
+    const sets = driver.actions.filter((a) => a.kind === 'set' && a.range).slice(0, 4);
+    const triggers = driver.actions.filter((a) => a.kind === 'trigger').slice(0, 3);
+    const hacks: HackDraft[] = [
+      ...sets.map((a): HackDraft => {
+        const r = a.range!, param = `p_${slug(a.actionId)}`;
+        return { ...common, id: `h_${slug(a.actionId)}`, name: short(a.label, 14), kind: 'control', blurb: short(a.label, 40),
+          commands: [{ action: a.actionId, param, value: 0, delayMs: 0 }], control: { accent: '', archetype: 'slider', param, size: 'm' },
+          params: [{ id: param, name: short(a.label, 16), min: r.min, max: r.max, step: r.step ?? 1, default: Math.round((r.min + r.max) / 2), unit: '' }],
+          inverse: { commands: [], restore: param } };
+      }),
+      ...triggers.map((a): HackDraft => ({ ...common, id: `h_${slug(a.actionId)}`, name: short(a.label, 14), kind: 'action', blurb: short(a.label, 40),
+        commands: [{ action: a.actionId, param: '', value: 0, delayMs: 0 }], control: { accent: '', archetype: 'none', param: '', size: 'm' }, params: [],
+        inverse: { commands: a.inverseActionId ? [{ action: a.inverseActionId, param: '', value: 0, delayMs: 0 }] : [], restore: '' } })),
+    ];
+    const content = JSON.stringify({ title: 'Visual Synth', hacks: hacks.length ? hacks : [] } satisfies ForgeDraft);
+    return {
+      call: async (_request, handlers, options) => {
+        if (options?.signal?.aborted) throw new RequestCancelledError();
+        handlers.onContent?.(content, content);
+        return { content, toolCalls: [], finishReason: 'stop', model: VISUAL_SYNTH_FALLBACK, source: 'fixture', latencyMs: 0, chunks: 1,
+          usage: { promptTokens: 0, completionTokens: 0, reasoningTokens: 0, cachedTokens: 0 } };
+      },
+      finish: () => {},
+    };
+  }
+
   async function forgeOnce(req: ForgeRequest, fallbackReason?: string): Promise<ForgeResult> {
     const dev = ForgeDevice.safeParse(req.device);
     const drv = ForgeDriver.safeParse(req.driver);
@@ -638,7 +673,7 @@ export function createForge(deps: ForgeDeps): Forge {
     }
     const device = dev.data;
     const driver = drv.data;
-    const template = (transport.source === 'fixture' || fallbackReason !== undefined) && isVisualSynth(driver);
+    const template = (transport.source === 'fixture' && isVisualSynth(driver)) || (fallbackReason !== undefined && onVisualSynth(driver));
     const runId = req.runId ?? newId('forge_');
     const model = template ? (fallbackReason !== undefined ? VISUAL_SYNTH_FALLBACK : VISUAL_SYNTH_FIXTURE) : req.model ?? defaultModel;
     const firstEffort = req.effort ?? DEFAULT_EFFORT;
@@ -648,7 +683,7 @@ export function createForge(deps: ForgeDeps): Forge {
     const specId = specIdFor(device.cardId);
     const existing = store.get(specId);
     const step = stepper(runId, device.cardId, req.onProgress);
-    const session = template ? visualSynthFixtureSession(driver)
+    const session = template ? (fallbackReason !== undefined ? templateSession(driver) : visualSynthFixtureSession(driver))
       : transport.session({ kit: FORGE_KIT, task: 'generate', cardId: device.cardId, request, mode: 'json', ...runContext(device, driver) });
     const fallback = session.match === 'category' || session.match === 'transport';
     // the panel skin: painted in parallel, attached as a later revision; it never gates the controls
@@ -656,7 +691,7 @@ export function createForge(deps: ForgeDeps): Forge {
     const reuseSkin = !req.repaintSkin && existing?.skin && existing.device.name === device.name ? existing.skin : undefined;
     const skinStep = `${runId}.skin`;
     let skinJob: Promise<SkinResult> | undefined;
-    if (painter && !reuseSkin && !isVisualSynth(driver)) {
+    if (painter && !reuseSkin && !onVisualSynth(driver)) {
       step({ stepId: skinStep, phase: 'forge', status: 'running', title: `Painting a panel skin for ${device.name}`, detail: crop ? 'from the scan crop (images/edits)' : 'from a prompt (images/generations)', model: SKIN_MODEL, effort: 'low', source: painter.source });
       skinJob = painter.paint({ device, transport: driver.transport, crop, signal: req.signal }).catch((e) => ({ ok: false, mode: crop ? 'edit' : 'generate', model: SKIN_MODEL, source: painter.source, latencyMs: 0, error: (e as Error).message }) as SkinResult);
     }
@@ -674,7 +709,7 @@ export function createForge(deps: ForgeDeps): Forge {
 
     try {
       for (let attempt = 1; attempt <= 1 + MAX_REPAIRS; attempt++) {
-        const effort = attempt === 1 ? firstEffort : REPAIR_EFFORT;
+        const effort = attempt === 1 ? firstEffort : req.repairEffort ?? REPAIR_EFFORT;
         const t0 = Date.now();
         const gen = step({
           phase: 'forge',

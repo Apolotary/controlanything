@@ -3,11 +3,16 @@
   "device": "ControlAnything Visual Synth",
   "manufacturer": "ControlAnything",
   "sense": "camera",
-  "firmwareNotes": "Silent original WebGL2 instrument. No audio or notes. Generate exactly two set actions: cc71 labelled Warp and cc21 labelled Water ripples, each range 0-127, step 1, curve linear; and three trigger actions pattern0/pattern1/pattern2 sending program change 0/1/2. Every action expects sense camera, effect any. CC21 selects Water mode and changes ripple depth: forward/back hand motion creates expanding ripple waves. Pattern names: Flow, Rings, Prism. Do not substitute Warp or Rings for Water ripples.",
+  "firmwareNotes": "Silent original WebGL2 instrument on the paired Mac screen. No audio or notes. Its renderer publishes a capability manifest (packages/vsynth/src/manifest.ts): the CCs below on channel 1 (values 0-127) and program changes 0-3 (Flow, Rings, Prism, Water). CC21 switches to Water and sets ripple depth, so forward/back hand motion makes expanding ripple waves. Verification is visual: the headset camera, backed by the renderer's own receipt.",
   "sources": [
     {
       "title": "this repo: original visual synth implementation",
       "url": "packages/vsynth/src/state.ts",
+      "confidence": "implementation"
+    },
+    {
+      "title": "this repo: visual synth capability manifest",
+      "url": "packages/vsynth/src/manifest.ts",
       "confidence": "implementation"
     }
   ],

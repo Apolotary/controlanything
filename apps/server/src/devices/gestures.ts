@@ -124,9 +124,10 @@ export function proposeGestureMap(driver: ForgeDriver, verification?: Verificati
     axis('right_height', [/\btilt\b/, /\bpitch\b/], { maxRateHz: Math.min(10, driver.maxRateHz ?? 10) });
     posture('R_FIST', [/\brecenter\b/, /\bcenter\b/]);
   } else {
-    axis('right_height', [/\bwarp\b/, /\bcutoff\b/, /\bfilter\b/, /\btimbre\b/, /\bengine param(?:eter)? 1\b/], { curve: 's-curve' });
-    // The visual synth's golden path: push/pull plays the water ripples with no extra Ask Muse round-trip.
-    axis('right_depth', [/\b(?:water )?ripples?\b/, /\bwater\b/], { smoothingMinCutoff: 2.5, smoothingBeta: 0.7, maxRateHz: Math.min(20, driver.maxRateHz ?? 20) });
+    // The visual synth's golden path: push/pull plays the water ripples (CC21) with no extra Ask Muse round-trip;
+    // whatever Muse labelled it, the wire id (cc21) still finds it. Height takes Warp, else Muse's next CC control.
+    axis('right_depth', [/\b(?:water )?ripples?\b/, /\bwater\b/, /\bcc21\b/], { smoothingMinCutoff: 2.5, smoothingBeta: 0.7, maxRateHz: Math.min(20, driver.maxRateHz ?? 20) });
+    axis('right_height', [/\bwarp\b/, /\bcutoff\b/, /\bfilter\b/, /\btimbre\b/, /\bengine param(?:eter)? 1\b/, /\bcc71\b/, /\bcc(?:74|10|1|7|11|20)\b/], { curve: 's-curve' });
     axis('right_roll', [/\bzoom\b/, /\bpitch\s*bend\b/, /\bresonance\b/, /\bengine param(?:eter)? 2\b/], { bipolar: true });
     axis('right_pinch_aperture', [/\bhue\b/, /\bresonance\b/, /\b(?:fx|effect) mix\b/, /\bengine param(?:eter)? 3\b/]);
     axis('two_hand_distance', [/\breverb\b/, /\b(?:fx|effect) mix\b/]);

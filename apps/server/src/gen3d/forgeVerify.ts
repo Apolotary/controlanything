@@ -11,6 +11,7 @@ import type { ForgeAction, ForgeDriver } from './forgeTypes';
 import type { ForgeDraft, HackDraft } from './hackset';
 import { issue, type Issue } from './issues';
 import { isVisualSynth } from './visualSynth';
+import { isVisualSynthPort, misnamedVisual, visualKey } from '../devices/visualSynth';
 
 export const BANNED_NAME_WORDS = [
   'quickhack',
@@ -122,7 +123,7 @@ function commandIssues(h: HackDraft, c: DraftCommand, path: string, byId: Map<st
 
 export function draftIssues(draft: ForgeDraft, driver: ForgeDriver): Issue[] {
   const out: Issue[] = [];
-  const visual = isVisualSynth(driver);
+  const visual = isVisualSynth(driver) || isVisualSynthPort(driver.executor?.port);
   const byId = new Map(driver.actions.map((a) => [a.actionId, a]));
   const ids = new Set<string>();
   const names = new Set<string>();
@@ -131,20 +132,21 @@ export function draftIssues(draft: ForgeDraft, driver: ForgeDriver): Issue[] {
   draft.hacks.forEach((h, i) => {
     const at = `hacks[${i}]`;
     if (visual) {
-      const allowed = h.kind === 'control' ? ['cc71', 'cc21'] : ['pattern0', 'pattern1', 'pattern2'];
-      if (h.commands.length !== 1 || !allowed.includes(h.commands[0].action)) {
-        out.push(issue('bindings', 'visual_synth_binding', `${at}.commands`, 'Use cc71 for Warp, cc21 for Water ripples, or one pattern0/1/2 action per button'));
+      // The driver Muse wrote is the contract: one set action per control, one trigger per button, honest names.
+      const action = byId.get(h.commands[0]?.action ?? '');
+      const wanted = h.kind === 'control' ? 'set' : 'trigger';
+      if (h.commands.length !== 1 || !action || action.kind !== wanted) {
+        out.push(issue('bindings', 'visual_synth_binding', `${at}.commands`, `A visual synth ${h.kind} sends exactly one driver ${wanted} action`));
       }
-      const actionId = h.commands[0]?.action;
-      if (h.kind === 'control' && (actionId === 'cc71' || actionId === 'cc21')) {
-        const label = actionId === 'cc71' ? 'Warp' : 'Water ripples';
-        if (h.name.trim().toLowerCase() !== label.toLowerCase()) {
-          out.push(issue('presentation', 'visual_synth_label', `${at}.name`, `${actionId} must be called ${label}; its effect cannot be renamed to another visual effect`));
-        }
-        const p = h.params[0];
+      if (action && misnamedVisual(h.name, visualKey(action))) {
+        out.push(issue('presentation', 'visual_synth_label', `${at}.name`, `"${h.name}" names a different visual effect than ${action.label}`));
+      }
+      if (h.kind === 'control' && action?.range) {
+        const p = h.params[0], r = action.range;
         if (h.params.length !== 1 || !p || h.control.param !== p.id || h.commands[0]?.param !== p.id
-          || p.min !== 0 || p.max !== 127 || p.step !== 1 || !Number.isInteger(p.default) || p.default < 0 || p.default > 127) {
-          out.push(issue('bindings', 'visual_synth_range', `${at}.params`, `${label} needs one bound param with range 0-127, step 1 and an integer default inside that range`));
+          || p.min < r.min || p.max > r.max || !Number.isInteger(p.min) || !Number.isInteger(p.max) || !Number.isInteger(p.step) || p.step < 1
+          || !Number.isInteger(p.default) || p.default < p.min || p.default > p.max) {
+          out.push(issue('bindings', 'visual_synth_range', `${at}.params`, `${action.label} needs one bound param inside ${r.min}-${r.max} with an integer default inside it`));
         }
       }
       if (h.oracle.type !== 'camera') out.push(issue('safety', 'visual_synth_camera', `${at}.oracle`, 'This silent visual instrument requires the camera oracle'));
@@ -211,7 +213,7 @@ export function draftIssues(draft: ForgeDraft, driver: ForgeDriver): Issue[] {
   const n = draft.hacks.length;
   if (!visual && n < 4) out.push(issue('composition', 'hack_count', 'hacks', `${n} hacks; generate 4-8`, n >= 2 ? 'warn' : 'error'));
   const controllable = driver.actions.filter((a) => a.kind !== 'trigger').length;
-  const visualControls = driver.actions.some((action) => action.actionId === 'cc21') ? 2 : 1;
+  const visualControls = Math.min(4, driver.actions.filter((action) => action.kind === 'set').length);
   const wantControls = visual ? visualControls : Math.min(2, controllable);
   const controls = draft.hacks.filter((h) => h.kind === 'control').length;
   // one control may drive several actions (an xy pad on pan + tilt): enough when every set/toggle action is covered
@@ -220,7 +222,7 @@ export function draftIssues(draft: ForgeDraft, driver: ForgeDriver): Issue[] {
   if (controls < wantControls && !allCovered) out.push(issue('composition', 'control_count', 'hacks', `${controls} controls; make at least ${wantControls} (this driver has ${controllable} set/toggle actions)`));
   const wantActions = visual ? 0 : Math.min(2, driver.actions.length);
   const actions = draft.hacks.filter((h) => h.kind === 'action').length;
-  if (visual && (controls !== visualControls || actions > 3 || new Set(draft.hacks.filter((h) => h.kind === 'control').map((h) => h.commands[0]?.action)).size !== visualControls)) out.push(issue('composition', 'visual_synth_card', 'hacks', `Use exactly ${visualControls} distinct controls: Warp${visualControls === 2 ? ' and Water ripples' : ''}, and at most three pattern buttons`));
+  if (visual && (controls !== visualControls || actions > 3 || new Set(draft.hacks.filter((h) => h.kind === 'control').map((h) => h.commands[0]?.action)).size !== visualControls)) out.push(issue('composition', 'visual_synth_card', 'hacks', `Use exactly ${visualControls} distinct controls, one per continuous driver action, and at most three pattern buttons`));
   if (actions < wantActions) out.push(issue('composition', 'action_count', 'hacks', `${actions} one-shot hacks; make at least ${wantActions}`));
   return out;
 }

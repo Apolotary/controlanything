@@ -6,7 +6,8 @@
  * resort so the loop keeps going (clearly labelled: no Meta model wrote it). Nothing executes until VERIFY.
  */
 import { type Driver, DriverDraft, newId } from '@ce/protocol';
-import { visualSynthDraft, VISUAL_SYNTH_ID } from '../devices/visualSynth';
+import { isVisualSynthPort, visualSynthDraft, VISUAL_SYNTH_ID } from '../devices/visualSynth';
+import { VISUAL_SYNTH_MANIFEST } from '@ce/vsynth/manifest';
 import { osmoDraft, templateBleDraft } from '../devices/osmo/driver';
 import { resolveOp } from '../devices/encode';
 import type { LearnedCode } from './types';
@@ -30,7 +31,7 @@ export const DRIVE_SYSTEM =
   'IR codes are named by ref ("lib:<brand>/ch<n>/<key>" from the brief, or "learned:<id>"), never invented; the server fills bytes and timings. ' +
   'For a dimmable light with brighter/dimmer triggers also add one "set" action with range {"min":0,"max":100,"step":10} whose encode is {"kind":"step","upActionId":...,"downActionId":...,"steps":10}. ' +
   'For a synth prefer the parameters the brief marks as best for a demo: 4-8 "set" actions on the most audible CCs plus one note trigger. MIDI CC action ranges are actual wire values (usually 0-127), never normalized UI ranges. Exception: a reviewed CC-only chart permits only its listed CCs, channel and value ranges, with audio effect verification; do not add notes, program changes or other message types. Never send SysEx other than the identity request, never tempo/record/randomize controls. ' +
-  'For a silent visual instrument follow its chart instead: camera verification only, no notes, exactly Warp plus three pattern triggers, and include the CC action range and curve from the chart. ' +
+  'For a silent visual instrument, design the driver from the capability manifest it publishes: choose its most expressive controls yourself, only messages the manifest accepts, no notes, camera verification. ' +
   'provenance: cite the brief\'s sources. Keep it to at most 12 actions.';
 
 export interface DriveResult {
@@ -47,9 +48,12 @@ export interface DriveResult {
 export function driveMessages(card: DeviceCardPayload, research: Research, transport: Driver['transport'], executorKind: string | undefined, repair?: { draft: DriverDraft; issues: string }): ChatMessage[] {
   const visualContract = transport === 'midi' && research.profile?.id === VISUAL_SYNTH_ID
     ? [
-      'This is the known silent ControlAnything Visual Synth. Its protocol takes precedence over general synth suggestions and the other CCs listed in the research chart.',
-      'Return exactly these five actions: cc71, cc21, pattern0, pattern1, pattern2. Preserve each actionId, kind, encode, range, curve and expect exactly as specified below. Do not rename IDs, add controls, add notes, use audio verification, or replace program changes with CC messages.',
-      `Required visual synth actions: ${JSON.stringify(visualSynthDraft(card.cardId, []).actions)}`,
+      'This is the silent ControlAnything Visual Synth on the paired Mac screen. Its renderer publishes this capability manifest; it accepts nothing else:',
+      JSON.stringify(VISUAL_SYNTH_MANIFEST),
+      'You are writing the controller the wearer will play hands-free in AR, seen on a screen about two metres away. The wearer asked for two continuous hand controls (hand height, and forward/back push-pull, which they want to make water ripples) plus a few one-tap pattern buttons. Design it:',
+      '- 2 to 4 "set" actions on manifest CCs: msg "cc", channel 1, value "$value", a range of wire values inside 0-127 (narrow it when the extremes look bad), step 1, curve linear or s-curve, and a short label in the wearer\'s words. Pick the parameters that change the picture most visibly.',
+      '- up to 3 "trigger" actions on manifest programs: msg "pc", channel 1, number = program, labelled with what appears; inverseActionId may name the trigger that restores the default look.',
+      '- actionId is cc<number> for a CC and pattern<program> for a program change. expect is {"sense":"camera","effect":"any"} for every action. No notes, no other channels, no CCs or programs outside the manifest.',
     ].join('\n') : transport === 'ble'
     ? [
       'This is a DJI Osmo Mobile gimbal behind the server\'s Osmo bridge. Keep these five actions and their actionIds, kinds, encodes and ranges; you may only improve labels and descriptions. Ranges are degrees inside the brief\'s safe range; never add speed or roll actions.',
@@ -98,7 +102,7 @@ export interface DriveAttempt {
 }
 
 /** Model sequence: Spark low, Spark medium repair, Wonder low (guarded). */
-function plan(deps: DriveDeps, maxAttempts: number): { client: MuseChat; effort: 'low' | 'medium'; maxTokens: number; timeoutMs: number; tag: string }[] {
+function plan(deps: DriveDeps, maxAttempts: number): { client: MuseChat; effort: 'minimal' | 'low' | 'medium'; maxTokens: number; timeoutMs: number; tag: string }[] {
   const steps = [
     { client: deps.spark, effort: 'low' as const, maxTokens: 6000, timeoutMs: 120_000, tag: 'spark' },
     { client: deps.spark, effort: 'medium' as const, maxTokens: 6000, timeoutMs: 120_000, tag: 'spark' },
@@ -114,12 +118,16 @@ export async function drive(
   transport: Driver['transport'],
   ids: { driverId: string; executor: Driver['executor']; executorKind?: string },
   vctx: ValidationContext,
-  opts: { signal?: AbortSignal; maxAttempts?: number; onAttempt?: (info: DriveAttempt) => void } = {},
+  opts: { signal?: AbortSignal; maxAttempts?: number; onAttempt?: (info: DriveAttempt) => void; firstEffort?: 'minimal' | 'low' | 'medium' } = {},
 ): Promise<DriveResult | undefined> {
   const started = Date.now();
   let repair: { draft: DriverDraft; issues: string } | undefined;
   let last: DriveResult | undefined;
   const steps = plan(deps, opts.maxAttempts ?? 3);
+  // The visual synth's driver is small: the lowest effort that stays valid answers fastest; a repair goes up to low.
+  if (opts.firstEffort && steps[0]) steps[0] = { ...steps[0], effort: opts.firstEffort };
+  if (opts.firstEffort === 'minimal' && steps[1]) steps[1] = { ...steps[1], effort: 'low' };
+  const visual = isVisualSynthPort(ids.executor.port);
   for (const [i, step] of steps.entries()) {
     throwIfCancelled(opts.signal);
     const attempt = i + 1;
@@ -148,7 +156,7 @@ export async function drive(
       continue;
     }
     throwIfCancelled(opts.signal);
-    const draft = postProcess(res.data, card.cardId, transport);
+    const draft = visual ? visualPostProcess(postProcess(res.data, card.cardId, transport)) : postProcess(res.data, card.cardId, transport);
     const validation = validateDriver(draft, ids, { ...vctx, expectedTransport: transport });
     const model = res.recordedFrom ?? res.model;
     last = { draft, validation, model, effort: step.effort, latencyMs: Date.now() - started, attempts: attempt, source: res.source, recordedFrom: res.recordedFrom };
@@ -158,6 +166,22 @@ export async function drive(
     deps.log?.(`[drive] attempt ${attempt} rejected:\n${repair.issues}`);
   }
   return last;
+}
+
+/**
+ * The visual synth's ids and oracle are the server's: ids follow the wire message (cc<number>, pattern<program>) so
+ * gestures, receipts and history line up; every action is checked by the headset camera / renderer receipt.
+ * Muse's choices (which controls, labels, ranges, curves, patterns, undo) are kept as written.
+ */
+export function visualPostProcess(draft: DriverDraft): DriverDraft {
+  const rename = new Map<string, string>();
+  const actions = draft.actions.map((a) => {
+    const e = a.encode;
+    const id = e.kind === 'midi' && e.number !== undefined ? (e.msg === 'cc' ? `cc${e.number}` : e.msg === 'pc' ? `pattern${e.number}` : a.actionId) : a.actionId;
+    rename.set(a.actionId, id);
+    return { ...a, actionId: id, expect: { sense: 'camera' as const, effect: 'any' as const } };
+  });
+  return { ...draft, actions: actions.map((a) => (a.inverseActionId ? { ...a, inverseActionId: rename.get(a.inverseActionId) ?? a.inverseActionId } : a)) };
 }
 
 /** Server-side normalisation of a model draft: ids present, cardId/transport forced, a step action when brighter/dimmer pairs exist. */

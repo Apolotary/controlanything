@@ -52,7 +52,6 @@ describe('silent visual synth forge', () => {
 
   it.each([
     ['normalized range', { min: 0, max: 1, step: .01, default: .5 }],
-    ['half range', { min: 0, max: 64, step: 1, default: 32 }],
     ['fractional steps', { min: 0, max: 127, step: .5, default: 64 }],
     ['non-finite default', { min: 0, max: 127, step: 1, default: NaN }],
   ])('rejects a Water control with %s', (_name, range) => {
@@ -79,7 +78,7 @@ describe('silent visual synth forge', () => {
     draft.hacks.push(secondControl);
     expect(draftIssues(draft, driver).some((issue) => issue.code === 'visual_synth_card')).toBe(true);
     const messages = forgeMessages({ device, driver, verification, request: 'Build controls' });
-    expect(messages[1].content).toContain('exactly two distinct controls: Warp');
+    expect(messages[1].content).toContain('exactly one control per continuous (set) driver action');
     expect(isVisualSynth({ ...driver, name: 'Another synth' })).toBe(false);
   });
 });

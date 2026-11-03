@@ -8,6 +8,7 @@ import type { ForgeDevice, ForgeDriver, VerifyState } from './forgeTypes';
 import type { ForgeDraft, HackSet } from './hackset';
 import type { StreamMessage } from './stream';
 import { isVisualSynth } from './visualSynth';
+import { isVisualSynthPort } from '../devices/visualSynth';
 import { boundedInteractionReferences, type InteractionReference } from './interactionReferences';
 
 /** the few-shot example (exported so a test proves it passes every check) */
@@ -178,7 +179,7 @@ export function forgeMessages(p: ForgePromptInput): StreamMessage[] {
     p.current ? JSON.stringify(p.current.hacks) : 'none',
     'REQUEST',
     JSON.stringify(p.request),
-    ...(isVisualSynth(p.driver) ? ['VISUAL SYNTH CARD', `Override the general composition rule: ${p.driver.actions.some((action) => action.actionId === 'cc21') ? 'exactly two distinct controls: Warp bound only to cc71 and Water ripples bound only to cc21' : 'exactly one main control called Warp, bound only to cc71'}, and at most three buttons bound individually to pattern0, pattern1, pattern2. CC21 selects the Water effect; do not label Warp or Rings as Water ripples. Use the driver range and integer steps. Every oracle is camera:screen_changed. This instrument is silent.`] : []),
+    ...(isVisualSynth(p.driver) || isVisualSynthPort(p.driver.executor?.port) ? ['VISUAL SYNTH CARD', `Override the general composition rule: exactly one control per continuous (set) driver action, each bound only to its action with one param inside that action's range and integer steps, and at most three buttons each bound to one pattern trigger. Name each control by what it does on screen; never use another parameter's name (a Warp control is not "ripples"). Every oracle is camera:screen_changed. This instrument is silent. Keep blurbs short.`] : []),
     ...repairLines(p.repair),
   ];
   return [

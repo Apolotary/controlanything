@@ -17,10 +17,36 @@ export function visualSynthDraft(cardId: string, provenance: Provenance[]): Driv
   };
 }
 
-/** Legacy saved visual drivers cannot claim the new ripple capability. */
+/**
+ * Only the legacy four-action driver (Warp + three patterns, from before Water ripples existed) needs an upgrade.
+ * A driver Muse wrote from the manifest is its own choice, with or without ripples.
+ */
 export function visualSynthNeedsUpgrade(driver?: Pick<Driver, 'executor' | 'actions'>): boolean {
   if (!driver || !isVisualSynthPort(driver.executor.port)) return false;
-  return !driver.actions.some(a => a.actionId === 'cc21' && a.kind === 'set' && a.encode.kind === 'midi'
-    && a.encode.msg === 'cc' && a.encode.channel === 1 && a.encode.number === 21 && a.encode.value === '$value'
-    && a.range?.min === 0 && a.range.max === 127 && a.range.step === 1);
+  const ids = driver.actions.map((a) => a.actionId).sort().join(',');
+  return ids === 'cc71,pattern0,pattern1,pattern2';
+}
+
+/** Words that name each visual synth parameter or pattern: a label may not claim a different one. */
+const VISUAL_WORDS: Record<string, RegExp> = {
+  brightness: /\bbright/i, hue: /\b(hue|colou?r)\b/i, saturation: /\bsatur/i, speed: /\b(speed|tempo)\b/i, zoom: /\bzoom/i,
+  warp: /\bwarp/i, ripple: /\b(ripple|water)/i, symmetry: /\b(symmetr|kaleido|mirror)/i,
+  flow: /\bflow/i, rings: /\brings?\b/i, prism: /\bprism/i,
+};
+const CC_PARAMETER: Record<number, string> = { 7: 'brightness', 10: 'hue', 11: 'saturation', 1: 'speed', 74: 'zoom', 71: 'warp', 21: 'ripple', 20: 'symmetry' };
+const PROGRAM_KEY = ['flow', 'rings', 'prism', 'ripple'];
+
+/** The manifest key a visual synth action drives, from its wire message (or its canonical id cc<n>/pattern<n>). */
+export function visualKey(action: { actionId: string; encode?: { kind?: string; msg?: string; number?: number } }): string | undefined {
+  const e = action.encode;
+  if (e?.kind === 'midi' && e.number !== undefined) return e.msg === 'cc' ? CC_PARAMETER[e.number] : e.msg === 'pc' ? PROGRAM_KEY[e.number] : undefined;
+  const m = /^(cc|pattern)(\d+)$/.exec(action.actionId);
+  return m ? (m[1] === 'cc' ? CC_PARAMETER[Number(m[2])] : PROGRAM_KEY[Number(m[2])]) : undefined;
+}
+
+/** True when a label names a different visual parameter or pattern than its own (Warp must not pose as Water ripples). */
+export function misnamedVisual(label: string, own: string | undefined): boolean {
+  if (!own) return false;
+  if (VISUAL_WORDS[own]?.test(label)) return false;
+  return Object.entries(VISUAL_WORDS).some(([key, words]) => key !== own && words.test(label));
 }

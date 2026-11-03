@@ -36,7 +36,7 @@ import { fixtureDriverDraft, WONDER_MODEL } from './drive';
 import { macLocalInfo, type Roster } from './executors';
 import { cropJpeg, fixtureDeviceCard, identify, type IdentifyResult } from './identify';
 import { decodeJpeg } from '../oracle/image';
-import { demoMode, runLoop } from './loop';
+import { demoMode, prefetchVisualDriver, runLoop } from './loop';
 import { CANCELLED_GUIDANCE, type TimedPhase } from './guidance';
 import { subscribeForge } from './forgeBridge';
 import { restoreSavedForge } from './restoreForge';
@@ -232,7 +232,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   activeForge?.setReferences?.((query) => interactionReferences(tags.library(), query));
   const unsubscribeForge = activeForge?.subscribe ? subscribeForge(activeForge, hub, targets, (cardId) => {
     const t = targets.get(cardId);
-    if (!t) return !tags.get(cardId); // Standalone HTTP samples have no saved device intent.
+    // Standalone HTTP samples have no saved device intent; a prefetched visual synth waits for its setup.
+    if (!t) return cardId !== VISUAL_SYNTH_CARD_ID && !tags.get(cardId);
     return mode === 'control' && tags.has(cardId) && (setups.has(cardId) || canControl(t));
   }, (spec) => {
     const target = targets.get(spec.cardId!);
@@ -730,6 +731,10 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     // A completed setup that was declined only needs a fresh ARM confirmation.
     if (!rerun && !visualSynthNeedsUpgrade(t.driver) && midiPermissionsCurrent(t) && t.specId && t.driver && verifiedControlCount(specs.get(t.specId), t) > 0) {
       if (demoMode() && virtualScreenExecutor(t.card) && !t.driver.actions.some((a) => a.confirm === 'hold')) {
+        // A device verified before: its saved driver and controls come straight back from the library, labelled so.
+        const passed = t.driver.actions.filter((a) => t.verification[a.actionId] === 'pass').length;
+        steps.note('drive', `saved driver from the device library: ${passed}/${t.driver.actions.length} actions verified earlier · written by ${t.driver.modelId ?? 'unknown'}`,
+          { cardId: t.cardId, runId: t.runId, kind: 'proof', model: t.driver.modelId, evidence: 'saved driver', sentence: 'Saved driver', hint: 'Restored from the device library' });
         showControls(t, from.deviceId);
         arm.auto(t, t.driver, 'ControlAnything demo (CE_DEMO=1, verified silent visuals)');
         setups.delete(t.cardId);
@@ -1010,6 +1015,12 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     enforcePresence();
     publishTags();
     continueVisualIntent();
+    // CE_DEMO: Muse writes the Mac visual synth's driver as soon as a Mac advertises it, so a pinch goes straight to verify.
+    if (demoMode() && process.env.CE_PREFETCH !== '0') for (const host of visualSynthHosts(hub.devices())) {
+      // Controls are prefetched only for a first setup: a saved, verified card keeps its own forge entry untouched.
+      const saved = targets.get(VISUAL_SYNTH_CARD_ID);
+      prefetchVisualDriver(loopDeps, host, visualSynthCard(host), { forge: !saved?.specId && !setups.has(VISUAL_SYNTH_CARD_ID) });
+    }
     if (presence.reason === 'join' && presence.deviceId) {
       for (const state of canvas.snapshots()) if (tags.has(state.cardId)) hub.sendToDevice(presence.deviceId, 'canvas.state', state);
       for (const t of targets.list()) {
