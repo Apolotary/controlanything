@@ -86,10 +86,6 @@
             },
             "params": {
               "type": "object",
-              "propertyNames": {
-                "type": "string",
-                "maxLength": 24
-              },
               "additionalProperties": {
                 "type": "number"
               }

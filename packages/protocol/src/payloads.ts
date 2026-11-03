@@ -727,7 +727,7 @@ export const ExecAckPayload = z.object({
   applied: z.object({
     source: z.enum(['renderer', 'port']),
     /** at most 16 keys; the visual synth sends 0..1 units (symmetry 1..8, pattern 0..3) */
-    params: z.record(z.string().max(24), z.number()).optional(),
+    params: z.record(z.string(), z.number()).optional(),
     visible: z.boolean().optional(),
     frame: z.number().int().min(0).optional(),
     at: z.number().optional(),
