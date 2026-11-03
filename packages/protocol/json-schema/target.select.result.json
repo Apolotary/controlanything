@@ -47,6 +47,9 @@
         "reason": {
           "type": "string",
           "maxLength": 300
+        },
+        "autoSetup": {
+          "type": "boolean"
         }
       },
       "required": [

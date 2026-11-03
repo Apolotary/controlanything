@@ -83,6 +83,10 @@
         "text": {
           "type": "string",
           "maxLength": 500
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 80
         }
       },
       "additionalProperties": false

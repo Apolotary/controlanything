@@ -56,6 +56,9 @@
         "reason": {
           "type": "string",
           "maxLength": 300
+        },
+        "auto": {
+          "type": "boolean"
         }
       },
       "required": [

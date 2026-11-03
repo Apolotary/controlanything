@@ -265,6 +265,8 @@ export const TargetSelectPayload = z.object({
   deviceId: Id.optional(),
   /** what the user said with it, e.g. "control this" */
   text: z.string().max(500).optional(),
+  /** the on-device detector's label of the pinched box (e.g. "laptop"); the server identifies it with Muse */
+  label: z.string().max(80).optional(),
 });
 export type TargetSelectPayload = z.infer<typeof TargetSelectPayload>;
 
@@ -274,6 +276,8 @@ export const TargetSelectResultPayload = z.object({
   ok: z.boolean(),
   cardId: Id.optional(),
   reason: z.string().max(300).optional(),
+  /** CE_DEMO=1: the server started control.setup for this card itself; the client tracks it as its active setup */
+  autoSetup: z.boolean().optional(),
 });
 export type TargetSelectResultPayload = z.infer<typeof TargetSelectResultPayload>;
 
@@ -883,6 +887,8 @@ export const ArmResultPayload = z.object({
   armed: z.boolean(),
   by: z.string().max(120).optional(),
   reason: z.string().max(300).optional(),
+  /** CE_DEMO=1: armed by the server after verification, with no arm.request; clients accept it for their active setup */
+  auto: z.boolean().optional(),
 });
 export type ArmResultPayload = z.infer<typeof ArmResultPayload>;
 
