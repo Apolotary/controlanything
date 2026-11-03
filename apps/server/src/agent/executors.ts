@@ -57,6 +57,8 @@ export function suggestedClients(cap: Capability): DeviceKind[] {
       return ['mac', 'iphone'];
     case 'printer':
       return ['devterm'];
+    case 'ble':
+      return ['gimbal'];
     default:
       return ['mac'];
   }
@@ -65,9 +67,9 @@ export function suggestedClients(cap: Capability): DeviceKind[] {
 /**
  * Pick an executor for a transport. MIDI: the device whose ports include an output matching `portHint`
  * (else the only MIDI device). IR: prefer a Nature Remo bridge, then a Cardputer, then anything with "ir".
- * local: the device the user pointed at (`preferDeviceId`), else the Mac.
+ * local: the device the user pointed at (`preferDeviceId`), else the Mac. ble: the server's DJI Osmo bridge.
  */
-export function pickExecutor(r: Roster, cap: 'midi' | 'ir' | 'local', opts: { portHint?: string; preferDeviceId?: string } = {}): ExecutorPick | undefined {
+export function pickExecutor(r: Roster, cap: 'midi' | 'ir' | 'local' | 'ble', opts: { portHint?: string; preferDeviceId?: string } = {}): ExecutorPick | undefined {
   const cands = online(r, cap);
   if (!cands.length) return undefined;
   const toPick = (d: DeviceInfo, port?: Port): ExecutorPick => ({ deviceId: d.deviceId, name: d.name, kind: d.kind, port, internal: d.deviceId === MAC_LOCAL_ID });
@@ -84,6 +86,13 @@ export function pickExecutor(r: Roster, cap: 'midi' | 'ir' | 'local', opts: { po
     if (!matches.length && outputs.length === 1) return outputs[0];
     // No unique instrument: return connection readiness without choosing an output.
     return toPick(cands[0]);
+  }
+  if (cap === 'ble') {
+    // only a gimbal bridge speaks the Osmo profile; the gimbal whose Bluetooth link is up wins
+    const gimbals = cands.filter((d) => d.kind === 'gimbal');
+    const up = gimbals.find((d) => d.ports?.some((p) => p.kind === 'ble' && p.state === 'connected'));
+    const pick = up ?? gimbals[0];
+    return pick ? toPick(pick, pick.ports?.find((p) => p.kind === 'ble')) : undefined;
   }
   if (cap === 'ir') {
     // a Nature Remo on the LAN blasts further than the Cardputer's unit; the Cardputer stays the alternative

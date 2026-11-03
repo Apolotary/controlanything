@@ -2,6 +2,7 @@ import { isVisualSynthPort, visualSynthNeedsUpgrade } from '../devices/visualSyn
 import type { TaggedDevice } from '@ce/protocol';
 import { roster as devices, type Roster } from './executors';
 import { neededCapability, type LinkCapability } from './link';
+import { isGimbalCard } from '../devices/osmo/driver';
 import { MAC_LOCAL_ID } from './maclocal';
 import { synthConnectionGuidance } from './guidance';
 import type { Target } from './types';
@@ -18,6 +19,7 @@ export function isLaptopTarget(t: Target, label = ''): boolean {
 
 export function tagCapability(t: Target): LinkCapability | undefined {
   const card = t.card;
+  if (card && isGimbalCard(card)) return 'ble';
   if (card?.protocols.includes('hid') && !card.protocols.includes('midi') && !card.requires?.includes('midi')) return undefined;
   if (isLaptopTarget(t)) return 'local';
   if (!card) return undefined;
@@ -52,6 +54,8 @@ export function evaluateConnection(t: Target, roster: Roster, label?: string): P
   const cap = tagCapability(t);
   const hint = cap === 'ir'
       ? 'Pair the Cardputer IR node or connect a Nature Remo bridge'
+      : cap === 'ble'
+        ? 'Switch the DJI gimbal on and close the Mimo app (the server needs CE_OSMO=ble)'
       : cap === 'local'
         ? 'Open the Mac app and enable control of this Mac'
         : 'Connect a companion that can reach this device';

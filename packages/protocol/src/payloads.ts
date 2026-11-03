@@ -467,7 +467,7 @@ export const LinkResultPayload = z.object({
   cardId: Id,
   verdict: z.enum(['confirmed', 'consistent', 'mismatch', 'unknown', 'none']),
   executorDeviceId: Id.optional(),
-  channel: z.enum(['midi', 'ir', 'local', 'sim']).optional(),
+  channel: z.enum(['midi', 'ir', 'local', 'sim', 'ble']).optional(),
   port: Port.optional(),
   evidence: z.array(z.object({ kind: LinkEvidenceKind, ok: z.boolean(), detail: z.string().max(300) })).max(8),
   reason: z.string().max(300).optional(),

@@ -21,7 +21,7 @@ import type { WebSearcher } from '../research/websearch';
 import type { Sam } from '../scan/sam';
 import { ArmService } from './arm';
 import type { Dispatcher } from './dispatch';
-import { drive, dryResolve, templateIrDraft, templateLocalDraft, templateMidiDraft } from './drive';
+import { drive, dryResolve, templateBleDraft, templateIrDraft, templateLocalDraft, templateMidiDraft } from './drive';
 import { candidatesFor, online, pickSensor, type Roster, suggestedClients } from './executors';
 import { cropForSkin, cropJpeg, identify, type IdentifyResult, type SkinCropImage } from './identify';
 import { learnCodes } from './learn';
@@ -239,7 +239,7 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       } else {
         // last resort: the curated template, honestly labelled
         const draft: DriverDraft | undefined = cap === 'midi' ? (research.profile ? templateMidiDraft(card, research.profile, research) : undefined)
-          : cap === 'ir' ? templateIrDraft(card, research) : cap === 'local' ? templateLocalDraft(card, research, executor.kind) : undefined;
+          : cap === 'ir' ? templateIrDraft(card, research) : cap === 'local' ? templateLocalDraft(card, research, executor.kind) : cap === 'ble' ? templateBleDraft(card, research.provenance) : undefined;
         if (!draft) {
           dstep.fail('The selected transport has no supported fallback');
           fail('Could not write commands for the selected MIDI device', { sentence: 'I could not prepare this device’s MIDI controls', hint: 'Review its MIDI chart on the Mac, then retry setup', action: 'retry' });

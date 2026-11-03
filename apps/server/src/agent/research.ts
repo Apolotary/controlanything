@@ -8,6 +8,7 @@ import type { WebSearcher } from '../research/websearch';
 import type { LinkCapability } from './link';
 import type { MidiChartStore } from '../devices/midi-charts';
 import type { LearnedCode, Research } from './types';
+import { OSMO_PROVENANCE, osmoBrief } from '../devices/osmo/driver';
 
 export const KOIZUMI_NOTE =
   'The KOIZUMI KRH-TG-9A remote has no public code set (checked Flipper-IRDB, IRDB, LIRC, SmartIR, blogs). ' +
@@ -62,6 +63,10 @@ export async function research(
     }
     if (/koizumi/i.test(`${card.maker} ${card.model} ${card.notes ?? ''}`)) parts.push(KOIZUMI_NOTE);
     return { brief: parts.join('\n'), provenance, irLibrary: lib, learned: opts.learned };
+  }
+  if (cap === 'ble') {
+    provenance.push(...OSMO_PROVENANCE);
+    return { brief: osmoBrief(), provenance };
   }
   if (cap === 'local') {
     provenance.push({ source: 'curated', ref: 'builtin:local-ops', note: 'Mac: volume (osascript), Music play/pause, say; iPhone: torch, haptic, screen; DevTerm: print, beep' });

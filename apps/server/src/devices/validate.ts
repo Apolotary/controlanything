@@ -7,6 +7,7 @@
 import { type ActionEncode, type Driver, type DriverAction, type DriverDraft, type IrCapture, type IrOp, RATE_LIMITS, VALUE_PLACEHOLDER } from '@ce/protocol';
 import { isVisualSynthPort, VISUAL_SYNTH_NAME } from './visualSynth';
 import { fillRaw, sameCode } from './ir';
+import { OSMO_LIMITS } from './osmo/om';
 import type { IrLibrary } from './profiles';
 
 export interface DriverIssue {
@@ -53,6 +54,7 @@ const LOCAL_OPS_BY_KIND: Record<string, Set<string>> = {
 function hasPlaceholder(encode: ActionEncode): boolean {
   if (encode.kind === 'midi') return encode.value === VALUE_PLACEHOLDER;
   if (encode.kind === 'local') return encode.arg === VALUE_PLACEHOLDER;
+  if (encode.kind === 'ble') return encode.arg === VALUE_PLACEHOLDER;
   return false;
 }
 
@@ -191,6 +193,20 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
       const allowed = ctx.executorKind ? LOCAL_OPS_BY_KIND[ctx.executorKind] : undefined;
       if (allowed && !allowed.has(e.op)) err('local_op_not_supported', `${path}.encode.op`, `a ${ctx.executorKind} cannot do "${e.op}" (supports ${[...allowed].join(', ')})`);
       if (e.op === 'volume' && typeof e.arg === 'number' && (e.arg < 0 || e.arg > 100)) err('bad_volume', `${path}.encode.arg`, 'volume is 0-100');
+    } else if (e.kind === 'ble') {
+      // the DJI Osmo bridge clamps again at send time; the driver itself must already stay inside the envelope
+      if (ctx.executorKind && ctx.executorKind !== 'gimbal') err('ble_executor', `${path}.encode`, `a ${ctx.executorKind} cannot drive a Bluetooth gimbal`);
+      const lim = e.op === 'pan' ? OSMO_LIMITS.yaw : e.op === 'tilt' ? OSMO_LIMITS.pitch : undefined;
+      if (lim) {
+        if (e.arg !== VALUE_PLACEHOLDER && typeof e.arg !== 'number') err('ble_bad_arg', `${path}.encode.arg`, `${e.op} takes degrees or "${VALUE_PLACEHOLDER}"`);
+        if (typeof e.arg === 'number' && (e.arg < lim.min || e.arg > lim.max)) err('ble_out_of_range', `${path}.encode.arg`, `${e.op} ${e.arg}° is outside ${lim.min}..${lim.max}°`);
+        if (a.kind === 'set' && a.range && (a.range.min < lim.min || a.range.max > lim.max)) err('ble_range', `${path}.range`, `${e.op} range must stay within ${lim.min}..${lim.max}°`);
+      } else if (e.op === 'nudge') {
+        const n = e.arg && typeof e.arg === 'object' ? e.arg : undefined;
+        if (!n || (n.yaw === undefined && n.pitch === undefined)) err('ble_bad_arg', `${path}.encode.arg`, 'nudge takes {"yaw":deg,"pitch":deg}');
+        else if (Math.abs(n.yaw ?? 0) > 60 || Math.abs(n.pitch ?? 0) > 30) err('ble_out_of_range', `${path}.encode.arg`, 'a nudge moves at most 60° pan / 30° tilt');
+      } else if (e.arg !== undefined && typeof e.arg !== 'object') err('ble_bad_arg', `${path}.encode.arg`, `${e.op} takes no angle`);
+      if (a.kind === 'set' && !lim) err('ble_set_needs_axis', `${path}.encode.op`, 'a "set" gimbal action must be pan or tilt');
     } else if (e.kind === 'step') {
       for (const k of ['upActionId', 'downActionId'] as const) {
         const target = byId.get(e[k]);
@@ -212,7 +228,7 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
   }
 
   // rate limits
-  const cap = input.transport === 'midi' ? RATE_LIMITS.midiPerSec : input.transport === 'ir' ? RATE_LIMITS.irPerSec : RATE_LIMITS.lightChangesPerSec;
+  const cap = input.transport === 'midi' ? RATE_LIMITS.midiPerSec : input.transport === 'ir' ? RATE_LIMITS.irPerSec : input.transport === 'ble' ? OSMO_LIMITS.maxRateHz : RATE_LIMITS.lightChangesPerSec;
   const lightCap = ctx.emitsLight ? RATE_LIMITS.lightChangesPerSec : cap;
   let maxRateHz = input.maxRateHz ?? Math.min(cap, lightCap);
   if (maxRateHz > Math.min(cap, lightCap)) {

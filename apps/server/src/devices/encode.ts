@@ -46,7 +46,7 @@ export function resolveOp(action: DriverAction, value?: number): ExecOp {
   if (e.kind === 'step') throw new Error(`action ${action.actionId} is a step composite; expand it with planSteps()`);
   if (e.kind === 'ir') return fillRaw(e);
   const op: ExecOp = { ...e } as ExecOp;
-  const needs = (op.kind === 'midi' && op.value === VALUE_PLACEHOLDER) || (op.kind === 'local' && op.arg === VALUE_PLACEHOLDER);
+  const needs = (op.kind === 'midi' && op.value === VALUE_PLACEHOLDER) || ((op.kind === 'local' || op.kind === 'ble') && op.arg === VALUE_PLACEHOLDER);
   if (needs) {
     if (value === undefined) throw new Error(`action ${action.actionId} needs a value`);
     const from = action.range ?? { min: 0, max: 1 };
@@ -55,9 +55,11 @@ export function resolveOp(action: DriverAction, value?: number): ExecOp {
     // domains. Expanding 20–100 into 0–127 would send values the chart never authorized.
     const domain = op.kind === 'midi' && op.msg === 'cc' && action.range
       ? { min: clamp(action.range.min, 0, 127), max: clamp(action.range.max, 0, 127) } : range;
-    const mapped = mapRange(value, from, domain, int);
+    // a gimbal axis is in degrees on the wire: the action range is the domain (the bridge clamps again)
+    const mapped = op.kind === 'ble' ? Math.round(mapRange(value, from, from) * 10) / 10 : mapRange(value, from, domain, int);
     if (op.kind === 'midi') op.value = mapped;
     else if (op.kind === 'local') op.arg = op.op === 'torch' ? mapped > 0.5 : mapped;
+    else if (op.kind === 'ble') op.arg = mapped;
   }
   if (op.kind === 'midi' && op.msg === 'note' && op.durationMs === undefined) op.durationMs = 250;
   return op;

@@ -10,11 +10,14 @@ import type { MidiProfile } from '../devices/profiles';
 import type { Dispatcher } from './dispatch';
 import { type ExecutorPick, pickExecutor, type Roster } from './executors';
 import { virtualScreenExecutor, visualSynthCompanions } from './visual-synth';
+import { isGimbalCard } from '../devices/osmo/driver';
 
-export type LinkCapability = 'midi' | 'ir' | 'local';
+export type LinkCapability = 'midi' | 'ir' | 'local' | 'ble';
 
 /** The one capability a card needs to be driven. */
-export function neededCapability(card: Pick<DeviceCardPayload, 'requires' | 'protocols' | 'category'>): LinkCapability | undefined {
+export function neededCapability(card: Pick<DeviceCardPayload, 'requires' | 'protocols' | 'category'> & Partial<Pick<DeviceCardPayload, 'name' | 'maker' | 'model'>>): LinkCapability | undefined {
+  // a phone gimbal (DJI Osmo) is driven over BLE even when the phone on it makes the card look like a phone
+  if (isGimbalCard({ name: card.name ?? '', maker: card.maker ?? '', model: card.model ?? '' })) return 'ble';
   const req = card.requires ?? [];
   for (const c of ['midi', 'ir', 'local'] as const) if (req.includes(c as Capability)) return c;
   if (card.protocols.includes('midi')) return 'midi';
@@ -97,6 +100,14 @@ export async function tryLink(
     else if (port?.ok && portHint) result.verdict = 'consistent';
     else result.verdict = 'unknown';
     if (result.verdict === 'mismatch') result.reason = 'the connected instrument is not the one the camera identified';
+    return { result, executor: pick };
+  }
+
+  if (cap === 'ble') {
+    const up = pick.port?.state === 'connected';
+    result.evidence.push({ kind: 'port-name', ok: up, detail: up ? `${pick.name}: Bluetooth link up to "${pick.port?.name}"` : `${pick.name} is running but the gimbal is not connected over Bluetooth yet` });
+    if (!up) return { result: { ...result, verdict: 'none', reason: 'switch the DJI gimbal on (and close the Mimo app); the Mac connects to it over Bluetooth' } };
+    result.verdict = 'consistent';
     return { result, executor: pick };
   }
 

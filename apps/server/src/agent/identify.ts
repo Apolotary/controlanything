@@ -20,6 +20,7 @@ export const IDENTIFY_SYSTEM =
   'Never identify, describe or mention people. `requires` lists the client capabilities needed to control it: ["midi"] for a USB-MIDI instrument, ["ir"] for anything driven by an infrared remote (ceiling lights, air conditioners, TVs), ["local"] for a computer or phone. ' +
   'For ordinary non-electronic objects such as a book, cup, bottle or ball, use category "other", protocols ["other"], requires [], companion "none". Do not invent a control connection. For books, quote only legible cover text; never invent contents of unread pages. ' +
   'A screen showing the legible label ControlAnything Visual Synth is the silent virtual MIDI instrument (maker ControlAnything, model Visual Synth, category synthesizer, protocols ["midi"], requires ["midi"]); identify that application when selected. ' +
+  'A motorised handheld phone gimbal (for example a DJI Osmo Mobile / OM 4 holding a phone) is the gimbal, not the phone: put "gimbal" in its name, category "other", protocols ["ble"], requires ["ble"], companion "phone_ble"; the Mac reaches it over Bluetooth. ' +
   'alternatives: other plausible identifications. followUp: what to photograph to be sure (a label, the ports).';
 
 /** Crop with ~2% padding, as JPEG base64. */
@@ -187,6 +188,9 @@ export function fixtureDeviceCard(messages: ChatMessage[]): DeviceCardDraft {
   if (/\b(book|cup|mug|bottle|ball)s?\b/.test(label)) {
     return { name: `FIXTURE ${label.slice(0, 60)}`, maker: 'unknown', model: 'unknown', category: 'other', confidence: 0.6,
       protocols: ['other'], requires: [], companion: 'none', evidence: ['FIXTURE: object label only; contents were not read'] };
+  }
+  if (/\b(gimbal|osmo|stabili[sz]er)\b/.test(label)) {
+    return { name: 'FIXTURE DJI Osmo Mobile gimbal', maker: 'DJI', model: 'OM 4', category: 'other', confidence: 0.6, protocols: ['ble'], requires: ['ble'], companion: 'phone_ble', evidence: ['FIXTURE: object label only, no Meta model was called'] };
   }
   const kindOf = (s: string) => (/ceiling light|lamp|\blight\b/.test(s) ? 'light' : /synth|keyboard|op-1|electronic device/.test(s) ? 'synth' : undefined);
   if (/controlanything visual synth|visual synth/.test(label)) {

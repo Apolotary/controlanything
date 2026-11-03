@@ -7,6 +7,7 @@
  */
 import { type Driver, DriverDraft, newId } from '@ce/protocol';
 import { visualSynthDraft, VISUAL_SYNTH_ID } from '../devices/visualSynth';
+import { osmoDraft, templateBleDraft } from '../devices/osmo/driver';
 import { resolveOp } from '../devices/encode';
 import type { LearnedCode } from './types';
 import type { MidiProfile } from '../devices/profiles';
@@ -49,6 +50,10 @@ export function driveMessages(card: DeviceCardPayload, research: Research, trans
       'This is the known silent ControlAnything Visual Synth. Its protocol takes precedence over general synth suggestions and the other CCs listed in the research chart.',
       'Return exactly these five actions: cc71, cc21, pattern0, pattern1, pattern2. Preserve each actionId, kind, encode, range, curve and expect exactly as specified below. Do not rename IDs, add controls, add notes, use audio verification, or replace program changes with CC messages.',
       `Required visual synth actions: ${JSON.stringify(visualSynthDraft(card.cardId, []).actions)}`,
+    ].join('\n') : transport === 'ble'
+    ? [
+      'This is a DJI Osmo Mobile gimbal behind the server\'s Osmo bridge. Keep these five actions and their actionIds, kinds, encodes and ranges; you may only improve labels and descriptions. Ranges are degrees inside the brief\'s safe range; never add speed or roll actions.',
+      `Required gimbal actions: ${JSON.stringify(osmoDraft(card.cardId, []).actions)}`,
     ].join('\n') : '';
   const msgs: ChatMessage[] = [
     { role: 'system', content: DRIVE_SYSTEM },
@@ -280,11 +285,12 @@ export function templateLocalDraft(card: DeviceCardPayload, research: Research, 
 export function fixtureDriverDraft(messages: ChatMessage[]): DriverDraft {
   const text = messages.map((m) => (typeof m.content === 'string' ? m.content : m.content.map((p) => (p.type === 'text' ? p.text : '')).join(' '))).join('\n');
   const cardId = /cardId "([^"]+)"/.exec(text)?.[1] ?? 'card';
-  const transport = (/Transport: (midi|ir|local)/.exec(text)?.[1] ?? 'midi') as Driver['transport'];
+  const transport = (/Transport: (midi|ir|local|ble)/.exec(text)?.[1] ?? 'midi') as Driver['transport'];
   const executorKind = /via a (\w+)/.exec(text)?.[1];
   const card: DeviceCardPayload = { cardId, name: 'FIXTURE device', maker: 'unknown', model: 'unknown', category: transport === 'midi' ? 'synthesizer' : transport === 'ir' ? 'lighting' : 'computer', confidence: 0.5, protocols: [transport === 'local' ? 'other' : transport], evidence: [] };
   const research: Research = { brief: text, provenance: [{ source: 'fixture', ref: 'fixture:driver_draft' }] };
   if (transport === 'midi' && text.includes('ControlAnything Visual Synth')) return visualSynthDraft(cardId, research.provenance);
+  if (transport === 'ble') return { ...osmoDraft(cardId, research.provenance), name: 'FIXTURE gimbal driver', notes: 'FIXTURE: canned driver, no Meta model was called' };
   if (transport === 'midi') {
     // CCs mentioned in the brief's chart lines "  46: ..." -> allowed set
     const ccs = [...text.matchAll(/^\s+(\d+): /gm)].map((m) => Number(m[1]));
@@ -327,6 +333,8 @@ export function fixtureDriverDraft(messages: ChatMessage[]): DriverDraft {
   }
   return { ...templateLocalDraft(card, research, executorKind), name: 'FIXTURE local driver', notes: 'FIXTURE: canned driver, no Meta model was called' };
 }
+
+export { templateBleDraft };
 
 /** Sanity: every action of a validated driver resolves to an op (or is a step). */
 export function dryResolve(driver: Driver): string[] {

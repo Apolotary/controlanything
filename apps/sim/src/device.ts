@@ -197,7 +197,7 @@ export class SimDevice {
       return { execId: p.execId, ok, sentAt, latencyMs: sentAt - received, ...extra };
     };
     const op = p.op;
-    if (op.kind === 'local') return ack(false, { error: 'unsupported', detail: 'the sim has no local ops (volume, torch, print...)' });
+    if (op.kind === 'local' || op.kind === 'ble') return ack(false, { error: 'unsupported', detail: `the sim has no ${op.kind} ops (volume, torch, print, gimbal...)` });
     if (op.kind === 'midi') {
       const output = p.port ? matchingPort(p.port, 'midi-out') : undefined;
       if (p.port && !output) return ack(false, { error: 'no_port', detail: `no MIDI output "${p.port}" on the sim (have "${SIM_PORTS[0]!.name}")` });

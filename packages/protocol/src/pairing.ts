@@ -44,6 +44,7 @@ export const DEFAULT_ROLE: Record<DeviceKind, Role> = {
   web: 'controller',
   sim: 'device',
   remo: 'device',
+  gimbal: 'device',
 };
 
 /** Only these kinds may approve new devices. */

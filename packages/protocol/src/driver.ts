@@ -5,7 +5,7 @@
  * expands and sends to an executor client (`exec.command`). Muse Wonder writes the Driver with
  * `json_schema`; the server validates it against allowlists (CC numbers from the stored chart, IR codes
  * from the stored candidate library or learned frames, no SysEx writes), ranges and rate limits before
- * anything executes. Every op the executor receives is one of MidiOp | IrOp | LocalOp.
+ * anything executes. Every op the executor receives is one of MidiOp | IrOp | LocalOp | BleOp.
  *
  * Same rules as the rest of the package: flat, non-recursive, depth <= 10 (these double as Muse
  * `response_format` json_schema).
@@ -129,8 +129,31 @@ export const LocalOp = z.object({
 });
 export type LocalOp = z.infer<typeof LocalOp>;
 
+/**
+ * A command to a Bluetooth LE peripheral whose wire protocol the executor implements (transport "ble"), shaped
+ * like LocalOp. profile "dji-osmo": a DJI Osmo Mobile phone gimbal, bridged by the server's Osmo bridge (DUML
+ * over BLE). Angles in degrees; yaw = pan (left/right), pitch = tilt (up/down).
+ *   pan: absolute yaw = arg (a number or "$value") · tilt: absolute pitch = arg (a number or "$value") ·
+ *   nudge: {yaw?, pitch?} relative to the current aim · recenter: back to 0/0/0 · stop: hold where it is.
+ * The executor clamps every target to its safe range and caps the slew speed, whatever the op says.
+ */
+export const BleProfile = z.enum(['dji-osmo']);
+export type BleProfile = z.infer<typeof BleProfile>;
+export const BleOpName = z.enum(['pan', 'tilt', 'nudge', 'recenter', 'stop']);
+export type BleOpName = z.infer<typeof BleOpName>;
+const Degrees = z.number().min(-180).max(180);
+export const BleArgs = z.object({ yaw: Degrees.optional(), pitch: Degrees.optional(), durationMs: z.number().int().min(0).max(10_000).optional() });
+export type BleArgs = z.infer<typeof BleArgs>;
+export const BleOp = z.object({
+  kind: z.literal('ble'),
+  profile: BleProfile,
+  op: BleOpName,
+  arg: z.union([Degrees, ValuePlaceholder, BleArgs]).optional(),
+});
+export type BleOp = z.infer<typeof BleOp>;
+
 /** What an executor can receive. */
-export const ExecOp = z.discriminatedUnion('kind', [MidiOp, IrOp, LocalOp]);
+export const ExecOp = z.discriminatedUnion('kind', [MidiOp, IrOp, LocalOp, BleOp]);
 export type ExecOp = z.infer<typeof ExecOp>;
 
 /**
@@ -148,7 +171,7 @@ export const StepOp = z.object({
 });
 export type StepOp = z.infer<typeof StepOp>;
 
-export const ActionEncode = z.discriminatedUnion('kind', [MidiOp, IrOp, LocalOp, StepOp]);
+export const ActionEncode = z.discriminatedUnion('kind', [MidiOp, IrOp, LocalOp, BleOp, StepOp]);
 export type ActionEncode = z.infer<typeof ActionEncode>;
 
 // --- expectations and evidence -------------------------------------------------------------
@@ -207,7 +230,7 @@ export type Evidence = z.infer<typeof Evidence>;
 
 // --- the driver -----------------------------------------------------------------------------
 
-export const Transport = z.enum(['midi', 'ir', 'local']);
+export const Transport = z.enum(['midi', 'ir', 'local', 'ble']);
 export type Transport = z.infer<typeof Transport>;
 
 export const ProvenanceSource = z.enum(['midi.guide', 'manual', 'irdb', 'web_search', 'learned', 'curated', 'fixture']);
