@@ -306,7 +306,7 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
             t.evidence.push(e);
             d.hub.broadcast('verify.result', e);
             const sent = e.sent.op.kind === 'ir' ? `IR ${e.sent.op.bytes?.map((b) => b.toString(16).padStart(2, '0')).join(' ') ?? 'raw'}` : e.sent.op.kind === 'midi' ? `${e.sent.op.msg.toUpperCase()}${e.sent.op.number !== undefined ? ` ${e.sent.op.number}` : ''}${typeof e.sent.op.value === 'number' ? `=${e.sent.op.value}` : ''}` : `${e.sent.op.op}`;
-            d.steps.note('verify', `${e.actionId}: sent ${sent} · expected ${e.expected.effect} · ${e.observed.note ?? e.observed.metric}`, { ...base, kind: 'proof', status: e.pass ? 'ok' : 'fail', evidence: `${e.pass ? 'seen ✓' : 'not seen ✗'} Δ${e.observed.delta}`, detail: JSON.stringify(e.observed), ...verifyGuidance });
+            d.steps.note('verify', `${e.actionId}: sent ${sent} · expected ${e.expected.effect} · ${e.observed.note ?? e.observed.metric}`, { ...base, kind: 'proof', status: e.pass ? 'ok' : 'fail', evidence: `${e.pass ? (e.observed.sense !== 'ack' ? 'seen ✓' : /verified by renderer/.test(e.observed.note ?? '') ? 'renderer ✓' : 'acknowledged ✓') : 'not seen ✗'} Δ${e.observed.delta}`, detail: JSON.stringify(e.observed), ...verifyGuidance });
           },
         },
       ));

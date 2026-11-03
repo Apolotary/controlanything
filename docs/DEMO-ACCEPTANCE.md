@@ -8,7 +8,7 @@ Target: **Enter AR → pinch the MacBook → setup ring → arcs → fist + push
 
 | # | Check | How | ✓ |
 |---|---|---|---|
-| M1 | One server on :8787, live mode, Mac silent | `curl -s localhost:8787/api/health` shows `"mode":"live"`. Server started with `CE_MAC_SILENT=1`. No other dev servers or e2e browsers running. | |
+| M1 | One server on :8787, live mode, Mac silent | `curl -s localhost:8787/api/health` shows `"mode":"live"`. Server started with `CE_DEMO=1 CE_MAC_SILENT=1` (`CE_DEMO=1` makes the pinch set up and arm the visual synth by itself; without it the card asks for **Set up** and **Enable controls**). No other dev servers or e2e browsers running. | |
 | M2 | Quest and Mac paired once; `.data` kept | The companion shows **Paired with Quest 3**. Don't clear the data dir before the take. | |
 | M3 | Companion in its own Chrome window, full screen | Open `http://localhost:8787/companion/` in a separate Chrome window, then View → Enter Full Screen (⌃⌘F). The window shows only the pairing/status card. Details is behind the **Details** button. Close every other companion tab first: only one tab runs the executor, and a stray tab keeps that role. | |
 | M4 | Do Not Disturb on, no other apps on that Space | Notifications don't stop the renderer (measured), but they show up in a screen recording. | |

@@ -91,7 +91,7 @@ async function main(): Promise<void> {
   const live = h.mode === 'live';
   const lines = [
     '',
-    c.b('ControlEverything · JUDGE PATH (no hardware)'),
+    c.b('ControlAnything · JUDGE PATH (no hardware)'),
     `  models     ${live ? c.cyan('LIVE Meta Model API') + c.dim(' (sam-3.1, muse-spark-1.3, muse-wonder-1.0, …)') : c.volt('FIXTURE') + c.dim(' (recorded real responses, labelled FIXTURE; add MODEL_API_KEY to .env for live)')}`,
     '',
     `  1  sim room   ${c.cyan(`${BASE}/sim/`)}`,

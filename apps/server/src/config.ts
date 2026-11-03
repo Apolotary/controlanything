@@ -5,7 +5,7 @@ import { type MuseConfig, resolveMuseConfig } from './muse/config';
 
 export const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 export const SERVER_ROOT = fileURLToPath(new URL('../', import.meta.url));
-export const SERVER_NAME = 'controleverything-server';
+export const SERVER_NAME = 'controlanything-server';
 export const SERVER_VERSION = '0.1.0';
 
 export interface ListenConfig {

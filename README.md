@@ -158,7 +158,7 @@ Development checks: `npm run typecheck`, `npm test`, `npm run build`. `npm start
 
 ## Built during the hackathon
 
-The application code, clients, firmware, prompts, device data and simulated room were built during the Meta Global AI Developer Hackathon, starting Oct 26, 2026, for submission by **Nov 5, 11:00 JST**. The commit history is the build log. Hardware, pretrained models and third-party libraries/assets below were not built by us.
+The application code, clients, firmware, prompts, device data and simulated room were built during the Meta Global AI Developer Hackathon, starting Oct 26, 2026, for submission by **Nov 5, 11:00 JST**. The commit history is the build log. Hardware, pretrained models and third-party libraries/assets below were not built by us. The DJI Osmo gimbal adapter (`apps/server/src/devices/osmo/`) is new code written during the hackathon; it draws on public protocol research (below) and on the author's own earlier, private notes on the gimbal's Bluetooth protocol (March 2026, documentation only), from which no code is included.
 
 ## Licences and credits
 
@@ -170,5 +170,6 @@ Repository code: **MIT**. Direct npm runtime dependencies are listed here; versi
 - **Design references (no code copied):** Google **XR Blocks** (Apache-2.0; Li et al., "XR Blocks: Accelerating Human-centered AI + XR Innovation", arXiv:2509.25504): grayGlass panel colours, lazy-follow and appear timings, touch rules. **NVIDIA XR AI** (Apache-2.0): the agent response contract (acknowledge only after a delay, streamed replies). Our arc dials, setup ring, device card layout and hand rings are our own code built on these.
 - **Fonts:** Inter in the current Quest HUD and Mac companion; Chakra Petch and Share Tech Mono in the Quest launcher/legacy renderer and sim. All supplied by **@fontsource**, **SIL OFL-1.1**. The Quest also bundles an Inter derivative for tabular numerals; [font notice](apps/quest/public/fonts/README.txt).
 - **Development/emulation:** Vite, IWER and @iwer/devui (MIT). **DevTerm:** Project Nayuki's QR generator (MIT). **Firmware:** M5Unified, M5GFX, M5Cardputer, ArduinoJson (MIT); Arduino-ESP32 and IRremoteESP8266 (LGPL-2.1).
+- **DJI Osmo gimbal protocol references (no code copied):** [alkersan/om-research](https://github.com/alkersan/om-research) (MIT) and the DUML dissectors in [o-gs/dji-firmware-tools](https://github.com/o-gs/dji-firmware-tools) (GPL-3.0). The optional Bluetooth helper runs **bleak** (MIT) through `uv`. DJI and Osmo are trademarks of SZ DJI Technology; not affiliated.
 - **Device data:** [source URLs and provenance](apps/server/data/devices/README.md); midi.guide / pencilresearch MIDI data (CC-BY-SA-4.0), Flipper-IRDB (CC0), SmartIR (MIT). Manufacturer facts are transcribed, not manuals reproduced. Unknown remote codes are learned from your remote.
 - **Sim room:** our procedural Blender scene, with no third-party scene assets. Model names are descriptive; not affiliated with or endorsed by Meta.
