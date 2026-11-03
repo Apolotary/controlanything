@@ -63,13 +63,13 @@ export class HandFeedback {
     if (!debug) return;
     const canvas = document.createElement('canvas');
     canvas.width = 768;
-    canvas.height = 256;
+    canvas.height = 300;
     const context = canvas.getContext('2d');
     if (!context) return;
     this.canvas = canvas;
     this.context = context;
     this.texture = new CanvasTexture(canvas);
-    this.plate = new Mesh(new PlaneGeometry(0.54, 0.18), new MeshBasicMaterial({
+    this.plate = new Mesh(new PlaneGeometry(0.54, 0.21), new MeshBasicMaterial({
       map: this.texture, depthTest: false, depthWrite: false, toneMapped: false,
     }));
     this.plate.name = 'hand-debug';
@@ -94,6 +94,9 @@ export class HandFeedback {
     hover.quaternion.setFromUnitVectors(FORWARD, this.facing);
     hover.scale.set(Math.max(0.03, target.sizeM[0] + 0.035), Math.max(0.03, target.sizeM[1] + 0.035), 1);
   }
+
+  /** `?debug=1`: one line of xr-input pointer state (active kind per hand, ● = selecting). */
+  pointerInfo = '';
 
   update(f: ShellFrame, diagnostics: Record<Handedness, HandDiagnostics>, calls: number): void {
     for (const side of HANDS) {
@@ -144,8 +147,10 @@ export class HandFeedback {
       const y = 66 + index * 90;
       ctx.fillStyle = d.tracked ? '#e1eee8' : '#a8b8b0';
       ctx.fillText(`${side === 'left' ? 'L' : 'R'} ${d.tracked ? 'tracked' : 'untracked'}   joints ${d.jointCount}   distance ${d.pinchDistanceCm?.toFixed(1) ?? '--'} cm`, 20, y);
-      ctx.fillText(`   select events ${d.selectEvents}   down ${d.selectDown ? 'yes' : 'no'}   pinch ${f.hands[side]?.pinching ? 'yes' : 'no'}`, 20, y + 36);
+      ctx.fillText(`   select events ${d.selectEvents}   down ${d.selectDown ? 'yes' : 'no'}   pinch ${f.hands[side]?.pinching ? 'yes' : 'no'}   palm ${f.hands[side]?.palmUp ? 'up' : '-'}`, 20, y + 36);
     });
+    ctx.fillStyle = '#e1eee8';
+    ctx.fillText(`Pointers ${this.pointerInfo || '--'}`, 20, 250);
     this.texture!.needsUpdate = true;
   }
 

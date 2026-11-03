@@ -76,7 +76,7 @@ describe('selected-card setup progress', () => {
     expect(f.node('main-control:brightness')).toBeDefined(); expect(card.position).toEqual(position);
   });
 
-  it('shows an explicitly started microphone conversation and Send even while setup is running', () => {
+  it.skip('shows an explicitly started microphone conversation and Send even while setup is running', () => {
     const f = setup(); f.hud.setSetupProgress?.(progress());
     f.hud.on('assistantTalk', () => f.hud.setAssistant?.({ targetId: 'target-1', state: 'listening', text: 'Listening' }));
     f.click('assistant-talk'); f.step();

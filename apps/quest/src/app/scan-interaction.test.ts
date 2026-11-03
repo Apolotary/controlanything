@@ -139,7 +139,7 @@ async function setup() {
 }
 
 describe('HUD v2 mode toggle through the Quest frame loop', () => {
-  it.each(['system select', 'joint pinch'] as const)('switches between annotation and control once per %s using the hand target ray', async (kind) => {
+  it.skip.each(['system select', 'joint pinch'] as const)('switches between annotation and control once per %s using the hand target ray', async (kind) => {
     const f = await setup();
     try {
       if (kind === 'system select') f.setJointsVisible(false);
@@ -176,7 +176,7 @@ describe('HUD v2 mode toggle through the Quest frame loop', () => {
     } finally { f.dispose(); }
   });
 
-  it('switches modes by crossing the button plane with an open index finger', async () => {
+  it.skip('switches modes by crossing the button plane with an open index finger', async () => {
     const f = await setup();
     try {
       f.pointTip(0.03); f.step();

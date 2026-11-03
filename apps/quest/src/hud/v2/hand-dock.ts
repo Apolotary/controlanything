@@ -164,8 +164,13 @@ export class HandDockAnchor {
   private readonly rotation = new Quaternion();
   private readonly matrix = new Matrix4();
   private readonly headForward = new Vector3();
+  private readonly side = new Vector3();
+  private readonly offset: { lateral: number; up: number; toward: number };
 
-  constructor(readonly nonDominant: 'left' | 'right' = 'left') {}
+  /** `offset` (metres, head frame) moves the dock beside the hand so the other index can poke it. */
+  constructor(readonly nonDominant: 'left' | 'right' = 'left', offset: Partial<{ lateral: number; up: number; toward: number }> = {}) {
+    this.offset = { lateral: 0, up: 0, toward: 0.06, ...offset };
+  }
 
   update(frame: HudFrame, dock: Object3D, wrist: Object3D, _width: number): void {
     this.justOpened = false;
@@ -175,7 +180,10 @@ export class HandDockAnchor {
     const hasHands = realHand(frame.hands.left) || realHand(frame.hands.right);
     const hand = frame.hands[this.nonDominant];
     const controller = frame.hands.left;
-    this.source = frame.pointer === 'mouse' ? 'mouse' : hasHands ? 'hand' : controller?.controller && controller.grip ? 'controller' : null;
+    // In the emulator the mouse is the right hand; an articulated menu hand still owns the dock.
+    const menuHand = realHand(hand);
+    this.source = frame.pointer === 'mouse' && !(menuHand && (hand.palmUp || this.source === 'hand' && this.open)) ? 'mouse'
+      : hasHands ? 'hand' : controller?.controller && controller.grip ? 'controller' : null;
     // Treat unavailable tracking as attached so a hidden dock never jumps to a desk fallback.
     this.tracked = this.source !== 'mouse';
     if (previousSource !== this.source) this.closeImmediately();
@@ -291,7 +299,11 @@ export class HandDockAnchor {
     if (count) this.destination.multiplyScalar(1 / count);
     else this.destination.set(0, 0, -0.075).applyQuaternion(joint.quaternion).add(joint.position);
     this.direction.subVectors(frame.head.position, this.destination).normalize();
-    this.destination.addScaledVector(this.direction, 0.06);
+    this.destination.addScaledVector(this.direction, this.offset.toward);
+    // Beside the hand (toward the body centre) and slightly up, in the head's frame.
+    this.side.set(1, 0, 0).applyQuaternion(frame.head.quaternion).setY(0).normalize();
+    this.destination.addScaledVector(this.side, this.offset.lateral);
+    this.destination.y += this.offset.up;
     // A fixed up axis keeps the menu content level as the wrist rolls.
     this.matrix.lookAt(frame.head.position, this.destination, UP);
     this.rotation.setFromRotationMatrix(this.matrix);

@@ -90,6 +90,8 @@ import { THEME as HUD_V2_THEME } from '../hud/v2/theme';
 import type { Handedness, Hud, ShellFrame } from './hud-contract';
 import { type HudKind, loadHud } from './hud-loader';
 import { handJointPositions, InputSampler } from './input';
+import { createSpatialInput, type SpatialInput } from './spatial-input';
+import type { PaletteItem } from '../hud/v2/wrist-palette';
 import { Page } from './page';
 import { frameReferenceSpace, endXr, startXr, xrSupport } from './xr';
 import { RoomAnchors } from '../anchors/room';
@@ -261,6 +263,9 @@ export class QuestApp {
   private serverMode = '';
   private enteringXr = false;
   private handFeedback!: HandFeedback;
+  /** The single UI input owner (xr-input ray/poke/grab + forwarded mouse). */
+  spatial?: SpatialInput;
+  private readonly frameHooks: ((f: ShellFrame, dtSec: number, timeMs: number, xrFrame?: XRFrame) => void)[] = [];
 
   constructor(params: URLSearchParams) {
     this.params = params;
@@ -281,6 +286,8 @@ export class QuestApp {
       this.page.log(`desktop emulator: IWER ${this.emulator.device.version} (${this.emulator.device.name}${this.emulator.devui ? ', DevUI' : ''})`, 'ok');
     }
     await this.setupHud();
+    this.spatial = createSpatialInput(this.scene, this.desktopCam, this.renderer);
+    (this.hud as Hud & { setSpatialInput?: (s: SpatialInput) => void }).setSpatialInput?.(this.spatial);
     await this.setupCamera();
     this.refreshHome();
     if (this.live && this.params.get('debug') === '1') {
@@ -2166,6 +2173,26 @@ export class QuestApp {
     this.refreshHome();
   }
 
+  // --- extension points (other lanes register here; see wrist-palette.ts) ---------------------------
+
+  /** Add a wrist-palette button (≤ 5 shown in all). Returns an unregister function. */
+  registerPaletteItem(item: PaletteItem): () => void {
+    const hud = this.hud as Hud & { registerPaletteItem?: (i: PaletteItem) => () => void };
+    return hud.registerPaletteItem?.(item) ?? (() => {});
+  }
+
+  /** Add an action pill beside a selected object's ring label (annotate). Returns an unregister function. */
+  registerObjectAction(action: { key: string; label: string; visible?: (targetId: string) => boolean; onSelect: (targetId: string) => void }): () => void {
+    const hud = this.hud as Hud & { registerObjectAction?: (a: typeof action) => () => void };
+    return hud.registerObjectAction?.(action) ?? (() => {});
+  }
+
+  /** Per-frame callback, after the HUD update and before render. Returns an unregister function. */
+  addFrameHook(hook: (f: ShellFrame, dtSec: number, timeMs: number, xrFrame?: XRFrame) => void): () => void {
+    this.frameHooks.push(hook);
+    return () => { const i = this.frameHooks.indexOf(hook); if (i >= 0) this.frameHooks.splice(i, 1); };
+  }
+
   // --- frame loop -----------------------------------------------------------------------------------
 
   private frameErrors = 0;
@@ -2249,6 +2276,8 @@ export class QuestApp {
       this.hud.upsertTarget(toHudTarget(t));
     }
     this.consumed.left = this.consumed.right = false;
+    // Pointer events (pokes, pinches, clicks) dispatch here, before the HUD reads them this frame.
+    this.spatial?.update(f.dt, time);
     if (this.mouseCursor) {
       // gen3d gets the mouse as its dev cursor, not also as a hand
       this.mouseCursor.update();
@@ -2260,7 +2289,11 @@ export class QuestApp {
       if (this.hud.root.getObjectByName('main-menu')?.visible) this.cancelManualRegion();
       else { const region = this.manualRegion.update(f, this.camera.eye, this.camera.info); if (region) void this.scanManualRegion(region); }
     } else if (!this.manualScanPending && !this.onboarding?.visible && !this.projects?.open) this.interact(f, time);
+    if (this.spatial) this.handFeedback.pointerInfo = this.spatial.describe();
     this.handFeedback.update(f, this.input.diagnostics, this.renderer.info.render.calls);
+    for (const hook of this.frameHooks) {
+      try { hook(f, f.dt, time, xrFrame); } catch (e) { if (this.frameErrors++ < 5) this.page.log(`frame hook error: ${(e as Error).message}`, 'error'); }
+    }
     if (!this.onboarding?.visible) this.scanner.tick(time);
     if (this.live) {
       this.live.tick(time, f.dt * 1000);

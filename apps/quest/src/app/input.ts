@@ -376,11 +376,23 @@ export class InputSampler {
       }
       const wrist = joints.wrist;
       if (wrist) {
-        // WebXR joint space: -Y points perpendicular out of the palm, -Z along the bone.
-        // https://www.w3.org/TR/webxr-hand-input-1/#xrjointspace (same axes for both hands).
-        this.palm.set(0, -1, 0).applyQuaternion(wrist.quaternion);
+        const indexKnuckle = joints['index-finger-phalanx-proximal'], pinkyKnuckle = joints['pinky-finger-phalanx-proximal'];
+        if (indexKnuckle && pinkyKnuckle) {
+          // Palm normal from joint positions, which does not depend on the runtime's joint axes:
+          // left hand = pinky × index, right hand = index × pinky (both from the wrist).
+          this.towardHead.subVectors(indexKnuckle.position, wrist.position);
+          this.palm.subVectors(pinkyKnuckle.position, wrist.position);
+          if (src.handedness === 'left') this.palm.cross(this.towardHead);
+          else this.palm.crossVectors(this.towardHead, this.palm);
+          this.palm.normalize();
+        } else {
+          // WebXR joint space: -Y points perpendicular out of the palm, -Z along the bone.
+          // https://www.w3.org/TR/webxr-hand-input-1/#xrjointspace (same axes for both hands).
+          this.palm.set(0, -1, 0).applyQuaternion(wrist.quaternion);
+        }
         this.towardHead.subVectors(this.output.head.position, wrist.position).normalize();
-        palmUp = this.palm.dot(this.towardHead) > 0.65;
+        // Hysteresis: turning toward the face opens at ~57°, it stays open until ~72°.
+        palmUp = this.palm.dot(this.towardHead) > (track.palmUpSince !== null ? 0.3 : 0.55);
       }
     } else {
       for (const name of JOINTS) delete joints[name];
