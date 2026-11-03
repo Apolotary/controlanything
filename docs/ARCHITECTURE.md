@@ -198,7 +198,7 @@ The schema and lower-level gen3d renderer are broader than the current main Ques
 |---|---|
 | Fixture | 1.3 s |
 | Live, cold | 29.0 s: Spark identify 8.2 s, driver 7.1 s, forge 7.8 s plus one forge repair 13.2 s. An earlier probe took 41.9 s. |
-| Live, with the driver/controls prefetch | 1.2 s, measured by the builder after the verification pass, once the prefetch has finished (about 40 s after the Mac companion connects). Before that, the first live setup takes about 10–25 s while Muse writes the driver. |
+| Live, with the driver/controls prefetch (~40 s after the Mac companion connects) | Builder measurements after the verification pass, all from one pinch:<br>• ~1.2 s for a YOLO *laptop* box with the prefetch finished;<br>• ~23 s for a generic SAM *electronic device* box with the prefetch finished (mostly Muse identify);<br>• ~32 s while the prefetch is still running (no duplicate calls). |
 
 Other numbers from that pass:
 - 24 SAM 3.1 calls in one live run.

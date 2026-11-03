@@ -17,7 +17,7 @@ One MacBook and one Quest 3. The Mac is both the bridge and the device being pla
 
 1. **Enter AR.** Passthrough plus a calm HUD. The headset pairs with the Mac by looking at the QR code on its companion page (or you type the code).
 2. **Look at the MacBook.** A thin outline and a pill appear: *MacBook · pinch to control*.
-3. **Pinch it.** A setup ring circles the screen while the agent runs: identify → driver → verify → controls. If SAM labelled the box only as a generic *electronic device*, the first pinch may just name it. Pinch again when the pill asks.
+3. **Pinch it.** A setup ring circles the screen while the agent runs: identify → driver → verify → controls. One pinch is enough. A generic SAM box (*electronic device*) is first identified by Muse as the Mac, and setup then continues on the same pinch.
 4. **Play.** Two arc dials (Warp, Ripples) appear on the screen's edges, with a device card beside them. Pinch-drag a dial and the Mac's visuals follow.
 5. **Perform.** Tap *Perform* on the card. Then a left fist is the clutch, and your right hand's height and depth drive the dials.
 6. **Stop.** Open both palms toward the scene, or tap *Stop* on the wrist palette.
@@ -40,7 +40,7 @@ Every server model call goes to Meta's Model API. The table lists only what the 
 | Mode | Pinch → controls armed |
 |---|---|
 | Live, cold | **29.0 s**: identify 8.2 s, driver 7.1 s, forge 7.8 s plus one forge repair 13.2 s. An earlier live probe took 41.9 s. |
-| Live, with the prefetch | **1.2 s**, measured by the builder after the verification pass. This applies only once the Mac companion has been connected for about 40 s. With `CE_DEMO=1`, the server asks Muse for the driver and controls as soon as a Mac advertises the renderer, and that prefetch must finish first; the pinch then re-validates the result. Before the prefetch finishes, the first live setup takes about 10–25 s while Muse writes the driver. |
+| Live, with the prefetch | With `CE_DEMO=1`, the server asks Muse for the driver and controls as soon as a Mac advertises the renderer; the prefetch takes about 40 s, and the pinch re-validates its result. The builder measured these times after the verification pass:<br>• **~1.2 s** for a YOLO *laptop* box once the prefetch has finished;<br>• **~23 s** for a generic SAM *electronic device* box once the prefetch has finished (mostly the Muse identify);<br>• **~32 s** while the prefetch is still running (no duplicate calls). |
 | Fixture replay | **1.3 s**. |
 
 After setup, moving a control makes **no model call**. A control event resolves to a validated driver action, then to a MIDI, IR or Bluetooth op, rate-limited, in under 1 ms on the server.
