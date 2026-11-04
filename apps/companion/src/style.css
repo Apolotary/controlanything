@@ -414,3 +414,7 @@ body.stage .passcode { font-size: 32px; }
 .simple .simple-bar { display: flex; justify-content: center; gap: 8px; padding: 0 24px 32px; }
 .simple .simple-bar button { border-radius: 20px; padding: 8px 16px; }
 .simple .simple-bar .simple-stop { color: var(--status-danger); }
+/* Why Open visuals could not open in this tab, with one fix (Use this tab). */
+.simple-note { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px; margin: 0 auto; padding: 12px 24px; font-size: 14px; color: var(--text-secondary); text-align: center; }
+.simple .simple-note { margin-top: -20px; padding: 0 24px 32px; }
+.simple-note button { border-radius: 20px; padding: 6px 14px; }

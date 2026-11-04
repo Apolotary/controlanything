@@ -51,12 +51,20 @@ export function describeOp(cmd: ExecCommandPayload): { what: string; target: str
   return { what: `${op.op}${op.arg !== undefined ? ` ${JSON.stringify(op.arg).slice(0, 40)}` : ''}`, target: 'local' };
 }
 
+export const EXECUTOR_LOCK = 'ce.companion.executor';
+
 export class Executor {
   leader = false;
+  /** Another tab holds the role (it took over, or held it first). Unset while the first claim is pending. */
+  standby = false;
   readonly tape: TapeRow[] = [];
   onTape: () => void = () => {};
-  onLeader: (leader: boolean) => void = () => {};
+  /** `takenOver`: another tab explicitly took the role from this one ("Use this tab"). */
+  onLeader: (leader: boolean, takenOver?: boolean) => void = () => {};
   log: (level: 'debug' | 'info' | 'warn' | 'error', text: string) => void = () => {};
+  /** A plain (non-stealing) request for the lock is waiting in line. */
+  private queued = false;
+  private standbyTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
     private readonly midi: MidiExecutor,
@@ -66,18 +74,53 @@ export class Executor {
   ) {}
 
   /** Take the executor role (or wait for it while another tab holds it). */
-  claim(): void {
+  claim(): void { this.request(false); }
+
+  /**
+   * The visible tab's explicit takeover (Open visuals / Use this tab): steal the lock. The previous holder's
+   * request rejects with AbortError, so it learns at once, goes to standby, and waits in line again.
+   */
+  takeOver(): void {
+    if (this.leader) return;
+    this.request(true);
+  }
+
+  private request(steal: boolean): void {
     const locks = (navigator as Navigator & { locks?: LockManager }).locks;
     if (!locks) {
-      this.leader = true;
-      this.onLeader(true);
+      if (!this.leader) this.setLeader(true);
       return;
     }
-    void locks.request('ce.companion.executor', () => {
-      this.leader = true;
-      this.onLeader(true);
-      return new Promise<void>(() => {}); // held until this tab closes
+    if (!steal) {
+      if (this.queued) return;
+      this.queued = true;
+      // Only call this tab standby once the request has really waited (no flash while the first grant is pending).
+      clearTimeout(this.standbyTimer);
+      this.standbyTimer = setTimeout(() => {
+        if (!this.leader && this.queued && !this.standby) { this.standby = true; this.onLeader(false); }
+      }, 300);
+    }
+    locks.request(EXECUTOR_LOCK, steal ? { steal: true } : {}, () => {
+      if (!steal) this.queued = false;
+      this.setLeader(true);
+      return new Promise<void>(() => {}); // held until this tab closes or another tab takes over
+    }).catch(() => {
+      if (!steal) this.queued = false;
+      if (this.leader) {
+        this.leader = false;
+        this.standby = true;
+        this.log('warn', 'another companion tab took over visuals and devices');
+        this.onLeader(false, true);
+      }
+      this.request(false); // wait in line to get the role back when that tab closes
     });
+  }
+
+  private setLeader(leader: boolean): void {
+    clearTimeout(this.standbyTimer);
+    this.leader = leader;
+    this.standby = !leader;
+    this.onLeader(leader);
   }
 
   attach(conn: Connection): void {
