@@ -450,6 +450,7 @@ interface ActiveWiring { cardId: string; wiringId: string; driverId: string; rea
 export interface AgentBuilt {
   ok: boolean; title: string; explanation: string; code: string; needs: ('right' | 'left' | 'screen')[];
   actions: WireAction[]; controls: NonNullable<WireReadyPayload['controls']>; model: string; source: 'live' | 'fixture';
+  ui?: WireReadyPayload['ui']; visualizer?: WireReadyPayload['visualizer'];
   connector?: { entry: string; pid?: number }; issues: string[];
 }
 
@@ -466,6 +467,7 @@ export interface WireServiceDeps extends WireDeps {
   verifyActions(target: Target, ids: string[], signal: AbortSignal): Promise<string[]>;
   /** Cancel queued commands and release known held outputs without revoking the verified connection. */
   stopOutputs?(target: Target, reason: string): Promise<{ released: boolean; reason?: string }>;
+  agentRelease?(cardId: string): Promise<{ released: boolean; reason?: string }>;
   cardOfSpec(specId: string): string | undefined;
   developConnector?(task: string, onProgress: (note: string) => void, signal: AbortSignal): Promise<{ jobId: string; state: string; reason?: string }>;
   buildConnector?(input: WireInput, emit: WireEmit, opts: { signal: AbortSignal; wiringId: string }): Promise<WireWritten>;
@@ -579,7 +581,7 @@ export class WireService {
         if (!built.ok) { this.log(`[wire] ${cardId} agent failed after ${((Date.now() - t0) / 1000).toFixed(1)} s: ${built.issues[0] ?? ''}`); return; }
         const payload: WireReadyPayload = { cardId, wiringId, ...(p.requestId ? { requestId: p.requestId } : {}), code: built.code.slice(0, 8192),
           title: built.title.slice(0, 80), explanation: built.explanation.slice(0, 300), model: built.model.slice(0, 64), source: built.source,
-          actions: built.actions.slice(0, 16), needs: built.needs, controls: built.controls.slice(0, 8), ...(built.connector ? { connector: built.connector } : {}) };
+          actions: built.actions.slice(0, 16), needs: built.needs, controls: built.controls.slice(0, 8), ...(built.ui ? { ui: built.ui, visualizer: built.visualizer } : {}), ...(built.connector ? { connector: built.connector } : {}) };
         this.active.set(cardId, { cardId, wiringId, driverId: 'agent', ready: payload, actions: new Map(payload.actions.map((a) => [a.actionId, a])), at: Date.now(), agent: true });
         send('ready', { code: built.code || undefined, title: payload.title, explanation: payload.explanation, model: built.model, source: built.source, latencyMs: Date.now() - t0,
           note: `ready · ${payload.controls?.length ?? 0} control${payload.controls?.length === 1 ? '' : 's'}${built.code ? ' + hand program' : ''}` });
@@ -694,7 +696,7 @@ export class WireService {
     this.clear(p.cardId);
     let release: { released: boolean; reason?: string } | undefined;
     // An agent connector releases its own notes/touches in onStop when clear() retires it.
-    try { if (wasAgent) release = { released: true }; else if (target) release = await this.d.stopOutputs?.(target, p.reason ?? 'Both palms out'); }
+    try { if (wasAgent) release = await this.d.agentRelease?.(p.cardId) ?? { released: false, reason: 'Connector stopped. Device release was not confirmed.' }; else if (target) release = await this.d.stopOutputs?.(target, p.reason ?? 'Both palms out'); }
     catch (e) { this.log(`[wire] release ${p.cardId}: ${(e as Error).message}`); release = { released: false }; }
     const payload: WireStoppedPayload = { cardId: p.cardId, requestId: p.requestId, wiringId: epoch.wiringId, ok: true,
       ...(release ? { releaseConfirmed: release.released } : {}),

@@ -175,6 +175,9 @@ export const WireReadyPayload = z.object({
   needs: z.array(z.enum(['right', 'left', 'screen'])).max(3),
   /** Generated AR controls (Muse agent); absent on older hand-program-only wirings. */
   controls: z.array(WireControl).max(8).optional(),
+  /** Trusted compiler output from Muse's compact instrument design. */
+  ui: Gen3dSpec.optional(),
+  visualizer: z.object({ kind: z.enum(['notes', 'trail', 'pulse', 'ripple']), actions: z.array(z.string().min(1).max(41)).max(16) }).optional(),
   /** Where the glue runs on the Mac (Muse agent): the connector entry file and its process. */
   connector: z.object({ entry: z.string().max(200), pid: z.number().int().optional() }).optional(),
 });
