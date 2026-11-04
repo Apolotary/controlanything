@@ -55,6 +55,8 @@ import { CompanionSetupProgress, SetupProgressPanel } from './ui/setup-progress'
 import { CompanionCanvas, CanvasPanel } from './ui/canvas';
 import { MidiChartPanel, chartRequest } from './ui/midi-chart';
 import { replayArmResult, runReplay } from './replay';
+import { deviceLabel, overlayHeading, WiringState } from './ui/wiring';
+import { WiringCard, WiringPanel } from './ui/wiring-view';
 
 const APP = 'companion@0.2.0';
 const params = new URLSearchParams(location.search);
@@ -84,7 +86,9 @@ const evidence: VerifyResultPayload[] = [];
 const linkResults = new Map<string, LinkResultPayload>();
 /** "wrong device · refused" verdicts stay in EVIDENCE even after the right cable goes in */
 const refusals: LinkResultPayload[] = [];
-const replaying = params.get('replay') === '1';
+/** ?replay=1 is the scripted OP-1 run, ?replay=wire the scripted "touch the water" wiring (both display only). */
+const replayKind = params.get('replay') === 'wire' ? 'wire' : params.get('replay') === '1' ? 'op1' : undefined;
+const replaying = replayKind !== undefined;
 /** Larger status type for recordings; details remain available. */
 const stage = params.get('stage') === '1';
 /** Dedicated visuals mode: the paired companion opens its full-screen visual synth by itself. */
@@ -100,7 +104,11 @@ let armNote: { cardId?: string; armId?: string; text: string; ok: boolean; at: n
 let focusCardId: string | undefined;
 let focusPinned = false;
 let calls: CallsResponse | undefined;
-let mainTab: 'code' | 'tape' | 'spec' = 'code';
+let mainTab: 'code' | 'wiring' | 'tape' | 'spec' = 'code';
+/** The program Muse writes to wire the wearer's hands to a device (wire.progress / wire.ready). */
+const wirings = new WiringState();
+let wiringCard: WiringCard | undefined;
+let wiringPanel: WiringPanel | undefined;
 let tabChosenByUser = false;
 let addTarget: 'phone' | 'quest' | 'devterm' = 'phone';
 let qrShown = '';
@@ -266,6 +274,7 @@ const render = scheduler({
   banners: renderBanners,
   device: renderDevice,
   code: renderCode,
+  wiring: renderWiring,
   tape: renderTape,
   spec: renderSpec,
   agent: renderAgent,
@@ -276,7 +285,7 @@ const render = scheduler({
   approve: renderApprove,
   daemons: renderDaemons,
 });
-const renderAll = () => ['calm', 'canvas', 'top', 'banners', 'device', 'code', 'tape', 'spec', 'agent', 'calls', 'evidence', 'learn', 'links', 'approve', 'daemons'].forEach(render);
+const renderAll = () => ['calm', 'canvas', 'top', 'banners', 'device', 'code', 'wiring', 'tape', 'spec', 'agent', 'calls', 'evidence', 'learn', 'links', 'approve', 'daemons'].forEach(render);
 
 // --- helpers --------------------------------------------------------------------------------
 
@@ -288,7 +297,7 @@ function setFocus(cardId: string | undefined, byUser = false): void {
   else if (focusPinned) return;
   if (!cardId || cardId === focusCardId) return;
   focusCardId = cardId;
-  ['device', 'code', 'tape', 'spec', 'evidence', 'daemons'].forEach(render);
+  ['device', 'code', 'wiring', 'tape', 'spec', 'evidence', 'daemons'].forEach(render);
 }
 
 function focusDriver(): DriverSpecPayload | undefined {
@@ -911,10 +920,13 @@ function proofChip(lr: LinkResultPayload | undefined): HTMLElement {
 }
 
 
+/** Details tabs, left to right: the driver, the wiring Muse wrote on top of it, what was sent, the interface spec. */
+const TABS = ['code', 'wiring', 'tape', 'spec'] as const;
+
 function setTab(t: typeof mainTab, byUser = false): void {
   mainTab = t;
   if (byUser) tabChosenByUser = true;
-  for (const id of ['code', 'tape', 'spec'] as const) {
+  for (const id of TABS) {
     $(`tab-${id}`).setAttribute('aria-selected', String(id === t));
     $(`tab-${id}`).tabIndex = id === t ? 0 : -1;
     $(id).hidden = id !== t;
@@ -949,6 +961,21 @@ function renderCode(): void {
   }
   const prov = drv.provenance.map((p) => `${p.source}: ${p.ref}`).join('\n');
   box.append(jsonView(drv, `driver.spec · ${drv.transport.toUpperCase()} · written by ${drv.modelId ?? 'the agent'}${drv.source === 'fixture' ? ' (recorded example)' : ''}${prov ? `\n${prov}` : ''}`));
+}
+
+/** A wiring for the Visual synth shows its code on the Mac's own full-screen visuals too. */
+const isVisualWiring = (cardId: string): boolean => /visual[\s-]synth/i.test(cards.get(cardId)?.name ?? '') || /^visual-synth-/.test(cardId);
+
+/** Idempotent: the card, the Details tab and the visuals overlay each redraw only when the wiring changed. */
+function renderWiring(): void {
+  wiringCard ??= new WiringCard();
+  wiringPanel ??= new WiringPanel($('wiring'));
+  const w = wirings.current(focusCardId);
+  const name = w ? cards.get(w.cardId)?.name : undefined;
+  wiringCard.render(w, name);
+  wiringPanel.render(w, name);
+  visualLauncher.setWiring(w && isVisualWiring(w.cardId)
+    ? { id: w.wiringId, heading: overlayHeading(w, deviceLabel(name)), code: w.code, phase: w.phase, endedAt: w.endedAt } : undefined);
 }
 
 function renderTape(): void {
@@ -1828,6 +1855,22 @@ function connect(): void {
     if (!tabChosenByUser && !known) setTab('code');
     ['code', 'device', 'evidence', 'calm'].forEach(render);
   });
+  // Muse writes the wiring (the program that maps the wearer's hands to the device's actions), streamed as text.
+  c.on('wire.progress', (m) => {
+    if (m.from !== 'server') return;
+    const first = wirings.get(m.payload.cardId)?.wiringId !== m.payload.wiringId;
+    if (!wirings.progress(m)) { repeated(m); return; }
+    setFocus(m.payload.cardId);
+    if (first && !tabChosenByUser) setTab('wiring');
+    render('wiring');
+  });
+  c.on('wire.ready', (m) => {
+    if (m.from !== 'server') return;
+    if (!wirings.ready(m)) { repeated(m); return; }
+    setFocus(m.payload.cardId);
+    log('info', `wiring ready: ${m.payload.title} · ${m.payload.model} · ${m.payload.actions.length} action(s)`);
+    render('wiring');
+  });
   c.on('driver.status', (m) => {
     if (retiredSetupMessage(m)) return;
     if (sameState(driverStatus.get(m.payload.driverId), m.payload)) { repeated(m); return; }
@@ -1897,12 +1940,16 @@ function connect(): void {
     if (next) { activity = next; render('calm'); }
   });
   if (!replaying) c.start();
+  // ?inject=1 (a test or a recording rig): feed server messages to this page as if the server had sent them.
+  // They are validated against the protocol schemas first, and nothing goes on the wire.
+  if (params.get('inject') === '1' && !replaying) (globalThis as { __ceInject?: (message: object) => boolean }).__ceInject = (message) => conn?.inject(message) ?? false;
   if (replaying && !replayStarted) {
     replayStarted = true;
-    log('info', 'Demo: showing a recorded OP-1 Field run (display only)');
+    log('info', replayKind === 'wire' ? 'Demo: showing a recorded wiring run, Muse writing how your hands touch the water (display only)' : 'Demo: showing a recorded OP-1 Field run (display only)');
     runReplay(
       (m) => c.inject(m),
-      () => log('info', 'Replay finished. Open Details to enable or cancel the example controls.'),
+      () => log('info', replayKind === 'wire' ? 'Replay finished. The Wiring tab keeps the program.' : 'Replay finished. Open Details to enable or cancel the example controls.'),
+      replayKind,
     );
   }
 }
@@ -1931,11 +1978,12 @@ function setupForms(): void {
     void executor.panicLocal('button');
     conn?.send('panic', { reason: 'Stop all button on the Mac' }, { to: 'server' });
   });
-  const tabs = ['code', 'tape', 'spec'] as const;
+  const tabs = TABS;
   for (const [i, t] of tabs.entries()) {
     $(`tab-${t}`).addEventListener('click', () => setTab(t, true));
     $(`tab-${t}`).addEventListener('keydown', (e) => {
-      const next = e.key === 'ArrowRight' ? (i + 1) % 3 : e.key === 'ArrowLeft' ? (i + 2) % 3 : e.key === 'Home' ? 0 : e.key === 'End' ? 2 : undefined;
+      const n = tabs.length;
+      const next = e.key === 'ArrowRight' ? (i + 1) % n : e.key === 'ArrowLeft' ? (i + n - 1) % n : e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : undefined;
       if (next === undefined) return;
       e.preventDefault();
       setTab(tabs[next], true);

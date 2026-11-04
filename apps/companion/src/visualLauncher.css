@@ -31,4 +31,13 @@
 .visual-launcher-gauge .value { stroke: var(--vl-accent); transition: stroke-dasharray 180ms var(--vl-ease); }
 .visual-launcher-gauge-value { position: absolute; top: 24px; font-size: 20px; font-weight: 600; }
 .visual-launcher-gauge-label { margin-top: -6px; font-size: 12px; font-weight: 500; color: var(--vl-muted); letter-spacing: 0.02em; }
-@media (prefers-reduced-motion: reduce) { .visual-launcher * { transition: none !important; } }
+/* Muse's wiring streaming in while it is written: a subtle monospace corner plate that lets go 8 s after the wiring is ready. */
+.visual-launcher-code { position: absolute; top: 70px; left: 28px; width: min(400px, calc(100% - 56px)); padding: 10px 14px 12px; border-radius: 16px; border: 1px solid var(--vl-stroke); background: rgba(8, 12, 20, 0.56); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); opacity: 0; visibility: hidden; transform: translateY(-4px); transition: opacity 520ms var(--vl-ease), transform 520ms var(--vl-ease), visibility 0s linear 520ms; pointer-events: none; }
+.visual-launcher-code.show { opacity: 0.9; visibility: visible; transform: none; transition-delay: 0s; }
+.visual-launcher-code-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12px; font-weight: 500; letter-spacing: -0.01em; color: var(--vl-muted); }
+.visual-launcher-code-head::before { content: ''; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--vl-accent); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2); animation: vl-code-pulse 1.1s ease-in-out infinite; }
+.visual-launcher-code[data-phase='ready'] .visual-launcher-code-head::before { background: #34d399; box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.2); animation: none; }
+.visual-launcher-code[data-phase='failed'] .visual-launcher-code-head::before { background: #fbbf24; box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.2); animation: none; }
+.visual-launcher-code-pre { margin: 0; height: 224px; overflow: hidden; font: 400 11px/16px ui-monospace, 'SF Mono', Menlo, Consolas, monospace; color: rgba(226, 242, 255, 0.86); white-space: pre; -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 22px); mask-image: linear-gradient(to bottom, transparent 0, #000 22px); }
+@keyframes vl-code-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .visual-launcher * { transition: none !important; } .visual-launcher-code-head::before { animation: none; } }

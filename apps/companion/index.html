@@ -73,6 +73,12 @@
             <progress id="setup-progress" max="100" aria-label="Current task progress"></progress>
           </section>
 
+          <section id="wiring-card" class="wiring-card panel" aria-label="Wiring" hidden>
+            <p id="wiring-line" class="wiring-line" role="status" aria-live="polite"></p>
+            <div class="wiring-meta"><span id="wiring-chip" class="wiring-chip"></span><button id="wiring-toggle" class="ghost wiring-toggle" type="button" aria-expanded="false" aria-controls="wiring-code" hidden>See code</button></div>
+            <pre id="wiring-code" class="wiring-code" hidden></pre>
+          </section>
+
           <section id="setup-workspace" class="setup-workspace panel" hidden></section>
 
           <section id="devices-panel" class="panel devices-panel" aria-labelledby="devices-title">
@@ -95,8 +101,8 @@
             <div id="banners" class="banners"></div>
             <section class="panel" id="device-panel"><header><h2>Controls<small>Target device</small></h2></header><div id="device-card" class="device-card"></div></section>
             <section class="panel" id="code-panel">
-              <header><div class="tabs" role="tablist" aria-label="Generated controls"><button id="tab-code" class="tab" role="tab" type="button" aria-controls="code" aria-selected="true">Driver</button><button id="tab-tape" class="tab" role="tab" type="button" aria-controls="tape" aria-selected="false">Recording</button><button id="tab-spec" class="tab" role="tab" type="button" aria-controls="spec" aria-selected="false">Spec</button></div><div class="code-meta row"><span id="filetab" class="filetab"></span><span id="gen-chip"></span></div></header>
-              <div class="body"><div id="code" class="code" role="tabpanel" aria-labelledby="tab-code" tabindex="0"></div><div id="tape" class="tape" role="tabpanel" aria-labelledby="tab-tape" tabindex="0" hidden></div><div id="spec" class="code" role="tabpanel" aria-labelledby="tab-spec" tabindex="0" hidden></div></div>
+              <header><div class="tabs" role="tablist" aria-label="Generated controls"><button id="tab-code" class="tab" role="tab" type="button" aria-controls="code" aria-selected="true">Driver</button><button id="tab-wiring" class="tab" role="tab" type="button" aria-controls="wiring" aria-selected="false">Wiring</button><button id="tab-tape" class="tab" role="tab" type="button" aria-controls="tape" aria-selected="false">Recording</button><button id="tab-spec" class="tab" role="tab" type="button" aria-controls="spec" aria-selected="false">Spec</button></div><div class="code-meta row"><span id="filetab" class="filetab"></span><span id="gen-chip"></span></div></header>
+              <div class="body"><div id="code" class="code" role="tabpanel" aria-labelledby="tab-code" tabindex="0"></div><div id="wiring" class="wiring" role="tabpanel" aria-labelledby="tab-wiring" tabindex="0" hidden></div><div id="tape" class="tape" role="tabpanel" aria-labelledby="tab-tape" tabindex="0" hidden></div><div id="spec" class="code" role="tabpanel" aria-labelledby="tab-spec" tabindex="0" hidden></div></div>
             </section>
             <section class="panel" id="checks-panel"><header><h2>Checks<small>Sent, expected, and observed</small></h2></header><div id="evidence"></div></section>
             <section class="panel agent" id="agent-panel"><header><h2>Agent log<small>Steps and model latency</small></h2><span id="calls-total" class="tiny dim"></span></header><div class="body"><div id="worklog" class="worklog"></div></div><div id="calls" class="calls"></div></section>

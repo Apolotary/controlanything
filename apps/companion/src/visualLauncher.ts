@@ -1,5 +1,7 @@
 import { createVisualSynth, createVisualSynthRelay, type VisualSynthParameters, type VisualSynthRenderer, type VisualSynthRelay } from '@ce/vsynth';
 import { announceVisualRenderer } from './visualPresence';
+import { showCode } from './ui/wiring-view';
+import { WIRING_OVERLAY_HIDE_MS, type WiringPhase } from './ui/wiring';
 import './visualLauncher.css';
 
 const SVG = 'http://www.w3.org/2000/svg';
@@ -7,6 +9,16 @@ const SVG = 'http://www.w3.org/2000/svg';
 const GAUGES = [{ key: 'warp', label: 'Warp' }, { key: 'ripple', label: 'Ripples' }] as const;
 const ARC = 'M 8 44 A 36 36 0 1 1 72 44';
 const ARC_LENGTH = 169.6; // 270° of r=36
+
+/** What the corner overlay shows of the wiring Muse is writing for this device. */
+export interface WiringOverlayView {
+  id: string;
+  heading: string;
+  code: string;
+  phase: WiringPhase;
+  /** When it became ready or failed (epoch ms): the overlay hides WIRING_OVERLAY_HIDE_MS after that. */
+  endedAt?: number;
+}
 
 /**
  * The Mac's full-screen visual synth: the device the headset controls. In-page (no popup permission),
@@ -32,6 +44,14 @@ export class VisualSynthLauncher {
   /** Keeps the Mac's display awake while the visuals show (the user is looking through the headset). */
   private wakeLock?: WakeLockSentinel;
   private wakeLockPending = false;
+  /** The wiring Muse is writing: a subtle corner overlay streams its code, then lets go 8 s after it is ready. */
+  private wiringBox?: HTMLElement;
+  private wiringHead?: HTMLElement;
+  private wiringPre?: HTMLElement;
+  private wiringView?: WiringOverlayView;
+  private wiringShown = '';
+  private wiringDismissed?: string;
+  private wiringTimer?: { id: string; timer: ReturnType<typeof setTimeout> };
   private readonly visibility = () => this.update();
   private readonly resize = () => {
     if (!this.canvas) return;
@@ -96,7 +116,12 @@ export class VisualSynthLauncher {
       host.append(svg, value, label); meters.append(host);
       this.gauges.set(gauge.key, { arc, value });
     }
-    panel.append(canvas, toolbar, output, readout, meters); document.body.append(panel);
+    const wiringBox = document.createElement('aside'); wiringBox.className = 'visual-launcher-code'; wiringBox.setAttribute('aria-hidden', 'true');
+    const wiringHead = document.createElement('div'); wiringHead.className = 'visual-launcher-code-head';
+    const wiringPre = document.createElement('pre'); wiringPre.className = 'visual-launcher-code-pre';
+    wiringBox.append(wiringHead, wiringPre);
+    panel.append(canvas, toolbar, output, readout, meters, wiringBox); document.body.append(panel);
+    this.wiringBox = wiringBox; this.wiringHead = wiringHead; this.wiringPre = wiringPre; this.wiringShown = '';
     this.panel = panel; this.canvas = canvas; this.output = output; this.retry = retry;
     this.readoutName = readoutName; this.readoutValue = readoutValue; this.live = live;
     panel.addEventListener('pointermove', () => this.showChrome());
@@ -123,6 +148,7 @@ export class VisualSynthLauncher {
       globalThis.addEventListener('keydown', this.keys);
       this.update();
       this.showChrome();
+      this.applyWiring();
       return true;
     } catch (error) {
       this.ready = false; this.renderer?.dispose(); this.renderer = undefined;
@@ -168,6 +194,8 @@ export class VisualSynthLauncher {
     this.relay?.dispose(); this.relay = undefined;
     this.renderer?.dispose(); this.renderer = undefined;
     clearTimeout(this.idleTimer); clearTimeout(this.chromeTimer);
+    if (this.wiringTimer) clearTimeout(this.wiringTimer.timer);
+    this.wiringTimer = undefined; this.wiringBox = this.wiringHead = this.wiringPre = undefined; this.wiringShown = '';
     document.removeEventListener('visibilitychange', this.visibility);
     globalThis.removeEventListener('resize', this.resize);
     globalThis.removeEventListener('keydown', this.keys);
@@ -175,6 +203,38 @@ export class VisualSynthLauncher {
     this.panel?.remove(); this.panel = undefined; this.canvas = undefined; this.output = undefined; this.retry = undefined; this.ownerId = undefined;
     this.readoutName = undefined; this.readoutValue = undefined; this.live = undefined; this.gauges.clear();
     if (hadPanel) this.options.onClosed?.();
+  }
+
+  /**
+   * The wiring Muse is writing for this device (or none). The code streams into a small monospace corner overlay while
+   * it is written and checked; 8 s after it is ready (or failed) the overlay fades. Repeated calls with the same view
+   * change nothing.
+   */
+  setWiring(view: WiringOverlayView | undefined): void {
+    this.wiringView = view;
+    this.applyWiring();
+  }
+
+  private applyWiring(): void {
+    const box = this.wiringBox, view = this.wiringView;
+    if (!box || !this.panel) return;
+    if (this.wiringTimer && this.wiringTimer.id !== view?.id) { clearTimeout(this.wiringTimer.timer); this.wiringTimer = undefined; }
+    if (!view || this.wiringDismissed === view.id) { box.classList.remove('show'); return; }
+    if (this.wiringHead && this.wiringHead.textContent !== view.heading) this.wiringHead.textContent = view.heading;
+    if (this.wiringPre) this.wiringShown = showCode(this.wiringPre, this.wiringShown, view.code);
+    box.dataset.phase = view.phase;
+    if (view.phase !== 'ready' && view.phase !== 'failed') {
+      if (this.wiringTimer) { clearTimeout(this.wiringTimer.timer); this.wiringTimer = undefined; }
+      box.classList.add('show');
+      return;
+    }
+    const left = (view.endedAt ?? Date.now()) + WIRING_OVERLAY_HIDE_MS - Date.now();
+    if (left <= 0) { this.wiringDismissed = view.id; box.classList.remove('show'); return; }
+    box.classList.add('show');
+    if (!this.wiringTimer) {
+      const id = view.id;
+      this.wiringTimer = { id, timer: setTimeout(() => { this.wiringTimer = undefined; this.wiringDismissed = id; this.applyWiring(); }, left) };
+    }
   }
 
   /** Open visuals on a panel that is already up: show its buttons (Full screen, Back to companion) again. */
