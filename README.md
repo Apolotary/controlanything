@@ -9,7 +9,7 @@ How it works in one line: Meta **SAM 3.1** outlines the objects around you; you 
 <!-- VIDEO_URL -->
 **▶ 3-minute demo video:** _link coming soon_
 
-<p align="center"><img src="docs/hero-quest.jpg" alt="Real Meta Quest 3 passthrough capture: a fingertip touches the laptop screen and the water ripples follow it" width="720"><br><sub>Real Quest 3 capture, Nov 5: Muse wrote this touch program live (31.6 s, muse-spark-1.3). The fingertip on the laptop screen splashes the water; the small panel shows what the program sends. No setup, no controls in the way.</sub></p>
+<p align="center"><img src="docs/hero.png" alt="ControlAnything: Ask. Muse wires it. Any device your laptop can reach. Buddy the mascot waves." width="720"></p>
 
 Built for the **Meta Global AI Developer Hackathon** (Indie Developer track, *Push the Frontier*). The name nods to Meta's *Segment Anything*; this is an independent project, not a Meta product.
 
