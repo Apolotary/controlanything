@@ -227,6 +227,10 @@ export class LeanHud implements Hud {
     } });
     this.palette.register({ key: 'exit-ar', label: 'Exit', order: 90, hold: true, onSelect: () => this.events.emit('exit', {}) });
     if (lab) this.palette.register({ key: 'lab-menu', label: 'More (lab)', order: 95, onSelect: () => this.setMenuOpen(!this.deck.panel.visible) });
+    // The two layers from the spec, always first: Annotate (look, box, track) and Control (talk to the device).
+    this.palette.register({ key: 'layer', label: 'Layer', order: -20, onSelect: () => {},
+      segments: [{ key: 'annotate', label: 'Annotate', width: 0.094 }, { key: 'control', label: 'Control', width: 0.094 }],
+      selected: () => this.home.mode, onSegment: (key) => this.events.emit('mode', { mode: key === 'control' ? 'control' : 'annotate' }) });
     // What to track (spec: "switch tracking to electronics"): one compact segmented row, Annotate only.
     this.palette.register({ key: 'track', label: 'Track', order: -10, onSelect: () => {}, visible: () => this.home.mode === 'annotate',
       segments: [{ key: 'electronics', label: 'Electronics', width: 0.086 }, { key: 'objects', label: 'Objects', width: 0.064 }, { key: 'everything', label: 'All', width: 0.04 }],

@@ -16,6 +16,12 @@ export type FingerMenuFinger = keyof typeof FINGER_JOINTS;
 const MENU_FINGERS = Object.keys(FINGER_JOINTS) as FingerMenuFinger[];
 const TOUCH_ENTER = 0.015, TOUCH_RELEASE = 0.022, TOUCH_NEAR = 0.04;
 const TOUCH_DEBOUNCE_MS = 30, MAX_HAND_SPEED = 0.6;
+/** Follow speed (s): snappy normally, nearly still while the other index reaches for the menu so a tap lands. */
+const FOLLOW_TAU = 0.08, REACH_TAU = 0.6;
+/** How far around the menu (m) the other index counts as reaching for it. */
+const REACH_MARGIN = 0.08;
+/** The menu hand often drops out for a moment when the other hand comes close; keep the menu meanwhile. */
+const LOST_GRACE_MS = 800;
 
 export interface FingerTouchState {
   finger: FingerMenuFinger | null;
@@ -165,7 +171,11 @@ export class HandDockAnchor {
   private readonly matrix = new Matrix4();
   private readonly headForward = new Vector3();
   private readonly side = new Vector3();
+  private readonly reachPoint = new Vector3();
   private readonly offset: { lateral: number; up: number; toward: number };
+  /** The other hand's index is near the open menu (the menu holds still and stays open). */
+  reaching = false;
+  private lostSince: number | null = null;
 
   /** `offset` (metres, head frame) moves the dock beside the hand so the other index can poke it. */
   constructor(readonly nonDominant: 'left' | 'right' = 'left', offset: Partial<{ lateral: number; up: number; toward: number }> = {}) {
@@ -205,20 +215,31 @@ export class HandDockAnchor {
       wrist.visible = false;
       return;
     }
-    // A tracked dominant hand must never substitute for the menu hand or reveal a stale anchor.
+    const other = frame.hands[this.nonDominant === 'left' ? 'right' : 'left'];
+    this.reaching = this.source === 'hand' && this.open && this.reachingFor(dock, other, _width);
+    // A tracked dominant hand must never substitute for the menu hand or reveal a stale anchor...
     if (this.source !== 'hand' || !realHand(hand)) {
+      // ...but while the other index is pressing it, an open menu survives a short dropout of the menu hand where it is
+      // (Quest loses a hand for a moment when the other hand comes close).
+      if (this.source === 'hand' && this.open && this.attached && this.reaching) {
+        this.lostSince ??= frame.time;
+        if (frame.time - this.lostSince < LOST_GRACE_MS) {
+          this.fade(true, frame.time);
+          return;
+        }
+      }
       this.closeImmediately();
       wrist.visible = false;
       return;
     }
+    this.lostSince = null;
 
     const firstPose = !this.attached;
     if (firstPose) this.closeImmediately();
     this.attached = true;
     this.place(frame, hand, dock, wrist, firstPose);
 
-    const other = frame.hands[this.nonDominant === 'left' ? 'right' : 'left'];
-    const held = this.open && this.fingerNear(other, hand);
+    const held = this.open && (this.reaching || this.fingerNear(other, hand));
     const palmReady = hand.palmUp && (hand.palmUpMs ?? 0) >= DWELL_MS && this.inReach(frame, hand);
     let nextOpen = this.open;
     if (palmReady || (this.open && (hand.palmUp || held))) {
@@ -287,7 +308,21 @@ export class HandDockAnchor {
     this.attached = false;
     this.awaySince = null;
     this.raisedSince = null;
+    this.lostSince = null;
+    this.reaching = false;
     this.controllerPinned = this.controllerRaised = false;
+  }
+
+  /** The other hand's index tip is in front of (or just through) the open menu, within a margin around it. */
+  private reachingFor(dock: Object3D, other: HandState | undefined, width: number): boolean {
+    const tip = other && !other.controller ? other.joints['index-finger-tip'] : undefined;
+    if (!tip || !Number.isFinite(tip.position.lengthSq())) return false;
+    const height = (dock.userData.height as number | undefined) ?? 0.1;
+    // Local +z faces the head (lookAt from the head), so an approaching finger has z > 0.
+    dock.worldToLocal(this.reachPoint.copy(tip.position));
+    return Math.abs(this.reachPoint.x) <= width / 2 + REACH_MARGIN
+      && Math.abs(this.reachPoint.y) <= height / 2 + REACH_MARGIN
+      && this.reachPoint.z > -0.06 && this.reachPoint.z < 0.15;
   }
 
   private place(frame: HudFrame, hand: HandState, dock: Object3D, wrist: Object3D, first: boolean): void {
@@ -309,7 +344,8 @@ export class HandDockAnchor {
     // A fixed up axis keeps the menu content level as the wrist rolls.
     this.matrix.lookAt(frame.head.position, this.destination, UP);
     this.rotation.setFromRotationMatrix(this.matrix);
-    const alpha = first ? 1 : 1 - Math.exp(-Math.max(0, frame.dt) / 0.08);
+    const tau = this.reaching ? REACH_TAU : FOLLOW_TAU;
+    const alpha = first ? 1 : 1 - Math.exp(-Math.max(0, frame.dt) / tau);
     dock.position.lerp(this.destination, alpha);
     dock.quaternion.slerp(this.rotation, alpha);
 

@@ -598,7 +598,7 @@ export class QuestApp {
     }
     hud.on('exit', () => { this.tangible?.release('exit'); void endXr(this.renderer).catch(() => this.hud.toast('Could not exit AR. Hold Exit to try again.', 'warn')); });
     hud.on('selectTarget', (e) => this.lock(e.targetId, 'chip'));
-    hud.on('mode', (e) => this.setMode(e.mode));
+    hud.on('mode', (e) => this.switchLayer(e.mode));
     hud.on('filter', (e) => this.setLiveCategory(e.filter));
     hud.on('tagRemove', (e) => this.untag(e.targetId));
     hud.on('forget', (e) => this.requestForget(e.targetId));
@@ -792,6 +792,18 @@ export class QuestApp {
       this.page.log(e, 'warn');
     });
     this.wireMessages();
+  }
+
+  /** The wrist's Annotate | Control switch. Control needs a device: resume the one in use, or say how to pick one. */
+  private switchLayer(mode: AppMode): void {
+    if (mode !== 'control' || this.modes.mode === 'control') { this.setMode(mode); return; }
+    const tags = [...this.modes.tags.values()], armed = (cardId?: string) => !!cardId && this.armedCards.has(cardId);
+    const tag = [this.lockedId ? this.modes.tags.get(this.lockedId) : undefined, tags.find((t) => t.cardId === 'visual-synth-mac'), ...tags]
+      .find((t) => armed(t?.cardId));
+    if (!tag?.cardId) { this.hud.toast('Control needs a device: pinch its box, or tap Visual synth', 'info'); return; }
+    if (tag.cardId === 'visual-synth-mac' && !this.canControl(tag.cardId)) { this.selectVisualSynth(); return; }
+    this.setMode('control');
+    if (!this.canControl(tag.cardId)) this.lock(tag.targetId, 'api');
   }
 
   setMode(mode: AppMode, send = true): void {
