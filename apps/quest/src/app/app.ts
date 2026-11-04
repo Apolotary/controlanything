@@ -841,6 +841,7 @@ export class QuestApp {
       this.pendingPlacement = undefined; this.pendingForget = undefined;
     }
     this.modes.mode = mode;
+    this.assertedMode = undefined;
     if (send) {
       this.ws.send('mode.set', { mode }, { to: 'server' });
     }
@@ -1624,6 +1625,7 @@ export class QuestApp {
         else this.fixture = undefined;
       }
       this.ws.send('mode.set', { mode: this.modes.mode }, { to: 'server' });
+      this.assertedMode = undefined;
       this.canvas?.syncSelection();
       for (const tag of this.modes.tags.values()) if (tag.pending) this.ws.send('tag.add', tag.pending, { to: 'server' });
       for (const cardId of this.modes.removals) this.ws.send('tag.remove', { cardId }, { to: 'server' });
@@ -1710,11 +1712,17 @@ export class QuestApp {
   private lastShown?: { frameId: string; dets: ReturnType<typeof normalizeDetections> };
 
   private onModeState({ mode }: PayloadOf<'mode.state'>): void {
-    // A room snapshot or another client's stale mode must never choose this user's mode.
-    if (mode !== this.modes.mode) {
-      this.ws.send('mode.set', { mode: this.modes.mode }, { to: 'server' });
-    }
+    // A room snapshot or another client's stale mode must never choose this user's mode. Re-assert it at most once
+    // per local mode (setMode and a new welcome reset this), and only from the tab the user is in: two tabs of one
+    // identity in different modes used to ping-pong mode.set at thousands of messages a second (the Mac flicker).
+    if (mode === this.modes.mode || this.superseded || this.assertedMode === this.modes.mode) return;
+    const owner = !!this.session || typeof document === 'undefined' || document.visibilityState === 'visible';
+    if (!owner) return;
+    this.assertedMode = this.modes.mode;
+    this.ws.send('mode.set', { mode: this.modes.mode }, { to: 'server' });
   }
+  /** The local mode already re-asserted once against a different server mode.state. */
+  private assertedMode?: AppMode;
 
   private targetForCard(cardId: string, hint: { frameId?: string; detId?: string } = {}): Target | undefined {
     let t = this.targets.byCard(cardId);
