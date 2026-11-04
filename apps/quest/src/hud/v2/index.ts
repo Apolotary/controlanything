@@ -33,6 +33,7 @@ import { DeviceCard, type CardAction, type CardAgent, type CardAsk, type CardVie
 import { CalibrationMarkers, CodeCard } from '../../wiring/code-card';
 import { WireRequestReader } from '../../wiring/request-reader';
 import { DialRig, type DialMode, type DialModel } from './radial-dial';
+import { KnobStrip } from './knob-strip';
 import { setupChecks, setupFraction } from './setup-ring';
 import { liveGesture } from '../../gestures/feedback';
 export { whenSdfReady } from './text';
@@ -172,6 +173,9 @@ export class LeanHud implements Hud {
   private requestPanel: 'invitation' | 'ideas' | 'details' = 'invitation';
   private inspectWireCode = false;
   private readonly codeCard = new CodeCard();
+  /** Muse-generated AR controls (knobs/buttons) for the running wiring. */
+  private readonly knobs = new KnobStrip();
+  private readonly knobAnchor = new Vector3();
   private readonly requestReader = new WireRequestReader(this.surfaces);
   private readonly wireMarkers = new CalibrationMarkers();
   private readonly codePosition = new Vector3();
@@ -315,7 +319,10 @@ export class LeanHud implements Hud {
     this.annotationLayer.add(this.boxes);
     this.root.add(this.annotationLayer, this.card, this.modalLayer, this.deck, this.deck.panel, this.coach, this.notice, this.reticles, this.tether);
     this.root.add(this.helperPairing);
-    this.root.add(this.codeCard, this.wireMarkers, this.requestReader);
+    this.root.add(this.codeCard, this.wireMarkers, this.requestReader, this.knobs);
+    this.knobs.onChange = (control, value, phase) => {
+      if (this.locked) this.events.emit('wireControl', { targetId: this.locked, actionId: control.actionId, value, phase });
+    };
     this.widgets.push({ group: this.requestReader.hitArea, w: this.requestReader.width, h: this.requestReader.height,
       kind: 'handle', start: () => {}, lastMove: 0 });
     for (const [group, action] of [
@@ -758,9 +765,10 @@ export class LeanHud implements Hud {
     if (working && this.setupProgressView) return { state: 'reply', text: this.setupProgressView.title, model };
     return null;
   }
+  /** Ask Muse is offered as soon as a tagged object is selected in Control: the Muse agent does the connecting. */
   private canOfferInvitation(): boolean {
-    return !!this.locked && this.wireView?.targetId === this.locked && this.selectedConnection() === 'ready'
-      && !!this.mounted()?.armed && !this.setupWorking() && !this.deviceState?.busy
+    return !!this.locked && this.wireView?.targetId === this.locked
+      && !this.setupWorking() && !this.deviceState?.busy && !this.deviceState?.pairingSeconds
       && ['idle', 'stopped', 'failed'].includes(this.wireView.phase);
   }
   /** Keep the held mic target and its release path stable until speech is sent or transcribed. */
@@ -824,9 +832,11 @@ export class LeanHud implements Hud {
     }
     let ask: CardAsk | null = null;
     const wire = this.wireView;
-    if (wire && wire.targetId === this.locked && !working && connection === 'ready' && m?.armed) {
+    if (wire && wire.targetId === this.locked && !working && !state?.pairingSeconds && (!state?.legacyPerform || connection === 'ready' && m?.armed)) {
       if (!state?.legacyPerform) {
         actions.length = 0;
+        // The Mac companion is the bridge for USB/MIDI devices: offer to connect it, without blocking the ask.
+        const needsMac = connection === 'offline' && (state?.action === 'open-companion' || state?.action === 'pair-device');
         if (wire.phase === 'running') {
           const source = wire.code?.source === 'fixture' ? 'FIXTURE' : wire.code?.source === 'template' ? 'Template' : 'Live';
           return { title: wire.code?.title || name, subtitle: wire.code?.explanation || wire.prompt,
@@ -846,11 +856,13 @@ export class LeanHud implements Hud {
           if (ideas) actions.push({ id: 'wire-back', label: 'Back to Ask Muse' });
           else {
             actions.push({ id: 'wire-more-ideas', label: 'Ideas' });
-            if (wire.code || wire.canRecalibrate) actions.push({ id: 'wire-details', label: 'Details' });
+            if (needsMac) actions.push({ id: 'control-pair', label: state?.action === 'open-companion' ? 'Connect Mac' : 'Connect', icon: 'link' });
+            else if (wire.code || wire.canRecalibrate) actions.push({ id: 'wire-details', label: 'Details' });
           }
           subtitle = wire.phase === 'failed' ? wire.code?.phaseLine || wire.prompt
             : ideas ? 'Choose an idea for Muse to write'
-              : wire.phase === 'stopped' ? 'Stopped. Ask for your next interaction.' : wire.mic === 'off' ? 'Try an example, or choose Ideas.' : 'What should your hands do?';
+              : needsMac ? (state?.hint ? title(state.hint, 90) : 'Needs a companion: connect your Mac, then ask Muse.')
+              : wire.phase === 'stopped' ? 'Stopped. Ask Muse for something new.' : wire.mic === 'off' ? 'Try an example, or choose Ideas.' : 'Ask Muse how you want to control it.';
           return { title: name, subtitle, presentation: ideas ? 'ideas' : 'invitation', toggle: null, actions, ask, agent: null };
         }
         return { title: name, subtitle: wire.prompt, toggle: null, actions: [], ask: null, agent: null };
@@ -881,7 +893,7 @@ export class LeanHud implements Hud {
     const wiring = this.wireView?.phase === 'running';
     const askFirst = this.wireView?.targetId === this.locked && !state?.legacyPerform;
     const mode: DialMode = !workspace || !box ? 'hidden' : !state?.legacyPerform
-      ? ready ? 'hidden' : 'setup'
+      ? ready || !(this.setupWorking() || state?.busy) ? 'hidden' : 'setup'
       : ready ? state.handControl || wiring ? 'perform' : askFirst ? 'waiting' : 'armed' : 'setup';
     look.rig.setMode(mode);
     if (box && mode !== 'hidden') {
@@ -951,6 +963,19 @@ export class LeanHud implements Hud {
       this.codeCard.quaternion.copy(this.codeQuaternion);
     } else if (!show) this.codePlaced = false;
     this.codeCard.update(dt * 1000, show);
+    // Generated controls: a row of knobs between the device and the wearer, a little below the device's centre.
+    const controls = wire?.phase === 'running' && box && !this.requestReader.visible ? wire.controls ?? null : null;
+    this.knobs.set(controls);
+    if (controls && box) {
+      const H = Math.max(LOOK.dial.minH, Math.min(LOOK.dial.maxH, box.h));
+      this.knobAnchor.copy(box.center).lerp(this.head, 0.35);
+      const reach = this.knobAnchor.distanceTo(this.head);
+      if (reach > 0.75) this.knobAnchor.sub(this.head).setLength(0.75).add(this.head);
+      this.knobAnchor.y = Math.max(this.head.y - 0.32, Math.min(this.head.y - 0.12, box.center.y - Math.min(H / 2, 0.18) - 0.02));
+      this.knobs.place(this.knobAnchor, this.head, dt);
+    }
+    this.knobs.update(dt);
+    this.root.userData.knobs = controls ? this.knobs.snapshot() : undefined;
     if (this.requestReader.visible) {
       if (!this.readerPlaced) {
         this.readerForward.set(0, 0, -1).applyQuaternion(frame.head.quaternion); this.readerForward.y = 0;

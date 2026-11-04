@@ -96,18 +96,18 @@ export class TutorialSteps {
         : s.needsEnable
         ? { title: 'Enable this device', detail: 'Press Enable controls on the confirmation, then ask Muse.' }
         : s.controllable
-        ? { title: ['failed', 'stopped'].includes(s.wire.phase ?? '') ? 'Ask Muse to try again' : 'What should your hands do?', detail: s.instrument === 'musical-synth'
-          ? 'Choose Play like a theremin, or hold the mic to ask Muse.' : s.instrument === 'visual-synth'
-          ? 'Choose Touch the water, or hold the mic to ask Muse.' : 'Hold the mic and describe the controls you want.' }
+        ? { title: ['failed', 'stopped'].includes(s.wire.phase ?? '') ? 'Ask Muse to try again' : 'Ask Muse what you want', detail: s.instrument === 'musical-synth'
+          ? 'Choose Play like a theremin, or hold the mic and say it.' : s.instrument === 'visual-synth'
+          ? 'Choose Touch the water or another suggestion, or hold the mic and say it.' : 'Hold the mic and say it: “give me knobs”, “play it with my hands”.' }
         : { title: 'Getting the device ready', detail: 'Keep the Mac in view while its controls are checked.' };
       case 'wiring': return s.wire.phase === 'failed' || s.wire.phase === 'stopped'
         ? { title: 'Try your request again', detail: 'Choose a suggestion on the device card.' }
-        : { title: 'Watch Muse write the connection', detail: 'The code card shows writing, checks and readiness.' };
+        : { title: 'Watch Muse write the connection', detail: 'Muse writes, runs and tests a connector on your Mac. The code card shows each step.' };
       case 'calibrate': return { title: 'Calibrate your screen', detail: 'Move your fingertip to the named corner, then hold still.' };
       case 'touch': return s.wire.phase !== 'running'
         ? { title: 'Ask Muse to start again', detail: 'Your wiring is paused. Choose a suggestion to continue.' }
         : this.needsScreen ? { title: 'Touch the water', detail: 'Bring one fingertip to your Mac screen, then move it.' }
-          : { title: 'Try your new hand control', detail: 'Follow Muse’s explanation on the code card.' };
+          : { title: 'Try your new controls', detail: 'Pinch a knob and twist it, or follow Muse’s explanation.' };
       case 'menu': return !this.sawStop
         ? now - (this.playAt ?? now) < 5000 ? undefined
           : { title: 'Stop just the wiring', detail: 'Show both palms outward. Your Mac stays ready for another request.' }

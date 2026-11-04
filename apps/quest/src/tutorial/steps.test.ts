@@ -25,7 +25,7 @@ describe('first-run wiring tutorial', () => {
     expect(steps.view(s, 60_200)?.title).toBe('Enable this device');
     s.needsEnable = false; s.controllable = true;
     steps.update(s, 60_300);
-    expect(steps.step).toBe('ask'); expect(steps.view(s, 60_300)?.title).toBe('What should your hands do?');
+    expect(steps.step).toBe('ask'); expect(steps.view(s, 60_300)?.title).toBe('Ask Muse what you want');
     s.wire = { phase: 'writing', request: 'Touch the water', requestId: 'explicit-ask' };
     steps.update(s, 60_400); expect(steps.step).toBe('wiring');
   });
@@ -34,7 +34,7 @@ describe('first-run wiring tutorial', () => {
     const steps = new TutorialSteps(), s = probe();
     Object.assign(s, { mode: 'control', selected: true, cardId: 'op1', controllable: true });
     steps.update(s, 0);
-    expect(steps.view(s, 0)?.detail).toBe('Hold the mic and describe the controls you want.');
+    expect(steps.view(s, 0)?.detail).toBe('Hold the mic and say it: “give me knobs”, “play it with my hands”.');
     s.instrument = 'visual-synth';
     expect(steps.view(s, 0)?.detail).toContain('Touch the water');
     s.instrument = 'musical-synth';

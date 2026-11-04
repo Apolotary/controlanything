@@ -8,7 +8,7 @@
  * turns signals into control events, and only through the sandbox (wiring/runtime.ts).
  */
 import { Vector3 } from 'three';
-import { newId, type WireProgressPayload, type WireReadyPayload, type WireStoppedPayload, type WireStopPayload } from '@ce/protocol';
+import { newId, type WireControl, type WireProgressPayload, type WireReadyPayload, type WireStoppedPayload, type WireStopPayload } from '@ce/protocol';
 import type { ShellFrame } from '../app/hud-contract';
 import type { WireCalibrationView, WireCodeView, WirePhase, WireView } from '../hud/contract';
 import { SignalTracker, SIGNAL_RANGE } from '../gestures/signals';
@@ -16,9 +16,12 @@ import { ScreenCalibrator } from '../gestures/screen-calibration';
 import { clearPlane, loadPlane, planePoint, savePlane, type ScreenPlane } from '../gestures/screen-plane';
 import { WiringRuntime, type StopKind, type WireEmit, type WiringProgram } from './runtime';
 
-export const WIRE_CHIPS = ['Touch the water', 'Hands as knobs', 'Surprise me'] as const;
-export const MUSICAL_WIRE_CHIPS = ['Play like a theremin', 'Pinch to play notes', 'Surprise me'] as const;
-export const PHYSICAL_WIRE_CHIPS = ['Hands as knobs', 'Surprise me'] as const;
+export const WIRE_CHIPS = ['Touch the water', 'Give me knobs for the visuals', 'Hands as knobs'] as const;
+export const MUSICAL_WIRE_CHIPS = ['Play like a theremin', 'Pinch to play notes', 'Give me filter knobs'] as const;
+export const PHYSICAL_WIRE_CHIPS = ['Give me knobs for this', 'Play it with my hands', 'Surprise me'] as const;
+/** A laptop/Mac: Muse can drive the visual synth running on it. */
+export const LAPTOP_WIRE_CHIPS = ['Write a controller for the visual synth', 'Touch the water', 'Hands as knobs'] as const;
+const isLaptop = (label: string) => /\b(laptop|macbook|mac|computer|notebook|monitor|screen|display|visual synth)\b/i.test(label);
 export const WIRE_TIMING = {
   /** title + explanation stay up this long once the program runs, then the card collapses to a pill */
   explainMs: 6000,
@@ -78,6 +81,8 @@ interface Wiring {
   runStartedAt?: number;
   stopped: boolean;
   askedAt: number;
+  /** AR controls Muse generated for this wiring (knobs/buttons beside the device). */
+  controls?: WireControl[];
 }
 
 const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
@@ -91,6 +96,8 @@ export class WiringController {
   private acceptServerWiring = false;
   private readonly retiredWirings = new Set<string>();
   private w: Wiring | null = null;
+  /** Values sent by generated AR controls (counts as use, like a hand program's outputs). */
+  private controlSends = 0;
   private plane: ScreenPlane | null = null;
   private mic: 'idle' | 'listening' | 'busy' = 'idle';
   private micStartedAt = 0;
@@ -127,7 +134,8 @@ export class WiringController {
     const w = this.w;
     return { phase: this.phase, request: w?.request, requestId: w?.requestId, wiringId: w?.wiringId, title: w?.title, model: w?.model, source: w?.wireSource, codeChars: w?.code.length,
       running: this.running, calibrated: !!this.plane, needsScreen: w?.needsScreen ?? false,
-      touching: this.running && this.screenTouching, mic: this.mic, stats: { ...this.runtime.stats }, step: this.calibrator.step };
+      touching: this.running && this.screenTouching, mic: this.mic, stats: { ...this.runtime.stats, sent: (this.runtime.stats.sent ?? 0) + this.controlSends }, step: this.calibrator.step,
+      controls: w?.controls?.length ?? 0 };
   }
 
   // --- asking -----------------------------------------------------------------------------------------------------
@@ -206,12 +214,21 @@ export class WiringController {
     // or recalibrate a program that already arrived.
     if (w?.program?.wiringId === p.wiringId) return;
     if (w.wiringId && w.wiringId !== p.wiringId && this.runtime.running) this.runtime.stop('a new program arrived', 'external', true);
-    w.wiringId = p.wiringId; w.code = p.code; w.model = p.model; w.wireSource = p.source; w.title = p.title; w.explanation = p.explanation;
-    w.needsScreen = p.needs.includes('screen');
+    w.wiringId = p.wiringId; w.code = p.code || w.code; w.model = p.model; w.wireSource = p.source; w.title = p.title; w.explanation = p.explanation;
+    w.needsScreen = !!p.code.trim() && p.needs.includes('screen');
+    w.controls = p.controls?.length ? p.controls : undefined;
     w.program = { wiringId: p.wiringId, requestId: w.requestId, cardId: p.cardId, code: p.code, title: p.title, explanation: p.explanation, model: p.model, source: p.source, actions: p.actions };
     w.stopped = false; w.phase = 'ready'; w.phaseLine = 'ready';
     this.host.feedback?.('ready');
-    this.host.log(`wire.ready "${p.title}" · ${p.model} · ${p.source} · ${p.actions.length} actions · needs ${p.needs.join(',') || 'hands'}`, 'ok');
+    this.host.log(`wire.ready "${p.title}" · ${p.model} · ${p.source} · ${p.actions.length} actions · ${p.controls?.length ?? 0} controls · needs ${p.needs.join(',') || 'hands'}`, 'ok');
+    if (!p.code.trim()) {
+      // AR controls only: nothing runs per frame; the knobs send their own values.
+      this.collapsed = false;
+      w.phase = 'running'; w.runStartedAt = this.now();
+      this.host.toast(`${p.title || 'Controls'} ready · pinch a knob and twist`, 'ok');
+      this.changed();
+      return;
+    }
     if (w.needsScreen) {
       this.plane = loadPlane(w.cardId, sel.anchor);
       if (!this.plane) { this.beginCalibration(); this.changed(); return; }
@@ -234,6 +251,15 @@ export class WiringController {
     w.phase = 'running'; w.runStartedAt = this.now(); w.stopped = false;
     this.host.toast(`${w.title || 'Wiring'} is running`, 'ok');
     this.changed();
+  }
+
+  /** A generated AR control moved: send its value to the connector, like a hand program output. */
+  control(actionId: string, value: number | boolean, phase: 'start' | 'move' | 'end'): boolean {
+    const w = this.w;
+    if (!w || w.phase !== 'running' || !w.program || !w.program.actions.some((a) => a.actionId === actionId) || !this.acceptServerWiring) return false;
+    if (phase === 'start') return true;
+    this.controlSends++;
+    return this.host.sendControl(w.cardId, { widgetId: `wire:${actionId}`, value, phase, requestId: w.requestId, ...(w.wiringId ? { wiringId: w.wiringId } : {}) });
   }
 
   /** The wearer (or the app) stops the wiring. Safe at any time. */
@@ -529,7 +555,7 @@ export class WiringController {
               : phase === 'failed' ? 'Could not wire that · try again'
                 : phase === 'stopped' ? 'Stopped · ask again' : `${w.title || 'Wiring'} · ready`;
     const chips = busy ? [] : [...(sel.instrument === 'musical-synth' ? MUSICAL_WIRE_CHIPS
-      : sel.instrument === 'visual-synth' ? WIRE_CHIPS : PHYSICAL_WIRE_CHIPS)];
+      : sel.instrument === 'visual-synth' ? WIRE_CHIPS : isLaptop(sel.label) ? LAPTOP_WIRE_CHIPS : PHYSICAL_WIRE_CHIPS)];
     const code: WireCodeView | undefined = w ? {
       wiringId: w.wiringId || 'pending', requestId: w.requestId, phase, model: w.model || 'Muse', source: w.wireSource, request: w.request, code: w.code, phaseLine: w.phaseLine,
       ...(w.title ? { title: w.title } : {}), ...(w.explanation ? { explanation: w.explanation } : {}),
@@ -544,6 +570,7 @@ export class WiringController {
       ...(code ? { code } : {}),
       ...(calibration ? { calibration } : outline ? { calibration: { step: 'bottom-right' as const, progress: 1, message: 'Screen calibrated', corners: [], outline } } : {}),
       canRecalibrate: !!w?.needsScreen && !!w.program && (phase === 'running' || phase === 'stopped' || phase === 'ready'),
+      ...(w?.controls && phase === 'running' ? { controls: w.controls } : {}),
     };
   }
 

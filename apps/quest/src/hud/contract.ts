@@ -65,6 +65,8 @@ export interface WireView {
   calibration?: WireCalibrationView;
   /** "Recalibrate screen" offered (a screen wiring is calibrated or running) */
   canRecalibrate?: boolean;
+  /** AR knobs/buttons Muse generated, shown beside the device while the wiring runs. */
+  controls?: import('@ce/protocol').WireControl[];
 }
 export interface ProjectView {
   title: string; status: string; projectCount: number; actionCount: number; ready: boolean; running: boolean; engaged: boolean;
@@ -246,6 +248,8 @@ export interface HudEvents {
   /** Hold-to-talk for a wiring request: down = start listening, up = send. */
   wireTalk: { targetId: string; down: boolean };
   wireRecalibrate: { targetId: string };
+  /** A Muse-generated AR control (knob/button/toggle) moved. */
+  wireControl: { targetId: string; actionId: string; value: number | boolean; phase: 'start' | 'move' | 'end' };
   assistantConfirm: { targetId: string; proposalId: string; accept: boolean };
   assistantDismiss: { targetId: string };
   handControl: { targetId: string; enabled: boolean };

@@ -78,11 +78,11 @@ describe('the wiring flow', () => {
     expect(t.view()).toMatchObject({ phase: 'idle', chips: [...PHYSICAL_WIRE_CHIPS] });
     expect(t.view()?.chips).not.toContain('Touch the water');
     expect(t.view()?.chips).not.toContain('Play like a theremin');
-    expect(t.controller.chipText(0)).toBe('Hands as knobs');
-    expect(t.controller.chipText(1)).toBe('Surprise me');
+    expect(t.controller.chipText(0)).toBe(PHYSICAL_WIRE_CHIPS[0]);
+    expect(t.controller.chipText(1)).toBe(PHYSICAL_WIRE_CHIPS[1]);
     expect(t.sent).toEqual([]); expect(t.controls).toEqual([]); expect(t.runtime.running).toBe(false);
     expect(t.controller.ask(t.controller.chipText(0)!, 'chip')).toBe(true);
-    expect(t.sent).toEqual([{ type: 'wire.request', payload: { cardId: 'physical-device', text: 'Hands as knobs', source: 'chip', requestId: expect.any(String) } }]);
+    expect(t.sent).toEqual([{ type: 'wire.request', payload: { cardId: 'physical-device', text: PHYSICAL_WIRE_CHIPS[0], source: 'chip', requestId: expect.any(String) } }]);
     expect(t.runtime.running).toBe(false); expect(t.controls).toEqual([]);
     t.controller.reset();
   });

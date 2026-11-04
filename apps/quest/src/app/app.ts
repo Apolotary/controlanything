@@ -585,6 +585,7 @@ export class QuestApp {
     hud.on('wireAsk', (e) => { if (e.targetId === this.lockedId) this.wiring?.ask(e.text, e.source); });
     hud.on('wireTalk', (e) => { if (e.targetId === this.lockedId) { if (e.down) this.wiring?.micPress(); else this.wiring?.micLetGo(); } });
     hud.on('wireRecalibrate', (e) => { if (e.targetId === this.lockedId) this.wiring?.recalibrate(); });
+    hud.on('wireControl', (e) => { if (e.targetId === this.lockedId) this.wiring?.control(e.actionId, e.value, e.phase); });
     hud.on('assistantTalk', (e) => { this.clearHandControl(); void this.assistant?.toggle(e.targetId); });
     hud.on('assistantConfirm', (e) => this.assistant?.confirm(e.targetId, e.proposalId, e.accept));
     hud.on('assistantDismiss', () => this.assistant?.cancel());
@@ -660,10 +661,10 @@ export class QuestApp {
           instrument: tag.cardId === 'musical-synth-mac' ? 'musical-synth' as const
             : tag.cardId === 'visual-synth-mac' ? 'visual-synth' as const : undefined } : undefined;
       },
-      canControl: (cardId) => this.canControl(cardId),
+      canControl: (cardId) => this.canAsk(cardId),
       send: (type, payload) => !!this.ws.send(type, payload, { to: 'server' }),
       sendControl: (cardId, event) => {
-        if (!this.canControl(cardId)) return false;
+        if (!this.canAsk(cardId)) return false;
         const specId = this.specByCard.get(cardId);
         return !!this.ws.send('control.event', { widgetId: event.widgetId, value: event.value, ts: Date.now(), phase: event.phase,
           ...(event.requestId ? { requestId: event.requestId } : {}), ...(event.wiringId ? { wiringId: event.wiringId } : {}), ...(specId ? { specId } : {}) });
@@ -1417,6 +1418,16 @@ export class QuestApp {
     const specId = this.specByCard.get(tag.cardId);
     if (specId) this.hud.setArmed(this.gen3dIdFor(specId), false);
     this.hud.showConfirm(null); this.refreshHome();
+  }
+
+  /**
+   * Asking Muse needs only a deliberate choice: Control mode with this tagged object selected. The Muse agent on the
+   * Mac does the connection work itself (companion, USB-MIDI, connector) after the request; no setup ceremony first.
+   */
+  private canAsk(cardId: string | undefined): boolean {
+    const tag = cardId ? this.modes.byCard(cardId) : undefined;
+    return this.session?.visibilityState !== 'hidden' && this.modes.mode === 'control' && !!cardId && !!tag
+      && this.lockedId === tag.targetId;
   }
 
   private canControl(cardId: string | undefined): boolean {
@@ -2349,9 +2360,10 @@ export class QuestApp {
         return { inXr: !!this.session && !this.superseded && this.session.visibilityState !== 'hidden',
           busy: !!this.onboarding?.visible || this.onboarding?.state === 'shown' || !!this.hud.isReadingRequest?.(), boxes: this.visibleTargets.size,
           selected: !!selectedId || !!this.visualSynthIntent || !!this.virtualSelection, mode: this.modes.mode,
-          needsSetup: !!selectedId && this.modes.canSetup(selectedId),
-          needsBridge: selectedTag?.connection === 'offline',
-          controllable: !!cardId && this.canControl(cardId), needsEnable: !!this.pendingArm, fullStopRequestId: this.tutorialStoppedRequestId,
+          // Muse agent flow: no Set up / Enable steps; asking is possible as soon as the object is selected in Control.
+          needsSetup: false,
+          needsBridge: false,
+          controllable: !!cardId && this.canAsk(cardId), needsEnable: false, fullStopRequestId: this.tutorialStoppedRequestId,
           cardId, instrument: cardId === 'musical-synth-mac' ? 'musical-synth' : cardId === 'visual-synth-mac' ? 'visual-synth' : undefined,
           wire: (this.wiring?.snapshot() ?? {}) as TutorialProbe['wire'],
           menuOpen: !!palette?.visible && palette.anchor.open,
