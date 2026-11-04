@@ -3,6 +3,8 @@ import { z } from 'zod';
 /** One room-wide master setting. Receiving it never grants browser autoplay permission. */
 export const AudioMasterPayload = z.object({ volume: z.number().min(0).max(1), muted: z.boolean() });
 export type AudioMasterPayload = z.infer<typeof AudioMasterPayload>;
+/** OS speech fallback for browsers without speechSynthesis (including Quest Browser). */
+export const AudioSpeakPayload = z.object({ text: z.string().trim().min(1).max(450) });
 export const DEFAULT_AUDIO_MASTER: Readonly<AudioMasterPayload> = Object.freeze({ volume: .35, muted: false });
 
 /** Pure state adapter shared by the Quest and Mac; each sound engine owns its browser AudioContext. */

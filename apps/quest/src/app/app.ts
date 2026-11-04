@@ -285,7 +285,7 @@ export class QuestApp {
 
   constructor(params: URLSearchParams) {
     this.params = params;
-    this.demoAudio = new QuestDemoAudio(params);
+    this.demoAudio = new QuestDemoAudio(params, text => !!this.ws.send('audio.speak', { text }, { to: 'server' }));
     this.onboarding = new HelperOnboarding(params.get('camera') === 'sim');
     this.nonDominant = params.get('dominant') === 'left' ? 'right' : 'left';
   }

@@ -19,7 +19,8 @@ export type Runner = (file: string, args: string[]) => Promise<string>;
 
 export const execFileRunner: Runner = (file, args) =>
   new Promise((resolve, reject) => {
-    execFile(file, args, { timeout: 8000, windowsHide: true }, (err, stdout, stderr) => {
+    const speech = file === 'say' || file === 'osascript' && args.some(arg => arg.includes('say (item 1 of argv)'));
+    execFile(file, args, { timeout: speech ? 45_000 : 8000, windowsHide: true }, (err, stdout, stderr) => {
       if (err) reject(new Error(stderr?.toString().trim() || err.message));
       else resolve(stdout.toString().trim());
     });
@@ -108,7 +109,7 @@ export class MacLocalExecutor {
       let out: string;
       if (op.op === 'say' && master) {
         this.speaking++;
-        try { out = await this.run('osascript', ['-e', 'on run argv\nsay (item 1 of argv) volume ((item 2 of argv) as real)\nend run', plan.args[0]!, String(Math.max(0, Math.min(1, master.volume)))]); }
+        try { out = await this.run('osascript', ['-e', 'on run argv\nsay (item 1 of argv) volume ((item 2 of argv) as real) stopping current speech true\nend run', plan.args[0]!, String(Math.max(0, Math.min(1, master.volume)))]); }
         finally { this.speaking--; }
       } else if (op.op === 'music' && master) {
         out = await this.run('osascript', ['-e', `tell application "Music" to set sound volume to ${Math.round(Math.max(0, Math.min(1, master.volume)) * 100)}`, ...plan.args]);
@@ -120,10 +121,10 @@ export class MacLocalExecutor {
     }
   }
 
-  /** Cancel our active OS speech when the shared master is muted. */
+  /** Cancel active OS speech on master changes; utterance volume otherwise stays fixed. */
   masterChanged(): void {
     const state = this.audioMaster?.();
-    if (!this.silent && this.speaking > 0 && state && (state.muted || state.volume <= 0)) {
+    if (!this.silent && this.speaking > 0 && state) {
       void this.run('osascript', ['-e', 'say "" stopping current speech true']).catch(() => {});
     }
     if (!this.silent && this.musicOwned && state) {

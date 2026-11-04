@@ -13,6 +13,7 @@ import { TagStore } from './tags';
 import type { TargetDetection } from './types';
 import type { Forge } from '../gen3d/forge';
 import type { WireWritten } from './wire';
+import { MacLocalExecutor } from './maclocal';
 
 vi.mock('./link', async (original) => ({ ...await original<typeof import('./link')>(), tryLink: vi.fn() }));
 
@@ -91,6 +92,15 @@ afterEach(async () => {
 });
 
 describe('annotation and control mode boundary', () => {
+  it('uses OS speech feedback only for the owner or local requester', async () => {
+    const exec = vi.spyOn(MacLocalExecutor.prototype, 'exec').mockResolvedValue({ ok: true, detail: 'Stub OS speech; no sound played' });
+    const s = setup();
+    s.emit('audio.speak', { text: 'That is a book!' }, false);
+    expect(exec).not.toHaveBeenCalled();
+    s.emit('audio.speak', { text: 'That is a book!' }, true);
+    expect(exec).toHaveBeenCalledWith({ kind: 'local', op: 'say', arg: 'That is a book!' });
+    await Promise.resolve();
+  });
   it('refuses peripheral selection, retry and setup while accepting an owner page', () => {
     const s = setup({ devices: [remo] });
     const target = s.addKnown();

@@ -15,9 +15,10 @@ export class QuestDemoAudio {
   private readonly removeOutput: () => void;
   private readonly removeUnlock: () => void;
   readonly stats = { cues: 0, speech: 0, speechStarted: 0, speechFinished: 0, speechErrors: 0,
+    macSpeechQueued: 0, speechProvider: 'none' as 'none' | 'browser-os' | 'mac-os',
     thinking: false, unlocked: false, speechAvailable: typeof speechSynthesis !== 'undefined' };
 
-  constructor(params: URLSearchParams) {
+  constructor(params: URLSearchParams, private readonly speechFallback?: (text: string) => boolean | void) {
     this.quiet = params.get('mute') === '1';
     if (this.quiet) demoAudioMaster.forceMute(true);
     this.removeOutput = demoAudioMaster.registerOutput(volume => {
@@ -93,23 +94,49 @@ export class QuestDemoAudio {
 
   /** speechSynthesis is browser/OS speech, never a remote AI voice model. */
   speak(text: string): void {
-    if (this.quiet || (globalThis as { __ceMute?: boolean }).__ceMute || this.volume <= 0 || !demoAudioMaster.unlocked || !this.stats.speechAvailable || !text.trim()) return;
+    if (!this.maySpeak() || !text.trim()) return;
+    const words = text.slice(0, 450);
     this.cancelSpeech();
-    const utterance = this.utterance = new SpeechSynthesisUtterance(text.slice(0, 450));
+    if (!this.stats.speechAvailable) { this.macSpeech(words); return; }
+    const utterance = this.utterance = new SpeechSynthesisUtterance(words);
     const voices = speechSynthesis.getVoices();
     const voice = voices.find(v => v.localService && /^en/i.test(v.lang)) ?? voices.find(v => /^en/i.test(v.lang));
     if (voice) utterance.voice = voice;
     utterance.volume = this.volume; utterance.rate = 1.06; utterance.pitch = 1.15;
     utterance.onstart = () => { this.stats.speechStarted++; };
     utterance.onend = () => { this.stats.speechFinished++; if (this.utterance === utterance) this.utterance = undefined; };
-    utterance.onerror = () => { this.stats.speechErrors++; if (this.utterance === utterance) this.utterance = undefined; };
+    let fallbackAttempted = false;
+    utterance.onerror = event => {
+      this.stats.speechErrors++;
+      const current = this.utterance === utterance;
+      if (current) this.utterance = undefined;
+      if (current && !fallbackAttempted && !['canceled', 'interrupted'].includes(event.error)) {
+        fallbackAttempted = true; this.macSpeech(words);
+      }
+    };
     this.stats.speech++;
-    speechSynthesis.speak(utterance);
+    this.stats.speechProvider = 'browser-os';
+    try { speechSynthesis.speak(utterance); }
+    catch {
+      this.stats.speechErrors++; this.utterance = undefined;
+      if (!fallbackAttempted) { fallbackAttempted = true; this.macSpeech(words); }
+    }
+  }
+
+  private maySpeak(): boolean { return !this.quiet && !(globalThis as { __ceMute?: boolean }).__ceMute && this.volume > 0 && demoAudioMaster.unlocked; }
+  private macSpeech(text: string): void {
+    if (!this.maySpeak() || !this.speechFallback) return;
+    try {
+      if (this.speechFallback(text) === false) return;
+      // A request queued on the socket is not proof that a Mac speaker was heard.
+      this.stats.macSpeechQueued++; this.stats.speechProvider = 'mac-os';
+    } catch { /* Offline bridge: the Buddy's visible reaction still remains. */ }
   }
 
   private cancelSpeech(): void {
-    if (this.utterance && this.stats.speechAvailable) speechSynthesis.cancel();
+    const current = this.utterance;
     this.utterance = undefined;
+    if (current && this.stats.speechAvailable) speechSynthesis.cancel();
   }
   suspend(): void {
     this.thinking.clear(); this.stats.thinking = false;

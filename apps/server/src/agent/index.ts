@@ -1366,6 +1366,15 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       return;
     }
     switch (m.type) {
+      case 'audio.speak':
+        // UI/Buddy speech is feedback, not model inference or a device driver.
+        // Native OS speech supplies the fallback when Quest lacks speechSynthesis.
+        if (from.canApprove || from.local) {
+          void macLocal.exec({ kind: 'local', op: 'say', arg: m.payload.text })
+            .then(result => { if (!result.ok) hub.sendToDevice(from.deviceId, 'log', { level: 'warn', code: 'audio_speech_unavailable', message: result.detail ?? 'Mac speech is unavailable.' }); })
+            .catch(error => log(`[audio] OS speech failed: ${(error as Error).message}`));
+        } else hub.sendToDevice(from.deviceId, 'log', { level: 'warn', code: 'forbidden', message: 'Only the paired owner may use Mac speech.' });
+        return;
       case 'canvas.get':
         canvas.get(from.deviceId, m.payload.cardId);
         return;
