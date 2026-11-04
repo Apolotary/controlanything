@@ -140,7 +140,10 @@ export class Executor {
       if (!row) return;
       const o = m.payload.observed;
       const word = o.sense === 'audio' ? 'heard' : o.sense === 'camera' ? 'seen' : 'wired';
-      row.verdict = { pass: m.payload.pass, text: m.payload.pass ? `${word} ✓` : 'no reaction ✗' };
+      const verdict = { pass: m.payload.pass, text: m.payload.pass ? `${word} ✓` : 'no reaction ✗' };
+      // The server re-sends checks on every mode change: an unchanged verdict changes nothing.
+      if (row.verdict?.pass === verdict.pass && row.verdict.text === verdict.text) return;
+      row.verdict = verdict;
       this.onTape();
     });
   }
