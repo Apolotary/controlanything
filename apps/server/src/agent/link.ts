@@ -10,6 +10,8 @@ import type { MidiProfile } from '../devices/profiles';
 import type { Dispatcher } from './dispatch';
 import { type ExecutorPick, pickExecutor, type Roster } from './executors';
 import { virtualScreenExecutor, visualSynthCompanions } from './visual-synth';
+import { musicalSynthExecutor, musicalSynthHosts, MUSICAL_SYNTH_GUIDANCE } from './musical-synth';
+import { MUSICAL_SYNTH_PORT_ID } from '../devices/musicalSynth';
 import { isGimbalCard } from '../devices/osmo/driver';
 
 export type LinkCapability = 'midi' | 'ir' | 'local' | 'ble';
@@ -41,6 +43,17 @@ export async function tryLink(
   cap: LinkCapability,
   opts: { linkId: string; profile?: MidiProfile; preferDeviceId?: string; signal?: AbortSignal; probeIdentity?: boolean } ,
 ): Promise<LinkOutcome> {
+  // Known browser instrument: exact owner and exact ready output; never fall back to a physical MIDI port or inquiry.
+  const musicalExecutor = musicalSynthExecutor(card);
+  if (musicalExecutor) {
+    const device = musicalSynthHosts(deps.roster.devices(), true).find(d => d.deviceId === musicalExecutor);
+    const port = device?.ports?.find(p => p.id === MUSICAL_SYNTH_PORT_ID && p.kind === 'midi-out' && p.state === 'connected');
+    const result: LinkResultPayload = { linkId: opts.linkId, cardId: card.cardId, verdict: 'none', evidence: [] };
+    if (cap !== 'midi' || !device || !port) return { result: { ...result, reason: MUSICAL_SYNTH_GUIDANCE } };
+    return { result: { ...result, verdict: 'consistent', executorDeviceId: device.deviceId, channel: 'midi', port,
+      evidence: [{ kind: 'port-name', ok: true, detail: 'Exact authored browser instrument output; Sound on was explicitly enabled on its Mac. No physical MIDI identity probe.' }] },
+      executor: { deviceId: device.deviceId, name: device.name, kind: device.kind, port } };
+  }
   const portHint = opts.profile?.usb?.portNameHint;
   const virtualExecutor = virtualScreenExecutor(card);
   const virtualDevice = virtualExecutor ? visualSynthCompanions(deps.roster.devices()).find((device) => device.deviceId === virtualExecutor) : undefined;

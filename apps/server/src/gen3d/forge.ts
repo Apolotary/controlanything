@@ -32,6 +32,7 @@ import { TopLevelItemScanner } from './partial';
 import { LiveSkinPainter, ReplaySkinPainter, SKIN_MODEL, type SkinCrop, type SkinPainter, type SkinResult, SkinStore } from './skin';
 import { costUsd, type StreamMessage, StreamClient, type StreamUsage } from './stream';
 import { LiveTransport, loadRecordedRuns, type ModelTransport, ReplayTransport, type RunTarget, type TransportResult, type TransportSession } from './transport';
+import { isMusicalSynth, MUSICAL_SYNTH_FIXTURE, musicalSynthFixtureSession } from './musicalSynth';
 import { isVisualSynth, VISUAL_SYNTH_FIXTURE, visualSynthFixtureSession } from './visualSynth';
 
 export const FORGE_KIT = 'ce.hackset/1+ce.gen3d/1';
@@ -673,9 +674,10 @@ export function createForge(deps: ForgeDeps): Forge {
     }
     const device = dev.data;
     const driver = drv.data;
+    const musicalFixture = transport.source === 'fixture' && isMusicalSynth(driver);
     const template = (transport.source === 'fixture' && isVisualSynth(driver)) || (fallbackReason !== undefined && onVisualSynth(driver));
     const runId = req.runId ?? newId('forge_');
-    const model = template ? (fallbackReason !== undefined ? VISUAL_SYNTH_FALLBACK : VISUAL_SYNTH_FIXTURE) : req.model ?? defaultModel;
+    const model = musicalFixture ? MUSICAL_SYNTH_FIXTURE : template ? (fallbackReason !== undefined ? VISUAL_SYNTH_FALLBACK : VISUAL_SYNTH_FIXTURE) : req.model ?? defaultModel;
     const firstEffort = req.effort ?? DEFAULT_EFFORT;
     const verification = verificationOf(driver, req.verification);
     const request = req.request?.trim() || `generate a hack set for the ${device.name}`;
@@ -683,7 +685,7 @@ export function createForge(deps: ForgeDeps): Forge {
     const specId = specIdFor(device.cardId);
     const existing = store.get(specId);
     const step = stepper(runId, device.cardId, req.onProgress);
-    const session = template ? (fallbackReason !== undefined ? templateSession(driver) : visualSynthFixtureSession(driver))
+    const session = musicalFixture ? musicalSynthFixtureSession(driver) : template ? (fallbackReason !== undefined ? templateSession(driver) : visualSynthFixtureSession(driver))
       : transport.session({ kit: FORGE_KIT, task: 'generate', cardId: device.cardId, request, mode: 'json', ...runContext(device, driver) });
     const fallback = session.match === 'category' || session.match === 'transport';
     // the panel skin: painted in parallel, attached as a later revision; it never gates the controls
@@ -745,7 +747,7 @@ export function createForge(deps: ForgeDeps): Forge {
         last = res;
         modelUsed = template && fallbackReason !== undefined ? VISUAL_SYNTH_FALLBACK : res.recordedFrom ?? res.model ?? model;
         usage = addUsage(usage, res.usage);
-        step({ stepId: gen.stepId, startedAt: gen.startedAt, endedAt: Date.now(), phase: 'forge', status: res.degenerate ? 'fail' : 'ok', title: template ? (fallbackReason !== undefined ? `Live forge failed (${fallbackReason.slice(0, 80)}); template fallback assembled` : 'Visual synth fixture template assembled') : res.degenerate ? 'Muse looped on whitespace; retrying' : `Muse answered in ${(res.latencyMs / 1000).toFixed(1)} s`, detail: res.usage ? `in ${res.usage.promptTokens} (cached ${res.usage.cachedTokens}) · out ${res.usage.completionTokens} (reasoning ${res.usage.reasoningTokens})` : undefined, model: modelUsed, effort, latencyMs: res.latencyMs, source: res.source, recordedFrom: res.recordedFrom });
+        step({ stepId: gen.stepId, startedAt: gen.startedAt, endedAt: Date.now(), phase: 'forge', status: res.degenerate ? 'fail' : 'ok', title: musicalFixture ? 'Musical synth fixture catalog assembled (no model or gesture mapping)' : template ? (fallbackReason !== undefined ? `Live forge failed (${fallbackReason.slice(0, 80)}); template fallback assembled` : 'Visual synth fixture template assembled') : res.degenerate ? 'Muse looped on whitespace; retrying' : `Muse answered in ${(res.latencyMs / 1000).toFixed(1)} s`, detail: res.usage ? `in ${res.usage.promptTokens} (cached ${res.usage.cachedTokens}) · out ${res.usage.completionTokens} (reasoning ${res.usage.reasoningTokens})` : undefined, model: modelUsed, effort, latencyMs: res.latencyMs, source: res.source, recordedFrom: res.recordedFrom });
 
         // 1. schema
         let draft: ForgeDraft | undefined;

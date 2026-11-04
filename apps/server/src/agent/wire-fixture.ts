@@ -84,6 +84,25 @@ const TOUCH_WORDS = /touch|water|ripple|splash|finger|screen|poke|tap on|press t
 
 /** The wiring for a request, built from the driver's own actions. `prefix` labels who wrote it (FIXTURE / Template). */
 export function buildWiring(actions: ActionBrief[], request: string, prefix: 'FIXTURE' | 'Template', note: string, controls = touchControls()): WireDraftData {
+  // Only fixture / visibly labelled fallback. Live mappings always come from Muse.
+  const pitch = actions.find(a => a.actionId === 'cc16' && /scale note/i.test(a.label));
+  const gate = actions.find(a => a.actionId === 'cc17' && /note gate/i.test(a.label));
+  if (pitch && gate && /play|theremin|note|synth|music|instrument|chord/i.test(request)) return {
+    title: `${prefix}: Hand-played scale`,
+    explanation: `${note} Raise your right hand to change scale note; pinch to play, release to stop. Release and pinch again after eight seconds.`.slice(0, 200),
+    code: [
+      `// ${prefix}: no model wrote this hand-played scale example.`,
+      'const r = s.right;',
+      'if (r) {',
+      `  out.set('${pitch.actionId}', Math.round(${lerp(pitch, 'r.height')}));`,
+      `  out.set('${gate.actionId}', r.pinch > 0.7 ? 127 : 0);`,
+      '  mem.played = true;',
+      '} else if (mem.played) {',
+      `  out.set('${gate.actionId}', 0);`,
+      '  mem.played = false;',
+      '}',
+    ].join('\n'), needs: ['right'],
+  };
   const sets = actions.filter((a) => a.kind === 'set');
   const trigger = actions.find((a) => a.kind === 'trigger') ?? actions.find((a) => a.kind === 'toggle');
   if (TOUCH_WORDS.test(request) && sets.length) {

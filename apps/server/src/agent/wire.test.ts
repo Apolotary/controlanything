@@ -10,7 +10,7 @@ import { Dispatcher } from './dispatch';
 import { ControlRouter } from './control';
 import { StepLog } from './steps';
 import { TargetStore } from './targets';
-import { chunkCode, deviceHints, extractCodeSoFar, SIGNALS_API, WireService, wireHack, wireMessages, wireRateHz, writeWiring, type WireDeps, type WireEmit } from './wire';
+import { chunkCode, libraryDriverNote, deviceHints, extractCodeSoFar, SIGNALS_API, WireService, wireHack, wireMessages, wireRateHz, writeWiring, type WireDeps, type WireEmit } from './wire';
 import { buildWiring, fixtureWireDraft, parseBriefs, templateWiring, type WireDraftData } from './wire-fixture';
 import { dryRun, validateWiring } from './wire-check';
 
@@ -55,6 +55,14 @@ function fakeChat(replies: (WireDraftData | Error | ((m: ChatMessage[]) => WireD
 const draft = (code: string, over: Partial<WireDraftData> = {}): WireDraftData => ({ title: 'Touch the water', explanation: 'Your fingertip makes ripples.', code, needs: ['screen'], ...over });
 
 describe('prompt', () => {
+  it('labels saved driver reuse separately from fresh wiring, including authored fixtures and templates', () => {
+    expect(libraryDriverNote({ modelId: 'muse-spark-1.3', source: 'live' })).toContain('from your library · model muse-spark-1.3 · source live');
+    expect(libraryDriverNote({ modelId: 'fixture', source: 'fixture' })).toContain('model fixture · source fixture');
+    const template = libraryDriverNote({ modelId: 'template', source: 'fixture' });
+    expect(template).toContain('template (no Meta model) · source fixture');
+    expect(template).not.toContain('written live');
+  });
+
   it('carries the request, the Signals API verbatim, the driver actions, manifest hints and the rules', () => {
     const msgs = wireMessages({ cardId: 'c', deviceName: 'MacBook', request: 'Touch the water', driver: extended });
     const text = msgs.map((m) => m.content).join('\n');
@@ -361,6 +369,29 @@ function service(over: { spark?: MuseChat; verifyFails?: string[]; driver?: Driv
 }
 
 describe('WireService', () => {
+  it('a disconnected owner revokes its pending request before any late ready can arrive', async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const spark = fakeChat([draft(TOUCH)]), reply = fakeChat([draft(TOUCH)]);
+    vi.mocked(spark.chatJson).mockImplementationOnce(async (...args) => { await waiting; return reply.chatJson(...args); });
+    const { svc, sent } = service({ spark });
+    svc.request({ cardId: 'visual-synth-mac', text: 'Touch the water', source: 'chip' }, { deviceId: 'quest' });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    expect(svc.disconnectOwner('quest')).toEqual(['visual-synth-mac']);
+    release(); await new Promise(resolve => setTimeout(resolve, 20));
+    expect(svc.activeCards()).toEqual([]); expect(sent.some(m => m.type === 'wire.ready')).toBe(false);
+  });
+
+  it('an older departing owner cannot revoke the newer owner, but its current owner can', async () => {
+    const { svc, done } = service();
+    svc.request({ cardId: 'visual-synth-mac', text: 'Touch the water', source: 'chip' }, { deviceId: 'quest-new' });
+    await done('wire.ready');
+    expect(svc.disconnectOwner('quest-old')).toEqual([]);
+    expect(svc.activeCards()).toEqual(['visual-synth-mac']);
+    expect(svc.disconnectOwner('quest-new')).toEqual(['visual-synth-mac']);
+    expect(svc.activeCards()).toEqual([]);
+  });
+
   it('request -> progress -> verify the touch actions -> wire.ready to everyone', async () => {
     const { svc, sent, verify, done, t } = service();
     svc.request({ cardId: 'visual-synth-mac', text: 'Touch the water', source: 'chip' }, { deviceId: 'quest' });

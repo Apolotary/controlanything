@@ -5,6 +5,7 @@
  * and rate limits. Every finding carries a path so the model can repair the draft.
  */
 import { type ActionEncode, type Driver, type DriverAction, type DriverDraft, type IrCapture, type IrOp, RATE_LIMITS, VALUE_PLACEHOLDER } from '@ce/protocol';
+import { isMusicalSynthPort, MUSICAL_SYNTH_MANIFEST } from './musicalSynth';
 import { VISUAL_SYNTH_MANIFEST } from '@ce/vsynth/manifest';
 import { isVisualSynthPort, misnamedVisual, touchRoleOfCc, VISUAL_SYNTH_NAME } from './visualSynth';
 import { fillRaw, sameCode } from './ir';
@@ -106,6 +107,8 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
   const err = (code: string, path: string, message: string) => issues.push({ severity: 'error', code, path, message });
   const warn = (code: string, path: string, message: string) => issues.push({ severity: 'warn', code, path, message });
   const visual = isVisualSynthPort(ids.executor.port);
+  const musical = isMusicalSynthPort(ids.executor.port);
+  if (musical && input.transport !== 'midi') err('musical_transport', 'transport', 'The browser synth uses only its manifest MIDI messages');
   if (ctx.expectedTransport && input.transport !== ctx.expectedTransport) err('selected_transport_mismatch', 'transport', `The selected device uses ${ctx.expectedTransport}; a ${input.transport} driver cannot replace it`);
   if (visual && input.transport !== 'midi') err('visual_transport', 'transport', 'The visual synth uses MIDI commands');
 
@@ -151,6 +154,19 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
         if (!program || a.kind !== 'trigger') err('visual_program', `${path}.encode`, `Pattern triggers send a manifest program change (${VISUAL_SYNTH_MANIFEST.programs.map((p) => `${p.program} ${p.name}`).join(', ')})`);
         else if (misnamedVisual(a.label, program.name === 'Water' ? 'ripple' : program.name.toLowerCase())) err('visual_label', `${path}.label`, `"${a.label}" names another pattern; program ${program.program} is ${program.name}`);
       } else err('visual_message', `${path}.encode.msg`, 'The visual synth accepts only manifest CCs and program changes (no notes)');
+    }
+    if (musical) {
+      if (a.expect?.sense !== 'audio' || a.expect.effect !== 'any') err('musical_oracle', `${path}.expect`, 'Software instrument actions require actual software analyser evidence: audio / any');
+      if (e.kind !== 'midi' || e.channel !== 1) err('musical_action', `${path}.encode`, 'The browser synth accepts MIDI on channel 1 only');
+      else if (e.msg === 'cc') {
+        const c = MUSICAL_SYNTH_MANIFEST.controls.find(c => c.cc === e.number);
+        if (!c) err('musical_cc', `${path}.encode.number`, 'CC is not in the software instrument capability manifest');
+        if (a.kind !== 'set' || e.value !== VALUE_PLACEHOLDER) err('musical_action', `${path}.encode`, 'Manifest CC controls must be set actions with value $value');
+        if (c && a.range && (a.range.min < c.min || a.range.max > c.max || !Number.isInteger(a.range.min) || !Number.isInteger(a.range.max) || a.range.step !== undefined && (!Number.isInteger(a.range.step) || a.range.step < 1))) err('musical_range', `${path}.range`, `CC ${c.cc} uses integer wire values ${c.min}-${c.max}`);
+        if (c?.cc === 17 && a.range && (a.range.min !== 0 || a.range.max < 64)) err('musical_gate', `${path}.range`, 'Note gate must permit 0 so tracking loss can release the note');
+      } else if (e.msg === 'pc') {
+        if (a.kind !== 'trigger' || !MUSICAL_SYNTH_MANIFEST.programs.some(p => p.program === e.number)) err('musical_program', `${path}.encode`, 'Preset triggers must use a published program 0, 1 or 2');
+      } else err('musical_message', `${path}.encode.msg`, 'Only manifest CCs and preset programs; no native note messages, SysEx or transport');
     }
     // per-op allowlists
     if (e.kind === 'midi') {

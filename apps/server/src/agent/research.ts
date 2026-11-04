@@ -8,6 +8,8 @@ import type { WebSearcher } from '../research/websearch';
 import type { LinkCapability } from './link';
 import type { MidiChartStore } from '../devices/midi-charts';
 import type { LearnedCode, Research } from './types';
+import { musicalSynthProfile } from '../devices/musicalSynth';
+import { musicalSynthExecutor } from './musical-synth';
 import { OSMO_PROVENANCE, osmoBrief } from '../devices/osmo/driver';
 
 export const KOIZUMI_NOTE =
@@ -28,11 +30,11 @@ export async function research(
 ): Promise<Research> {
   const provenance: Provenance[] = [];
   if (cap === 'midi') {
-    const profile = deps.midiCharts?.profile(card) ?? matchMidiProfile(deps.profiles, card);
+    const profile = musicalSynthExecutor(card) ? musicalSynthProfile() : deps.midiCharts?.profile(card) ?? matchMidiProfile(deps.profiles, card);
     if (profile) {
       if (profile.reviewedChart) provenance.push({ source: 'manual', ref: `reviewed-midi:${card.cardId}:r${profile.reviewedChart.revision}`,
         note: `Explicitly reviewed by ${profile.reviewedChart.reviewedBy}; CC subset only; physical effect still requires verification` });
-      else provenance.push({ source: 'curated', ref: `apps/server/data/devices/${profile.id}.json`, note: profile.sources[0]?.url });
+      else provenance.push({ source: 'curated', ref: musicalSynthExecutor(card) ? 'packages/vsynth/src/musical-manifest.ts' : `apps/server/data/devices/${profile.id}.json`, note: profile.sources[0]?.url });
       for (const s of profile.sources.slice(0, 3)) provenance.push({ source: 'manual', ref: s.url, note: s.title.slice(0, 200) });
       return { brief: midiBrief(profile), provenance, profile, allowedCcs: allowedCcs(profile) };
     }

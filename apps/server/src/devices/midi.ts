@@ -4,6 +4,7 @@
  * (SPEC §3.1 link.request "port-name and MIDI-identity cross-check evidence").
  */
 import type { Port } from '@ce/protocol';
+import { isMusicalSynthPort, MUSICAL_SYNTH_PORT_ID, MUSICAL_SYNTH_NAME } from './musicalSynth';
 import { isVisualSynthPort } from './visualSynth';
 
 /** F0 7E <device> 06 01 F7 */
@@ -65,6 +66,7 @@ export function portMatches(port: Pick<Port, 'id' | 'name'>, hint: string): bool
 /** The virtual display is selectable only when the requested instrument names it explicitly. */
 export function midiOutputCandidates(ports: Port[] | undefined, hint: string | undefined): Port[] {
   return (ports ?? []).filter((port) => port.kind === 'midi-out' && port.state !== 'disconnected'
+    && (!(isMusicalSynthPort(port.id) || isMusicalSynthPort(port.name)) || hint === MUSICAL_SYNTH_PORT_ID || hint === MUSICAL_SYNTH_NAME)
     && (!(isVisualSynthPort(port.id) || isVisualSynthPort(port.name))
       || Boolean(hint && /visual[\s-]synth/i.test(hint) && portMatches(port, hint))));
 }

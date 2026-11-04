@@ -8,6 +8,8 @@
 import type { Driver, DriverAction, Effect, Evidence, ExecAckPayload, ExecOp, Polygon, ScanFramePayload, SenseResultPayload, VerifyState } from '@ce/protocol';
 import { newId } from '@ce/protocol';
 import { cancellableDelay as sleep, throwIfCancelled } from '../muse/cancellation';
+import { MUSICAL_SCALE } from '@ce/vsynth/musical-manifest';
+import { isMusicalSynthPort, MUSICAL_SYNTH_MANIFEST } from '../devices/musicalSynth';
 import { VISUAL_SYNTH_MANIFEST } from '@ce/vsynth/manifest';
 import { isVisualSynthPort, TOUCH_VERIFY_CENTER, TOUCH_VERIFY_HOVER, touchRoleOfCc } from '../devices/visualSynth';
 import { resolveOp } from '../devices/encode';
@@ -240,6 +242,8 @@ async function observeOnce(deps: VerifyDeps, t: Target, driver: Driver, a: Drive
   const base = { evidenceId: newId('ev'), cardId: t.cardId, driverId: driver.driverId, actionId: a.actionId, attempt, expected: { sense, effect: expected } } as const;
   const lightCap = driver.transport === 'ir';
 
+  if (isMusicalSynthPort(exec.port)) return observeMusical(deps, t, driver, a, o, base);
+
   // the Mac speaks: record it through a microphone client and let Muse Voice Transcribe hear it back
   const line = spokenLine(op);
   if (line && sense === 'audio' && deps.heard && (o.micDeviceId || deps.silentSpeech)) {
@@ -394,6 +398,76 @@ async function observeOnce(deps: VerifyDeps, t: Target, driver: Driver, a: Drive
  * change (too far, off-centre, card in the way) or cannot answer in time, the renderer's own report decides and the
  * evidence says which one did. Verification can never zero the demo while the Mac acknowledges the commands.
  */
+/** Known software instrument only. A real analyser tone and exact applied state are both required.
+ * The ready port proves the person explicitly chose Sound on; this path cannot unlock it.
+ * Every probe releases its gate and restores settings, including cancellation, without relocking Sound on.
+ */
+async function observeMusical(deps: VerifyDeps, t: Target, driver: Driver, a: DriverAction, o: VerifyOptions,
+  base: Pick<Evidence, 'evidenceId' | 'cardId' | 'driverId' | 'actionId' | 'attempt' | 'expected'>): Promise<{ evidence: Evidence }> {
+  const e = a.encode;
+  if (a.expect?.sense !== 'audio' || a.expect.effect !== 'any' || e.kind !== 'midi' || e.channel !== 1 || !['cc', 'pc'].includes(e.msg)) throw new ExecError('The software instrument requires its manifest and actual analyser evidence', 'refused');
+  const c = e.msg === 'cc' ? MUSICAL_SYNTH_MANIFEST.controls.find(c => c.cc === e.number) : undefined;
+  const param = c?.parameter ?? (e.msg === 'pc' ? 'preset' : undefined);
+  if (!param) throw new ExecError('Software instrument action is outside its manifest', 'refused');
+  // Moderate probe values avoid extreme resonance/long envelopes. Gate must actually start a note.
+  const chosen = c ? c.cc === 17 ? 127 : Math.round(Math.max(a.range?.min ?? c.min, Math.min(a.range?.max ?? c.max, c.default + (c.default < (c.max - c.min) / 2 ? 8 : -8)))) : undefined;
+  const op = resolveOp(a, chosen);
+  const exec = driver.executor;
+  const send = (command: ExecOp, suffix: string, signal = o.signal) => deps.dispatcher.exec(exec.deviceId, command,
+    { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: `${a.actionId}:${suffix}`, waitForSlot: true, signal, timeoutMs: 4000 });
+  const cc = (number: number, value: number): ExecOp => ({ kind: 'midi', msg: 'cc', channel: 1, number, value });
+  let initial: ExecAckPayload['applied'];
+  let ack: ExecAckPayload | undefined;
+  try {
+    initial = (await send(cc(17, 0), 'probe-release')).applied;
+    if (initial?.source !== 'musical-synth' || !initial.audio?.unlocked || initial.visible !== true) throw new ExecError('On the Mac, choose Sound on and keep ControlAnything Synth visible', 'offline');
+    ack = await send(op, 'probe-action');
+    let measured = ack;
+    // Presets release notes, and filter/envelope settings need a sounding note for graph evidence.
+    if (!(e.msg === 'cc' && e.number === 17)) measured = await send(cc(17, 127), 'probe-gate');
+    // Pitch and gate must produce the requested scale note, not merely some waveform.
+    // A short bounded settle also lets a previous release/delay tail clear the analyser window.
+    const expectedIndex = e.msg === 'cc' && e.number === 16 ? chosen! : initial.params?.noteIndex;
+    const expectedNote = Number.isInteger(expectedIndex) ? MUSICAL_SCALE[expectedIndex as number] : undefined;
+    const expectedHz = expectedNote === undefined ? undefined : 440 * 2 ** ((expectedNote - 69) / 12);
+    const pitchRelevant = e.msg === 'cc' && (e.number === 16 || e.number === 17);
+    const pitchMatches = (receipt: ExecAckPayload['applied']) => expectedHz !== undefined && receipt?.audio?.frequency !== undefined && Math.abs(receipt.audio.frequency / expectedHz - 1) <= .025;
+    for (let poll = 0; pitchRelevant && !pitchMatches(measured.applied) && poll < 3; poll++) {
+      await sleep(70, o.signal);
+      measured = await send(cc(17, 127), 'probe-settle');
+    }
+    const applied = measured.applied;
+    const got = applied?.params?.[param];
+    const expected = e.msg === 'pc' ? e.number! : chosen!;
+    const audio = applied?.audio;
+    const fresh = !!applied && applied.source === 'musical-synth' && applied.visible === true && audio?.unlocked === true
+      && typeof applied.frame === 'number' && typeof initial.frame === 'number' && applied.frame > initial.frame
+      && typeof applied.at === 'number' && applied.at >= ack.sentAt - 1000;
+    const tone = !!audio && Number.isFinite(audio.rms) && audio.rms > 1e-5 && Number.isFinite(audio.frequency) && audio.frequency > 20;
+    const pass = fresh && tone && got === expected && (!pitchRelevant || pitchMatches(applied));
+    const note = pass
+      ? `Software audio graph: ${param}=${got}; analyser RMS ${audio!.rms.toFixed(4)}, ${audio!.frequency.toFixed(1)} Hz${audio!.muted ? ' (master muted)' : ''}. Not physical microphone evidence.`
+      : `Software graph check failed: ${param}=${got ?? 'missing'} (expected ${expected}); ${!fresh ? 'no fresh unlocked analyser receipt' : !tone ? 'analyser measured no tone' : got !== expected ? 'applied parameter mismatch' : `measured pitch ${audio?.frequency.toFixed(1)} Hz, expected ${expectedHz?.toFixed(1)} Hz`}.`;
+    return { evidence: { ...base, execId: ack.execId, sent: { op, at: ack.sentAt }, pass, note: note.slice(0, 300),
+      observed: { sense: 'audio', metric: 'rms', before: initial.audio?.rms ?? 0, after: audio?.rms ?? 0, delta: (audio?.rms ?? 0) - (initial.audio?.rms ?? 0),
+        threshold: 1e-5, sensorDeviceId: exec.deviceId, note: note.slice(0, 200) } } };
+  } finally {
+    if (initial?.source === 'musical-synth' && initial.params) {
+      // Bounded independent cleanup survives cancellation. Gate zero first, then restore the exact prior catalog values.
+      const cleanup = AbortSignal.timeout(3500);
+      try {
+        await send(cc(17, 0), 'restore-release', cleanup);
+        if (e.msg === 'pc' && typeof initial.params.preset === 'number') await send({ kind: 'midi', msg: 'pc', channel: 1, number: initial.params.preset }, 'restore-preset', cleanup);
+        for (const control of MUSICAL_SYNTH_MANIFEST.controls) {
+          if (control.cc === 17 || (e.msg !== 'pc' && control.cc !== e.number)) continue;
+          const value = initial.params[control.parameter];
+          if (typeof value === 'number') await send(cc(control.cc, value), 'restore-parameter', cleanup);
+        }
+      } catch (err) { deps.log?.(`[verify] could not release/restore software synth: ${(err as Error).message}`); }
+    }
+  }
+}
+
 async function observeVisual(deps: VerifyDeps, t: Target, driver: Driver, a: DriverAction, o: VerifyOptions, op: Extract<ExecOp, { kind: 'midi' }>,
   base: Pick<Evidence, 'evidenceId' | 'cardId' | 'driverId' | 'actionId' | 'attempt' | 'expected'>, polygon?: Polygon): Promise<{ evidence: Evidence; polygon?: Polygon }> {
   const d = deps.dispatcher;
@@ -592,7 +666,7 @@ export async function verifyDriver(deps: VerifyDeps, t: Target, driver: Driver, 
     // one real attempt (with its built-in double confirmation); a miss gets one retry
     let passed = false;
     // the visual synth gets one check per action: its renderer report already decides a camera miss
-    const attempts = isVisualSynthPort(current.executor.port) ? 1 : 2;
+    const attempts = isVisualSynthPort(current.executor.port) || isMusicalSynthPort(current.executor.port) ? 1 : 2;
     try {
       for (let attempt = 1; attempt <= attempts && !passed; attempt++) {
         const { evidence: e, polygon: p } = await verifyOnce(deps, t, current, a, attempt, o, polygon);

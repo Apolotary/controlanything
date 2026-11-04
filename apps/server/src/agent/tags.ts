@@ -1,3 +1,5 @@
+import { isMusicalSynthPort, MUSICAL_SYNTH_PORT_ID } from '../devices/musicalSynth';
+import { musicalSynthExecutor, MUSICAL_SYNTH_GUIDANCE } from './musical-synth';
 import { isVisualSynthPort, visualSynthNeedsUpgrade } from '../devices/visualSynth';
 import type { TaggedDevice } from '@ce/protocol';
 import { roster as devices, type Roster } from './executors';
@@ -14,7 +16,7 @@ export { TagStore } from './library-store';
 export type { AssetRef, LibraryRecord, SetupVersion, StoredTag } from './library-schema';
 
 export function isLaptopTarget(t: Target, label = ''): boolean {
-  if (virtualScreenExecutor(t.card)) return false; // the visual synth card itself is the instrument, not the laptop
+  if (virtualScreenExecutor(t.card) || musicalSynthExecutor(t.card)) return false; // the visual synth card itself is the instrument, not the laptop
   // A screen showing the visual synth is the Mac too: Muse often names it by what is on screen.
   return t.card?.category === 'computer' || /\b(laptop|computer|macbook|imac|notebook|this mac|monitor|display screen|computer screen|visual[\s-]?synth)\b/i.test(`${t.card?.name ?? ''} ${t.card?.model ?? ''} ${t.detection?.label ?? ''} ${label}`);
 }
@@ -79,7 +81,8 @@ export function evaluateConnection(t: Target, roster: Roster, label?: string): P
       ?? present.find((d) => d.deviceId === t.selection?.preferDeviceId && d.capabilities.includes('local') && (d.kind === 'mac' || d.kind === 'sim'))?.deviceId
     : undefined;
   const virtualExecutor = virtualScreenExecutor(t.card);
-  const assigned = virtualExecutor ?? t.driver?.executor.deviceId ?? t.link?.executorDeviceId ?? selectedLocal;
+  const musicalExecutor = musicalSynthExecutor(t.card);
+  const assigned = musicalExecutor ?? virtualExecutor ?? t.driver?.executor.deviceId ?? t.link?.executorDeviceId ?? selectedLocal;
   if (cap === 'local' && roster.silentLocal && (assigned === MAC_LOCAL_ID || !assigned && roster.macLocal)) {
     const url = (roster.helperUrl?.() ?? 'http://localhost:8787/pair').replace(/^https?:\/\//, '');
     return { connection: 'offline', hint: `Open ${url} on this Mac to play its visual synth`, action: 'open-companion' };
@@ -96,6 +99,11 @@ export function evaluateConnection(t: Target, roster: Roster, label?: string): P
       ? { connection: 'offline', hint: roster.visualOpening?.(virtualExecutor) ? 'Opening the Mac visuals…' : 'Open visuals on the Mac (ControlAnything) to continue' }
       : { connection: 'offline', hint: 'Open the paired Mac companion and its visual synth.', action: 'open-companion' };
   }
+  if (musicalExecutor) {
+    const ready = present.some(d => d.deviceId === musicalExecutor && d.online && d.capabilities.includes('midi')
+      && d.ports?.some(p => p.id === MUSICAL_SYNTH_PORT_ID && p.kind === 'midi-out' && p.state === 'connected'));
+    if (!ready) return { connection: 'offline', hint: MUSICAL_SYNTH_GUIDANCE };
+  }
   const wantsVisual = isVisualSynthPort(portId) || /visual[\s-]synth/i.test(`${t.card?.name ?? ''} ${t.detection?.label ?? ''}`);
   const online = present.filter((d) => d.online && d.capabilities.includes(cap));
   // A renderer or companion that blinked away (app switch, notification) keeps its card for a short grace.
@@ -104,7 +112,7 @@ export function evaluateConnection(t: Target, roster: Roster, label?: string): P
     if (assigned && d.deviceId !== assigned) return false;
     // The virtual visual synth port reaches only the visual synth; it never makes a physical synth look connected.
     if (cap === 'midi') return d.ports?.some((p) => p.kind === 'midi-out' && p.state !== 'disconnected' && (!portId || p.id === portId)
-      && (isVisualSynthPort(p.id) || isVisualSynthPort(p.name)) === wantsVisual);
+      && (musicalExecutor ? p.id === MUSICAL_SYNTH_PORT_ID : !(isMusicalSynthPort(p.id) || isMusicalSynthPort(p.name)) && (isVisualSynthPort(p.id) || isVisualSynthPort(p.name)) === wantsVisual));
     if (cap === 'local' && !assigned) return d.deviceId === MAC_LOCAL_ID || d.kind === 'mac' || d.kind === 'sim';
     return true;
   });

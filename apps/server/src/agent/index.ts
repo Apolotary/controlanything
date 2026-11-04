@@ -41,11 +41,13 @@ import { StreamClient } from '../gen3d/stream';
 import { VISUAL_SYNTH_MANIFEST } from '@ce/vsynth/manifest';
 import { validateDriver } from '../devices/validate';
 import { verifyDriver } from './verify';
-import { WireService } from './wire';
+import { libraryDriverNote, WireService } from './wire';
 import { fixtureWireDraft } from './wire-fixture';
 import { CANCELLED_GUIDANCE, type TimedPhase } from './guidance';
 import { subscribeForge } from './forgeBridge';
 import { restoreSavedForge } from './restoreForge';
+import { musicalSynthExecutor, musicalSynthHosts, musicalSynthCard, MUSICAL_SYNTH_GUIDANCE } from './musical-synth';
+import { extendWithMusicalCapabilities, isMusicalSynthPort, MUSICAL_SYNTH_MANIFEST } from '../devices/musicalSynth';
 import { extendWithTouch, isVisualSynthPort, visualSynthNeedsUpgrade } from '../devices/visualSynth';
 import { detachRouteBridge } from '../gen3d/routes';
 import { MacLocalExecutor } from './maclocal';
@@ -225,6 +227,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       t.state = 'identified'; t.sentence = 'Visual controls update available';
       t.hint = 'Set up control to add forward/back Water ripples'; t.action = 'retry';
     }
+    if (t.driver && t.specId) libraryDrivers.set(t.cardId, { driverId: t.driver.driverId, modelId: t.driver.modelId });
     return t;
   };
   for (const tag of tags.list()) restoreTarget({ ...tag, state: tag.armed ? 'armed' : tag.card ? 'identified' : 'scanned' });
@@ -793,12 +796,12 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     setups.add(t.cardId);
     // A completed setup that was declined only needs a fresh ARM confirmation.
     if (!rerun && !visualSynthNeedsUpgrade(t.driver) && midiPermissionsCurrent(t) && t.specId && t.driver && verifiedControlCount(specs.get(t.specId), t) > 0) {
+      // Every saved device, including musical synth, discloses reuse before either automatic or explicit re-arm.
+      const passed = t.driver.actions.filter((a) => t.verification[a.actionId] === 'pass').length;
+      libraryDrivers.set(t.cardId, { driverId: t.driver.driverId, modelId: t.driver.modelId });
+      steps.note('drive', `${libraryDriverNote(t.driver)} · ${passed}/${t.driver.actions.length} previously verified`,
+        { cardId: t.cardId, runId: t.runId, kind: 'proof', model: t.driver.modelId, source: t.driver.source, evidence: 'saved driver', sentence: 'Saved driver', hint: libraryDriverNote(t.driver) });
       if (demoMode() && virtualScreenExecutor(t.card) && !t.driver.actions.some((a) => a.confirm === 'hold')) {
-        // A device verified before: its saved driver and controls come straight back from the library, labelled so.
-        const passed = t.driver.actions.filter((a) => t.verification[a.actionId] === 'pass').length;
-        libraryDrivers.set(t.cardId, { driverId: t.driver.driverId, modelId: t.driver.modelId });
-        steps.note('drive', `saved driver from the device library: ${passed}/${t.driver.actions.length} actions verified earlier · written by ${t.driver.modelId ?? 'unknown'}`,
-          { cardId: t.cardId, runId: t.runId, kind: 'proof', model: t.driver.modelId, evidence: 'saved driver', sentence: 'Saved driver', hint: 'Restored from the device library' });
         showControls(t, from.deviceId);
         arm.auto(t, t.driver, 'ControlAnything demo (CE_DEMO=1, verified silent visuals)');
         setups.delete(t.cardId);
@@ -1065,9 +1068,45 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (auto && !running) setup(target.cardId, from);
     return target;
   };
+  /** Explicit software selection. Opening the panel never grants sound authority. */
+  const selectMusicalSynth = (p: TargetSelectPayload, from: { deviceId: string; name?: string }): Target | undefined => {
+    const reply = (ok: boolean, cardId?: string, reason?: string, autoSetup?: boolean) => {
+      if (p.requestId) hub.sendToDevice(from.deviceId, 'target.select.result', { requestId: p.requestId, ok, cardId, reason, ...(autoSetup ? { autoSetup } : {}) });
+    };
+    if (mode !== 'control') setMode('control');
+    const hosts = musicalSynthHosts(hub.devices());
+    const selected = p.deviceId ?? musicalSynthExecutor(targets.list().find(t => musicalSynthExecutor(t.card))?.card);
+    const host = selected ? hosts.find(d => d.deviceId === selected) : hosts.length === 1 ? hosts[0] : undefined;
+    if (!host) { reply(false, undefined, hosts.length > 1 ? 'More than one Mac can host the synth. Keep the Mac companion you want connected.' : 'Open the paired Mac companion to use ControlAnything Synth.'); return; }
+    const card = musicalSynthCard(host);
+    const saved = tags.get(card.cardId);
+    if (!saved && tags.library().length >= 64) { reply(false, undefined, 'Your device library is full. Forget an unused device, then retry.'); return; }
+    let target = targets.get(card.cardId);
+    if (!target) target = restoreTarget({ ...(saved ?? {}), cardId: card.cardId, card, selectedBy: from.deviceId, state: 'identified' });
+    if (target.driver && target.driver.executor.deviceId !== host.deviceId) {
+      stop(target, 'Mac re-paired'); target.armed = false; target.driver = undefined; target.specId = undefined;
+      target.controlCount = undefined; target.verification = {}; target.evidence = []; target.link = undefined; tags.setEnabled(card.cardId, false);
+    }
+    target.card = card; target.selectedBy = from.deviceId; target.detection = undefined;
+    target.selection = { preferDeviceId: host.deviceId, userText: 'Use the authored ControlAnything browser software instrument. Muse must write the hand wiring when I ask.' };
+    tags.add(target, 'ControlAnything Synth', p.position ?? saved?.position); canvas.select(from.deviceId, card.cardId);
+    hub.broadcast('device.card', card); publishTags();
+    const ready = musicalSynthHosts([host], true).length > 0;
+    if (!ready) {
+      hub.sendToDevice(host.deviceId, 'musical.open', { requestId: p.requestId ?? newId('musical-') });
+      reply(false, card.cardId, MUSICAL_SYNTH_GUIDANCE); return target;
+    }
+    const running = setups.has(card.cardId) || !!(target.abort && !target.abort.signal.aborted);
+    const auto = demoMode() && !canControl(target);
+    if (target.specId) showControls(target, from.deviceId);
+    reply(true, card.cardId, auto ? 'Setting up ControlAnything Synth…' : 'Ask Muse how your hands should play this synth.', auto || running);
+    if (auto && !running) setup(card.cardId, from);
+    return target;
+  };
   const select = (p: TargetSelectPayload, from: { deviceId: string; name?: string }): Target | undefined => {
     if (p.cardId && tags.has(p.cardId)) canvas.select(from.deviceId, p.cardId);
     if (p.virtual === 'visual-synth') return selectVisualSynth(p, from);
+    if (p.virtual === 'musical-synth') return selectMusicalSynth(p, from);
     if (mode === 'control') {
       const existing = p.cardId ? targets.get(p.cardId) : undefined;
       if (!existing || !tags.has(existing.cardId)) return undefined;
@@ -1075,6 +1114,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       if (!virtualScreenExecutor(existing.card) && isLaptopTarget(existing, tags.get(existing.cardId)?.label) && visualSynthHosts(hub.devices()).length) {
         return selectVisualSynth({ ...p, virtual: 'visual-synth', position: p.position ?? tags.get(existing.cardId)?.position, label: tags.get(existing.cardId)?.label }, from, existing.cardId);
       }
+      if (musicalSynthExecutor(existing.card)) return selectMusicalSynth({ ...p, virtual: 'musical-synth', position: p.position ?? tags.get(existing.cardId)?.position }, from);
       if (virtualScreenExecutor(existing.card)) return selectVisualSynth({ ...p, virtual: 'visual-synth', position: p.position ?? tags.get(existing.cardId)?.position }, from);
       if (canControl(existing)) showControls(existing, from.deviceId);
       publishTags();
@@ -1112,6 +1152,15 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       graceTimer.unref?.();
     }
     if (presence.deviceId && !hub.devices().some((device) => device.deviceId === presence.deviceId && device.online)) {
+      for (const cardId of wireService.disconnectOwner(presence.deviceId)) {
+        const target = targets.get(cardId);
+        if (!target) continue;
+        stop(target, 'The headset that requested this wiring disconnected');
+        const driver = target.driver;
+        // Only that instrument is silenced. A global panic broadcast would stop other owners and physical ports.
+        if (driver?.transport === 'midi' && driver.executor.port) dispatcher.fire(driver.executor.deviceId,
+          { kind: 'midi', msg: 'panic', channel: 1 }, { port: driver.executor.port, cardId, driverId: driver.driverId });
+      }
       assistant?.disconnect(presence.deviceId);
       voice.disconnect(presence.deviceId);
       canvas.disconnect(presence.deviceId);
@@ -1172,14 +1221,15 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     }
     const lib = libraryDrivers.get(cardId);
     const driver = targets.get(cardId)!.driver!;
-    return { ok: true, ...(lib && lib.driverId === driver.driverId ? { note: `driver from your library, written by ${lib.modelId ?? 'unknown'} · the wiring is written live now` } : {}) };
+    return { ok: true, ...(lib && lib.driverId === driver.driverId ? { note: libraryDriverNote(driver) } : {}) };
   };
   /** The visual synth's driver plus the manifest's touch inputs (Touch X / Y / pressure), unverified until a wiring uses them. */
   const prepareWireDriver = (t: Target): Driver => {
     const d = t.driver!;
-    const ext = extendWithTouch(d);
+    const musical = isMusicalSynthPort(d.executor.port);
+    const ext = musical ? extendWithMusicalCapabilities(d) : extendWithTouch(d);
     if (!ext.added.length) return d;
-    const ccs = new Set<number>(VISUAL_SYNTH_MANIFEST.controls.map((c) => c.cc));
+    const ccs = new Set<number>((musical ? MUSICAL_SYNTH_MANIFEST : VISUAL_SYNTH_MANIFEST).controls.map((c) => c.cc));
     const v = validateDriver(ext.driver, { driverId: d.driverId, executor: d.executor }, { expectedTransport: 'midi', allowedCcs: ccs, emitsLight: false, visualMaxSets: 12 });
     if (!v.ok) {
       log(`[wire] could not add the manifest's touch controls (${ext.added.join(', ')}) to ${t.cardId}'s driver: ${v.issues.filter((i) => i.severity === 'error').map((i) => i.message).join('; ').slice(0, 300)}`);

@@ -7,6 +7,7 @@
  */
 import { type Driver, DriverDraft, newId } from '@ce/protocol';
 import { isVisualSynthPort, visualExpect, visualSynthDraft, VISUAL_SYNTH_ID } from '../devices/visualSynth';
+import { musicalSynthDraft, MUSICAL_SYNTH_MANIFEST } from '../devices/musicalSynth';
 import { VISUAL_SYNTH_MANIFEST } from '@ce/vsynth/manifest';
 import { osmoDraft, templateBleDraft } from '../devices/osmo/driver';
 import { resolveOp } from '../devices/encode';
@@ -54,6 +55,14 @@ export function driveMessages(card: DeviceCardPayload, research: Research, trans
       '- 2 to 4 "set" actions on manifest CCs: msg "cc", channel 1, value "$value", a range of wire values inside 0-127 (narrow it when the extremes look bad), step 1, curve linear or s-curve, and a short label in the wearer\'s words. Pick the parameters that change the picture most visibly.',
       '- up to 3 "trigger" actions on manifest programs: msg "pc", channel 1, number = program, labelled with what appears; inverseActionId may name the trigger that restores the default look.',
       '- actionId is cc<number> for a CC and pattern<program> for a program change. expect is {"sense":"camera","effect":"any"} for every action, except the manifest\'s Touch X and Touch Y (nothing is drawn while the finger is lifted): those take {"sense":"ack","effect":"any"} (the server also sets this). The touch controls are not needed in this driver (a later step adds them when the wearer asks to touch the water). No notes, no other channels, no CCs or programs outside the manifest.',
+    ].join('\n') : transport === 'midi' && research.profile?.id === MUSICAL_SYNTH_MANIFEST.id
+    ? [
+      'This is ControlAnything Synth, an authored browser software instrument. Its capability manifest is the entire message allowlist:',
+      JSON.stringify(MUSICAL_SYNTH_MANIFEST),
+      'Write declarative capabilities only; a later explicit wearer request asks Muse to write the gesture glue live. No gestures are pre-wired here.',
+      'Include CC16 Scale note (integer range 0..14) and CC17 Note gate (0..127, 0 always releases), plus the five filter/envelope/delay controls and up to three preset triggers. No native note triggers or SysEx. Channel 1 only.',
+      'Each CC is a set action, value $value, actionId cc<number>, with the exact manifest range and integer step 1. Presets are triggers, actionId preset<program>. Every expectation is audio / any: the browser supplies actual software analyser evidence, never a physical microphone claim.',
+      'The Mac must explicitly unlock Sound on before setup or verification; your driver cannot unlock it. The engine caps a held note at eight seconds; release then play again to retrigger.',
     ].join('\n') : transport === 'ble'
     ? [
       'This is a DJI Osmo Mobile gimbal behind the server\'s Osmo bridge. Keep these five actions and their actionIds, kinds, encodes and ranges; you may only improve labels and descriptions. Ranges are degrees inside the brief\'s safe range; never add speed or roll actions.',
@@ -222,6 +231,7 @@ export function postProcess(draft: DriverDraft, cardId: string, transport: Drive
 // --- curated templates (FIXTURE fallback + the deterministic baseline the model is compared against) ------
 
 export function templateMidiDraft(card: DeviceCardPayload, profile: MidiProfile, research: Research): DriverDraft {
+  if (profile.id === MUSICAL_SYNTH_MANIFEST.id) return musicalSynthDraft(card.cardId, research.provenance);
   if (profile.id === VISUAL_SYNTH_ID) return visualSynthDraft(card.cardId, research.provenance);
   const best = profile.demo?.bestParameters ?? [];
   const ccs: number[] = [];
@@ -313,6 +323,7 @@ export function fixtureDriverDraft(messages: ChatMessage[]): DriverDraft {
   const executorKind = /via a (\w+)/.exec(text)?.[1];
   const card: DeviceCardPayload = { cardId, name: 'FIXTURE device', maker: 'unknown', model: 'unknown', category: transport === 'midi' ? 'synthesizer' : transport === 'ir' ? 'lighting' : 'computer', confidence: 0.5, protocols: [transport === 'local' ? 'other' : transport], evidence: [] };
   const research: Research = { brief: text, provenance: [{ source: 'fixture', ref: 'fixture:driver_draft' }] };
+  if (transport === 'midi' && text.includes('ControlAnything Synth')) return musicalSynthDraft(cardId, research.provenance);
   if (transport === 'midi' && text.includes('ControlAnything Visual Synth')) return visualSynthDraft(cardId, research.provenance);
   if (transport === 'ble') return { ...osmoDraft(cardId, research.provenance), name: 'FIXTURE gimbal driver', notes: 'FIXTURE: canned driver, no Meta model was called' };
   if (transport === 'midi') {

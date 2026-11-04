@@ -13,6 +13,7 @@
  */
 import { z } from 'zod';
 import { type ControlEventPayload, type Driver, type DriverAction, type Hack, museResponseFormat, newId, type WireAction, type WireProgressPayload, type WireReadyPayload, type WireRequestPayload } from '@ce/protocol';
+import { isMusicalSynthPort, MUSICAL_SYNTH_MANIFEST } from '../devices/musicalSynth';
 import { VISUAL_SYNTH_MANIFEST } from '@ce/vsynth/manifest';
 import { isVisualSynthPort, touchControls } from '../devices/visualSynth';
 import type { StreamClient, StreamMessage } from '../gen3d/stream';
@@ -84,6 +85,13 @@ export const FORBIDDEN_LIST =
   '`import`, `require`, `fetch`, `XMLHttpRequest`, `WebSocket`, `eval`, `Function`, `globalThis`, `self`, `postMessage`, `setTimeout`, `setInterval`, `while(true)` / `for(;;)`, `document`, `window`, `this`, `constructor`, `__proto__`, `prototype` ' +
   '(also `Promise`, `async`, `await`, `console`, `process`, `Reflect`, `Proxy`, regular expression literals and property names built from strings)';
 
+/** Source refers to the saved driver, independently of the new wiring's own source/model. */
+export function libraryDriverNote(driver: Pick<Driver, 'modelId' | 'source'>): string {
+  const model = driver.modelId?.slice(0, 64) ?? 'unknown';
+  const author = model === 'template' ? 'template (no Meta model)' : `model ${model}`;
+  return `driver from your library · ${author} · source ${driver.source ?? 'unknown'} · new wiring for this request`;
+}
+
 export interface WireInput {
   cardId: string;
   deviceName: string;
@@ -94,17 +102,27 @@ export interface WireInput {
 /** What each action does, as far as the device's own capability manifest says (the visual synth publishes one). */
 export function actionBriefs(driver: Pick<Driver, 'actions' | 'executor'>, manifest = VISUAL_SYNTH_MANIFEST): (ActionBrief & { range?: [number, number] })[] {
   const visual = isVisualSynthPort(driver.executor.port);
+  const musical = isMusicalSynthPort(driver.executor.port);
   return driver.actions.map((a) => {
     const e = a.encode;
-    const control = visual && e.kind === 'midi' && e.msg === 'cc' ? manifest.controls.find((c) => c.cc === e.number) : undefined;
-    const program = visual && e.kind === 'midi' && e.msg === 'pc' ? manifest.programs.find((p) => p.program === e.number) : undefined;
-    const effect = control?.effect ?? (program ? `shows the ${program.name} pattern: ${program.effect}` : undefined) ?? a.description ?? (a.expect && a.expect.effect !== 'any' ? `expected effect: ${a.expect.effect}` : undefined);
+    const control = e.kind === 'midi' && e.msg === 'cc' ? (musical ? MUSICAL_SYNTH_MANIFEST.controls : visual ? manifest.controls : []).find((c) => c.cc === e.number) : undefined;
+    const program = e.kind === 'midi' && e.msg === 'pc' ? (musical ? MUSICAL_SYNTH_MANIFEST.programs : visual ? manifest.programs : []).find((p) => p.program === e.number) : undefined;
+    const effect = control?.effect ?? (program ? `${musical ? 'selects the' : 'shows the'} ${program.name} ${musical ? 'sound preset' : 'pattern'}: ${program.effect}` : undefined) ?? a.description ?? (a.expect && a.expect.effect !== 'any' ? `expected effect: ${a.expect.effect}` : undefined);
     return { actionId: a.actionId, label: a.label, kind: a.kind, ...(a.range ? { range: [a.range.min, a.range.max] as [number, number], min: a.range.min, max: a.range.max } : {}), ...(effect ? { effect: effect.slice(0, 260) } : {}) };
   });
 }
 
 /** Lines of device hints from the capability manifest (the visual synth's touch inputs and what its controls do). */
 export function deviceHints(driver: Pick<Driver, 'actions' | 'executor'>, manifest = VISUAL_SYNTH_MANIFEST): string[] {
+  if (isMusicalSynthPort(driver.executor.port)) return [
+    `Device capability manifest: ${JSON.stringify(MUSICAL_SYNTH_MANIFEST)}`,
+    'This is the browser software musical instrument, not the silent visual synth or a physical MIDI device. Numeric values are raw wire units, not normalized UI units.',
+    'For a request to play notes, use Scale note (CC16, integer 0..14) together with Note gate (CC17, >=64 on, 0 releases). Gate alone is a single fixed pitch, and pitch alone is silent.',
+    'Always send Note gate 0 when the controlling hand disappears, or when the requested play gesture ends. Send it on that edge even when no hands remain, using mem if needed.',
+    'A held note stops after eight seconds. The wearer must release and play again to retrigger; repeated identical values are not a heartbeat. Make the explanation honest about how to start and release the note.',
+    'Sound is enabled only by an explicit Mac Sound on click. Do not invent code that unlocks audio, changes physical ports, or claims a sound was heard.',
+    'Choose the hand movement and gesture only from what the wearer asked for; the capability catalog does not prescribe a hand mapping.',
+  ];
   if (!isVisualSynthPort(driver.executor.port)) return [];
   const touch = touchControls(manifest.controls);
   const lines = [
@@ -428,6 +446,8 @@ export interface WireServiceDeps extends WireDeps {
 export class WireService {
   private readonly jobs = new Map<string, AbortController>();
   private readonly active = new Map<string, ActiveWiring>();
+  /** The latest explicit requester owns both its pending job and its published program. */
+  private readonly owners = new Map<string, string>();
   private readonly log: (line: string) => void;
 
   constructor(private readonly d: WireServiceDeps) {
@@ -459,6 +479,7 @@ export class WireService {
     this.active.delete(cardId);
     const abort = new AbortController();
     this.jobs.set(cardId, abort);
+    this.owners.set(cardId, from.deviceId);
     const wiringId = newId('wire-');
     const t0 = Date.now();
     const clip = (s: string | undefined, n: number) => (s === undefined ? undefined : s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -526,7 +547,10 @@ export class WireService {
       fail(`Something went wrong: ${(e as Error).message}`.slice(0, 160));
       throw e;
     } finally {
-      if (this.jobs.get(cardId) === abort) this.jobs.delete(cardId);
+      if (this.jobs.get(cardId) === abort) {
+        this.jobs.delete(cardId);
+        if (!this.active.has(cardId)) this.owners.delete(cardId);
+      }
     }
   }
 
@@ -546,12 +570,20 @@ export class WireService {
     return { target, driver, hack: wireHack(ev.widgetId, action, wireRateHz(driver, action)) };
   }
 
+  /** Revoke only the departing requester's current jobs/programs; a newer requester keeps its authority. */
+  disconnectOwner(deviceId: string): string[] {
+    const cards = [...this.owners].filter(([, owner]) => owner === deviceId).map(([id]) => id);
+    for (const cardId of cards) this.clear(cardId);
+    return cards;
+  }
+
   /** Stop, panic, untag, mode change: the program must be asked for again. */
   clear(cardId?: string): void {
     // A first request is not active yet. Include pending jobs so Stop while
     // Muse is writing cannot publish a late ready and restart the interaction.
     for (const id of cardId ? [cardId] : new Set([...this.active.keys(), ...this.jobs.keys()])) {
       this.active.delete(id);
+      this.owners.delete(id);
       this.jobs.get(id)?.abort();
       this.jobs.delete(id);
     }
@@ -566,6 +598,7 @@ export class WireService {
     for (const j of this.jobs.values()) j.abort();
     this.jobs.clear();
     this.active.clear();
+    this.owners.clear();
   }
 }
 
