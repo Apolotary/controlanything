@@ -24,7 +24,9 @@
  *
  * Approver = a paired device with canApprove (Authorization: Bearer <deviceToken>) or any localhost request.
  */
-import { existsSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PairApproveRequest, PairDenyRequest, PairStartRequest, PROTOCOL_VERSION } from '@ce/protocol';
 import express, { type NextFunction, type Request, type Response } from 'express';
@@ -201,6 +203,38 @@ export function createApp(ctx: ServerContext): express.Express {
       return;
     }
     res.json({ device: publicDevice(c.device), local: c.local, spaceId: ctx.registry.spaceId });
+  });
+
+  // OS speech rendered on the Mac and played by the headset (Quest Browser has no speechSynthesis). macOS `say` only:
+  // no AI voice model. Short lines, localhost or a paired device; a small cache makes repeated Buddy lines instant.
+  const speechCache = new Map<string, Buffer>();
+  const speechVoice = process.env.CE_SPEECH_VOICE || 'Samantha';
+  // Warm the voice once so the first Buddy line is not the slow one.
+  if (process.platform === 'darwin') {
+    const warm = mkdtempSync(join(tmpdir(), 'ce-speech-'));
+    execFile('say', ['-v', speechVoice, '-o', join(warm, 'warm.wav'), '--file-format=WAVE', '--data-format=LEI16@22050', '--', 'ready'], { timeout: 15_000 },
+      () => rmSync(warm, { recursive: true, force: true }));
+  }
+  api.post('/speech', express.json({ limit: '8kb' }), async (req, res) => {
+    const c = caller(req);
+    if (!c.device && !c.local) { res.status(401).json({ error: 'unauthorized', message: 'Speech needs a paired device token or localhost.' }); return; }
+    const text = typeof req.body?.text === 'string' ? req.body.text.replace(/\s+/g, ' ').trim().slice(0, 300) : '';
+    if (!text) { res.status(400).json({ error: 'bad_request', message: 'POST {"text": "..."}' }); return; }
+    if (process.platform !== 'darwin') { res.status(501).json({ error: 'unsupported', message: 'OS speech is only available on macOS.' }); return; }
+    let wav = speechCache.get(text);
+    if (!wav) {
+      const dir = mkdtempSync(join(tmpdir(), 'ce-speech-')), out = join(dir, 'line.wav');
+      try {
+        await new Promise<void>((resolve, reject) => execFile('say', ['-v', speechVoice, '-r', '195', '-o', out, '--file-format=WAVE', '--data-format=LEI16@22050', '--', text],
+          { timeout: 15_000 }, (error) => (error ? reject(error) : resolve())));
+        wav = readFileSync(out);
+      } catch (e) {
+        res.status(500).json({ error: 'speech_failed', message: (e as Error).message.slice(0, 200) }); return;
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+      speechCache.set(text, wav);
+      if (speechCache.size > 40) speechCache.delete(speechCache.keys().next().value!);
+    }
+    res.type('audio/wav').send(wav);
   });
 
   api.post(

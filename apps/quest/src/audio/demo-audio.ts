@@ -11,11 +11,15 @@ export class QuestDemoAudio {
   private thinkingTimer?: ReturnType<typeof setInterval>;
   private lastTap = -Infinity;
   private utterance?: SpeechSynthesisUtterance;
+  /** OS speech rendered on the Mac (macOS say) and played here, for browsers without speechSynthesis (Quest Browser). */
+  private speechSource?: AudioBufferSourceNode;
+  private speechGain?: GainNode;
+  private speechSeq = 0;
   private readonly quiet: boolean;
   private readonly removeOutput: () => void;
   private readonly removeUnlock: () => void;
   readonly stats = { cues: 0, speech: 0, speechStarted: 0, speechFinished: 0, speechErrors: 0,
-    macSpeechQueued: 0, speechProvider: 'none' as 'none' | 'browser-os' | 'mac-os',
+    macSpeechQueued: 0, speechProvider: 'none' as 'none' | 'browser-os' | 'mac-os' | 'mac-os-on-headset',
     thinking: false, unlocked: false, speechAvailable: typeof speechSynthesis !== 'undefined' };
 
   constructor(params: URLSearchParams, private readonly speechFallback?: (text: string) => boolean | void) {
@@ -25,6 +29,7 @@ export class QuestDemoAudio {
       const changed = volume !== this.volume;
       this.volume = volume;
       if (this.bus && this.context) this.bus.gain.setTargetAtTime(volume * 0.28, this.context.currentTime, 0.025);
+      if (this.speechGain && this.context) this.speechGain.gain.setTargetAtTime(volume, this.context.currentTime, 0.025);
       // Browsers can snapshot utterance volume at speak(); cancel it on a master
       // change rather than let old speech ignore the shared mute/volume control.
       if (volume === 0 || changed) this.cancelSpeech();
@@ -42,6 +47,9 @@ export class QuestDemoAudio {
         this.bus = this.context.createGain();
         this.bus.gain.value = this.volume * 0.28;
         this.bus.connect(this.context.destination);
+        this.speechGain = this.context.createGain();
+        this.speechGain.gain.value = this.volume;
+        this.speechGain.connect(this.context.destination);
       }
       if (this.context.state === 'suspended') void this.context.resume().catch(() => {});
       this.stats.unlocked = this.context.state === 'running';
@@ -97,7 +105,7 @@ export class QuestDemoAudio {
     if (!this.maySpeak() || !text.trim()) return;
     const words = text.slice(0, 450);
     this.cancelSpeech();
-    if (!this.stats.speechAvailable) { this.macSpeech(words); return; }
+    if (!this.stats.speechAvailable) { void this.headsetOsSpeech(words); return; }
     const utterance = this.utterance = new SpeechSynthesisUtterance(words);
     const voices = speechSynthesis.getVoices();
     const voice = voices.find(v => v.localService && /^en/i.test(v.lang)) ?? voices.find(v => /^en/i.test(v.lang));
@@ -137,6 +145,34 @@ export class QuestDemoAudio {
     const current = this.utterance;
     this.utterance = undefined;
     if (current && this.stats.speechAvailable) speechSynthesis.cancel();
+    this.speechSeq++;
+    const source = this.speechSource;
+    this.speechSource = undefined;
+    try { source?.stop(); } catch { /* already ended */ }
+  }
+
+  /** Ask the Mac to render the line with macOS `say`, then play it from the headset at the master volume. */
+  private async headsetOsSpeech(text: string): Promise<void> {
+    const ctx = this.context, out = this.speechGain;
+    const seq = ++this.speechSeq;
+    if (!ctx || !out || ctx.state !== 'running') { this.macSpeech(text); return; }
+    try {
+      const res = await fetch('/api/speech', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const buffer = await ctx.decodeAudioData(await res.arrayBuffer());
+      if (seq !== this.speechSeq || !this.maySpeak()) return;
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(out);
+      source.onended = () => { if (this.speechSource === source) this.speechSource = undefined; this.stats.speechFinished++; };
+      this.speechSource = source;
+      this.stats.speech++; this.stats.speechStarted++;
+      this.stats.speechProvider = 'mac-os-on-headset';
+      source.start();
+    } catch {
+      this.stats.speechErrors++;
+      if (seq === this.speechSeq) this.macSpeech(text);
+    }
   }
   suspend(): void {
     this.thinking.clear(); this.stats.thinking = false;
