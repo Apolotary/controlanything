@@ -135,6 +135,9 @@ try {
   await wait(()=>window.__ce.wiring.running,undefined,120000);
   evidence.ready=await quest.evaluate(()=>window.__musicIn.findLast(m=>m.type==='wire.ready').payload);
   assert.equal(evidence.ready.source,'fixture');
+  evidence.harness=(await fixture.json('/api/agent/harness')).runs.find(run=>run.runId===evidence.ready.wiringId);
+  assert.equal(evidence.harness?.outcome,'checked'); assert.equal(evidence.harness.currentlyAuthorized,true);
+  assert(evidence.harness.tools.some(tool=>tool.name==='finish_program'&&tool.ok),'Music must finish through the actual Mac agent harness');
   assert(!evidence.ready.needs.includes('screen'),'Hand music must not require screen calibration');
   assert.match(evidence.ready.code,/out\.set/);
   await wait(()=>window.__ce.hud.root.getObjectByName('wire-code-card')?.state?.code.includes('mem.played = false'));

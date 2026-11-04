@@ -123,3 +123,14 @@ Measure with `node scripts/quest-cdp.mjs --fps 450` (≈5 s at 90 Hz) in each st
 ### Object-first acceptance additions
 
 The main water path must require no wrist/mode/settings visit. With mic disabled, the one contextual example must still generate wiring only when pressed. Ideas/Details/More/Back must not ask Muse, record speech, change the target or resume controls. During play the device form clears, but Muse’s generated gesture/clutch instruction and Live/FIXTURE/Template source remain in one passive cue. Streaming code and checks must still appear automatically after asking. Stop all and held Exit remain reachable on both quick-menu pages; Tutorial is under More. Real permission/PTT quality and wearer comfort remain separate acceptance.
+
+
+## Muse bridge harness acceptance
+
+The normal selected-device WIRE request now uses the embedded native Muse tool loop. It is not Hermes or Muse Code. Existing driver generation remains separate; general questions/Canvas are not replaced. Inference is hosted by Meta's API, with orchestration on the Mac and the fast generated program on Quest.
+
+- Actual request reaches `/api/agent/harness` with the same wiring ID. Both scoped inspections, real `check_program` and exact-hash `finish_program` must succeed; prose cannot declare readiness.
+- `checked` is program-validation/synthetic-dry-run evidence. Device verification and current authorization remain separate. Stop/replacement must make `currentlyAuthorized` false.
+- Missing/unapproved stream model metadata, unknown/foreign-scope tools, cancelled jobs and exhausted budgets must not install wiring or an implicit template. Fixture conversations must be clearly labelled scripted.
+- The explicit live smoke check is `node --import tsx apps/server/scripts/harness-probe.ts --live`. It costs Meta API calls, uses a synthetic image and fake connector, and sends no device commands. It checks actual push sensitivity and height independence in generated code, not physical display response.
+- Current full browser checks must still pass for water and muted music; they do not substitute for the attended Quest and real-microphone gates above.

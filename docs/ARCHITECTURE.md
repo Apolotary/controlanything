@@ -62,7 +62,7 @@ Musical receipts use `applied.source: musical-synth`, raw parameters and an actu
 
 ## 4. WIRE: generated JavaScript
 
-`apps/server/src/agent/wire.ts` receives one selected card, the exact request, available signals and driver actions. Muse Spark returns `{title, explanation, code, needs}` through structured output. Streaming code goes to both clients. Repair uses validator/dry-run findings; a guarded Wonder fallback can be attempted. Exhausted generation may produce a visibly labelled **Template** fallback; fixture mode is labelled **FIXTURE**. Neither is presented as a live model-written program.
+`apps/server/src/agent/wire.ts` owns the explicit selected-card request, epochs and authorization. Its normal program writer is `MuseBridgeHarness` in `agent/muse-harness.ts`: a bounded native Meta tool-call loop on the Mac server. Muse inspects the connector and actual signal API, submits `{title, explanation, code, needs}` to real validation/dry-run, repairs failures, and finishes the exact checked artifact by hash. Streamed code goes to both clients. Device verification remains separate and precedes `wire.ready`. Failure installs no implicit template. Fixture mode runs a labelled scripted tool conversation through the same dispatch/checks. The older direct structured-output helper remains separate from the normal assembled bridge. See [harness boundaries and receipts](MUSE-HARNESS.md).
 
 `code` is the body of `function wire(s, out, mem)`. The program reads signals, retains small state in `mem`, and calls only `out.set(actionId, value)` or `out.trigger(actionId)`.
 

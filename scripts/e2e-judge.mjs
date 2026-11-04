@@ -33,6 +33,7 @@ let serverLog = '';
 let currentPhase = '00-server';
 const browserLog = [];
 const timings = {};
+let harnessProof;
 const abort = new AbortController();
 
 async function json(path) {
@@ -364,6 +365,18 @@ async function run() {
     await until('Muse wrote the wiring and it needs the screen calibrated', () => quest.evaluate(() => window.__ce.wiring.phase === 'calibrating'), PIPELINE_TIMEOUT);
     const card = await quest.evaluate(() => window.__ce.hud.root.userData.wire.card);
     assert(/Touch the water/.test(card.header) && card.badge === 'FIXTURE', `the code card names the request and its source (${card.header} / ${card.badge})`);
+    const ready = await quest.evaluate(() => window.__judge.events.findLast(e => e.type === 'wire.ready').payload);
+    const harness = await json('/api/agent/harness');
+    assert.equal(harness.backend, 'muse-bridge');
+    harnessProof = harness.runs.find(run => run.runId === ready.wiringId);
+    assert(harnessProof, 'The actual request must reach the Mac agent harness');
+    assert.equal(harnessProof.outcome, 'checked'); assert.equal(harnessProof.source, 'fixture');
+    assert.equal(harnessProof.currentlyAuthorized, true);
+    for (const name of ['inspect_selected_device', 'inspect_gesture_signals', 'check_program', 'finish_program']) {
+      assert(harnessProof.tools.some(tool => tool.name === name && tool.ok), `Missing successful actual tool: ${name}`);
+    }
+    assert(harnessProof.artifact.hash && harnessProof.artifact.dryRunFrames > 0);
+    await writeFile(join(SCREENS, 'harness-receipt.json'), JSON.stringify(harnessProof, null, 2));
     await screenshot('08-code-card');
     geometry = await quest.evaluate((c) => {
       const app = window.__ce, p = app.desktopCam.position.clone().fromArray(c), head = app.emulator.head();
@@ -444,7 +457,8 @@ async function run() {
     await waitQuest(() => window.__ce.tutorial?.snapshot().finished);
     assert.equal(await quest.evaluate(() => localStorage.getItem('ce.tutorial.wire.v1')), 'skipped');
   });
-  await writeFile(join(SCREENS, 'summary.json'), JSON.stringify({ fixture: true, demo: true, verifiedBy, timings }, null, 2));
+  assert.equal((await json(`/api/agent/harness/runs/${harnessProof.runId}`)).currentlyAuthorized, false, 'Stop all revokes harness-created wiring');
+  await writeFile(join(SCREENS, 'summary.json'), JSON.stringify({ fixture: true, demo: true, verifiedBy, timings, harness: harnessProof }, null, 2));
 }
 
 async function diagnostics() {

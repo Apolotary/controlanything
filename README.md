@@ -15,6 +15,8 @@ Built for the **Meta Global AI Developer Hackathon** (Indie Developer track, *Pu
 
 One MacBook and one Quest 3. The Mac runs the server, a paired companion and a silent full-screen **visual synth**. Its capability manifest describes what the instrument accepts; the hand-to-device wiring is generated after your request.
 
+The Mac server now hosts a small **Muse agent harness** for that request: Muse chooses native API tools to inspect the selected connector and Quest signals, submit code for real checks, repair it, and finish the exact checked artifact. Inference uses Meta's API; the fast hand program runs on Quest. This is ControlAnything's own bounded harness, not Hermes or Muse Code. See [the harness and its receipts](docs/MUSE-HARNESS.md).
+
 1. **Enter AR and find the Mac.** Pair with the companion's QR code or passcode. SAM 3.1 provides the outlines; point and pinch the Mac directly. The wrist menu is a backup: **Find objects**, contextual **Ask Muse**, **More**, **Stop all** and held **Exit**. More contains instruments, Buddy, Tutorial, layers and filters.
 2. **Pinch the MacBook.** The companion opens its visuals. A setup ring shows the link, Muse-written driver, effect verification and interface preparation. A saved driver may be reused with its source disclosed. Driver prefetch is **off by default**; `CE_PREFETCH=1` is an opt-in rehearsal mode.
 3. **Ask what your hands should do.** Hold the selected device's **Ask Muse** control and speak. One example, **Touch the water**, remains available for silent use or unavailable microphone permissions. **Ideas** reveals **Hands as knobs** and **Surprise me**. The device has no hand interaction before the explicit request, and the ordinary path requires no mode/settings menu.
@@ -37,7 +39,7 @@ For a longer request, choose **Details → Read request** after stopping the wir
 |---|---|
 | **SAM 3.1** (`sam-3.1`) | Finds and outlines the devices and objects in passthrough frames: every box you see comes from it. During verification it finds the same outline again on the before and after frames. |
 | **Muse Spark** (`muse-spark-1.3`) | Identifies the pinched device from a crop and the whole frame. Writes the driver from the device's capability manifest or MIDI chart. Writes the per-request JavaScript wiring and control descriptions, with repair when checks fail. Also writes the Muse buddy’s text: it reacts to each object you show it and judges whether the object meets the quest. |
-| **Muse Wonder** (`muse-wonder-1.0`) | Guarded fallback for driver or wiring generation when Muse Spark fails; only count it as used when a call actually occurred. |
+| **Muse Wonder** (`muse-wonder-1.0`) | Guarded fallback for driver generation and older experimental paths. The normal gesture-program harness is pinned to Muse Spark; only count Wonder as used when a call actually occurred. |
 | **Muse Image** (`muse-image-1.0`) | Paints the buddy's stickers. Optionally paints a device-inspired panel texture, which never delays the controls. |
 | **Muse Voice Transcribe** (`muse-voice-transcribe-1.0`) | Transcribes the device card’s hold-to-talk wiring request, plus the older lab assistant and spoken verification clips. |
 
@@ -67,7 +69,7 @@ These parts are OS or browser features, or plain code. None of them is an AI mod
 
 The wiring API is `wire(s, out, mem)`: read hand/screen signals, call `out.set(actionId, value)` or `out.trigger(actionId)`, and retain small state in `mem`. The runtime restricts actions, clamps values, rate-limits outputs and stops on repeated errors or a watchdog timeout. The server independently checks active wiring, arming and verification before dispatch. These are prototype guardrails, not a general-purpose untrusted-code platform.
 
-Live generation is the normal keyed route. If generation fails, a **Template** fallback is visibly labelled *no Meta model wrote this*. No-key runs are **FIXTURE**, including chunked code playback. Driver-library reuse is labelled separately and does not mean the wiring was newly generated. Each new wiring request still asks for a new program; this path does not silently restore an old hand mapping.
+Live generation is the normal keyed route. The gesture-program harness fails visibly if Muse cannot finish checked code; it installs no implicit template. Older experimental generation paths can show a **Template**, labelled *no Meta model wrote this*. No-key runs are **FIXTURE**, including scripted tool calls and chunked code playback. Driver-library reuse is labelled separately and does not mean the wiring was newly generated. Each new wiring request still asks for a new program; this path does not silently restore an old hand mapping.
 
 After setup, each hand frame needs **no model call**: worker output → `control.event` (`wire:<actionId>`) → validated driver → Mac executor/renderer. See [architecture](docs/ARCHITECTURE.md) for the protocol and limits.
 
