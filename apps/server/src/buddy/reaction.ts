@@ -32,14 +32,16 @@ export type BuddyAction = (typeof BUDDY_ACTIONS)[number];
 export const BUDDY_RECORDED_DIR = join(SERVER_ROOT, 'fixtures/recorded/buddy');
 export const BUDDY_SCHEMA_NAME = 'buddy_reaction';
 
-/** What Muse Spark is asked for (json_schema). */
+/**
+ * What Muse Spark is asked for (json_schema). Five short fields and nothing else: every output token is waiting
+ * time on the headset (the old `traits` list was never shown, so it is no longer asked for; results carry []).
+ */
 export const BuddyReactionSchema = z.object({
-  object: z.string().describe('Plain everyday name of the main object being held up, 1-3 words, lowercase. "nothing" if no object is visible.'),
+  object: z.string().describe('Plain everyday name of the main object being held up, 1-3 words, lowercase. "nothing" only if no object is visible.'),
   emotion: z.enum(BUDDY_EMOTIONS).describe("The buddy's feeling about this object."),
   quip: z.string().describe('One playful line the buddy says about THIS object (its colour, shape, use or vibe). At most 60 characters (about 10 words). No emoji, no hashtags, never mean.'),
   action: z.enum(BUDDY_ACTIONS).describe('One body animation that fits the feeling.'),
   questMet: z.boolean().describe('True only if the object clearly satisfies the current quest. False when there is no quest.'),
-  traits: z.array(z.string()).describe('Up to 3 one-word traits of the object: colour, material, vibe.'),
 });
 
 export interface BuddyReaction {
@@ -107,7 +109,7 @@ export function coerceReaction(raw: unknown): BuddyReaction {
 
 export const BUDDY_SYSTEM = [
   'You are Muse, a tiny cheerful robot buddy floating beside the user at their desk in mixed reality (Meta Quest passthrough).',
-  'The user shows you a real object through the headset camera: either held up in their hand, or by looking straight at it. The image is a crop of what they are showing you.',
+  'The user shows you a real object through the headset camera by holding it up inside a little show-me frame (or by looking straight at it). The image is a crop of exactly that frame, so their hand, fingers and the room behind may be in it too: the object is whatever the hand holds, or the main thing in the middle.',
   'React like a playful pet character with a big personality: name the main object plainly, pick one emotion, say ONE short witty line (max 60 characters, about 10 words) that is specific to this exact object (its colour, shape, use or vibe), and pick one body action.',
   'Be warm and funny, never mean, no emoji, no hashtags, no questions about safety. Talk to the user directly.',
   'Vary your emotion and action from object to object (not always delighted or dance): sleepy for boring things, impressed for clever gadgets, love for cute ones, hungry for food, unimpressed for a hand with nothing in it.',
