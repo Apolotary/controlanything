@@ -1196,4 +1196,30 @@ describe('gesture-first device workspace', () => {
     expect((f.hud.root.getObjectByName('wrist-palette') as Object3D & { item(key: string): { visible(): boolean } }).item('ask-muse').visible()).toBe(false);
     f.hud.dispose();
   });
+
+  it('keeps the microphone invitation stable while recording or transcribing', () => {
+    const f = setup(); f.hud.upsertTarget(target); f.hud.setLocked(target.id); f.hud.renderSpec(spec(), { targetId: target.id });
+    f.hud.setDeviceState?.({ targetId: target.id, connection: 'ready', silentVisual: true });
+    const sent: string[] = [];
+    for (const type of ['wireAsk', 'wireTalk', 'wireRecalibrate', 'control', 'mode'] as const) f.hud.on(type, () => sent.push(type));
+    const actions = f.hud as unknown as { lookAction(id: string): void };
+    const card = () => f.hud.root.getObjectByName('device-card-v3')!.userData.view;
+    const panel = f.hud.root.getObjectByName('device-card')!;
+    const palette = f.hud.root.getObjectByName('wrist-palette') as Object3D & { item(key: string): { onSelect(): void } };
+    for (const mic of ['listening', 'busy'] as const) {
+      f.hud.setWire?.({ ...wire('stopped'), mic }); f.hud.update(f.frame(undefined, 200));
+      const before = card(), position = panel.position.clone(), facing = panel.quaternion.clone();
+      for (const id of ['wire-more-ideas', 'wire-details', 'wire-back']) actions.lookAction(id);
+      palette.item('ask-muse').onSelect();
+      f.hud.update(f.frame(undefined, 200));
+      expect(card()).toEqual(before);
+      expect(card().presentation).toBe('invitation'); expect(card().ask.mic).toBe(mic);
+      expect(card().actions.map((a: {id: string}) => a.id)).toEqual(['wire-more-ideas', 'wire-details']);
+      expect(panel.position).toEqual(position); expect(panel.quaternion.angleTo(facing)).toBeLessThan(1e-6);
+      expect(f.hud.root.userData.wire.phase).toBe('stopped');
+      expect(f.hud.root.getObjectByName('wire-request-reader')!.visible).toBe(false);
+    }
+    expect(sent).toEqual([]);
+    f.hud.dispose();
+  });
 });

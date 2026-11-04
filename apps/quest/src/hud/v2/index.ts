@@ -275,6 +275,7 @@ export class LeanHud implements Hud {
     } });
     this.palette.register({ key: 'ask-muse', label: 'Ask Muse', order: -50, section: 'primary',
       visible: () => this.canOfferInvitation(), onSelect: () => {
+        if (this.keepVoiceInvitation()) return;
         this.requestPanel = 'invitation'; this.inspectWireCode = false;
         // Focus is presentation only: no microphone, request, stop or execution is started.
         this.workspaceAnchor.reset(); this.workspaceAnchor.update(this.headPose, this.time * 1000);
@@ -664,6 +665,7 @@ export class LeanHud implements Hud {
     const target = this.selected(), m = this.mounted();
     if (!target) return;
     if (id === 'wire-more-ideas' || id === 'wire-details' || id === 'wire-back') {
+      if (this.keepVoiceInvitation()) return;
       if (!this.canOfferInvitation()) return;
       this.requestPanel = id === 'wire-more-ideas' ? 'ideas' : id === 'wire-details' ? 'details' : 'invitation';
       this.inspectWireCode = false;
@@ -764,6 +766,13 @@ export class LeanHud implements Hud {
     return !!this.locked && this.wireView?.targetId === this.locked && this.selectedConnection() === 'ready'
       && !!this.mounted()?.armed && !this.setupWorking() && !this.deviceState?.busy
       && ['idle', 'stopped', 'failed'].includes(this.wireView.phase);
+  }
+  /** Keep the held mic target and its release path stable until speech is sent or transcribed. */
+  private keepVoiceInvitation(): boolean {
+    const mic = this.wireView?.targetId === this.locked ? this.wireView.mic : undefined;
+    if (mic !== 'listening' && mic !== 'busy') return false;
+    this.toast(mic === 'listening' ? 'Release to send your request.' : 'Wait for transcription to finish.', 'info');
+    return true;
   }
   private lookView(): CardView {
     const target = this.selected(), m = this.mounted();
