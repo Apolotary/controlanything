@@ -109,6 +109,8 @@ export interface AgentOptions {
 }
 
 const agents = new WeakMap<ServerContext, Agent>();
+/** Value-only library.state / tags.state updates go out at most this often. */
+const PUBLISH_VALUES_MS = 500;
 
 export function getAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent {
   let a = agents.get(ctx);
@@ -524,8 +526,24 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     hub.broadcast('tags.state', tagsState());
     assistant?.refresh();
   };
-  const unsubscribeTags = targets.onChange((t) => {
+  // A dial at 20 Hz must not mean 20 library writes and 40 room-wide broadcasts per second (the Mac page re-renders
+  // on each): value-only changes are written lazily and published at most every PUBLISH_VALUES_MS.
+  let publishedAt = 0;
+  let publishTimer: ReturnType<typeof setTimeout> | undefined;
+  const publishTagsSoon = () => {
+    if (publishTimer) return;
+    const wait = PUBLISH_VALUES_MS - (Date.now() - publishedAt);
+    if (wait <= 0) { publishedAt = Date.now(); publishTags(); return; }
+    publishTimer = setTimeout(() => { publishTimer = undefined; publishedAt = Date.now(); publishTags(); }, wait);
+    publishTimer.unref?.();
+  };
+  const unsubscribeTags = targets.onChange((t, kind) => {
     if (!tags.has(t.cardId)) return;
+    if (kind === 'value') {
+      tags.syncValues(t);
+      publishTagsSoon();
+      return;
+    }
     const spec = t.specId ? specs.get(t.specId) : undefined;
     tags.sync(t, spec, spec ? setupContext(spec) : undefined);
     publishTags();
@@ -961,8 +979,12 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       setTimeout(() => {
         if (visualIntent?.at !== at) return;
         hub.sendToDevice(host.deviceId, 'visual.open', { requestId: newId('visual-') });
-        log(`[visual] still waiting for ${host.deviceId}'s screen after ${VISUAL_REMIND_MS / 1000} s; asked again`);
-        visualWaitStatus('needs-companion', 'Open visuals on the Mac', 'Waiting for the Mac’s screen: click Open visuals in ControlAnything on the Mac and keep it in front', 'cancel');
+        // Only the companion tab that runs the local bridges opens the visuals; a second tab is a common reason for "nothing happens".
+        const tabs = hub.clients().devices.find((d) => d.deviceId === host.deviceId)?.connections.filter((c) => c.state !== 'superseded' && c.role === 'companion').length ?? 0;
+        log(`[visual] still waiting for ${host.deviceId}'s screen after ${VISUAL_REMIND_MS / 1000} s; asked again (${tabs} companion tab${tabs === 1 ? '' : 's'})`);
+        visualWaitStatus('needs-companion', 'Open visuals on the Mac', tabs > 1
+          ? `ControlAnything is open in ${tabs} tabs on the Mac: click Open visuals in the tab that says “Runs local bridges”, or close the others`
+          : 'Waiting for the Mac’s screen: click Open visuals in ControlAnything on the Mac and keep it in front', 'cancel');
       }, VISUAL_REMIND_MS),
       setTimeout(() => {
         if (visualIntent?.at !== at) return;
@@ -1270,7 +1292,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     panic,
     close: () => {
       clearTimeout(graceTimer);
+      clearTimeout(publishTimer);
       clearVisualIntent();
+      tags.flushPending();
       canvas.invalidate();
       voice.invalidate();
       assistant?.invalidate();

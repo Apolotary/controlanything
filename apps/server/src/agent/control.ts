@@ -225,7 +225,7 @@ export class ControlRouter {
         this.latestCommand.delete(key);
         if (ok && param && !stepper) {
           target.paramValues[param.id] = clamp(value, param.min, param.max);
-          this.d.targets.changed(target);
+          this.d.targets.changed(target, 'value');
         }
       }
       this.report(ev, from, ok, detail, spec.specId);
@@ -327,7 +327,7 @@ export class ControlRouter {
       const acknowledged: ExecResult | undefined = result ? (ok, detail) => {
         if (ok && target.runId === runId) {
           target.stepIndex[a.actionId] = (target.stepIndex[a.actionId] ?? current) + direction;
-          this.d.targets.changed(target);
+          this.d.targets.changed(target, 'value');
         }
         result(ok, detail);
       } : undefined;
@@ -379,7 +379,7 @@ export class ControlRouter {
       const acknowledged: ExecResult | undefined = result ? (ok, detail) => {
         if (ok && target.runId === runId) {
           target.paramValues[paramId] = clamp((target.paramValues[paramId] ?? from) + (presses > 0 ? step : -step), param.min, param.max);
-          this.d.targets.changed(target);
+          this.d.targets.changed(target, 'value');
         }
         result(ok, detail);
       } : undefined;
