@@ -190,7 +190,8 @@ try {
   evidence.requestReader={simulatedTranscript:true,characters:longRequest.length,pages:first.pages,allWordsRetained:true,readOnly:true};
 
   phase='wrong-device-request-is-explicit';
-  const callsBeforeWrongTarget=(await fixture.json('/api/muse/calls')).length;
+  const callsBeforeWrongTarget=(await fixture.json('/api/muse/calls')).calls;
+  assert(Array.isArray(callsBeforeWrongTarget),'The call-log endpoint must expose its calls array');
   const readyBeforeWrongTarget=await quest.evaluate(()=>window.__musicIn.filter(m=>m.type==='wire.ready').length);
   await quest.evaluate(()=>window.__ce.wiring.ask('I have an OP-1 Field connected to this laptop. Create gesture controls for it.','voice'));
   await wait(()=>window.__ce.wiring.phase==='failed');
@@ -198,7 +199,7 @@ try {
   assert.equal(rejected.model,'not-called');
   assert.match(rejected.note,/Select the OP-1 in Annotate/);
   assert.match(rejected.note,/Correct device/);
-  assert.equal((await fixture.json('/api/muse/calls')).length,callsBeforeWrongTarget,'Wrong physical target must not invoke Muse or a visual fallback');
+  assert.equal((await fixture.json('/api/muse/calls')).calls.length,callsBeforeWrongTarget.length,'Wrong physical target must not invoke Muse or a visual fallback');
   assert.equal(await quest.evaluate(()=>window.__musicIn.filter(m=>m.type==='wire.ready').length),readyBeforeWrongTarget);
   assert.equal(await quest.evaluate(()=>window.__ce.wiring.running),false);
   assert.equal((await snapshot()).state.gate,0);
