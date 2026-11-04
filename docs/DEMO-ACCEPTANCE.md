@@ -56,8 +56,8 @@ Measure with `node scripts/quest-cdp.mjs --fps 450` (≈5 s at 90 Hz) in each st
 | Nov 4 10:29–10:30, HEAD b12469f, worn | Annotate, while a stale tab held the camera (38 samples) | 86.5 | 18.7 (53) | — | 10 % | 22 (88 max) | 13.5k | — | Camera failed ("Could not start video source"); fixed by closing the old tab |
 | Nov 4 10:31, b12469f, worn | Control, camera on (29 samples) | 90.0 | 12.1 (82) | — | 0 % | 24–84 | 13.9k | — | |
 | Nov 4 10:54, f3861cc+, worn | **Annotate**, camera on (7 samples) | 85 | 19.3 (52); worst 47 | — | 7 % | 24 (28 max) | 19.6k | — | **Below target.** CPU-side (camera + YOLO + upload), not draws. Lasts only the ~10 s before the pinch |
-| Nov 4 10:55, f3861cc+, worn | **Armed** (39 samples) | 89.9 | 12.35 (81); worst 15.0 | — | 0 % | 50 (86 max) | 24.9k | 45 frames / 45 s (reticles, wrist palette) | **Pass** |
-| Nov 4 10:56, f3861cc+, worn | **Perform** fist open / **live** (7 + 15 samples) | 90 | 12.34 / 12.39 (81); worst 14.7 | — | 0 % | 50–56 | 24.5k | — | **Pass**. Mac acks: 100/100 ok, renderer, visible; ack latency 1 ms p50, 46 ms p95 |
+| Nov 4 10:55, f3861cc+, worn | **Armed** (42 samples) | 89.9 | 12.34 (81); worst 15.0 | — | 0 % | 50 (86 max) | 24.9k | 45 frames / 45 s (reticles, wrist palette) | **Pass** |
+| Nov 4 10:56–10:57, f3861cc+, worn | **Perform** fist open / **live** (17 + 19 samples) | 90 | 12.05 / 12.40 (83 / 81); worst 14.7 | — | 0 % | 50–56 | 24.5k | — | **Pass**. Mac acks: 100/100 ok, renderer, visible; ack latency 1 ms p50, 46 ms p95 |
 
 ## 5. Mac renderer checks
 
@@ -84,4 +84,4 @@ Measure with `node scripts/quest-cdp.mjs --fps 450` (≈5 s at 90 Hz) in each st
 
 | Run | Time | Build | Result | Notes / clip |
 |---|---|---|---|---|
-| 1 | Nov 4 10:54:45–10:57 | HEAD after f3861cc (tab reloaded 10:54:39) | Pinch → armed in 3 s; Perform drives Warp, Ripples and Hue on the Mac; armed/perform 81 fps at p95; Annotate 52 fps at p95 | Stop (G10) and Exit (G11) not yet observed by instruments. Earlier attempt 10:29 failed: a stale Quest tab held the camera |
+| 1 | Nov 4 10:54:45–10:57 | HEAD after f3861cc (tab reloaded 10:54:39) | Pinch → armed in 3 s; Perform drives Warp, Ripples and Hue on the Mac; armed/perform 81 fps at p95; Annotate 52 fps at p95 | Stop (G10) and Exit (G11) not observed: at 10:57:34 the XR session went hidden (headset off or Home) while still armed, with no panic/Stop sent. Earlier attempt 10:29 failed: a stale Quest tab held the camera |
