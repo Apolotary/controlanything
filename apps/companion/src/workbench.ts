@@ -1141,7 +1141,7 @@ function renderCalls(): void {
 async function pollCalls(): Promise<void> {
   if (document.visibilityState === 'visible' && !serverDown) {
     try {
-      calls = await api.calls();
+      calls = await api.calls(identity?.deviceToken);
       render('calls');
     } catch {
       // the server may be restarting

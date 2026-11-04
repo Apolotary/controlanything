@@ -50,7 +50,7 @@ export interface CallsResponse {
 
 export const api = {
   health: () => call<Health>('GET', '/api/health'),
-  calls: () => call<CallsResponse>('GET', '/api/muse/calls'),
+  calls: (token?: string) => call<CallsResponse>('GET', '/api/muse/calls', undefined, token),
   pairStart: (req: PairStartRequest) => call<PairStartResponse>('POST', '/api/pair/start', req),
   pairStatus: (pairingId: string, pollSecret: string) =>
     call<PairStatusResponse>('GET', `/api/pair/status?pairingId=${encodeURIComponent(pairingId)}&pollSecret=${encodeURIComponent(pollSecret)}`),

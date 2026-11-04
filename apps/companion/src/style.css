@@ -449,6 +449,7 @@ body.stage .passcode { font-size: 32px; }
 #master-audio output { min-width: 32px; color: var(--text-secondary); }
 @media (max-width: 500px) { #master-audio { right: 8px; bottom: 8px; gap: 6px; } #master-audio input { width: 80px; } }
 .agent-connector { padding-block: 14px; border-top: 1px solid var(--border, #343b47); min-width: 0; }
+#muse-connectors { padding: 16px 18px; }
 .agent-connector .row { justify-content: space-between; gap: 12px; }
 .connector-entry { overflow-wrap: anywhere; }
 .connector-logs { max-height: 180px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
