@@ -38,6 +38,8 @@ export interface VisualSynthManifest {
   /** messages the renderer rejects */
   rejects: string[];
   receipt: string;
+  /** how the three touch controls (CC22 X, CC23 Y, CC24 pressure) work together: for drivers and wiring programs */
+  touch: string;
 }
 
 const EFFECTS: Record<string, string> = {
@@ -49,8 +51,11 @@ const EFFECTS: Record<string, string> = {
   warp: 'how strongly the field bends and folds',
   ripple: 'ripple depth on every pattern: concentric rings across the screen get deeper and brighter, and each change sends an expanding wave; it never changes the pattern (program changes do)',
   symmetry: 'kaleidoscope symmetry, 1 to 8 mirrored segments',
+  touchX: 'touch X: where the wearer\'s fingertip touches the screen, left to right (0 = left edge, 127 = right edge of the visible canvas); send it with Touch Y, and before pressure, so the splash lands under the finger',
+  touchY: 'touch Y: where the wearer\'s fingertip touches the screen, top to bottom (0 = top edge, 127 = bottom edge; top-left is 0,0)',
+  touchPressure: 'touch pressure: 0 lifted; 1-20 hovering (a soft caustic lens and glow under the fingertip that grows as it comes closer); 21-127 touching: a splash where it lands (stronger with higher values), then a wake of ripples that follows the finger while X and Y move; lifting lets the waves keep expanding and fade. Works on every pattern, most beautiful on Water',
 };
-const PROGRAM_EFFECTS = ['flowing domain-warped field', 'concentric rings', 'prismatic colour bands', 'lit water surface (Ripples make its waves)'];
+const PROGRAM_EFFECTS = ['flowing domain-warped field', 'concentric rings', 'prismatic colour bands', 'lit water surface (Ripples make its waves; fingertip splashes and wakes look best here)'];
 
 export const VISUAL_SYNTH_MANIFEST: VisualSynthManifest = {
   id: 'controlanything-visual-synth',
@@ -66,4 +71,8 @@ export const VISUAL_SYNTH_MANIFEST: VisualSynthManifest = {
   resets: 'CC120, CC121, CC123 or panic reset every parameter to its default',
   rejects: ['note on/off (it has no sound)', 'any channel other than 1', 'program changes above 3', 'SysEx other than the identity request'],
   receipt: 'Each accepted CC/PC is acknowledged with the renderer state after it (exec.ack.applied.params, 0..1 units).',
+  touch: 'Touch the water: CC22 X and CC23 Y place the fingertip on the visible canvas (0..127 across, top-left 0,0) and CC24 is its pressure '
+    + '(0 lifted, 1-20 hover, 21-127 touching). Pressure crossing 20 is a touch-down: one splash at the current X/Y (stronger with higher pressure, applied within one frame, never smoothed). '
+    + 'While touching, moving X/Y leaves a wake (ripples spawned along the path at about 20 per second). Hover shows a soft glow that grows as pressure rises toward 20. '
+    + 'Lifting (pressure back to 0..20) sends one soft ring and the existing waves fade by themselves. Send X and Y first or together with pressure; keep sending X/Y at 20-60 Hz while touching; send pressure 0 when the finger leaves or is lost.',
 };

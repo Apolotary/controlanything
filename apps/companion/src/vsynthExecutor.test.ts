@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { VisualSynthExecutor, visualSynthPort } from './vsynthExecutor';
-import { createVisualSynthState, VISUAL_SYNTH_IDENTITY_REPLY } from '@ce/vsynth';
+import { createVisualSynthPort, createVisualSynthState, VISUAL_SYNTH_IDENTITY_REPLY } from '@ce/vsynth';
 import type { ExecCommandPayload, MidiOp } from '@ce/protocol';
 
 const port = () => ({ receiveMidi: vi.fn(), reset: vi.fn(), getState: createVisualSynthState, setState: vi.fn(), dispose: vi.fn() });
@@ -32,6 +32,21 @@ describe('silent virtual output', () => {
     await executor.execute(command({ kind: 'midi', msg: 'panic', channel: 1 }));
     expect(p.reset).toHaveBeenCalledOnce();
     expect(p.receiveMidi).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts the fingertip (CC22 X, CC23 Y, CC24 pressure) and reports it in the applied state', async () => {
+    const port = createVisualSynthPort();
+    const executor = new VisualSynthExecutor(port);
+    for (const [number, value] of [[22, 32], [23, 95], [24, 100]] as const) {
+      const ack = await executor.execute(command({ kind: 'midi', msg: 'cc', channel: 1, number, value }));
+      expect(ack.ok, `CC${number}`).toBe(true);
+    }
+    const ack = await executor.execute(command({ kind: 'midi', msg: 'cc', channel: 1, number: 24, value: 0 }));
+    expect(ack.applied?.params).toMatchObject({ touchX: 32 / 127, touchY: 95 / 127, touchPressure: 0 });
+    expect(Object.keys(ack.applied?.params ?? {}).length).toBeLessThanOrEqual(16); // the ack schema allows 16 keys
+    await executor.execute(command({ kind: 'midi', msg: 'panic', channel: 1 }));
+    expect(port.getState()).toMatchObject({ touchX: .5, touchY: .5, touchPressure: 0 });
+    port.dispose();
   });
 
   it('labels a command confirmed by a drawing page as applied by the renderer', async () => {

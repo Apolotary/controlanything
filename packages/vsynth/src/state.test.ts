@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyVisualSynthMidi, createVisualSynthState, isVisualSynthState, VISUAL_SYNTH_CONTROLS } from './state.js';
+import { applyVisualSynthMidi, createVisualSynthState, isVisualSynthState, TOUCH_HOVER_MAX_CC, touchPhase, VISUAL_SYNTH_CONTROLS } from './state.js';
 
 describe('silent visual instrument MIDI state', () => {
   it('sets Ripples depth with CC21 without changing the pattern or Warp (Perform sends CC21 constantly)', () => {
@@ -19,6 +19,22 @@ describe('silent visual instrument MIDI state', () => {
       expect(applyVisualSynthMidi(createVisualSynthState(), [0xb0, control.cc, 0])?.parameters[control.parameter]).toBe(control.min);
       expect(applyVisualSynthMidi(createVisualSynthState(), [0xb0, control.cc, 127])?.parameters[control.parameter]).toBe(control.max);
     }
+  });
+  it('maps the fingertip: CC22 X, CC23 Y (top-left is 0,0) and CC24 pressure with lifted / hover / touching phases', () => {
+    const before = createVisualSynthState();
+    expect(before).toMatchObject({ touchX: .5, touchY: .5, touchPressure: 0 });
+    const moved = applyVisualSynthMidi(applyVisualSynthMidi(before, [0xb0, 22, 0])!.parameters, [0xb0, 23, 127])!;
+    expect(moved.parameters).toMatchObject({ touchX: 0, touchY: 1, pattern: 0, ripple: before.ripple });
+    expect(moved.label).toBe('Touch Y · 100%');
+    expect(applyVisualSynthMidi(before, [0xb0, 24, 64])?.parameters.touchPressure).toBeCloseTo(64 / 127, 10);
+    const phases = [0, 1, 20, 21, 127].map((cc) => touchPhase(cc / 127));
+    expect(phases).toEqual(['lifted', 'hover', 'hover', 'touching', 'touching']);
+    expect(TOUCH_HOVER_MAX_CC).toBe(20);
+    // Stop lifts the finger and recentres it
+    const touching = applyVisualSynthMidi(before, [0xb0, 24, 100])!.parameters;
+    expect(applyVisualSynthMidi(touching, [0xb0, 123, 0])?.parameters).toEqual(before);
+    expect(isVisualSynthState({ ...before, touchPressure: 1.2 })).toBe(false);
+    expect(isVisualSynthState({ ...before, touchX: undefined })).toBe(false);
   });
   it('selects each pattern and rejects unsupported commands and malformed MIDI', () => {
     for (const pattern of [0, 1, 2, 3]) expect(applyVisualSynthMidi(createVisualSynthState(), [0xc0, pattern])?.parameters.pattern).toBe(pattern);
