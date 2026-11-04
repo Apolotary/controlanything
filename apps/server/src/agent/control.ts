@@ -46,6 +46,8 @@ export interface ControlDeps {
   canControl?: (target: Target) => boolean;
   /** A reason while the target's output is temporarily away (the Mac visuals closed): events are dropped, not failed. */
   paused?: (target: Target) => string | undefined;
+  /** Demo controls stay inert until the wearer has asked Muse for a wiring. */
+  manualReady?: (target: Target) => boolean;
   onResult?: (result: ControlResultPayload, from: string) => void;
   /** room hacks (combos, daemons) are not fired here: the owner of the hook runs them */
   onRoomHack?: (hack: Hack, spec: UiSpecPayload, value: number | boolean, from?: string) => RouteResult;
@@ -167,6 +169,9 @@ export class ControlRouter {
     const paused = this.d.paused?.(target);
     if (paused) return { ok: false, reason: 'paused', detail: paused, cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
     if (!this.allowed(target)) return { ok: false, reason: 'control is not authorized for this device', cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
+    if (!ev.widgetId.startsWith('wire:') && this.d.manualReady && !this.d.manualReady(target)) {
+      return { ok: false, reason: 'Ask Muse what your hands should do first', cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
+    }
     // combos and daemons: handed to their runner (they ask for their own tap)
     if (spec && (hack.kind === 'daemon' || hack.commands.some((c) => c.cardId && c.cardId !== target.cardId))) {
       if (!this.d.onRoomHack) return { ok: false, reason: 'no room hack runner', cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
@@ -288,7 +293,8 @@ export class ControlRouter {
       return p ? clamp(value, p.min, p.max) : value;
     })() : cmd.value;
     const send = () => {
-      if (!target.armed || target.runId !== runId || !target0.armed || target0.runId !== sourceRunId || !this.allowed(target) || !this.allowed(target0) || target.verification[a.actionId] !== 'pass') { onResult?.(false, 'Command cancelled'); return 0; }
+      if (!target.armed || target.runId !== runId || !target0.armed || target0.runId !== sourceRunId || !this.allowed(target) || !this.allowed(target0) || target.verification[a.actionId] !== 'pass'
+        || !hack.id.startsWith('wire:') && this.d.manualReady && !this.d.manualReady(target0)) { onResult?.(false, 'Command cancelled'); return 0; }
       if (a.encode.kind === 'step') return this.fireSteps(target, driver, a, v ?? 0, onResult, isLiveHack(hack));
       try {
         const op = resolveOp(a, a.kind === 'set' ? (v ?? 0) : undefined);

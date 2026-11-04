@@ -332,6 +332,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   };
   const control = new ControlRouter({ targets, dispatcher, specs, steps, hub, log, onRoomHack, canControl,
     wire: (ev) => wireService.resolve(ev),
+    manualReady: (t) => !demoMode() || !!wireService.readyFor(t.cardId),
     paused: (t) => (visualPaused(t) ? 'Visuals closed on the Mac: controls paused' : undefined),
     onResult: (result, from) => { hub.sendToDevice(from, 'control.result', result); },
   });

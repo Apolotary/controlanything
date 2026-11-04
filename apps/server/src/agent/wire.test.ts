@@ -387,7 +387,7 @@ describe('WireService', () => {
     expect(verify).not.toHaveBeenCalledWith(expect.anything(), expect.arrayContaining(['cc71']), expect.anything());
   });
 
-  it('fails clearly when an action cannot be verified, when the card is not ready, and keeps the old wiring', async () => {
+  it('fails clearly when an action cannot be verified or the card is not ready', async () => {
     const a = service({ verifyFails: ['cc24'] });
     a.svc.request({ cardId: 'visual-synth-mac', text: 'Touch the water', source: 'chip' }, { deviceId: 'quest' });
     const failed = await a.done('wire.progress', 1000).then(() => new Promise<{ payload: Record<string, unknown> }>((ok) => { const i = setInterval(() => { const f = a.sent.find((m) => m.payload.phase === 'failed'); if (f) { clearInterval(i); ok(f); } }, 5); }));
@@ -399,6 +399,35 @@ describe('WireService', () => {
     b.svc.request({ cardId: 'visual-synth-mac', text: 'Touch the water', source: 'chip' }, { deviceId: 'quest' });
     await new Promise((r) => setTimeout(r, 50));
     expect(b.sent.find((m) => m.payload.phase === 'failed')!.payload.note).toBe('Pinch the device first.');
+  });
+
+  it('Stop cancels a first request still being written, before any active wiring exists', async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const spark = fakeChat([draft(TOUCH)]);
+    const reply = fakeChat([draft(TOUCH)]);
+    vi.mocked(spark.chatJson).mockImplementationOnce(async (...args) => { await waiting; return reply.chatJson(...args); });
+    const { svc, sent } = service({ spark });
+    svc.request({ cardId: 'visual-synth-mac', text: 'Touch the water', source: 'chip' }, { deviceId: 'quest' });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    svc.clear();
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(svc.activeCards()).toEqual([]);
+    expect(sent.some((m) => m.type === 'wire.ready')).toBe(false);
+  });
+
+  it('asking again immediately withdraws old control authority, even when the new setup fails', async () => {
+    const options: { ensure?: 'ok' | 'fail' } = {};
+    const { svc, done, sent } = service(options);
+    svc.request({ cardId: 'visual-synth-mac', text: 'Touch the water', source: 'chip' }, { deviceId: 'quest' });
+    await done('wire.ready');
+    options.ensure = 'fail';
+    svc.request({ cardId: 'visual-synth-mac', text: 'Hands as knobs', source: 'chip' }, { deviceId: 'quest' });
+    expect(svc.resolve({ widgetId: 'wire:cc22' })).toMatchObject({ reason: expect.stringContaining('no wiring is active') });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(sent.some((m) => m.type === 'wire.progress' && m.payload.phase === 'failed')).toBe(true);
+    expect(svc.activeCards()).toEqual([]);
   });
 
   it('resolves wire events only for actions of the current wire.ready, and drops everything on clear', async () => {
@@ -425,7 +454,7 @@ describe('WireService', () => {
 
 // --- the control path ------------------------------------------------------------------------------------------------------
 describe('wire events through the ControlRouter', () => {
-  function rig() {
+  function rig(policy = { ready: true }) {
     const hub = { broadcast: vi.fn(() => 1), sendToDevice: vi.fn(() => 1) };
     
     const targets = new TargetStore(hub as never);
@@ -438,10 +467,24 @@ describe('wire events through the ControlRouter', () => {
       cardId: 'visual-synth-mac', wiringId: 'w1', driverId: extended.driverId, at: 0, ready: {},
       actions: new Map(['cc22', 'cc23', 'cc24', 'pattern0'].map((id) => [id, { actionId: id }])),
     });
-    const router = new ControlRouter({ targets, dispatcher, specs: { get: () => undefined, list: () => [] }, steps: new StepLog(hub as never), hub: hub as never, now: () => Date.now(), wire: (ev) => svc.resolve(ev), onResult: (r) => results.push(r) });
+    const router = new ControlRouter({ targets, dispatcher, specs: { get: () => undefined, list: () => [] }, steps: new StepLog(hub as never), hub: hub as never, now: () => Date.now(), wire: (ev) => svc.resolve(ev), manualReady: () => policy.ready, onResult: (r) => results.push(r) });
     return { router, fire, t, results };
   }
   const ev = (widgetId: string, value: number | boolean, specId = 'spec-1') => ({ widgetId, value, ts: 1, specId, phase: 'move' as const });
+
+  it('keeps optional manual controls inert until a wiring exists while generated outputs still use their own gate', () => {
+    const policy = { ready: false };
+    const { router, t, fire } = rig(policy);
+    const resolve = vi.spyOn(router, 'resolve');
+    resolve.mockReturnValue({ target: t, driver: t.driver!, hack: wireHack('manual-warp', t.driver!.actions[0]!, 30) });
+    expect(router.onControlEvent(ev('manual-warp', 80))).toMatchObject({ ok: false, fired: 0, reason: 'Ask Muse what your hands should do first' });
+    expect(fire).not.toHaveBeenCalled();
+    policy.ready = true;
+    expect(router.onControlEvent(ev('manual-warp', 80))).toMatchObject({ ok: true, fired: 1 });
+    resolve.mockRestore();
+    policy.ready = false;
+    expect(router.onControlEvent(ev('wire:cc22', 90))).toMatchObject({ ok: true, fired: 1 });
+  });
 
   it('fires the driver op with the value clamped to the action range', () => {
     const { router, fire } = rig();

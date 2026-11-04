@@ -454,6 +454,9 @@ export class WireService {
     const { hub, targets } = this.d;
     const cardId = p.cardId;
     this.jobs.get(cardId)?.abort();
+    // Asking again withdraws the previous program immediately. A failed new
+    // request must not leave the old hand mapping authorized on the server.
+    this.active.delete(cardId);
     const abort = new AbortController();
     this.jobs.set(cardId, abort);
     const wiringId = newId('wire-');
@@ -545,7 +548,9 @@ export class WireService {
 
   /** Stop, panic, untag, mode change: the program must be asked for again. */
   clear(cardId?: string): void {
-    for (const id of cardId ? [cardId] : [...this.active.keys()]) {
+    // A first request is not active yet. Include pending jobs so Stop while
+    // Muse is writing cannot publish a late ready and restart the interaction.
+    for (const id of cardId ? [cardId] : new Set([...this.active.keys(), ...this.jobs.keys()])) {
       this.active.delete(id);
       this.jobs.get(id)?.abort();
       this.jobs.delete(id);
