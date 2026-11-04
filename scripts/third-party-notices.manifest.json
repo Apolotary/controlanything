@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "scope": "Conservative installed runtime dependency closure (dependencies, installed optional dependencies and installed peers) of the Quest, companion, sim, server and shared protocol/control packages, plus the browser-imported emulator packages; supplemental icon attribution and vendored asset notices. This is not a list of modules proven present in every browser bundle, nor all development tools in package-lock.json.",
+  "workspacePackages": [
+    "apps/quest/package.json",
+    "apps/companion/package.json",
+    "apps/sim/package.json",
+    "apps/server/package.json",
+    "packages/protocol/package.json",
+    "packages/gen3d/package.json",
+    "packages/vsynth/package.json"
+  ],
+  "supplementalPackages": [
+    {
+      "name": "lucide-react",
+      "reason": "Installed Lucide icon-set ISC notice, supplementing the implementation notices shipped by @pmndrs/uikit-lucide. This entry does not claim React is used by the Quest UI."
+    }
+  ],
+  "vendoredNotices": [
+    {
+      "id": "webxr-input-profiles-assets",
+      "name": "@webxr-input-profiles/assets vendored meshes",
+      "version": null,
+      "versionNote": "The exact upstream asset package version was not recorded with these vendored files.",
+      "sourceFile": "apps/quest/public/xr-profiles/LICENSE.md",
+      "reason": "Existing full MIT notice accompanying generic-hand and meta-quest-touch-plus GLB assets."
+    },
+    {
+      "id": "jetbrains-mono",
+      "name": "JetBrains Mono vendored regular font",
+      "version": null,
+      "versionNote": "Vendored font, not an installed npm package; no package version is inferred.",
+      "sourceFile": "apps/quest/public/fonts/OFL-JetBrainsMono.txt",
+      "reason": "Existing full SIL Open Font License accompanying JetBrainsMono-Regular.ttf."
+    },
+    {
+      "id": "vendored-inter-fonts",
+      "name": "Inter vendored fonts, CE Inter Tabular and generated MSDF atlas",
+      "version": null,
+      "versionNote": "Vendored/derived assets; provenance and reproduction are documented in apps/quest/public/fonts/README.txt.",
+      "sourceFile": "apps/quest/public/fonts/OFL-Inter.txt",
+      "reason": "Preserves the exact existing notice accompanying the copied and derived Inter assets, independently of the installed font package version."
+    }
+  ],
+  "outputs": [
+    "apps/quest/public/notices",
+    "apps/companion/public/notices",
+    "apps/sim/public/notices"
+  ],
+  "browserImportedDevPackages": [
+    {
+      "name": "iwer",
+      "reason": "Quest app/emulator.ts imports IWER into the optional browser emulator chunk despite its development-dependency declaration."
+    },
+    {
+      "name": "@iwer/devui",
+      "reason": "Quest app/emulator.ts imports the emulator UI into an optional browser chunk despite its development-dependency declaration."
+    }
+  ],
+  "upstreamNotices": [
+    {
+      "name": "yoga-layout",
+      "version": "3.2.1",
+      "sourceFile": "third-party/notices/yoga-layout-3.2.1-LICENSE",
+      "upstreamFile": "LICENSE",
+      "repositoryFromInstalledPackage": "git@github.com:facebook/yoga.git",
+      "tag": "v3.2.1",
+      "commit": "042f5013152eb81c1552dec945b88f7b95ca350f",
+      "url": "https://raw.githubusercontent.com/facebook/yoga/042f5013152eb81c1552dec945b88f7b95ca350f/LICENSE",
+      "resolvedUrl": "https://raw.githubusercontent.com/facebook/yoga/042f5013152eb81c1552dec945b88f7b95ca350f/LICENSE",
+      "sha256": "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85",
+      "reason": "The installed yoga-layout@3.2.1 package declares MIT but omits the full LICENSE file; copied verbatim from its official repository at the version tag commit."
+    }
+  ]
+}

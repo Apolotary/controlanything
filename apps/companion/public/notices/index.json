@@ -1,0 +1,3213 @@
+{
+  "schemaVersion": 1,
+  "generator": "scripts/bundle-third-party-notices.mjs",
+  "scopeManifest": "scripts/third-party-notices.manifest.json",
+  "scope": "Conservative installed runtime dependency closure (dependencies, installed optional dependencies and installed peers) of the Quest, companion, sim, server and shared protocol/control packages, plus the browser-imported emulator packages; supplemental icon attribution and vendored asset notices. This is not a list of modules proven present in every browser bundle, nor all development tools in package-lock.json.",
+  "omittedUninstalledOptionalDependencies": [
+    "lucide-react: @types/react",
+    "styled-components: react-native",
+    "ws: bufferutil",
+    "ws: utf-8-validate",
+    "zustand: @types/react",
+    "zustand: immer"
+  ],
+  "entries": [
+    {
+      "kind": "installed-package",
+      "name": "@emotion/is-prop-valid",
+      "version": "1.4.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@emotion/is-prop-valid/package.json",
+      "includedVia": [
+        "styled-components"
+      ],
+      "notices": [
+        {
+          "file": "packages/emotion--is-prop-valid@1.4.0/LICENSE",
+          "sourceFile": "node_modules/@emotion/is-prop-valid/LICENSE",
+          "bytes": 1087,
+          "sha256": "6e8d23763cf7cb707ad8f6677aa502ebeca1dda447e6d6e57f6549c1625b9c4a"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@emotion/memoize",
+      "version": "0.9.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@emotion/memoize/package.json",
+      "includedVia": [
+        "@emotion/is-prop-valid"
+      ],
+      "notices": [
+        {
+          "file": "packages/emotion--memoize@0.9.0/LICENSE",
+          "sourceFile": "node_modules/@emotion/memoize/LICENSE",
+          "bytes": 1087,
+          "sha256": "6e8d23763cf7cb707ad8f6677aa502ebeca1dda447e6d6e57f6549c1625b9c4a"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@fontsource/chakra-petch",
+      "version": "5.3.0",
+      "licenseMetadata": "OFL-1.1",
+      "packageJson": "node_modules/@fontsource/chakra-petch/package.json",
+      "includedVia": [
+        "@ce/quest",
+        "@ce/sim"
+      ],
+      "notices": [
+        {
+          "file": "packages/fontsource--chakra-petch@5.3.0/LICENSE",
+          "sourceFile": "node_modules/@fontsource/chakra-petch/LICENSE",
+          "bytes": 5472,
+          "sha256": "8f32c96ea465c5916489845361238b31b365414228bc2e4e45e3ae98ba1d311a"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@fontsource/inter",
+      "version": "5.3.0",
+      "licenseMetadata": "OFL-1.1",
+      "packageJson": "node_modules/@fontsource/inter/package.json",
+      "includedVia": [
+        "@ce/companion",
+        "@ce/quest"
+      ],
+      "notices": [
+        {
+          "file": "packages/fontsource--inter@5.3.0/LICENSE",
+          "sourceFile": "node_modules/@fontsource/inter/LICENSE",
+          "bytes": 4477,
+          "sha256": "3b0a5fca3d17942cde889069889dedbbbd075e9b599968c82a95f4d944e9b345"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@fontsource/share-tech-mono",
+      "version": "5.3.0",
+      "licenseMetadata": "OFL-1.1",
+      "packageJson": "node_modules/@fontsource/share-tech-mono/package.json",
+      "includedVia": [
+        "@ce/quest",
+        "@ce/sim"
+      ],
+      "notices": [
+        {
+          "file": "packages/fontsource--share-tech-mono@5.3.0/LICENSE",
+          "sourceFile": "node_modules/@fontsource/share-tech-mono/LICENSE",
+          "bytes": 4428,
+          "sha256": "9909bc951ab73dcf212a1675aab327ffafa853c2b8e8d11a066b1bcc57afeefb"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "three",
+      "version": "0.184.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@iwer/devui/node_modules/three/package.json",
+      "includedVia": [
+        "@iwer/devui"
+      ],
+      "notices": [
+        {
+          "file": "packages/three@0.184.0/LICENSE",
+          "sourceFile": "node_modules/@iwer/devui/node_modules/three/LICENSE",
+          "bytes": 1081,
+          "sha256": "8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@iwer/devui",
+      "version": "2.7.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@iwer/devui/package.json",
+      "includedVia": [
+        "Quest app/emulator.ts imports the emulator UI into an optional browser chunk despite its development-dependency declaration."
+      ],
+      "notices": [
+        {
+          "file": "packages/iwer--devui@2.7.0/LICENSE",
+          "sourceFile": "node_modules/@iwer/devui/LICENSE",
+          "bytes": 1088,
+          "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@iwsdk/xr-input",
+      "version": "1.0.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@iwsdk/xr-input/package.json",
+      "includedVia": [
+        "@ce/quest"
+      ],
+      "notices": [
+        {
+          "file": "packages/iwsdk--xr-input@1.0.1/LICENSE",
+          "sourceFile": "node_modules/@iwsdk/xr-input/LICENSE",
+          "bytes": 1088,
+          "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@meta-sam/parser",
+      "version": "0.1.0",
+      "licenseMetadata": "SEE LICENSE IN LICENSE",
+      "packageJson": "node_modules/@meta-sam/parser/package.json",
+      "includedVia": [
+        "@ce/server"
+      ],
+      "notices": [
+        {
+          "file": "packages/meta-sam--parser@0.1.0/LICENSE",
+          "sourceFile": "node_modules/@meta-sam/parser/LICENSE",
+          "bytes": 7353,
+          "sha256": "4dea99bfaa016e21bc860d73f344236bd1e5c4977d1a9a8fd32f822b500ae1be"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@noble/hashes",
+      "version": "1.8.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@noble/hashes/package.json",
+      "includedVia": [
+        "pkijs"
+      ],
+      "notices": [
+        {
+          "file": "packages/noble--hashes@1.8.0/LICENSE",
+          "sourceFile": "node_modules/@noble/hashes/LICENSE",
+          "bytes": 1109,
+          "sha256": "4f221aee6e072336700c408c68ab3b96a3fc09f6aebe6f48f1bd99e5ef13faec"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@peculiar/asn1-cms",
+      "version": "2.11.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@peculiar/asn1-cms/package.json",
+      "includedVia": [
+        "@peculiar/asn1-pfx",
+        "@peculiar/asn1-pkcs9",
+        "@peculiar/x509"
+      ],
+      "notices": [
+        {
+          "file": "packages/peculiar--asn1-cms@2.11.1/LICENSE",
+          "sourceFile": "node_modules/@peculiar/asn1-cms/LICENSE",
+          "bytes": 1057,
+          "sha256": "1ecdd8e8977af83c07c5f97bec87b47d27059b7ea323ca3160fbfa2314f5d99c"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@peculiar/asn1-csr",
+      "version": "2.11.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@peculiar/asn1-csr/package.json",
+      "includedVia": [
+        "@peculiar/x509"
+      ],
+      "notices": [
+        {
+          "file": "packages/peculiar--asn1-csr@2.11.1/LICENSE",
+          "sourceFile": "node_modules/@peculiar/asn1-csr/LICENSE",
+          "bytes": 1059,
+          "sha256": "031b1aac1313d91559ecc89cb6ce7c822f39f1a1259fae0f9b8d01a90c35c85a"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@peculiar/asn1-ecc",
+      "version": "2.11.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@peculiar/asn1-ecc/package.json",
+      "includedVia": [
+        "@peculiar/x509"
+      ],
+      "notices": [
+        {
+          "file": "packages/peculiar--asn1-ecc@2.11.1/LICENSE",
+          "sourceFile": "node_modules/@peculiar/asn1-ecc/LICENSE",
+          "bytes": 1059,
+          "sha256": "031b1aac1313d91559ecc89cb6ce7c822f39f1a1259fae0f9b8d01a90c35c85a"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@peculiar/asn1-pfx",
+      "version": "2.11.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@peculiar/asn1-pfx/package.json",
+      "includedVia": [
+        "@peculiar/asn1-pkcs9"
+      ],
+      "notices": [
+        {
+          "file": "packages/peculiar--asn1-pfx@2.11.1/LICENSE",
+          "sourceFile": "node_modules/@peculiar/asn1-pfx/LICENSE",
+          "bytes": 1059,
+          "sha256": "031b1aac1313d91559ecc89cb6ce7c822f39f1a1259fae0f9b8d01a90c35c85a"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@peculiar/asn1-pkcs8",
+      "version": "2.11.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@peculiar/asn1-pkcs8/package.json",
+      "includedVia": [
+        "@peculiar/asn1-pfx",
+        "@peculiar/asn1-pkcs9"
+      ],
+      "notices": [
+        {
+          "file": "packages/peculiar--asn1-pkcs8@2.11.1/LICENSE",
+          "sourceFile": "node_modules/@peculiar/asn1-pkcs8/LICENSE",
+          "bytes": 1059,
+          "sha256": "031b1aac1313d91559ecc89cb6ce7c822f39f1a1259fae0f9b8d01a90c35c85a"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@peculiar/asn1-pkcs9",
+      "version": "2.11.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@peculiar/asn1-pkcs9/package.json",
+      "includedVia": [
+        "@peculiar/x509"
+      ],
+      "notices": [
+        {
+          "file": "packages/peculiar--asn1-pkcs9@2.11.1/LICENSE",
+          "sourceFile": "node_modules/@peculiar/asn1-pkcs9/LICENSE",
+          "bytes": 1056,
+          "sha256": "3ee7c4b649b783688f1186c9aa0da50e331027514c9bfa143f27983e23783c71"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@peculiar/asn1-rsa",
+      "version": "2.11.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@peculiar/asn1-rsa/package.json",
+      "includedVia": [
+        "@peculiar/asn1-pfx",
+        "@peculiar/x509"
+      ],
+      "notices": [
+        {
+          "file": "packages/peculiar--asn1-rsa@2.11.1/LICENSE",
+          "sourceFile": "node_modules/@peculiar/asn1-rsa/LICENSE",
+          "bytes": 1059,
+          "sha256": "031b1aac1313d91559ecc89cb6ce7c822f39f1a1259fae0f9b8d01a90c35c85a"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@peculiar/asn1-schema",
+      "version": "2.11.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@peculiar/asn1-schema/package.json",
+      "includedVia": [
+        "@peculiar/asn1-cms",
+        "@peculiar/asn1-csr",
+        "@peculiar/asn1-ecc",
+        "@peculiar/asn1-pfx",
+        "@peculiar/asn1-pkcs8",
+        "@peculiar/asn1-pkcs9",
+        "@peculiar/asn1-rsa",
+        "@peculiar/asn1-x509",
+        "@peculiar/asn1-x509-attr",
+        "@peculiar/x509"
+      ],
+      "notices": [
+        {
+          "file": "packages/peculiar--asn1-schema@2.11.1/LICENSE",
+          "sourceFile": "node_modules/@peculiar/asn1-schema/LICENSE",
+          "bytes": 1057,
+          "sha256": "1ecdd8e8977af83c07c5f97bec87b47d27059b7ea323ca3160fbfa2314f5d99c"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@peculiar/asn1-x509-attr",
+      "version": "2.11.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@peculiar/asn1-x509-attr/package.json",
+      "includedVia": [
+        "@peculiar/asn1-cms",
+        "@peculiar/asn1-pkcs9"
+      ],
+      "notices": [
+        {
+          "file": "packages/peculiar--asn1-x509-attr@2.11.1/LICENSE",
+          "sourceFile": "node_modules/@peculiar/asn1-x509-attr/LICENSE",
+          "bytes": 1059,
+          "sha256": "031b1aac1313d91559ecc89cb6ce7c822f39f1a1259fae0f9b8d01a90c35c85a"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@peculiar/asn1-x509",
+      "version": "2.11.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@peculiar/asn1-x509/package.json",
+      "includedVia": [
+        "@peculiar/asn1-cms",
+        "@peculiar/asn1-csr",
+        "@peculiar/asn1-ecc",
+        "@peculiar/asn1-pkcs8",
+        "@peculiar/asn1-pkcs9",
+        "@peculiar/asn1-rsa",
+        "@peculiar/asn1-x509-attr",
+        "@peculiar/x509"
+      ],
+      "notices": [
+        {
+          "file": "packages/peculiar--asn1-x509@2.11.1/LICENSE",
+          "sourceFile": "node_modules/@peculiar/asn1-x509/LICENSE",
+          "bytes": 1057,
+          "sha256": "1ecdd8e8977af83c07c5f97bec87b47d27059b7ea323ca3160fbfa2314f5d99c"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@peculiar/utils",
+      "version": "2.0.3",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@peculiar/utils/package.json",
+      "includedVia": [
+        "@peculiar/asn1-schema",
+        "@peculiar/asn1-x509"
+      ],
+      "notices": [
+        {
+          "file": "packages/peculiar--utils@2.0.3/LICENSE",
+          "sourceFile": "node_modules/@peculiar/utils/LICENSE",
+          "bytes": 1084,
+          "sha256": "ce2ae0f0066d1be56ab4ec851cc611805bb95cdc8dd858b301e22ee54b351d43"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@peculiar/x509",
+      "version": "1.14.3",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@peculiar/x509/package.json",
+      "includedVia": [
+        "selfsigned"
+      ],
+      "notices": [
+        {
+          "file": "packages/peculiar--x509@1.14.3/LICENSE",
+          "sourceFile": "node_modules/@peculiar/x509/LICENSE",
+          "bytes": 1091,
+          "sha256": "3d5d1b1150b1fc25144d342daaba3875899b8dc2fcb172ea4810cc69affbe4d3"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "zustand",
+      "version": "4.5.7",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@pmndrs/handle/node_modules/zustand/package.json",
+      "includedVia": [
+        "@pmndrs/handle"
+      ],
+      "notices": [
+        {
+          "file": "packages/zustand@4.5.7/LICENSE",
+          "sourceFile": "node_modules/@pmndrs/handle/node_modules/zustand/LICENSE",
+          "bytes": 1070,
+          "sha256": "c1e6e266563517467b1bf874817d23e426f3149252bd7d42758cd697514b8417"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@pmndrs/handle",
+      "version": "6.6.32",
+      "licenseMetadata": "SEE LICENSE IN LICENSE",
+      "packageJson": "node_modules/@pmndrs/handle/package.json",
+      "includedVia": [
+        "@iwer/devui"
+      ],
+      "notices": [
+        {
+          "file": "packages/pmndrs--handle@6.6.32/LICENSE",
+          "sourceFile": "node_modules/@pmndrs/handle/LICENSE",
+          "bytes": 1053,
+          "sha256": "3343b2b5561e039178e9c0d54a5574d6c1bd75ca14bf952d62e28b9db6f3e57b"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@pmndrs/msdfonts",
+      "version": "1.0.77",
+      "licenseMetadata": "SEE LICENSE IN LICENSE",
+      "packageJson": "node_modules/@pmndrs/msdfonts/package.json",
+      "includedVia": [
+        "@pmndrs/uikit"
+      ],
+      "notices": [
+        {
+          "file": "packages/pmndrs--msdfonts@1.0.77/LICENSE",
+          "sourceFile": "node_modules/@pmndrs/msdfonts/LICENSE",
+          "bytes": 7045,
+          "sha256": "06e7c2a1144d8118112f24f0c23af37fecc677cacca8fd8bb890af9f7ce640c8"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@pmndrs/pointer-events",
+      "version": "6.6.32",
+      "licenseMetadata": "SEE LICENSE IN LICENSE",
+      "packageJson": "node_modules/@pmndrs/pointer-events/package.json",
+      "includedVia": [
+        "@ce/quest",
+        "@iwer/devui",
+        "@iwsdk/xr-input",
+        "@pmndrs/handle"
+      ],
+      "notices": [
+        {
+          "file": "packages/pmndrs--pointer-events@6.6.32/LICENSE",
+          "sourceFile": "node_modules/@pmndrs/pointer-events/LICENSE",
+          "bytes": 2110,
+          "sha256": "fa82aa0a64aa9ae858bf8a535534510e47cea250a757c12f5b0ad0d9859b346c"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@pmndrs/uikit-horizon",
+      "version": "1.0.77",
+      "licenseMetadata": "SEE LICENSE IN LICENSE",
+      "packageJson": "node_modules/@pmndrs/uikit-horizon/package.json",
+      "includedVia": [
+        "@ce/quest"
+      ],
+      "notices": [
+        {
+          "file": "packages/pmndrs--uikit-horizon@1.0.77/LICENSE",
+          "sourceFile": "node_modules/@pmndrs/uikit-horizon/LICENSE",
+          "bytes": 2129,
+          "sha256": "353ecd943144abb16b41f6283261b45164143c93f118becf5142f05f487bce2b"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@pmndrs/uikit-lucide",
+      "version": "1.0.77",
+      "licenseMetadata": "SEE LICENSE IN LICENSE",
+      "packageJson": "node_modules/@pmndrs/uikit-lucide/package.json",
+      "includedVia": [
+        "@ce/quest",
+        "@pmndrs/uikit-horizon"
+      ],
+      "notices": [
+        {
+          "file": "packages/pmndrs--uikit-lucide@1.0.77/LICENSE",
+          "sourceFile": "node_modules/@pmndrs/uikit-lucide/LICENSE",
+          "bytes": 2110,
+          "sha256": "fa82aa0a64aa9ae858bf8a535534510e47cea250a757c12f5b0ad0d9859b346c"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@pmndrs/uikit-pub-sub",
+      "version": "1.0.77",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@pmndrs/uikit-pub-sub/package.json",
+      "includedVia": [
+        "@pmndrs/uikit"
+      ],
+      "notices": [
+        {
+          "file": "packages/pmndrs--uikit-pub-sub@1.0.77/LICENSE",
+          "sourceFile": "node_modules/@pmndrs/uikit-pub-sub/LICENSE",
+          "bytes": 2110,
+          "sha256": "fa82aa0a64aa9ae858bf8a535534510e47cea250a757c12f5b0ad0d9859b346c"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@pmndrs/uikit",
+      "version": "1.0.77",
+      "licenseMetadata": "SEE LICENSE IN LICENSE",
+      "packageJson": "node_modules/@pmndrs/uikit/package.json",
+      "includedVia": [
+        "@ce/quest",
+        "@pmndrs/uikit-horizon",
+        "@pmndrs/uikit-lucide"
+      ],
+      "notices": [
+        {
+          "file": "packages/pmndrs--uikit@1.0.77/LICENSE",
+          "sourceFile": "node_modules/@pmndrs/uikit/LICENSE",
+          "bytes": 2110,
+          "sha256": "fa82aa0a64aa9ae858bf8a535534510e47cea250a757c12f5b0ad0d9859b346c"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@preact/signals-core",
+      "version": "1.14.5",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@preact/signals-core/package.json",
+      "includedVia": [
+        "@iwsdk/xr-input",
+        "@pmndrs/uikit",
+        "@pmndrs/uikit-pub-sub"
+      ],
+      "notices": [
+        {
+          "file": "packages/preact--signals-core@1.14.5/LICENSE",
+          "sourceFile": "node_modules/@preact/signals-core/LICENSE",
+          "bytes": 1086,
+          "sha256": "a11fc89e4c6b118854c7a667734a0b2e6bf2af5e45c6686de31adbccc8f3ae8d"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@types/stylis",
+      "version": "4.2.7",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@types/stylis/package.json",
+      "includedVia": [
+        "styled-components"
+      ],
+      "notices": [
+        {
+          "file": "packages/types--stylis@4.2.7/LICENSE",
+          "sourceFile": "node_modules/@types/stylis/LICENSE",
+          "bytes": 1141,
+          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "@zappar/msdf-generator",
+      "version": "1.2.4",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/@zappar/msdf-generator/package.json",
+      "includedVia": [
+        "@pmndrs/uikit"
+      ],
+      "notices": [
+        {
+          "file": "packages/zappar--msdf-generator@1.2.4/LICENSE",
+          "sourceFile": "node_modules/@zappar/msdf-generator/LICENSE",
+          "bytes": 6295,
+          "sha256": "e4ec1fc31f33ac79285fd1a72a476928a47302165dfca0b062b95500d8c72b14"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "accepts",
+      "version": "2.0.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/accepts/package.json",
+      "includedVia": [
+        "express"
+      ],
+      "notices": [
+        {
+          "file": "packages/accepts@2.0.0/LICENSE",
+          "sourceFile": "node_modules/accepts/LICENSE",
+          "bytes": 1167,
+          "sha256": "71f83c4c0621102a56d9853812777b85751bce7e9726f686f5b056c1f8a4b0e6"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "asn1js",
+      "version": "3.1.0",
+      "licenseMetadata": "BSD-3-Clause",
+      "packageJson": "node_modules/asn1js/package.json",
+      "includedVia": [
+        "@peculiar/asn1-cms",
+        "@peculiar/asn1-csr",
+        "@peculiar/asn1-ecc",
+        "@peculiar/asn1-pfx",
+        "@peculiar/asn1-pkcs8",
+        "@peculiar/asn1-pkcs9",
+        "@peculiar/asn1-rsa",
+        "@peculiar/asn1-schema",
+        "@peculiar/asn1-x509",
+        "@peculiar/asn1-x509-attr",
+        "pkijs"
+      ],
+      "notices": [
+        {
+          "file": "packages/asn1js@3.1.0/LICENSE",
+          "sourceFile": "node_modules/asn1js/LICENSE",
+          "bytes": 1571,
+          "sha256": "ebe5d98519d0dfcbcb80e20b22a56e7321e8557cd14355760434bbd4c1f4f683"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "bidi-js",
+      "version": "1.1.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/bidi-js/package.json",
+      "includedVia": [
+        "troika-three-text"
+      ],
+      "notices": [
+        {
+          "file": "packages/bidi-js@1.1.0/LICENSE.txt",
+          "sourceFile": "node_modules/bidi-js/LICENSE.txt",
+          "bytes": 1071,
+          "sha256": "49d4d143fed599deb502a0fe6e02f49832f87e9a3a4cd0502e469596d50faa6d"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "body-parser",
+      "version": "2.4.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/body-parser/package.json",
+      "includedVia": [
+        "express"
+      ],
+      "notices": [
+        {
+          "file": "packages/body-parser@2.4.0/LICENSE",
+          "sourceFile": "node_modules/body-parser/LICENSE",
+          "bytes": 1172,
+          "sha256": "23d466b1b134b415b66fa50c6526b4cf3e7b9258554da88d3abb371721e7ce68"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "bytes",
+      "version": "3.1.2",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/bytes/package.json",
+      "includedVia": [
+        "body-parser",
+        "raw-body"
+      ],
+      "notices": [
+        {
+          "file": "packages/bytes@3.1.2/LICENSE",
+          "sourceFile": "node_modules/bytes/LICENSE",
+          "bytes": 1153,
+          "sha256": "e3b44af066615de2ea48d18d852d0762f18c0b2efcea714fa48a6f729d405b85"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "bytestreamjs",
+      "version": "2.0.1",
+      "licenseMetadata": "BSD-3-Clause",
+      "packageJson": "node_modules/bytestreamjs/package.json",
+      "includedVia": [
+        "pkijs"
+      ],
+      "notices": [
+        {
+          "file": "packages/bytestreamjs@2.0.1/LICENSE",
+          "sourceFile": "node_modules/bytestreamjs/LICENSE",
+          "bytes": 1534,
+          "sha256": "f0fd6a4bf9bf46cfcea2005f800305fbb72cd0152b3c269cf496388258ee08f9"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "call-bind-apply-helpers",
+      "version": "1.0.2",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/call-bind-apply-helpers/package.json",
+      "includedVia": [
+        "call-bound",
+        "dunder-proto",
+        "get-intrinsic"
+      ],
+      "notices": [
+        {
+          "file": "packages/call-bind-apply-helpers@1.0.2/LICENSE",
+          "sourceFile": "node_modules/call-bind-apply-helpers/LICENSE",
+          "bytes": 1071,
+          "sha256": "5e325595b4ea8cfec3802f545b1def5d7b73e4a5b8e9ba63e32a320f67732292"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "call-bound",
+      "version": "1.0.4",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/call-bound/package.json",
+      "includedVia": [
+        "side-channel-map",
+        "side-channel-weakmap"
+      ],
+      "notices": [
+        {
+          "file": "packages/call-bound@1.0.4/LICENSE",
+          "sourceFile": "node_modules/call-bound/LICENSE",
+          "bytes": 1071,
+          "sha256": "5e325595b4ea8cfec3802f545b1def5d7b73e4a5b8e9ba63e32a320f67732292"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "camelcase",
+      "version": "5.3.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/camelcase/package.json",
+      "includedVia": [
+        "yargs-parser"
+      ],
+      "notices": [
+        {
+          "file": "packages/camelcase@5.3.1/license",
+          "sourceFile": "node_modules/camelcase/license",
+          "bytes": 1109,
+          "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "camelize",
+      "version": "1.0.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/camelize/package.json",
+      "includedVia": [
+        "css-to-react-native"
+      ],
+      "notices": [
+        {
+          "file": "packages/camelize@1.0.1/LICENSE",
+          "sourceFile": "node_modules/camelize/LICENSE",
+          "bytes": 1073,
+          "sha256": "435a6722c786b0a56fbe7387028f1d9d3f3a2d0fb615bb8fee118727c3f59b7b"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "color-convert",
+      "version": "2.0.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/color-convert/package.json",
+      "includedVia": [
+        "ansi-styles"
+      ],
+      "notices": [
+        {
+          "file": "packages/color-convert@2.0.1/LICENSE",
+          "sourceFile": "node_modules/color-convert/LICENSE",
+          "bytes": 1087,
+          "sha256": "693866fc419c6f61c8570438ec00659d156ec2b4d4a4d04091711f5f11a365d4"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "color-name",
+      "version": "1.1.4",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/color-name/package.json",
+      "includedVia": [
+        "color-convert"
+      ],
+      "notices": [
+        {
+          "file": "packages/color-name@1.1.4/LICENSE",
+          "sourceFile": "node_modules/color-name/LICENSE",
+          "bytes": 1085,
+          "sha256": "c064f7a3e353bc1bc977f3c897941c75ef763f44f41677e0a15370ca0853d6e2"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "comlink",
+      "version": "4.4.2",
+      "licenseMetadata": "Apache-2.0",
+      "packageJson": "node_modules/comlink/package.json",
+      "includedVia": [
+        "@zappar/msdf-generator"
+      ],
+      "notices": [
+        {
+          "file": "packages/comlink@4.4.2/LICENSE",
+          "sourceFile": "node_modules/comlink/LICENSE",
+          "bytes": 11341,
+          "sha256": "bcf29b4fd3ec2cb5f9d40a0866da446f6da62170d2ccedf4aeca9cf9406dd20c"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "content-disposition",
+      "version": "2.0.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/content-disposition/package.json",
+      "includedVia": [
+        "express"
+      ],
+      "notices": [
+        {
+          "file": "packages/content-disposition@2.0.1/LICENSE",
+          "sourceFile": "node_modules/content-disposition/LICENSE",
+          "bytes": 1094,
+          "sha256": "bd47ce7b88c7759630d1e2b9fcfa170a0f1fde522be09e13fb1581a79d090400"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "content-type",
+      "version": "2.1.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/content-type/package.json",
+      "includedVia": [
+        "body-parser",
+        "express",
+        "negotiator",
+        "type-is"
+      ],
+      "notices": [
+        {
+          "file": "packages/content-type@2.1.0/LICENSE",
+          "sourceFile": "node_modules/content-type/LICENSE",
+          "bytes": 1089,
+          "sha256": "257aed98914108e91a337912727b6a802eef218248507f74b76faffaff517a38"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "cookie-signature",
+      "version": "1.2.2",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/cookie-signature/package.json",
+      "includedVia": [
+        "express"
+      ],
+      "notices": [
+        {
+          "file": "packages/cookie-signature@1.2.2/LICENSE",
+          "sourceFile": "node_modules/cookie-signature/LICENSE",
+          "bytes": 1124,
+          "sha256": "0dd4e47333485760cf8c265db5a5e24ae8d7401064c6f2e19793ee81a5bef42f"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "cookie",
+      "version": "0.7.2",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/cookie/package.json",
+      "includedVia": [
+        "express"
+      ],
+      "notices": [
+        {
+          "file": "packages/cookie@0.7.2/LICENSE",
+          "sourceFile": "node_modules/cookie/LICENSE",
+          "bytes": 1175,
+          "sha256": "c02110eedc16c7114f1a9bdc026c65626ce1d9c7e27fd51a8e0feee8a48a6858"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "css-color-keywords",
+      "version": "1.0.0",
+      "licenseMetadata": "ISC",
+      "packageJson": "node_modules/css-color-keywords/package.json",
+      "includedVia": [
+        "css-to-react-native"
+      ],
+      "notices": [
+        {
+          "file": "packages/css-color-keywords@1.0.0/LICENSE",
+          "sourceFile": "node_modules/css-color-keywords/LICENSE",
+          "bytes": 747,
+          "sha256": "17a548211b4a0cfaa8991068a39d30b0e7ef5c199321bb1c3484509529a8df05"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "css-to-react-native",
+      "version": "3.2.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/css-to-react-native/package.json",
+      "includedVia": [
+        "styled-components"
+      ],
+      "notices": [
+        {
+          "file": "packages/css-to-react-native@3.2.0/LICENSE.md",
+          "sourceFile": "node_modules/css-to-react-native/LICENSE.md",
+          "bytes": 1092,
+          "sha256": "9200b800b2460900fe3bff06010726f3a29079511e80245f43a24ef89c0e9d38"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "csstype",
+      "version": "3.2.3",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/csstype/package.json",
+      "includedVia": [
+        "styled-components"
+      ],
+      "notices": [
+        {
+          "file": "packages/csstype@3.2.3/LICENSE",
+          "sourceFile": "node_modules/csstype/LICENSE",
+          "bytes": 1062,
+          "sha256": "11d55bd4541c75ee7879547ac49089c489163dae49551389713c3d026cab383e"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "debug",
+      "version": "4.4.3",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/debug/package.json",
+      "includedVia": [
+        "body-parser",
+        "express",
+        "finalhandler",
+        "router",
+        "send"
+      ],
+      "notices": [
+        {
+          "file": "packages/debug@4.4.3/LICENSE",
+          "sourceFile": "node_modules/debug/LICENSE",
+          "bytes": 1139,
+          "sha256": "3a61c6c96caf5c1d9b623fb9b04c822b783dfcb78aa7e49c76a3f643e6ed7f95"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "decamelize",
+      "version": "1.2.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/decamelize/package.json",
+      "includedVia": [
+        "yargs",
+        "yargs-parser"
+      ],
+      "notices": [
+        {
+          "file": "packages/decamelize@1.2.0/license",
+          "sourceFile": "node_modules/decamelize/license",
+          "bytes": 1119,
+          "sha256": "6fb9754611c20f6649f68805e8c990e83261f29316e29de9e6cedae607b8634c"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "depd",
+      "version": "2.0.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/depd/package.json",
+      "includedVia": [
+        "express",
+        "http-errors",
+        "router"
+      ],
+      "notices": [
+        {
+          "file": "packages/depd@2.0.0/LICENSE",
+          "sourceFile": "node_modules/depd/LICENSE",
+          "bytes": 1094,
+          "sha256": "bd134b41da59e452fb5a1d366b660886f741c87c2bf9428e93764c419fbc40f5"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "dijkstrajs",
+      "version": "1.0.3",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/dijkstrajs/package.json",
+      "includedVia": [
+        "qrcode"
+      ],
+      "notices": [
+        {
+          "file": "packages/dijkstrajs@1.0.3/LICENSE.md",
+          "sourceFile": "node_modules/dijkstrajs/LICENSE.md",
+          "bytes": 714,
+          "sha256": "c46324e45a005413535a6fb7a97e9eacd3cc6bf30335b7d5c10b8ee3af9e60c2"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "dunder-proto",
+      "version": "1.0.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/dunder-proto/package.json",
+      "includedVia": [
+        "get-proto"
+      ],
+      "notices": [
+        {
+          "file": "packages/dunder-proto@1.0.1/LICENSE",
+          "sourceFile": "node_modules/dunder-proto/LICENSE",
+          "bytes": 1073,
+          "sha256": "2b770a704c15de238c3f622b01b0044ddd60b49ee30608ea6991ebf19db7a7a1"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "ee-first",
+      "version": "1.1.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/ee-first/package.json",
+      "includedVia": [
+        "on-finished"
+      ],
+      "notices": [
+        {
+          "file": "packages/ee-first@1.1.1/LICENSE",
+          "sourceFile": "node_modules/ee-first/LICENSE",
+          "bytes": 1099,
+          "sha256": "965ef284f7f4c176842ec2e87fa13e79feed777d56d7a21a5a3b38f1bb6dc288"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "encodeurl",
+      "version": "2.0.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/encodeurl/package.json",
+      "includedVia": [
+        "express",
+        "finalhandler",
+        "send",
+        "serve-static"
+      ],
+      "notices": [
+        {
+          "file": "packages/encodeurl@2.0.0/LICENSE",
+          "sourceFile": "node_modules/encodeurl/LICENSE",
+          "bytes": 1089,
+          "sha256": "7585ea7bba616ccbbe43cb54ecb67956688c3c5641bb84f3099a652a73193afe"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "es-define-property",
+      "version": "1.0.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/es-define-property/package.json",
+      "includedVia": [
+        "get-intrinsic",
+        "qs"
+      ],
+      "notices": [
+        {
+          "file": "packages/es-define-property@1.0.1/LICENSE",
+          "sourceFile": "node_modules/es-define-property/LICENSE",
+          "bytes": 1071,
+          "sha256": "5e325595b4ea8cfec3802f545b1def5d7b73e4a5b8e9ba63e32a320f67732292"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "es-errors",
+      "version": "1.3.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/es-errors/package.json",
+      "includedVia": [
+        "call-bind-apply-helpers",
+        "dunder-proto",
+        "es-object-atoms",
+        "get-intrinsic",
+        "side-channel",
+        "side-channel-list",
+        "side-channel-map",
+        "side-channel-weakmap"
+      ],
+      "notices": [
+        {
+          "file": "packages/es-errors@1.3.0/LICENSE",
+          "sourceFile": "node_modules/es-errors/LICENSE",
+          "bytes": 1071,
+          "sha256": "5e325595b4ea8cfec3802f545b1def5d7b73e4a5b8e9ba63e32a320f67732292"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "es-object-atoms",
+      "version": "1.1.2",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/es-object-atoms/package.json",
+      "includedVia": [
+        "get-intrinsic",
+        "get-proto"
+      ],
+      "notices": [
+        {
+          "file": "packages/es-object-atoms@1.1.2/LICENSE",
+          "sourceFile": "node_modules/es-object-atoms/LICENSE",
+          "bytes": 1071,
+          "sha256": "5e325595b4ea8cfec3802f545b1def5d7b73e4a5b8e9ba63e32a320f67732292"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "escape-html",
+      "version": "1.0.3",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/escape-html/package.json",
+      "includedVia": [
+        "express",
+        "finalhandler",
+        "send",
+        "serve-static"
+      ],
+      "notices": [
+        {
+          "file": "packages/escape-html@1.0.3/LICENSE",
+          "sourceFile": "node_modules/escape-html/LICENSE",
+          "bytes": 1157,
+          "sha256": "255aa557a1f55224ce522f311629c0bf20854740a67955cefd798fbd1d3d1ded"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "etag",
+      "version": "1.8.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/etag/package.json",
+      "includedVia": [
+        "express",
+        "send"
+      ],
+      "notices": [
+        {
+          "file": "packages/etag@1.8.1/LICENSE",
+          "sourceFile": "node_modules/etag/LICENSE",
+          "bytes": 1094,
+          "sha256": "a7996721249a136fbcfc1c201bcb5f414f38a701d4a24f28abe65e16cfcce813"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "express",
+      "version": "5.3.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/express/package.json",
+      "includedVia": [
+        "@ce/server"
+      ],
+      "notices": [
+        {
+          "file": "packages/express@5.3.0/LICENSE",
+          "sourceFile": "node_modules/express/LICENSE",
+          "bytes": 1249,
+          "sha256": "95a5762890e5c1c9808921cef095661fc482c5e1f0bba31446ac85595df6237c"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "finalhandler",
+      "version": "2.1.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/finalhandler/package.json",
+      "includedVia": [
+        "express"
+      ],
+      "notices": [
+        {
+          "file": "packages/finalhandler@2.1.1/LICENSE",
+          "sourceFile": "node_modules/finalhandler/LICENSE",
+          "bytes": 1119,
+          "sha256": "47dcccf62bf40469d23849b0b1dc8df9fc91bce219b880c638d4dc4596e6b5cf"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "find-up",
+      "version": "4.1.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/find-up/package.json",
+      "includedVia": [
+        "yargs"
+      ],
+      "notices": [
+        {
+          "file": "packages/find-up@4.1.0/license",
+          "sourceFile": "node_modules/find-up/license",
+          "bytes": 1109,
+          "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "forwarded",
+      "version": "0.2.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/forwarded/package.json",
+      "includedVia": [
+        "proxy-addr"
+      ],
+      "notices": [
+        {
+          "file": "packages/forwarded@0.2.0/LICENSE",
+          "sourceFile": "node_modules/forwarded/LICENSE",
+          "bytes": 1094,
+          "sha256": "bd47ce7b88c7759630d1e2b9fcfa170a0f1fde522be09e13fb1581a79d090400"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "fresh",
+      "version": "2.0.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/fresh/package.json",
+      "includedVia": [
+        "express",
+        "send"
+      ],
+      "notices": [
+        {
+          "file": "packages/fresh@2.0.0/LICENSE",
+          "sourceFile": "node_modules/fresh/LICENSE",
+          "bytes": 1174,
+          "sha256": "a0ec0dab16b3666f24950f86d257930ac2ad475557b4bfe245620e0817d8a45d"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "function-bind",
+      "version": "1.1.2",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/function-bind/package.json",
+      "includedVia": [
+        "call-bind-apply-helpers",
+        "get-intrinsic",
+        "hasown"
+      ],
+      "notices": [
+        {
+          "file": "packages/function-bind@1.1.2/LICENSE",
+          "sourceFile": "node_modules/function-bind/LICENSE",
+          "bytes": 1052,
+          "sha256": "773e131a7684726005a7e4688a80b4620033bc08499bc1404dd1a1eb3bca725e"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "get-caller-file",
+      "version": "2.0.5",
+      "licenseMetadata": "ISC",
+      "packageJson": "node_modules/get-caller-file/package.json",
+      "includedVia": [
+        "yargs"
+      ],
+      "notices": [
+        {
+          "file": "packages/get-caller-file@2.0.5/LICENSE.md",
+          "sourceFile": "node_modules/get-caller-file/LICENSE.md",
+          "bytes": 745,
+          "sha256": "902dbb4154679fb2b8d7c33878183f45b268d01eae5e5033dddaa8852d45f213"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "get-intrinsic",
+      "version": "1.3.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/get-intrinsic/package.json",
+      "includedVia": [
+        "call-bound",
+        "side-channel-map",
+        "side-channel-weakmap"
+      ],
+      "notices": [
+        {
+          "file": "packages/get-intrinsic@1.3.0/LICENSE",
+          "sourceFile": "node_modules/get-intrinsic/LICENSE",
+          "bytes": 1071,
+          "sha256": "39c5ec504cf6bd5cd782a7c695828e09189df79f5d94840e4f08feb97b9fd416"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "get-proto",
+      "version": "1.0.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/get-proto/package.json",
+      "includedVia": [
+        "get-intrinsic"
+      ],
+      "notices": [
+        {
+          "file": "packages/get-proto@1.0.1/LICENSE",
+          "sourceFile": "node_modules/get-proto/LICENSE",
+          "bytes": 1071,
+          "sha256": "be46ce1e3b0479af9ce82d22b465a6d7d2ff084fca0aaf3d54172da2b5eb5781"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "gl-matrix",
+      "version": "3.4.4",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/gl-matrix/package.json",
+      "includedVia": [
+        "iwer",
+        "webxr-layers-polyfill"
+      ],
+      "notices": [
+        {
+          "file": "packages/gl-matrix@3.4.4/LICENSE.md",
+          "sourceFile": "node_modules/gl-matrix/LICENSE.md",
+          "bytes": 1083,
+          "sha256": "af62d31a0cdc1bf95d5e19428c3e0de368b727d9d5b6b6cdb466f8a52e68ad06"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "gopd",
+      "version": "1.2.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/gopd/package.json",
+      "includedVia": [
+        "dunder-proto",
+        "get-intrinsic"
+      ],
+      "notices": [
+        {
+          "file": "packages/gopd@1.2.0/LICENSE",
+          "sourceFile": "node_modules/gopd/LICENSE",
+          "bytes": 1071,
+          "sha256": "d90bf0a089da4cf43d644ed240a0b3825dcdb705e64e38371d56995a4cc9e4c5"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "has-symbols",
+      "version": "1.1.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/has-symbols/package.json",
+      "includedVia": [
+        "get-intrinsic"
+      ],
+      "notices": [
+        {
+          "file": "packages/has-symbols@1.1.0/LICENSE",
+          "sourceFile": "node_modules/has-symbols/LICENSE",
+          "bytes": 1071,
+          "sha256": "206c1adcf206dc0031b11232f5b054ec5f1662407ab1ca415247921cab2068ab"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "hasown",
+      "version": "2.0.4",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/hasown/package.json",
+      "includedVia": [
+        "get-intrinsic"
+      ],
+      "notices": [
+        {
+          "file": "packages/hasown@2.0.4/LICENSE",
+          "sourceFile": "node_modules/hasown/LICENSE",
+          "bytes": 1083,
+          "sha256": "bf9b0d665be2a689851eea667ca9f42066ea1d903b38349c51e6a44b2577680a"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "http-errors",
+      "version": "2.0.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/http-errors/package.json",
+      "includedVia": [
+        "body-parser",
+        "express",
+        "raw-body",
+        "send"
+      ],
+      "notices": [
+        {
+          "file": "packages/http-errors@2.0.1/LICENSE",
+          "sourceFile": "node_modules/http-errors/LICENSE",
+          "bytes": 1168,
+          "sha256": "dcb94ff9b1e037a847bc20589dc81a1066d041fd4c16deb18b0fa968c66cf395"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "iconv-lite",
+      "version": "0.7.3",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/iconv-lite/package.json",
+      "includedVia": [
+        "body-parser",
+        "raw-body"
+      ],
+      "notices": [
+        {
+          "file": "packages/iconv-lite@0.7.3/LICENSE",
+          "sourceFile": "node_modules/iconv-lite/LICENSE",
+          "bytes": 1064,
+          "sha256": "ac779f7314c74f232ef847ea86e714abe25cf6eeb5cc97b69451b74e2af6492d"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "inherits",
+      "version": "2.0.4",
+      "licenseMetadata": "ISC",
+      "packageJson": "node_modules/inherits/package.json",
+      "includedVia": [
+        "http-errors"
+      ],
+      "notices": [
+        {
+          "file": "packages/inherits@2.0.4/LICENSE",
+          "sourceFile": "node_modules/inherits/LICENSE",
+          "bytes": 749,
+          "sha256": "5ffe28e7ade7d8f10d85d5337a73fd793dac5c462fb9a28fbf8c5046c7fbca3b"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "ipaddr.js",
+      "version": "1.9.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/ipaddr.js/package.json",
+      "includedVia": [
+        "proxy-addr"
+      ],
+      "notices": [
+        {
+          "file": "packages/ipaddr.js@1.9.1/LICENSE",
+          "sourceFile": "node_modules/ipaddr.js/LICENSE",
+          "bytes": 1087,
+          "sha256": "62568a2d1337b77171ecca9db10579163446de1ba6151678e81f06cdc199971b"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "is-fullwidth-code-point",
+      "version": "3.0.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/is-fullwidth-code-point/package.json",
+      "includedVia": [
+        "string-width"
+      ],
+      "notices": [
+        {
+          "file": "packages/is-fullwidth-code-point@3.0.0/license",
+          "sourceFile": "node_modules/is-fullwidth-code-point/license",
+          "bytes": 1109,
+          "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "is-promise",
+      "version": "4.0.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/is-promise/package.json",
+      "includedVia": [
+        "router"
+      ],
+      "notices": [
+        {
+          "file": "packages/is-promise@4.0.0/LICENSE",
+          "sourceFile": "node_modules/is-promise/LICENSE",
+          "bytes": 1058,
+          "sha256": "44191656d296391e0ec97e32f5385f0d02b6f2992694082d22ea04ba0f66f9e4"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "iwer",
+      "version": "2.7.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/iwer/package.json",
+      "includedVia": [
+        "@iwer/devui",
+        "Quest app/emulator.ts imports IWER into the optional browser emulator chunk despite its development-dependency declaration."
+      ],
+      "notices": [
+        {
+          "file": "packages/iwer@2.7.0/LICENSE",
+          "sourceFile": "node_modules/iwer/LICENSE",
+          "bytes": 1088,
+          "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "jpeg-js",
+      "version": "0.4.4",
+      "licenseMetadata": "BSD-3-Clause",
+      "packageJson": "node_modules/jpeg-js/package.json",
+      "includedVia": [
+        "@ce/server"
+      ],
+      "notices": [
+        {
+          "file": "packages/jpeg-js@0.4.4/LICENSE",
+          "sourceFile": "node_modules/jpeg-js/LICENSE",
+          "bytes": 1448,
+          "sha256": "c0a8512eabe960492fefd4f287523eb3b5ca1518ca37ef0ec83344cd7f089cb8"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "jsqr",
+      "version": "1.4.0",
+      "licenseMetadata": "Apache-2.0",
+      "packageJson": "node_modules/jsqr/package.json",
+      "includedVia": [
+        "@ce/server"
+      ],
+      "notices": [
+        {
+          "file": "packages/jsqr@1.4.0/LICENSE",
+          "sourceFile": "node_modules/jsqr/LICENSE",
+          "bytes": 11358,
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "locate-path",
+      "version": "5.0.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/locate-path/package.json",
+      "includedVia": [
+        "find-up"
+      ],
+      "notices": [
+        {
+          "file": "packages/locate-path@5.0.0/license",
+          "sourceFile": "node_modules/locate-path/license",
+          "bytes": 1109,
+          "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "lucide-react",
+      "version": "1.61.0",
+      "licenseMetadata": "ISC",
+      "packageJson": "node_modules/lucide-react/package.json",
+      "includedVia": [
+        "@iwer/devui",
+        "Installed Lucide icon-set ISC notice, supplementing the implementation notices shipped by @pmndrs/uikit-lucide. This entry does not claim React is used by the Quest UI."
+      ],
+      "notices": [
+        {
+          "file": "packages/lucide-react@1.61.0/LICENSE",
+          "sourceFile": "node_modules/lucide-react/LICENSE",
+          "bytes": 3208,
+          "sha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "math-intrinsics",
+      "version": "1.1.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/math-intrinsics/package.json",
+      "includedVia": [
+        "get-intrinsic"
+      ],
+      "notices": [
+        {
+          "file": "packages/math-intrinsics@1.1.0/LICENSE",
+          "sourceFile": "node_modules/math-intrinsics/LICENSE",
+          "bytes": 1073,
+          "sha256": "2b770a704c15de238c3f622b01b0044ddd60b49ee30608ea6991ebf19db7a7a1"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "media-typer",
+      "version": "1.1.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/media-typer/package.json",
+      "includedVia": [
+        "type-is"
+      ],
+      "notices": [
+        {
+          "file": "packages/media-typer@1.1.1/LICENSE",
+          "sourceFile": "node_modules/media-typer/LICENSE",
+          "bytes": 1094,
+          "sha256": "bd47ce7b88c7759630d1e2b9fcfa170a0f1fde522be09e13fb1581a79d090400"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "merge-descriptors",
+      "version": "2.0.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/merge-descriptors/package.json",
+      "includedVia": [
+        "express"
+      ],
+      "notices": [
+        {
+          "file": "packages/merge-descriptors@2.0.0/license",
+          "sourceFile": "node_modules/merge-descriptors/license",
+          "bytes": 1231,
+          "sha256": "70b126abc64d7ea06e1243349073935caa16fa47a41a571773ccf0b350b1d574"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "mime-db",
+      "version": "1.54.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/mime-db/package.json",
+      "includedVia": [
+        "mime-types"
+      ],
+      "notices": [
+        {
+          "file": "packages/mime-db@1.54.0/LICENSE",
+          "sourceFile": "node_modules/mime-db/LICENSE",
+          "bytes": 1172,
+          "sha256": "cc1dfd4dafa27271e8212cd3b274eeb3f262e40a6fdab36ddc3f9696f706f58b"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "mime-types",
+      "version": "3.0.2",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/mime-types/package.json",
+      "includedVia": [
+        "accepts",
+        "express",
+        "send",
+        "type-is"
+      ],
+      "notices": [
+        {
+          "file": "packages/mime-types@3.0.2/LICENSE",
+          "sourceFile": "node_modules/mime-types/LICENSE",
+          "bytes": 1167,
+          "sha256": "71f83c4c0621102a56d9853812777b85751bce7e9726f686f5b056c1f8a4b0e6"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "ms",
+      "version": "2.1.3",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/ms/package.json",
+      "includedVia": [
+        "debug",
+        "send"
+      ],
+      "notices": [
+        {
+          "file": "packages/ms@2.1.3/license.md",
+          "sourceFile": "node_modules/ms/license.md",
+          "bytes": 1079,
+          "sha256": "1662fae9b5314d11cf51284e2dcd1f006a354f7343f08712a730fcff9a359801"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "negotiator",
+      "version": "1.1.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/negotiator/package.json",
+      "includedVia": [
+        "accepts"
+      ],
+      "notices": [
+        {
+          "file": "packages/negotiator@1.1.0/LICENSE",
+          "sourceFile": "node_modules/negotiator/LICENSE",
+          "bytes": 1177,
+          "sha256": "553d4d20029a24e315b428a1a54a9e109eaa340f2e958a4f50a92362c2c4070b"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "object-inspect",
+      "version": "1.13.4",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/object-inspect/package.json",
+      "includedVia": [
+        "side-channel",
+        "side-channel-list",
+        "side-channel-map",
+        "side-channel-weakmap"
+      ],
+      "notices": [
+        {
+          "file": "packages/object-inspect@1.13.4/LICENSE",
+          "sourceFile": "node_modules/object-inspect/LICENSE",
+          "bytes": 1071,
+          "sha256": "bd40cc437e28a3ad7bef2ad34e6b72e757b182e67bda1acadbab4ef0476f8232"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "on-finished",
+      "version": "2.4.2",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/on-finished/package.json",
+      "includedVia": [
+        "body-parser",
+        "express",
+        "finalhandler",
+        "send"
+      ],
+      "notices": [
+        {
+          "file": "packages/on-finished@2.4.2/LICENSE",
+          "sourceFile": "node_modules/on-finished/LICENSE",
+          "bytes": 1167,
+          "sha256": "8089bcc08845ec143e5761f4a101a65b8c792a0dedbfeeb90a15560c0b77f768"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "once",
+      "version": "1.4.0",
+      "licenseMetadata": "ISC",
+      "packageJson": "node_modules/once/package.json",
+      "includedVia": [
+        "express"
+      ],
+      "notices": [
+        {
+          "file": "packages/once@1.4.0/LICENSE",
+          "sourceFile": "node_modules/once/LICENSE",
+          "bytes": 765,
+          "sha256": "4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "p-limit",
+      "version": "2.3.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/p-limit/package.json",
+      "includedVia": [
+        "p-locate"
+      ],
+      "notices": [
+        {
+          "file": "packages/p-limit@2.3.0/license",
+          "sourceFile": "node_modules/p-limit/license",
+          "bytes": 1109,
+          "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "p-locate",
+      "version": "4.1.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/p-locate/package.json",
+      "includedVia": [
+        "locate-path"
+      ],
+      "notices": [
+        {
+          "file": "packages/p-locate@4.1.0/license",
+          "sourceFile": "node_modules/p-locate/license",
+          "bytes": 1109,
+          "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "p-try",
+      "version": "2.2.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/p-try/package.json",
+      "includedVia": [
+        "p-limit"
+      ],
+      "notices": [
+        {
+          "file": "packages/p-try@2.2.0/license",
+          "sourceFile": "node_modules/p-try/license",
+          "bytes": 1109,
+          "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "parseurl",
+      "version": "1.3.3",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/parseurl/package.json",
+      "includedVia": [
+        "express",
+        "finalhandler",
+        "router",
+        "serve-static"
+      ],
+      "notices": [
+        {
+          "file": "packages/parseurl@1.3.3/LICENSE",
+          "sourceFile": "node_modules/parseurl/LICENSE",
+          "bytes": 1173,
+          "sha256": "11d017c3b9f1ee3f44caf7203035f0461d5b57e0db8ce1bc03a9af34fa7d3f6b"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "path-exists",
+      "version": "4.0.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/path-exists/package.json",
+      "includedVia": [
+        "find-up"
+      ],
+      "notices": [
+        {
+          "file": "packages/path-exists@4.0.0/license",
+          "sourceFile": "node_modules/path-exists/license",
+          "bytes": 1109,
+          "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "path-to-regexp",
+      "version": "8.4.2",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/path-to-regexp/package.json",
+      "includedVia": [
+        "router"
+      ],
+      "notices": [
+        {
+          "file": "packages/path-to-regexp@8.4.2/LICENSE",
+          "sourceFile": "node_modules/path-to-regexp/LICENSE",
+          "bytes": 1103,
+          "sha256": "4eeb3271453a891df609e5a9f4ee79a68307f730c13417a3bfeffa604ac8cf25"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "pkijs",
+      "version": "3.4.3",
+      "licenseMetadata": "BSD-3-Clause",
+      "packageJson": "node_modules/pkijs/package.json",
+      "includedVia": [
+        "selfsigned"
+      ],
+      "notices": [
+        {
+          "file": "packages/pkijs@3.4.3/LICENSE",
+          "sourceFile": "node_modules/pkijs/LICENSE",
+          "bytes": 1565,
+          "sha256": "d27a2aa238102924ea75da808f79253484347d824b9b7b077837e4232f9493f5"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "pngjs",
+      "version": "5.0.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/pngjs/package.json",
+      "includedVia": [
+        "qrcode"
+      ],
+      "notices": [
+        {
+          "file": "packages/pngjs@5.0.0/LICENSE",
+          "sourceFile": "node_modules/pngjs/LICENSE",
+          "bytes": 1151,
+          "sha256": "176b07a18c0bb3836aaeb61088fd0bf11a38f66e6f15e3fbda85faa225250d6e"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "postcss-value-parser",
+      "version": "4.2.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/postcss-value-parser/package.json",
+      "includedVia": [
+        "css-to-react-native"
+      ],
+      "notices": [
+        {
+          "file": "packages/postcss-value-parser@4.2.0/LICENSE",
+          "sourceFile": "node_modules/postcss-value-parser/LICENSE",
+          "bytes": 1074,
+          "sha256": "3687447039151857a6ba378db062172c7f33d4aa70a615c87a43a9c50e990485"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "proxy-addr",
+      "version": "2.0.8",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/proxy-addr/package.json",
+      "includedVia": [
+        "express"
+      ],
+      "notices": [
+        {
+          "file": "packages/proxy-addr@2.0.8/LICENSE",
+          "sourceFile": "node_modules/proxy-addr/LICENSE",
+          "bytes": 1094,
+          "sha256": "a7996721249a136fbcfc1c201bcb5f414f38a701d4a24f28abe65e16cfcce813"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "pvtsutils",
+      "version": "1.3.6",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/pvtsutils/package.json",
+      "includedVia": [
+        "@peculiar/x509",
+        "asn1js",
+        "pkijs"
+      ],
+      "notices": [
+        {
+          "file": "packages/pvtsutils@1.3.6/LICENSE",
+          "sourceFile": "node_modules/pvtsutils/LICENSE",
+          "bytes": 1084,
+          "sha256": "c620c1d08a47c93ce242914a4269b86e41df5a97845325725a5f83d5d6f9d7fd"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "pvutils",
+      "version": "1.2.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/pvutils/package.json",
+      "includedVia": [
+        "asn1js",
+        "pkijs"
+      ],
+      "notices": [
+        {
+          "file": "packages/pvutils@1.2.0/LICENSE",
+          "sourceFile": "node_modules/pvutils/LICENSE",
+          "bytes": 1137,
+          "sha256": "15c88630f1e778db64a446cb31b67362cc9eb7a048fdf5ac7ab51905b74464cd"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "ansi-regex",
+      "version": "5.0.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/qrcode/node_modules/ansi-regex/package.json",
+      "includedVia": [
+        "strip-ansi"
+      ],
+      "notices": [
+        {
+          "file": "packages/ansi-regex@5.0.1/license",
+          "sourceFile": "node_modules/qrcode/node_modules/ansi-regex/license",
+          "bytes": 1109,
+          "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "ansi-styles",
+      "version": "4.3.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/qrcode/node_modules/ansi-styles/package.json",
+      "includedVia": [
+        "wrap-ansi"
+      ],
+      "notices": [
+        {
+          "file": "packages/ansi-styles@4.3.0/license",
+          "sourceFile": "node_modules/qrcode/node_modules/ansi-styles/license",
+          "bytes": 1109,
+          "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "cliui",
+      "version": "6.0.0",
+      "licenseMetadata": "ISC",
+      "packageJson": "node_modules/qrcode/node_modules/cliui/package.json",
+      "includedVia": [
+        "yargs"
+      ],
+      "notices": [
+        {
+          "file": "packages/cliui@6.0.0/LICENSE.txt",
+          "sourceFile": "node_modules/qrcode/node_modules/cliui/LICENSE.txt",
+          "bytes": 731,
+          "sha256": "2dc0465729366c3a7890dfa9e972a1ba7048a26c02116fb8b419a6a1ac110149"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "emoji-regex",
+      "version": "8.0.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/qrcode/node_modules/emoji-regex/package.json",
+      "includedVia": [
+        "string-width"
+      ],
+      "notices": [
+        {
+          "file": "packages/emoji-regex@8.0.0/LICENSE-MIT.txt",
+          "sourceFile": "node_modules/qrcode/node_modules/emoji-regex/LICENSE-MIT.txt",
+          "bytes": 1077,
+          "sha256": "483acb265f182907d1caf6cff9c16c96f31325ed23792832cc5d8b12d5f88c8a"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "string-width",
+      "version": "4.2.3",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/qrcode/node_modules/string-width/package.json",
+      "includedVia": [
+        "cliui",
+        "wrap-ansi",
+        "yargs"
+      ],
+      "notices": [
+        {
+          "file": "packages/string-width@4.2.3/license",
+          "sourceFile": "node_modules/qrcode/node_modules/string-width/license",
+          "bytes": 1109,
+          "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "strip-ansi",
+      "version": "6.0.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/qrcode/node_modules/strip-ansi/package.json",
+      "includedVia": [
+        "cliui",
+        "string-width",
+        "wrap-ansi"
+      ],
+      "notices": [
+        {
+          "file": "packages/strip-ansi@6.0.1/license",
+          "sourceFile": "node_modules/qrcode/node_modules/strip-ansi/license",
+          "bytes": 1109,
+          "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "wrap-ansi",
+      "version": "6.2.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/qrcode/node_modules/wrap-ansi/package.json",
+      "includedVia": [
+        "cliui"
+      ],
+      "notices": [
+        {
+          "file": "packages/wrap-ansi@6.2.0/license",
+          "sourceFile": "node_modules/qrcode/node_modules/wrap-ansi/license",
+          "bytes": 1109,
+          "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "y18n",
+      "version": "4.0.3",
+      "licenseMetadata": "ISC",
+      "packageJson": "node_modules/qrcode/node_modules/y18n/package.json",
+      "includedVia": [
+        "yargs"
+      ],
+      "notices": [
+        {
+          "file": "packages/y18n@4.0.3/LICENSE",
+          "sourceFile": "node_modules/qrcode/node_modules/y18n/LICENSE",
+          "bytes": 731,
+          "sha256": "2034cce3b6fafcddd642c4175e01d3ddfc332a53b9f20fdc46b1466dc89ac469"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "yargs-parser",
+      "version": "18.1.3",
+      "licenseMetadata": "ISC",
+      "packageJson": "node_modules/qrcode/node_modules/yargs-parser/package.json",
+      "includedVia": [
+        "yargs"
+      ],
+      "notices": [
+        {
+          "file": "packages/yargs-parser@18.1.3/LICENSE.txt",
+          "sourceFile": "node_modules/qrcode/node_modules/yargs-parser/LICENSE.txt",
+          "bytes": 731,
+          "sha256": "365496ca1f56da40b23c9815fc40fa9005847b2f8f8fd1c1a4929ef25ec8cd1d"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "yargs",
+      "version": "15.4.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/qrcode/node_modules/yargs/package.json",
+      "includedVia": [
+        "qrcode"
+      ],
+      "notices": [
+        {
+          "file": "packages/yargs@15.4.1/LICENSE",
+          "sourceFile": "node_modules/qrcode/node_modules/yargs/LICENSE",
+          "bytes": 1146,
+          "sha256": "2f1a503bfab84b3ba7393627308b3274501e459e3b5185bbb56bbf16cb1602d4"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "qrcode",
+      "version": "1.5.4",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/qrcode/package.json",
+      "includedVia": [
+        "@ce/companion",
+        "@ce/quest",
+        "@ce/sim"
+      ],
+      "notices": [
+        {
+          "file": "packages/qrcode@1.5.4/license",
+          "sourceFile": "node_modules/qrcode/license",
+          "bytes": 1076,
+          "sha256": "8df47c6ad9ac2c41eb9b2a72def9908959da0ede8dadd56c7b249c1bdb0c5ce6"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "qs",
+      "version": "6.16.1",
+      "licenseMetadata": "BSD-3-Clause",
+      "packageJson": "node_modules/qs/package.json",
+      "includedVia": [
+        "body-parser",
+        "express"
+      ],
+      "notices": [
+        {
+          "file": "packages/qs@6.16.1/LICENSE.md",
+          "sourceFile": "node_modules/qs/LICENSE.md",
+          "bytes": 1600,
+          "sha256": "e7dc37bf662d7f786efcb46c545615e70c1daf458a38385521c63cf6607cdfe1"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "range-parser",
+      "version": "1.3.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/range-parser/package.json",
+      "includedVia": [
+        "express",
+        "send"
+      ],
+      "notices": [
+        {
+          "file": "packages/range-parser@1.3.0/LICENSE",
+          "sourceFile": "node_modules/range-parser/LICENSE",
+          "bytes": 1178,
+          "sha256": "f655e6291356ec0de7a8f0e69f294961a2cea86678ec94588be1e6a492e278ab"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "raw-body",
+      "version": "3.0.2",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/raw-body/package.json",
+      "includedVia": [
+        "body-parser"
+      ],
+      "notices": [
+        {
+          "file": "packages/raw-body@3.0.2/LICENSE",
+          "sourceFile": "node_modules/raw-body/LICENSE",
+          "bytes": 1181,
+          "sha256": "37876d7de8bdf5e5b9b58a697ebc34044624e493e6f49eff5c938e5226dcac6b"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "react-dom",
+      "version": "19.3.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/react-dom/package.json",
+      "includedVia": [
+        "@iwer/devui",
+        "styled-components"
+      ],
+      "notices": [
+        {
+          "file": "packages/react-dom@19.3.1/LICENSE",
+          "sourceFile": "node_modules/react-dom/LICENSE",
+          "bytes": 1088,
+          "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "react",
+      "version": "19.3.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/react/package.json",
+      "includedVia": [
+        "@iwer/devui",
+        "lucide-react",
+        "react-dom",
+        "styled-components",
+        "use-sync-external-store",
+        "zustand"
+      ],
+      "notices": [
+        {
+          "file": "packages/react@19.3.1/LICENSE",
+          "sourceFile": "node_modules/react/LICENSE",
+          "bytes": 1088,
+          "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "reflect-metadata",
+      "version": "0.2.2",
+      "licenseMetadata": "Apache-2.0",
+      "packageJson": "node_modules/reflect-metadata/package.json",
+      "includedVia": [
+        "@peculiar/x509"
+      ],
+      "notices": [
+        {
+          "file": "packages/reflect-metadata@0.2.2/LICENSE",
+          "sourceFile": "node_modules/reflect-metadata/LICENSE",
+          "bytes": 9141,
+          "sha256": "c5217b0544ea9c91d010863582d6f6b35ec50e4146c34dee085ddcec5dd92def"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "require-directory",
+      "version": "2.1.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/require-directory/package.json",
+      "includedVia": [
+        "yargs"
+      ],
+      "notices": [
+        {
+          "file": "packages/require-directory@2.1.1/LICENSE",
+          "sourceFile": "node_modules/require-directory/LICENSE",
+          "bytes": 1099,
+          "sha256": "a92e52eb1fa7cd746e3827bf01d3a3589bbc8e1e51348b1da042aad165525ad1"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "require-from-string",
+      "version": "2.0.2",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/require-from-string/package.json",
+      "includedVia": [
+        "bidi-js"
+      ],
+      "notices": [
+        {
+          "file": "packages/require-from-string@2.0.2/license",
+          "sourceFile": "node_modules/require-from-string/license",
+          "bytes": 1128,
+          "sha256": "6ee0feb1f6ef996ff5a68600f8cf98909cf412d39ef3cdceaefd87d636fa1b7f"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "require-main-filename",
+      "version": "2.0.0",
+      "licenseMetadata": "ISC",
+      "packageJson": "node_modules/require-main-filename/package.json",
+      "includedVia": [
+        "yargs"
+      ],
+      "notices": [
+        {
+          "file": "packages/require-main-filename@2.0.0/LICENSE.txt",
+          "sourceFile": "node_modules/require-main-filename/LICENSE.txt",
+          "bytes": 731,
+          "sha256": "365496ca1f56da40b23c9815fc40fa9005847b2f8f8fd1c1a4929ef25ec8cd1d"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "router",
+      "version": "2.2.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/router/package.json",
+      "includedVia": [
+        "express"
+      ],
+      "notices": [
+        {
+          "file": "packages/router@2.2.0/LICENSE",
+          "sourceFile": "node_modules/router/LICENSE",
+          "bytes": 1128,
+          "sha256": "d0bca4e517157b7a6120c085f5fe43a35b90c095e3bbeb9e67f220c608506a16"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "safer-buffer",
+      "version": "2.1.2",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/safer-buffer/package.json",
+      "includedVia": [
+        "iconv-lite"
+      ],
+      "notices": [
+        {
+          "file": "packages/safer-buffer@2.1.2/LICENSE",
+          "sourceFile": "node_modules/safer-buffer/LICENSE",
+          "bytes": 1094,
+          "sha256": "4bc935e71be198c67ddf3c2b5fddb195f6edc182bfc155a96a6db61b44b494b9"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "scheduler",
+      "version": "0.28.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/scheduler/package.json",
+      "includedVia": [
+        "react-dom"
+      ],
+      "notices": [
+        {
+          "file": "packages/scheduler@0.28.0/LICENSE",
+          "sourceFile": "node_modules/scheduler/LICENSE",
+          "bytes": 1088,
+          "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "selfsigned",
+      "version": "5.5.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/selfsigned/package.json",
+      "includedVia": [
+        "@ce/server"
+      ],
+      "notices": [
+        {
+          "file": "packages/selfsigned@5.5.0/LICENSE",
+          "sourceFile": "node_modules/selfsigned/LICENSE",
+          "bytes": 1078,
+          "sha256": "cce91643d3456176ba7870772e107f28f54d51948086339522e3c31fb49f2f34"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "send",
+      "version": "1.2.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/send/package.json",
+      "includedVia": [
+        "express",
+        "serve-static"
+      ],
+      "notices": [
+        {
+          "file": "packages/send@1.2.1/LICENSE",
+          "sourceFile": "node_modules/send/LICENSE",
+          "bytes": 1128,
+          "sha256": "25a328069fe771f8ed5b6f983ed4b0e6c84b3312ac0f69b28c3d52dc277962c9"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "serve-static",
+      "version": "2.2.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/serve-static/package.json",
+      "includedVia": [
+        "express"
+      ],
+      "notices": [
+        {
+          "file": "packages/serve-static@2.2.1/LICENSE",
+          "sourceFile": "node_modules/serve-static/LICENSE",
+          "bytes": 1189,
+          "sha256": "63b9a188d7d43e64b0558b7115255045b9fe20a5fc3ff483421cb899e7f52bcb"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "set-blocking",
+      "version": "2.0.0",
+      "licenseMetadata": "ISC",
+      "packageJson": "node_modules/set-blocking/package.json",
+      "includedVia": [
+        "yargs"
+      ],
+      "notices": [
+        {
+          "file": "packages/set-blocking@2.0.0/LICENSE.txt",
+          "sourceFile": "node_modules/set-blocking/LICENSE.txt",
+          "bytes": 731,
+          "sha256": "365496ca1f56da40b23c9815fc40fa9005847b2f8f8fd1c1a4929ef25ec8cd1d"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "setprototypeof",
+      "version": "1.2.0",
+      "licenseMetadata": "ISC",
+      "packageJson": "node_modules/setprototypeof/package.json",
+      "includedVia": [
+        "http-errors"
+      ],
+      "notices": [
+        {
+          "file": "packages/setprototypeof@1.2.0/LICENSE",
+          "sourceFile": "node_modules/setprototypeof/LICENSE",
+          "bytes": 727,
+          "sha256": "76d6d1ea0c268da37dd3c961b4fcfb23dee8417fff9e8786d4d44c585b781b69"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "side-channel-list",
+      "version": "1.0.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/side-channel-list/package.json",
+      "includedVia": [
+        "side-channel"
+      ],
+      "notices": [
+        {
+          "file": "packages/side-channel-list@1.0.1/LICENSE",
+          "sourceFile": "node_modules/side-channel-list/LICENSE",
+          "bytes": 1071,
+          "sha256": "5e325595b4ea8cfec3802f545b1def5d7b73e4a5b8e9ba63e32a320f67732292"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "side-channel-map",
+      "version": "1.0.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/side-channel-map/package.json",
+      "includedVia": [
+        "side-channel",
+        "side-channel-weakmap"
+      ],
+      "notices": [
+        {
+          "file": "packages/side-channel-map@1.0.1/LICENSE",
+          "sourceFile": "node_modules/side-channel-map/LICENSE",
+          "bytes": 1071,
+          "sha256": "5e325595b4ea8cfec3802f545b1def5d7b73e4a5b8e9ba63e32a320f67732292"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "side-channel-weakmap",
+      "version": "1.0.2",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/side-channel-weakmap/package.json",
+      "includedVia": [
+        "side-channel"
+      ],
+      "notices": [
+        {
+          "file": "packages/side-channel-weakmap@1.0.2/LICENSE",
+          "sourceFile": "node_modules/side-channel-weakmap/LICENSE",
+          "bytes": 1071,
+          "sha256": "cfc3f455254c0af0655cc3ff46a41ed644b67599f6043346169d285bf2b3cf3b"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "side-channel",
+      "version": "1.1.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/side-channel/package.json",
+      "includedVia": [
+        "qs"
+      ],
+      "notices": [
+        {
+          "file": "packages/side-channel@1.1.1/LICENSE",
+          "sourceFile": "node_modules/side-channel/LICENSE",
+          "bytes": 1071,
+          "sha256": "cfc3f455254c0af0655cc3ff46a41ed644b67599f6043346169d285bf2b3cf3b"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "statuses",
+      "version": "2.0.2",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/statuses/package.json",
+      "includedVia": [
+        "express",
+        "finalhandler",
+        "http-errors",
+        "send"
+      ],
+      "notices": [
+        {
+          "file": "packages/statuses@2.0.2/LICENSE",
+          "sourceFile": "node_modules/statuses/LICENSE",
+          "bytes": 1172,
+          "sha256": "512cfa4d5e7a7569c7ae4dd95241cb6ae2aaf648ef9ebd080c01bd24868d26e9"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "styled-components",
+      "version": "6.6.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/styled-components/package.json",
+      "includedVia": [
+        "@iwer/devui"
+      ],
+      "notices": [
+        {
+          "file": "packages/styled-components@6.6.0/LICENSE",
+          "sourceFile": "node_modules/styled-components/LICENSE",
+          "bytes": 1100,
+          "sha256": "5b893305a717230e5b0024ff5ca3eec1dc05ba600c9b140730488d97ce56f1e6"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "stylis",
+      "version": "4.3.6",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/stylis/package.json",
+      "includedVia": [
+        "styled-components"
+      ],
+      "notices": [
+        {
+          "file": "packages/stylis@4.3.6/LICENSE",
+          "sourceFile": "node_modules/stylis/LICENSE",
+          "bytes": 1078,
+          "sha256": "88c579c6ee44b41137a21321190d177982e5b17d4fa1b83a4a2e3ea325a8fc9a"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "three",
+      "version": "0.186.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/three/package.json",
+      "includedVia": [
+        "@ce/quest",
+        "@iwsdk/xr-input",
+        "@pmndrs/uikit",
+        "troika-three-text",
+        "troika-three-utils"
+      ],
+      "notices": [
+        {
+          "file": "packages/three@0.186.1/LICENSE",
+          "sourceFile": "node_modules/three/LICENSE",
+          "bytes": 1081,
+          "sha256": "8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "toidentifier",
+      "version": "1.0.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/toidentifier/package.json",
+      "includedVia": [
+        "http-errors"
+      ],
+      "notices": [
+        {
+          "file": "packages/toidentifier@1.0.1/LICENSE",
+          "sourceFile": "node_modules/toidentifier/LICENSE",
+          "bytes": 1108,
+          "sha256": "a832d679750e49ab433626ab196350b89964b60eb0d3edd3341887c7d5f4c128"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "troika-three-text",
+      "version": "0.52.5",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/troika-three-text/package.json",
+      "includedVia": [
+        "@ce/quest"
+      ],
+      "notices": [
+        {
+          "file": "packages/troika-three-text@0.52.5/LICENSE",
+          "sourceFile": "node_modules/troika-three-text/LICENSE",
+          "bytes": 1102,
+          "sha256": "c514829145810d3bf5730a78b5054250bd1b711b2823f2fc58c2ba89930bce5c"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "troika-three-utils",
+      "version": "0.52.5",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/troika-three-utils/package.json",
+      "includedVia": [
+        "troika-three-text"
+      ],
+      "notices": [
+        {
+          "file": "packages/troika-three-utils@0.52.5/LICENSE",
+          "sourceFile": "node_modules/troika-three-utils/LICENSE",
+          "bytes": 1102,
+          "sha256": "c514829145810d3bf5730a78b5054250bd1b711b2823f2fc58c2ba89930bce5c"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "troika-worker-utils",
+      "version": "0.52.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/troika-worker-utils/package.json",
+      "includedVia": [
+        "troika-three-text"
+      ],
+      "notices": [
+        {
+          "file": "packages/troika-worker-utils@0.52.0/LICENSE",
+          "sourceFile": "node_modules/troika-worker-utils/LICENSE",
+          "bytes": 1102,
+          "sha256": "c514829145810d3bf5730a78b5054250bd1b711b2823f2fc58c2ba89930bce5c"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "tslib",
+      "version": "2.8.1",
+      "licenseMetadata": "0BSD",
+      "packageJson": "node_modules/tslib/package.json",
+      "includedVia": [
+        "@peculiar/asn1-cms",
+        "@peculiar/asn1-csr",
+        "@peculiar/asn1-ecc",
+        "@peculiar/asn1-pfx",
+        "@peculiar/asn1-pkcs8",
+        "@peculiar/asn1-pkcs9",
+        "@peculiar/asn1-rsa",
+        "@peculiar/asn1-schema",
+        "@peculiar/asn1-x509",
+        "@peculiar/asn1-x509-attr",
+        "@peculiar/utils",
+        "@peculiar/x509",
+        "asn1js",
+        "pkijs",
+        "pvtsutils"
+      ],
+      "notices": [
+        {
+          "file": "packages/tslib@2.8.1/LICENSE.txt",
+          "sourceFile": "node_modules/tslib/LICENSE.txt",
+          "bytes": 655,
+          "sha256": "210b19e543130388c68654b7497e967119ce17145f66ab7d85688fbd70f08751"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "tslib",
+      "version": "1.14.1",
+      "licenseMetadata": "0BSD",
+      "packageJson": "node_modules/tsyringe/node_modules/tslib/package.json",
+      "includedVia": [
+        "tsyringe"
+      ],
+      "notices": [
+        {
+          "file": "packages/tslib@1.14.1/LICENSE.txt",
+          "sourceFile": "node_modules/tsyringe/node_modules/tslib/LICENSE.txt",
+          "bytes": 655,
+          "sha256": "210b19e543130388c68654b7497e967119ce17145f66ab7d85688fbd70f08751"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "tsyringe",
+      "version": "4.10.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/tsyringe/package.json",
+      "includedVia": [
+        "@peculiar/x509"
+      ],
+      "notices": [
+        {
+          "file": "packages/tsyringe@4.10.0/LICENSE",
+          "sourceFile": "node_modules/tsyringe/LICENSE",
+          "bytes": 1162,
+          "sha256": "27ebda9d51f0a56b7e281ccd8230a27236dcb51c05f64b07869ecf6e965d68b0"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "type-is",
+      "version": "2.1.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/type-is/package.json",
+      "includedVia": [
+        "body-parser",
+        "express"
+      ],
+      "notices": [
+        {
+          "file": "packages/type-is@2.1.0/LICENSE",
+          "sourceFile": "node_modules/type-is/LICENSE",
+          "bytes": 1172,
+          "sha256": "23d466b1b134b415b66fa50c6526b4cf3e7b9258554da88d3abb371721e7ce68"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "unpipe",
+      "version": "1.0.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/unpipe/package.json",
+      "includedVia": [
+        "raw-body"
+      ],
+      "notices": [
+        {
+          "file": "packages/unpipe@1.0.0/LICENSE",
+          "sourceFile": "node_modules/unpipe/LICENSE",
+          "bytes": 1114,
+          "sha256": "1a526fbe8d8577f5a4b1c2821842b55b7c0e18862531c62ae4ce69c9b19b74b6"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "use-sync-external-store",
+      "version": "1.7.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/use-sync-external-store/package.json",
+      "includedVia": [
+        "zustand"
+      ],
+      "notices": [
+        {
+          "file": "packages/use-sync-external-store@1.7.0/LICENSE",
+          "sourceFile": "node_modules/use-sync-external-store/LICENSE",
+          "bytes": 1088,
+          "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "vary",
+      "version": "1.1.2",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/vary/package.json",
+      "includedVia": [
+        "express"
+      ],
+      "notices": [
+        {
+          "file": "packages/vary@1.1.2/LICENSE",
+          "sourceFile": "node_modules/vary/LICENSE",
+          "bytes": 1094,
+          "sha256": "bd47ce7b88c7759630d1e2b9fcfa170a0f1fde522be09e13fb1581a79d090400"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "webgl-sdf-generator",
+      "version": "1.1.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/webgl-sdf-generator/package.json",
+      "includedVia": [
+        "troika-three-text"
+      ],
+      "notices": [
+        {
+          "file": "packages/webgl-sdf-generator@1.1.1/LICENSE.txt",
+          "sourceFile": "node_modules/webgl-sdf-generator/LICENSE.txt",
+          "bytes": 1071,
+          "sha256": "49d4d143fed599deb502a0fe6e02f49832f87e9a3a4cd0502e469596d50faa6d"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "webxr-layers-polyfill",
+      "version": "1.1.0",
+      "licenseMetadata": "Apache-2.0",
+      "packageJson": "node_modules/webxr-layers-polyfill/package.json",
+      "includedVia": [
+        "iwer"
+      ],
+      "notices": [
+        {
+          "file": "packages/webxr-layers-polyfill@1.1.0/LICENSE",
+          "sourceFile": "node_modules/webxr-layers-polyfill/LICENSE",
+          "bytes": 11357,
+          "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "which-module",
+      "version": "2.0.1",
+      "licenseMetadata": "ISC",
+      "packageJson": "node_modules/which-module/package.json",
+      "includedVia": [
+        "yargs"
+      ],
+      "notices": [
+        {
+          "file": "packages/which-module@2.0.1/LICENSE",
+          "sourceFile": "node_modules/which-module/LICENSE",
+          "bytes": 731,
+          "sha256": "852bf81203aa93aa89afc9f881ebb035322dc7334aaceff435c557634c94a815"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "wrappy",
+      "version": "1.0.2",
+      "licenseMetadata": "ISC",
+      "packageJson": "node_modules/wrappy/package.json",
+      "includedVia": [
+        "once"
+      ],
+      "notices": [
+        {
+          "file": "packages/wrappy@1.0.2/LICENSE",
+          "sourceFile": "node_modules/wrappy/LICENSE",
+          "bytes": 765,
+          "sha256": "4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "ws",
+      "version": "8.22.0",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/ws/package.json",
+      "includedVia": [
+        "@ce/server"
+      ],
+      "notices": [
+        {
+          "file": "packages/ws@8.22.0/LICENSE",
+          "sourceFile": "node_modules/ws/LICENSE",
+          "bytes": 1183,
+          "sha256": "2b29dcfe0d6471f7e8c92c5fb38c9f93edee10330937055440192f1832b1ecef"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "yoga-layout",
+      "version": "3.2.1",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/yoga-layout/package.json",
+      "includedVia": [
+        "@pmndrs/uikit"
+      ],
+      "upstreamNotice": {
+        "name": "yoga-layout",
+        "version": "3.2.1",
+        "sourceFile": "third-party/notices/yoga-layout-3.2.1-LICENSE",
+        "upstreamFile": "LICENSE",
+        "repositoryFromInstalledPackage": "git@github.com:facebook/yoga.git",
+        "tag": "v3.2.1",
+        "commit": "042f5013152eb81c1552dec945b88f7b95ca350f",
+        "url": "https://raw.githubusercontent.com/facebook/yoga/042f5013152eb81c1552dec945b88f7b95ca350f/LICENSE",
+        "resolvedUrl": "https://raw.githubusercontent.com/facebook/yoga/042f5013152eb81c1552dec945b88f7b95ca350f/LICENSE",
+        "sha256": "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85",
+        "reason": "The installed yoga-layout@3.2.1 package declares MIT but omits the full LICENSE file; copied verbatim from its official repository at the version tag commit."
+      },
+      "notices": [
+        {
+          "file": "packages/yoga-layout@3.2.1/LICENSE",
+          "sourceFile": "third-party/notices/yoga-layout-3.2.1-LICENSE",
+          "bytes": 1086,
+          "sha256": "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "zod",
+      "version": "4.6.7",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/zod/package.json",
+      "includedVia": [
+        "@ce/gen3d",
+        "@ce/protocol",
+        "@ce/quest",
+        "@ce/server",
+        "@pmndrs/uikit",
+        "@pmndrs/uikit-horizon"
+      ],
+      "notices": [
+        {
+          "file": "packages/zod@4.6.7/LICENSE",
+          "sourceFile": "node_modules/zod/LICENSE",
+          "bytes": 1072,
+          "sha256": "3f1189b28e3866e0d979968d466b78f813f76827cfdca1fbb124cc0a5c8841f8"
+        }
+      ]
+    },
+    {
+      "kind": "installed-package",
+      "name": "zustand",
+      "version": "5.0.16",
+      "licenseMetadata": "MIT",
+      "packageJson": "node_modules/zustand/package.json",
+      "includedVia": [
+        "@iwer/devui"
+      ],
+      "notices": [
+        {
+          "file": "packages/zustand@5.0.16/LICENSE",
+          "sourceFile": "node_modules/zustand/LICENSE",
+          "bytes": 1070,
+          "sha256": "c1e6e266563517467b1bf874817d23e426f3149252bd7d42758cd697514b8417"
+        }
+      ]
+    },
+    {
+      "kind": "vendored-asset-notice",
+      "name": "@webxr-input-profiles/assets vendored meshes",
+      "version": null,
+      "versionNote": "The exact upstream asset package version was not recorded with these vendored files.",
+      "includedVia": [
+        "Existing full MIT notice accompanying generic-hand and meta-quest-touch-plus GLB assets."
+      ],
+      "notices": [
+        {
+          "file": "assets/webxr-input-profiles-assets/LICENSE.md",
+          "sourceFile": "apps/quest/public/xr-profiles/LICENSE.md",
+          "bytes": 1094,
+          "sha256": "0ef0c87e8ffdd0681f332dc3b39f284dee2166d1f853fabc3853884fe81a6f30"
+        }
+      ]
+    },
+    {
+      "kind": "vendored-asset-notice",
+      "name": "JetBrains Mono vendored regular font",
+      "version": null,
+      "versionNote": "Vendored font, not an installed npm package; no package version is inferred.",
+      "includedVia": [
+        "Existing full SIL Open Font License accompanying JetBrainsMono-Regular.ttf."
+      ],
+      "notices": [
+        {
+          "file": "assets/jetbrains-mono/OFL-JetBrainsMono.txt",
+          "sourceFile": "apps/quest/public/fonts/OFL-JetBrainsMono.txt",
+          "bytes": 4398,
+          "sha256": "c1ab7c666206842a02b35b30770dac0d7a10156ed401c9defc3f02a754d89e90"
+        }
+      ]
+    },
+    {
+      "kind": "vendored-asset-notice",
+      "name": "Inter vendored fonts, CE Inter Tabular and generated MSDF atlas",
+      "version": null,
+      "versionNote": "Vendored/derived assets; provenance and reproduction are documented in apps/quest/public/fonts/README.txt.",
+      "includedVia": [
+        "Preserves the exact existing notice accompanying the copied and derived Inter assets, independently of the installed font package version."
+      ],
+      "notices": [
+        {
+          "file": "assets/vendored-inter-fonts/OFL-Inter.txt",
+          "sourceFile": "apps/quest/public/fonts/OFL-Inter.txt",
+          "bytes": 4477,
+          "sha256": "3b0a5fca3d17942cde889069889dedbbbd075e9b599968c82a95f4d944e9b345"
+        }
+      ]
+    }
+  ]
+}
