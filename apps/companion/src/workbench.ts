@@ -95,6 +95,7 @@ const stage = params.get('stage') === '1';
 const dedicatedVisuals = params.get('visuals') === '1';
 /** One calm screen (pairing + status) unless ?details=1, a replay, or the Details button. */
 let simple = !replaying && params.get('details') !== '1';
+let detailsFromSimple = false;
 let replayStarted = false;
 const linkRequests = new Map<string, LinkRequestPayload>();
 const specs = new Map<string, UiSpecPayload>();
@@ -373,7 +374,11 @@ function openDialog(id: string): void {
 }
 
 function closeDialog(id: string): void {
-  if (id === 'drawer') { showView('home'); return; }
+  if (id === 'drawer') {
+    if (detailsFromSimple) { simple = true; $('workbench').classList.add('simple'); }
+    showView('home');
+    return;
+  }
   const dialog = $<HTMLDialogElement>(id);
   if (!dialog.open || dialogTimers.has(dialog)) return;
   const finish = () => {
@@ -387,6 +392,7 @@ function closeDialog(id: string): void {
 }
 
 function showView(view: typeof currentView, focus = true): void {
+  if (view !== 'details') detailsFromSimple = false;
   currentView = view;
   $('workbench').dataset.view = view;
   $('home-view').hidden = view === 'details' || view === 'activity';
@@ -864,7 +870,10 @@ function confirmArm(a: ArmRequestPayload, approve: boolean, hold: boolean): void
 
 function renderDevice(): void {
   midiChartPanel ??= new MidiChartPanel($('midi-chart-editor'), (path, body) => chartRequest(path, body, identity?.deviceToken));
-  midiChartPanel.update([...cards.values()], !replaying && Boolean(conn?.open) && (canApprove || isLocalPage()), focusCardId);
+  // The virtual instrument is defined by its built-in capability manifest, not
+  // a user-entered physical MIDI chart (nor a chart endpoint in display replay).
+  const chartCards = replaying ? [] : [...cards.values()].filter(card => !card.cardId.startsWith('visual-synth-') && !card.notes?.startsWith('virtual:visual-synth:'));
+  midiChartPanel.update(chartCards, !replaying && Boolean(conn?.open) && (canApprove || isLocalPage()), focusCardId);
   const box = $('device-card');
   box.replaceChildren();
   const card = focusCardId ? cards.get(focusCardId) : undefined;
@@ -2035,7 +2044,13 @@ export async function bootWorkbench(): Promise<void> {
   $('workbench').classList.toggle('simple', simple);
   $('simple-visuals').addEventListener('click', openVisuals);
   $('simple-note-action').addEventListener('click', useThisTab);
-  $('simple-details').addEventListener('click', () => { simple = false; $('workbench').classList.remove('simple'); renderAll(); });
+  $('simple-details').addEventListener('click', () => {
+    detailsFromSimple = true;
+    simple = false;
+    $('workbench').classList.remove('simple');
+    showView('details');
+    renderAll();
+  });
   // Back from the full workbench to the one calm screen (button or Esc when no sheet is open).
   const backToSimple = (): void => { if (simple) return; simple = true; showView('home', false); $('workbench').classList.add('simple'); renderAll(); };
   $('simple-back').addEventListener('click', backToSimple);

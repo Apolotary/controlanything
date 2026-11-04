@@ -1169,6 +1169,19 @@ describe('Calm companion behavior', () => {
     expect(byId('details-open').getAttribute('aria-expanded')).toBe('false');
   });
 
+  it('opens Details directly from the calm screen and returns with Back', async () => {
+    await live();
+    await byId('simple-details').fire('click');
+    expect(byId('workbench').classList.contains('simple')).toBe(false);
+    expect(byId('drawer').hidden).toBe(false);
+    expect(byId('home-view').hidden).toBe(true);
+    expect(byId('details-open').getAttribute('aria-expanded')).toBe('true');
+    await byId('details-close').fire('click');
+    expect(byId('workbench').classList.contains('simple')).toBe(true);
+    expect(byId('drawer').hidden).toBe(true);
+    expect(byId('home-view').hidden).toBe(false);
+  });
+
   it('switches Home, Devices, Activity and Details without dropping a live task', async () => {
     const app = await live();
     await app.emit('presence', { devices: [{ deviceId: 'quest', kind: 'quest', name: 'Quest 3', online: true, capabilities: ['mic'], ports: [] }] });

@@ -44,6 +44,8 @@ try {
   const identity = await pairMac(fixture, 'Wiring-view fixture Mac');
   mac = await openMacBrowser(identity);
   const page = await mac.newPage();
+  const failedRequests = [];
+  page.on('response', response => { if (response.status() >= 400) { const failure = { status: response.status(), url: response.url() }; failedRequests.push(failure); console.error('HTTP resource failure:', failure); } });
   const CARD = `visual-synth-${identity.deviceId}`;
   const wire = { cardId: CARD, wiringId: 'wire-e2e-1', model: 'muse-spark-1.3', source: 'fixture' };
   await page.goto(`${fixture.base}/companion/?visuals=1&inject=1`);
@@ -139,7 +141,7 @@ try {
 
   // 5. A template wiring says so.
   await inject(page, 'wire.progress', { ...wire, wiringId: 'wire-e2e-2', model: 'template', source: 'template', phase: 'writing', code: '// template' });
-  await page.locator('#simple-back').click();
+  await page.locator('#details-close').click();
   await delay(300);
   assert.equal((await page.locator('#wiring-line').textContent()).trim(), 'Template wiring for the Visual synth (no Meta model wrote this)…');
   assert.equal(await page.locator('#wiring-chip').textContent(), 'Template');
@@ -157,6 +159,7 @@ try {
   assert.equal(await replay.locator('#wiring-chip').textContent(), 'FIXTURE');
 
   assert.equal(await page.evaluate(() => window.__audioAttempts), 0);
+  assert.deepEqual(failedRequests, [], 'Every requested resource must load');
   assert.deepEqual(mac.errors, []);
   await writeFile(join(OUT, 'report.json'), JSON.stringify({ overlayBox, tabs, mutationsWhileIdle: mutations.length }, null, 2));
   console.log('PASS wiring view: overlay streams and hides ~8 s after ready, calm card line/chip/See code, Details Wiring tab, idempotent DOM, ?replay=wire');
