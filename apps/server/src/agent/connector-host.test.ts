@@ -2,7 +2,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { CONNECTOR_SDK, ConnectorHost, type ConnectorOut } from './connector-host';
+import { CONNECTOR_SDK, ConnectorHost, isNeutralConnectorRelease, type ConnectorOut } from './connector-host';
 const dirs: string[] = [], hosts: ConnectorHost[] = [];
 afterEach(async () => { for (const host of hosts.splice(0)) host.stopAll('test complete'); for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 it('runs the actual line protocol for MIDI, gimbal, logs and Stop', async () => {
@@ -62,4 +62,44 @@ it.skipIf(process.platform === 'win32')('stops forked helpers even when the conn
     expect(alive()).toBe(true); host.stop('card');
     await expect.poll(alive, { timeout: 2500 }).toBe(false);
   } finally { if (alive()) { try { process.kill(helper, 'SIGKILL'); } catch { /* ended */ } } }
+});
+it('releases held notes/gates/gimbal with acknowledgements but drops non-neutral and unrelated late Stop output', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ce-connector-release-')); dirs.push(dir);
+  await writeFile(join(dir, 'ce.mjs'), CONNECTOR_SDK);
+  await writeFile(join(dir, 'index.mjs'), `import {onStop,midi,gimbal,ready} from './ce.mjs';
+    midi.note('Fixture',1,60,100,0); midi.cc('ce-musical-synth',1,17,127); gimbal.pan(10);
+    onStop(()=>{midi.cc('Fixture',1,74,127);midi.allNotesOff('unrelated');midi.cc('ce-musical-synth',1,17,0);gimbal.pan(20);gimbal.stop();});ready('ok');`);
+  const sent: ConnectorOut[] = [];
+  const host = new ConnectorHost({ send: (packet, done) => { sent.push(packet); done(true); } }); hosts.push(host);
+  await host.deploy('card', 'index.mjs', dir, [], 100);
+  await expect.poll(() => sent.length).toBe(3);
+  const generation = sent[0]!.generation;
+  expect(host.allows('card', generation)).toBe(true);
+  host.stop('card');
+  expect(host.allows('card', generation)).toBe(false);
+  expect(await host.waitForRelease('card')).toEqual({ released: true });
+  await expect.poll(() => sent.filter(packet => packet.release).length).toBeGreaterThanOrEqual(5);
+  const releases = sent.filter(packet => packet.release);
+  expect(releases.every(isNeutralConnectorRelease)).toBe(true);
+  expect(releases.some(packet => packet.target === 'midi' && packet.port === 'unrelated')).toBe(false);
+  expect(releases.some(packet => packet.target === 'midi' && packet.op.msg === 'panic')).toBe(true);
+  expect(releases.some(packet => packet.target === 'gimbal' && packet.op.op === 'stop')).toBe(true);
+});
+it('does not let queued old-generation commands inherit a replacement and reports failed release honestly', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ce-connector-epoch-')); dirs.push(dir);
+  await writeFile(join(dir, 'ce.mjs'), CONNECTOR_SDK);
+  await writeFile(join(dir, 'index.mjs'), `import {midi,ready} from './ce.mjs';midi.note('Fixture',1,60,100,0);ready('ok');`);
+  const sent: ConnectorOut[] = [];
+  const host = new ConnectorHost({ send: (packet, done) => { sent.push(packet); done(!packet.release); } }); hosts.push(host);
+  await host.deploy('card', 'index.mjs', dir, [], 100);
+  await expect.poll(() => sent.length).toBe(1);
+  const old = sent[0]!.generation;
+  host.stop('card');
+  expect(await host.waitForRelease('card')).toMatchObject({ released: false });
+  await host.deploy('card', 'index.mjs', dir, [], 100);
+  expect(host.has('card')).toBe(true);
+  expect(host.allows('card', old)).toBe(false);
+  expect(host.allows('card', old, true)).toBe(false);
+  await expect.poll(() => sent.some(packet => !packet.release && packet.generation !== old)).toBe(true);
+  expect(host.allows('card', sent.find(packet => !packet.release && packet.generation !== old)!.generation)).toBe(true);
 });

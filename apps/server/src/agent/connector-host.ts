@@ -11,7 +11,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { BleOp, MidiOp } from '@ce/protocol';
+import { BleOp, MidiOp, type ExecOp } from '@ce/protocol';
 
 export interface ConnectorAction {
   id: string;
@@ -22,7 +22,7 @@ export interface ConnectorAction {
 }
 
 /** One device command from a connector: MIDI through the Mac companion, or a DJI gimbal move through the Osmo bridge. */
-export type ConnectorOut = { cardId: string; target: 'midi'; port: string; op: MidiOp } | { cardId: string; target: 'gimbal'; op: BleOp };
+export type ConnectorOut = ({ cardId: string; target: 'midi'; port: string; op: MidiOp } | { cardId: string; target: 'gimbal'; op: BleOp }) & { generation: number; release?: true };
 const GIMBAL_OPS = new Set(['pan', 'tilt', 'nudge', 'recenter', 'stop']);
 export type OpResult = (ok: boolean, detail?: string) => void;
 
@@ -41,6 +41,21 @@ interface Running {
   verboseUntil: number;
   processGroup?: number;
   terminating?: boolean;
+  generation: number;
+  midi: Map<string, { port: string; channel: number; notes: boolean; sustain: boolean; controls: Set<number> }>;
+  gimbal: boolean;
+  releaseUntil?: number;
+  releaseResult?: Promise<{ released: boolean; reason?: string }>;
+}
+
+/** Only these exact neutral commands may outlive a retired connector's normal authority. */
+export function isNeutralConnectorRelease({ op, port }: { op: ExecOp; port?: string }): boolean {
+  if (op.kind === 'ble') return op.op === 'stop';
+  if (op.kind !== 'midi') return false;
+  if (op.msg === 'panic') return true;
+  return op.msg === 'cc' && op.value === 0 && (op.number === 64 || op.channel === 1
+    && (['ce-musical-synth', 'ControlAnything Synth'].includes(port ?? '') && op.number === 17
+      || ['ce-visual-synth', 'ControlAnything Visual Synth'].includes(port ?? '') && op.number === 24));
 }
 
 const MAX_LOG_LINES = 200;
@@ -54,6 +69,8 @@ export function connectorEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.Pr
 
 export class ConnectorHost {
   private readonly running = new Map<string, Running>();
+  private readonly releasing = new Map<string, Running>();
+  private generation = 0;
 
   constructor(private readonly o: {
     /** Send one MIDI op through the companion; `done` gets the executor's ack. */
@@ -69,6 +86,18 @@ export class ConnectorHost {
   has(cardId: string): boolean {
     const r = this.running.get(cardId);
     return !!r && !r.exited;
+  }
+
+  /** Rechecked at the dispatcher boundary so a queued old command cannot inherit a replacement's authority. */
+  allows(cardId: string, generation: number, release = false): boolean {
+    const current = this.running.get(cardId);
+    if (!release) return current?.generation === generation && !current.exited;
+    const retiring = this.releasing.get(cardId);
+    return !current && retiring?.generation === generation && Date.now() <= (retiring.releaseUntil ?? 0);
+  }
+
+  async waitForRelease(cardId: string): Promise<{ released: boolean; reason?: string }> {
+    return this.releasing.get(cardId)?.releaseResult ?? { released: true };
   }
 
   actions(cardId: string): ConnectorAction[] {
@@ -98,6 +127,7 @@ export class ConnectorHost {
     const grouped = process.platform !== 'win32';
     const child = spawn(process.execPath, [entry], { cwd, env: connectorEnv(), detached: grouped, stdio: ['pipe', 'pipe', 'pipe'] });
     const run: Running = { cardId, entry, child, actions: new Map(actions.map((a) => [a.id, a])), logs: [], startedAt: Date.now(), ops: 0, failures: 0, verboseUntil: Date.now() + 5000,
+      generation: ++this.generation, midi: new Map(), gimbal: false,
       ...(grouped && child.pid ? { processGroup: child.pid } : {}) };
     this.running.set(cardId, run);
     const push = (line: string) => {
@@ -123,6 +153,9 @@ export class ConnectorHost {
   }
 
   private onLine(run: Running, line: string, push: (l: string) => void): void {
+    const active = this.running.get(run.cardId) === run && !run.exited;
+    const release = !active && this.allows(run.cardId, run.generation, true);
+    if (!active && !release) return;
     let m: any;
     try { m = JSON.parse(line); } catch { push(line); return; }
     if (!m || typeof m !== 'object') { push(line); return; }
@@ -137,9 +170,22 @@ export class ConnectorHost {
         run.failures++; push('✗ invalid MIDI output from connector (check port, kind and numeric MIDI ranges)'); return;
       }
       const op = parsed.data;
+      const key = `${m.port}\0${op.channel}`;
+      let endpoint = run.midi.get(key);
+      if (release && (!endpoint || !isNeutralConnectorRelease({ op, port: m.port }))) return;
+      if (!endpoint) {
+        if (run.midi.size >= 64) { run.failures++; push('✗ too many MIDI endpoints in one connector'); return; }
+        endpoint = { port: m.port, channel: op.channel, notes: false, sustain: false, controls: new Set() }; run.midi.set(key, endpoint);
+      }
+      if (op.msg === 'note') endpoint.notes = true;
+      if (op.msg === 'panic') { endpoint.notes = false; endpoint.sustain = false; }
+      if (op.msg === 'cc' && op.number === 64) endpoint.sustain = op.value !== 0;
+      if (op.msg === 'cc' && isNeutralConnectorRelease({ op: { ...op, value: 0 }, port: m.port }) && op.number !== 64) {
+        if (op.value === 0) endpoint.controls.delete(op.number!); else endpoint.controls.add(op.number!);
+      }
       run.ops++;
       const what = describeMidi(op);
-      this.o.send({ cardId: run.cardId, target: 'midi', port: m.port, op }, (ok, detail) => {
+      this.o.send({ cardId: run.cardId, generation: run.generation, ...(release ? { release: true as const } : {}), target: 'midi', port: m.port, op }, (ok, detail) => {
         if (!ok) run.failures++;
         // Keep the log readable at 30 Hz: every failure, and successes only now and then.
         if (!ok || op.msg === 'note' || Date.now() < run.verboseUntil || run.ops % 15 === 1) push(`${ok ? '→' : '✗'} ${what} on ${m.port}${ok ? '' : `: ${detail ?? 'refused'}`}`);
@@ -154,9 +200,11 @@ export class ConnectorHost {
         run.failures++; push('✗ invalid gimbal output from connector (check operation and bounded numeric angles)'); return;
       }
       const op = parsed.data;
+      if (release && (!run.gimbal || !isNeutralConnectorRelease({ op }))) return;
+      if (op.op !== 'stop') run.gimbal = true;
       run.ops++;
       const what = `gimbal ${op.op}${typeof op.arg === 'number' ? ` ${Math.round(op.arg)}°` : op.arg && typeof op.arg === 'object' ? ` ${JSON.stringify(op.arg)}` : ''}`;
-      this.o.send({ cardId: run.cardId, target: 'gimbal', op }, (ok, detail) => {
+      this.o.send({ cardId: run.cardId, generation: run.generation, ...(release ? { release: true as const } : {}), target: 'gimbal', op }, (ok, detail) => {
         if (!ok) run.failures++;
         if (!ok || Date.now() < run.verboseUntil || run.ops % 10 === 1) push(`${ok ? '→' : '✗'} ${what}${ok ? detail ? ` (${detail.slice(0, 80)})` : '' : `: ${detail ?? 'refused'}`}`);
       });
@@ -185,6 +233,21 @@ export class ConnectorHost {
     const r = this.running.get(cardId);
     if (!r) return false;
     this.running.delete(cardId);
+    r.releaseUntil = Date.now() + 1700;
+    this.releasing.set(cardId, r);
+    const cleanup: ConnectorOut[] = [];
+    for (const endpoint of r.midi.values()) {
+      const make = (op: MidiOp): ConnectorOut => ({ cardId, generation: r.generation, release: true, target: 'midi', port: endpoint.port, op });
+      if (endpoint.notes) cleanup.push(make({ kind: 'midi', msg: 'panic', channel: endpoint.channel }));
+      if (endpoint.sustain) cleanup.push(make({ kind: 'midi', msg: 'cc', channel: endpoint.channel, number: 64, value: 0 }));
+      for (const number of endpoint.controls) cleanup.push(make({ kind: 'midi', msg: 'cc', channel: endpoint.channel, number, value: 0 }));
+    }
+    if (r.gimbal) cleanup.push({ cardId, generation: r.generation, release: true, target: 'gimbal', op: { kind: 'ble', profile: 'dji-osmo', op: 'stop' } });
+    r.releaseResult = Promise.all(cleanup.map(output => new Promise<boolean>(resolve => {
+      const timer = setTimeout(() => resolve(false), 1500); timer.unref?.();
+      try { this.o.send(output, ok => { clearTimeout(timer); resolve(ok); }); } catch { clearTimeout(timer); resolve(false); }
+    }))).then(results => results.every(Boolean) ? { released: true } : { released: false, reason: 'Connector stopped. A device did not confirm its note/touch release; use Stop all if needed.' });
+    setTimeout(() => { if (this.releasing.get(cardId) === r) this.releasing.delete(cardId); }, 1800).unref?.();
     if (!r.exited) {
       try { r.child.stdin!.write(`${JSON.stringify({ type: 'stop', reason })}\n`); } catch { /* already closed */ }
     }
