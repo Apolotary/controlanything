@@ -28,6 +28,8 @@ export interface PairApi {
 export interface PairingOptions {
   name: string;
   capabilities: Capability[];
+  /** Show the pairing code even over trusted USB localhost, for a deliberate fresh pairing. */
+  requireApproval?: boolean;
   store?: KeyValueStore;
   api?: PairApi;
   pollMs?: number;
@@ -89,7 +91,8 @@ export class PairingFlow extends Emitter<{ state: PairState }> {
       this.assertCurrent(gen);
       let start: PairStartResponse;
       try {
-        start = await this.api.pairStart({ name: this.o.name, kind: 'quest', capabilities: this.o.capabilities });
+        start = await this.api.pairStart({ name: this.o.name, kind: 'quest', capabilities: this.o.capabilities,
+          ...(this.o.requireApproval ? { requireApproval: true } : {}) });
       } catch (e) {
         this.assertCurrent(gen);
         this.set({ kind: 'offline', message: `Server unreachable (${(e as Error).message}); retrying…` });

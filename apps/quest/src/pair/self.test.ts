@@ -1,5 +1,5 @@
 import type { PairStartResponse, PairStatusResponse } from '@ce/protocol';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../io/api';
 import type { KeyValueStore } from '../io/identity';
 import { type PairApi, PairingFlow, type PairState } from './self';
@@ -52,6 +52,23 @@ function deferred<T>() {
 }
 
 describe('PairingFlow (device-code)', () => {
+  it('requires an explicit approval when manual pairing is requested over USB', async () => {
+    const store = memStore(), approval = deferred<PairStatusResponse>();
+    const pairStart = vi.fn<PairApi['pairStart']>().mockResolvedValue(start());
+    const api: PairApi = {
+      me: fakeApi({ starts: [] }).me,
+      pairStart,
+      pairStatus: async () => approval.promise,
+    };
+    const flow = new PairingFlow({ name: 'Quest 3', capabilities: ['camera'], requireApproval: true, store, api, sleep });
+    const ready = flow.ensure();
+    await vi.waitFor(() => expect(flow.state.kind).toBe('pending'));
+    expect(pairStart).toHaveBeenCalledWith({ name: 'Quest 3', kind: 'quest', capabilities: ['camera'], requireApproval: true });
+    expect(store.data['ce.device']).toBeUndefined();
+    approval.resolve({ pairingId: 'p1', status: 'approved', expiresAt: Date.now() + 1000, deviceId: 'quest-manual', deviceToken: 'manual-token' });
+    await expect(ready).resolves.toMatchObject({ deviceId: 'quest-manual' });
+  });
+
   it('over adb reverse the server approves on the spot', async () => {
     const store = memStore();
     const api = fakeApi({ starts: [start({ status: 'approved', deviceId: 'quest-1', deviceToken: 'tok' })] });

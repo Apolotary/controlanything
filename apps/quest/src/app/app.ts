@@ -628,7 +628,8 @@ export class QuestApp {
     const foreignIdentity = new Map<string, string>();
     const destination = new URL(this.ws.url);
     destination.protocol = destination.protocol === 'wss:' ? 'https:' : 'http:';
-    this.pairing = new PairingFlow({ name, capabilities: ['camera', 'mic', 'hands', 'display'], ...(!savedAllowed ? {
+    this.pairing = new PairingFlow({ name, capabilities: ['camera', 'mic', 'hands', 'display'],
+      ...(this.params.get('pair') === 'manual' ? { requireApproval: true } : {}), ...(!savedAllowed ? {
       api: pairingApi(destination.origin),
       store: { getItem: (key: string) => foreignIdentity.get(key) ?? null,
         setItem: (key: string, value: string) => { foreignIdentity.set(key, value); },

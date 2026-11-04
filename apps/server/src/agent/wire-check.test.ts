@@ -30,6 +30,15 @@ describe('stripComments', () => {
 });
 
 describe('validateWiring', () => {
+  it('explains an uncalled outer function instead of retrying it as an unexplained silent program', () => {
+    for (const code of [`function wire(s,out,mem) { ${TOUCH} }`, `(s,out,mem) => { ${TOUCH} }`]) {
+      const checked = validateWiring(code, driver);
+      expect(checked.ok).toBe(false);
+      expect(checked.issues).toContainEqual(expect.objectContaining({ code: 'program_wrapper', message: expect.stringContaining('remove the outer') }));
+    }
+    expect(validateWiring(TOUCH, driver).ok).toBe(true);
+  });
+
   it('accepts a touch program and reports the actions and signals it uses', () => {
     const r = validateWiring(TOUCH, driver);
     expect(r.issues).toEqual([]);

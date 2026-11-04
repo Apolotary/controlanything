@@ -111,6 +111,9 @@ export function validateWiring(code: string, driver: Pick<Driver, 'actions'>): W
   if (bytes > WIRE_MAX_BYTES) add('too_long', `the program is ${bytes} bytes; the limit is ${WIRE_MAX_BYTES}: make it shorter`);
 
   const { text, regex } = stripComments(code);
+  if (/^\s*(?:function\s+wire\s*\(|\(?\s*s\s*,\s*out\s*,\s*mem\s*\)?\s*=>)/.test(text)) {
+    add('program_wrapper', 'Send only the executable body: remove the outer function wire(s,out,mem) or arrow wrapper. Defining a function alone never drives an action.');
+  }
   if (regex) add('regex', 'regular expression literals are not allowed; compare numbers and booleans instead');
   for (const f of FORBIDDEN) {
     if (f.re.test(text)) add('forbidden', `"${f.token}" is not allowed in a wiring program (no imports, network, timers, DOM, this, eval or loops that never end)`);

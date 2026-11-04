@@ -10,7 +10,9 @@ import { actionBriefs, chunkCode, deviceHints, extractCodeSoFar, FORBIDDEN_LIST,
 import { dryRun, issueLines, resolveNeeds, validateWiring } from './wire-check';
 import { buildWiring, type WireDraftData } from './wire-fixture';
 
-export const MUSE_HARNESS_LIMITS = { turns: 8, tools: 16, budgetMs: 90_000, turnTokens: 4000, totalTokens: 24_000 } as const;
+// Prompt/context is billed again on each tool turn. It must not consume the
+// much smaller allowance intended for the code/reasoning Muse actually writes.
+export const MUSE_HARNESS_LIMITS = { turns: 12, tools: 16, budgetMs: 90_000, turnTokens: 4000, totalTokens: 128_000, completionTokens: 24_000 } as const;
 const META_MODEL = 'muse-spark-1.3';
 const Empty = z.object({}).strict();
 const Finish = z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
@@ -44,7 +46,7 @@ export interface HarnessToolReceipt { name: string; at: number; ok: boolean; sum
 export interface HarnessRunReceipt {
   runId: string; cardId: string; engine: 'native-muse-tools'; model: string; source: 'live' | 'fixture';
   startedAt: number; finishedAt?: number; outcome: 'running' | 'checked' | 'failed' | 'cancelled';
-  turns: number; tokens: number; requestHash: string; requestCharacters: number;
+  turns: number; tokens: number; promptTokens: number; completionTokens: number; requestHash: string; requestCharacters: number;
   observation: { available: boolean; capturedAt?: number; ageMs?: number; width?: number; height?: number };
   tools: HarnessToolReceipt[];
   calls: { model: string; source: 'live' | 'fixture'; latencyMs: number; ok: boolean }[];
@@ -87,7 +89,7 @@ export class MuseBridgeHarness {
     const observation = input.observation;
     const run: HarnessRunReceipt = {
       runId: opts.wiringTag ?? `harness-${randomUUID()}`, cardId: input.cardId, engine: 'native-muse-tools', model, source,
-      startedAt: started, outcome: 'running', turns: 0, tokens: 0, requestHash: sha(input.request), requestCharacters: input.request.length,
+      startedAt: started, outcome: 'running', turns: 0, tokens: 0, promptTokens: 0, completionTokens: 0, requestHash: sha(input.request), requestCharacters: input.request.length,
       observation: observation?.jpeg ? { available: true, capturedAt: observation.capturedAt, ageMs: Math.max(0, started - observation.capturedAt), width: observation.width, height: observation.height } : { available: false },
       tools: [], calls: [],
     };
@@ -115,6 +117,11 @@ export class MuseBridgeHarness {
       guard();
       if (source === 'live' && (this.model !== META_MODEL || this.d.stream?.model !== META_MODEL)) return fail('This harness requires muse-spark-1.3 on the Meta API; no alternative model was called.');
       for (let turn = 0; turn < MUSE_HARNESS_LIMITS.turns; turn++) {
+        // Stop spending before another API call; do not discard a valid tool
+        // response that the API has already generated and charged for.
+        if (run.tokens >= MUSE_HARNESS_LIMITS.totalTokens || run.completionTokens >= MUSE_HARNESS_LIMITS.completionTokens) {
+          return fail('This request reached the app’s token limit, not an API balance check. No wiring was installed. Ask again.');
+        }
         guard(); run.turns++;
         emit('writing', { model, source, note: source === 'fixture' ? 'FIXTURE: scripted Muse tool loop; no model called.' : `Muse agent: ${turn ? 'checking tool results…' : 'inspecting device and hand signals…'}` });
         const callStarted = Date.now();
@@ -141,14 +148,16 @@ export class MuseBridgeHarness {
               },
             };
             response = await abortable(this.d.stream!.stream({ model: this.model, messages, tools: museHarnessTools, parallelToolCalls: false,
-              reasoningEffort: 'low', maxTokens: MUSE_HARNESS_LIMITS.turnTokens }, handlers,
+              reasoningEffort: 'low', maxTokens: Math.min(MUSE_HARNESS_LIMITS.turnTokens, MUSE_HARNESS_LIMITS.completionTokens - run.completionTokens) }, handlers,
             { signal, timeoutMs: Math.max(1, budgetMs - (Date.now() - started)) }), signal);
           }
           guard();
           const reportedModel = source === 'fixture' ? 'fixture' : (response as StreamResult & { reportedModel?: string }).reportedModel;
           const validModel = source === 'fixture' ? response.model === 'fixture' : reportedModel === META_MODEL && response.model === META_MODEL;
           const usage = response.usage;
-          run.tokens += usage ? usage.promptTokens + usage.completionTokens : 0;
+          run.promptTokens += usage?.promptTokens ?? 0;
+          run.completionTokens += usage?.completionTokens ?? 0;
+          run.tokens = run.promptTokens + run.completionTokens;
           run.calls.push({ model: reportedModel?.slice(0, 64) ?? 'not-reported', source, latencyMs: response.latencyMs, ok: validModel });
           this.d.callLog?.add({ at: callStarted, label: 'muse_harness', model: reportedModel ?? 'not-reported', source, ok: validModel, latencyMs: response.latencyMs,
             format: 'tool_calls', effort: 'low', finishReason: response.finishReason,
@@ -161,7 +170,6 @@ export class MuseBridgeHarness {
           this.d.callLog?.add({ at: callStarted, label: 'muse_harness', model, source, ok: false, latencyMs: Date.now() - callStarted, error: reason });
           throw error;
         }
-        if (run.tokens > MUSE_HARNESS_LIMITS.totalTokens) return fail('Muse reached the agent token budget. No wiring was installed.');
         if (!response.toolCalls.length) {
           if (++emptyTurns >= 2) return fail('Muse replied without finishing a checked program. No wiring was installed.');
           messages.push({ role: 'assistant', content: response.content.slice(0, 1500) }, { role: 'user', content: 'A prose claim is not a completed program. Use the scoped inspection/check/finish tools.' });

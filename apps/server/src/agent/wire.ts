@@ -51,7 +51,7 @@ const FLICKER_PARAMETERS = new Set(['brightness', 'hue', 'saturation', 'symmetry
 export const WireDraft = z.object({
   title: z.string().min(1).max(60),
   explanation: z.string().min(1).max(200),
-  code: z.string().min(1).max(WIRE_MAX_BYTES),
+  code: z.string().min(1).max(WIRE_MAX_BYTES).describe('Only the executable BODY of wire(s,out,mem). Do not include function wire(...), an arrow-function wrapper, exports or Markdown fences. The host calls this body each frame.'),
   needs: z.array(z.enum(['right', 'left', 'screen'])).max(3),
 });
 

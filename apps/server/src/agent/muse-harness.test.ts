@@ -4,7 +4,7 @@ import type { StreamClient, StreamMessage, StreamResult } from '../gen3d/stream'
 import { CallLog } from '../muse/callLog';
 import { RequestCancelledError } from '../muse/cancellation';
 import type { WireInput } from './wire';
-import { MuseBridgeHarness } from './muse-harness';
+import { MUSE_HARNESS_LIMITS, MuseBridgeHarness } from './muse-harness';
 
 const model = 'muse-spark-1.3';
 const action = (n: number): DriverAction => ({ actionId: `cc${n}`, label: `Touch ${n}`, kind: 'set', range: { min: 0, max: 127, step: 1 },
@@ -36,6 +36,32 @@ function harness(steps: Step[]) {
 }
 
 describe('bounded native Muse tool harness (stubbed API transport)', () => {
+  it('allows a normal multi-turn request above the old combined-token cap and records input separately', async () => {
+    const usage = { promptTokens: 10000, completionTokens: 700, reasoningTokens: 0, cachedTokens: 0 };
+    const h = harness([
+      () => ({ ...inspections(), usage }),
+      () => ({ ...response([call('check_program', program)]), usage }),
+      messages => ({ ...response([call('finish_program', { hash: successfulHash(messages) })]), usage }),
+    ]);
+    expect((await h.agent.write(input, () => {})).ok).toBe(true);
+    expect(h.agent.list()[0]).toMatchObject({ tokens: 32100, promptTokens: 30000, completionTokens: 2100, outcome: 'checked' });
+  });
+
+  it('checks the next-call budget without discarding an already received valid finish', async () => {
+    const usage = { promptTokens: 45000, completionTokens: 100, reasoningTokens: 0, cachedTokens: 0 };
+    const h = harness([
+      () => ({ ...inspections(), usage }),
+      () => ({ ...response([call('check_program', program)]), usage }),
+      messages => ({ ...response([call('finish_program', { hash: successfulHash(messages) })]), usage }),
+    ]);
+    expect((await h.agent.write(input, () => {})).ok).toBe(true);
+    expect(h.agent.list()[0].tokens).toBeGreaterThan(MUSE_HARNESS_LIMITS.totalTokens);
+    const stopped = harness([() => ({ ...inspections(), usage: { promptTokens: MUSE_HARNESS_LIMITS.totalTokens, completionTokens: 1, reasoningTokens: 0, cachedTokens: 0 } })]);
+    expect((await stopped.agent.write(input, () => {})).ok).toBe(false);
+    expect(stopped.stream).toHaveBeenCalledOnce();
+    expect(stopped.agent.list()[0].reason).toContain('app’s token limit, not an API balance');
+  });
+
   it('feeds real validation failures back to Muse and finishes only the repaired checked artifact', async () => {
     const h = harness([
       inspections, () => response([call('check_program', { ...program, code: "out.set('cc99', 12);" })]),

@@ -55,7 +55,7 @@ The model does not process every hand frame. WebXR provides the Quest signals; g
 
 The existing bridge then verifies the actions and publishes `wire.ready`. A model saying “done” cannot replace those checks. Program generation uses only `muse-spark-1.3`; an unexpected response model is rejected before its tools execute. The gesture harness exposes no generic shell, arbitrary network, sound-unlock or unreviewed hardware tool. No implicit template is installed after failure.
 
-The loop is bounded to eight model turns, sixteen tool calls, ninety seconds and a reported token budget. Stop, replacement and disconnect cancel the job; retired results cannot publish readiness. There is no new runtime model in the hand-frame path.
+The loop is bounded to twelve model turns, sixteen tool calls and ninety seconds. It records prompt/context and generated tokens separately, with next-call limits of128,000 total reported tokens and24,000 generated tokens. These are app limits, independent of the API account balance. Repeated context counts toward total API usage; a paid valid finish response is processed before deciding whether another call is allowed. Stop, replacement and disconnect cancel the job; retired results cannot publish readiness. There is no new runtime model in the hand-frame path.
 
 If a selected-object observation is available, its timestamp and image are supplied in an actual multimodal API message. Its age is stated. A missing or cached frame is never called a live view. Receipt metadata records availability and age; image bytes and prompts are omitted from the receipt API.
 
