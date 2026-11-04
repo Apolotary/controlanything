@@ -4,25 +4,30 @@ import type { HandState, HudFrame } from '../contract';
 import { DockHold, FingerTouchDetector, HandDockAnchor, type FingerMenuFinger } from './hand-dock';
 import { WristPalette } from './wrist-palette';
 
-it('keeps Buddy and every existing wrist action reachable when Tutorial shares the Stop row', () => {
+it('keeps full-width instruments and every wrist action reachable with a compact Stop/Tutorial footer', () => {
   const palette = new WristPalette({} as never);
   const add = (key: string, order: number, extra = {}) => palette.register({ key, label: key, order, onSelect() {}, ...extra });
-  add('layer', -20); add('track', -10); add('visual-synth', 0); add('buddy', 10);
+  add('layer', -20, { segments: [{ key: 'annotate', label: 'Annotate', width: .094 }, { key: 'control', label: 'Control', width: .094 }] });
+  add('track', -10, { segments: [{ key: 'electronics', label: 'Electronics', width: .086 }, { key: 'objects', label: 'Objects', width: .064 }, { key: 'everything', label: 'All', width: .04 }] });
+  add('visual-synth', 0); add('buddy', 10);
   add('deck:panic', 80); add('exit-ar', 90, { hold: true });
   palette.rebuild(); const before = palette.userData.height;
   add('tutorial', 85, { compactWithPrevious: true }); palette.contentGroup.clear(); palette.rebuild();
-  expect(palette.buttons.map(button => button.name)).toEqual(['layer', 'track', 'visual-synth', 'buddy', 'deck:panic', 'tutorial', 'exit-ar']);
+  const selectors = ['layer:annotate', 'layer:control', 'track:electronics', 'track:objects', 'track:everything'];
+  expect(palette.buttons.map(button => button.name)).toEqual([...selectors, 'visual-synth', 'buddy', 'deck:panic', 'tutorial', 'exit-ar']);
   expect(palette.userData.height).toBe(before);
   const stop = palette.getObjectByName('deck:panic')!, tutorial = palette.getObjectByName('tutorial')!;
   expect(stop.position.y).toBe(tutorial.position.y);
   expect(stop.position.x + stop.userData.width / 2).toBeLessThan(tutorial.position.x - tutorial.userData.width / 2);
   add('musical-synth', 1, { compactWithPrevious: true }); palette.contentGroup.clear(); palette.rebuild();
-  expect(palette.buttons.map(button => button.name)).toEqual(['layer', 'track', 'visual-synth', 'musical-synth', 'buddy', 'deck:panic', 'tutorial', 'exit-ar']);
-  expect(palette.userData.height).toBe(before);
+  expect(palette.buttons.map(button => button.name)).toEqual([...selectors, 'visual-synth', 'musical-synth', 'buddy', 'deck:panic', 'tutorial', 'exit-ar']);
+  expect(palette.userData.height).toBeLessThan(.36);
   const visual = palette.getObjectByName('visual-synth')!, music = palette.getObjectByName('musical-synth')!;
-  expect(visual.position.y).toBe(music.position.y);
-  expect(visual.userData.width).toBeGreaterThanOrEqual(.07);
-  expect(visual.position.x + visual.userData.width / 2).toBeLessThan(music.position.x - music.userData.width / 2);
+  expect(visual.position.y - music.position.y).toBeGreaterThanOrEqual(.049 - 1e-8);
+  expect(visual.position.x).toBe(0); expect(music.position.x).toBe(0);
+  expect(visual.userData.width).toBeGreaterThanOrEqual(.24);
+  expect(music.userData.height).toBeGreaterThanOrEqual(.045);
+  expect(palette.getObjectByName('track:electronics')!.userData.width).toBeGreaterThan(.10);
 });
 
 function hand(x = -0.2, palmUp = true, palmUpMs = 450): HandState {

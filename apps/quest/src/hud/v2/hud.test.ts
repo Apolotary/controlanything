@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DoubleSide, Mesh, PerspectiveCamera, Scene, Vector3, Quaternion, type ShaderMaterial, Object3D, type WebGLRenderer } from 'three';
 import { EXAMPLES, type Gen3dSpec } from '@ce/gen3d';
-import type { HandState, HomeState, HudFrame, HudTarget } from '../contract';
+import type { HandState, HomeState, HudFrame, HudTarget, WireView } from '../contract';
 import { HandFeedback } from '../../app/hand-feedback';
 import { createHud, THEME } from './index';
 import { BoxField } from './boxes';
@@ -1091,6 +1091,63 @@ describe('physical device identity entry', () => {
     f.hud.setDeviceState?.({ targetId: target.id, connection: 'setup', busy: true });
     f.hud.update(f.frame(undefined, 200));
     expect(card().actions.some((a: {id: string}) => a.id === 'correct-device')).toBe(false);
+    f.hud.dispose();
+  });
+});
+
+describe('gesture-first device workspace', () => {
+  const wire = (phase: WireView['phase']): WireView => ({ targetId: target.id, phase, prompt: 'What should your hands do?',
+    chips: ['Touch the water', 'Hands as knobs', 'Surprise me'], mic: 'idle', canRecalibrate: true,
+    code: { wiringId: 'wire-reading', requestId: 'ask-reading', phase, model: 'fixture', source: 'fixture',
+      request: 'Let my fingertip touch the water and make ripples as it moves across the screen.', code: 'out.set("cc24", 0);', phaseLine: phase, mode: 'full' } });
+
+  it('yields the hand menu only to a changed explicit device selection', () => {
+    const f = setup(); f.hud.upsertTarget(target); f.hud.update(f.frame(undefined, 200));
+    const anchor = (f.hud.root.getObjectByName('wrist-palette') as Object3D & { anchor: { source: 'hand' | 'controller'; open: boolean; opacity: number } }).anchor;
+    anchor.source = 'hand'; anchor.open = true; anchor.opacity = 1;
+    f.hud.setLocked(target.id); expect(anchor.open).toBe(false);
+    anchor.open = true;
+    f.hud.setLocked(target.id); expect(anchor.open).toBe(true);
+    f.hud.upsertTarget({ ...target, label: 'Updated detection' }); expect(anchor.open).toBe(true);
+    f.hud.setLocked(null); expect(anchor.open).toBe(true);
+    anchor.source = 'controller'; f.hud.setLocked(target.id); expect(anchor.open).toBe(true);
+    f.hud.dispose();
+  });
+
+  it('shows no side handles or preset controls throughout the default requested interaction', () => {
+    const f = setup(); f.hud.upsertTarget(target); f.hud.setLocked(target.id); f.hud.renderSpec(spec(), { targetId: target.id });
+    f.hud.setDeviceState?.({ targetId: target.id, connection: 'ready', silentVisual: true });
+    for (const phase of ['idle', 'writing', 'calibrating', 'running', 'stopped'] as const) {
+      f.hud.setWire?.(wire(phase)); f.hud.update(f.frame(undefined, 200));
+      const rig = f.hud.root.getObjectByName('spatial-controls')!;
+      expect(rig.visible).toBe(false);
+      const card = f.hud.root.getObjectByName('device-card-v3')!.userData.view;
+      expect(card.actions.some((action: { id: string }) => action.id.startsWith('control:'))).toBe(false);
+      if (phase === 'running' || phase === 'calibrating') expect(card.ask.chips).toHaveLength(0);
+    }
+    f.hud.setWire?.(null); f.hud.setDeviceState?.({ targetId: target.id, connection: 'ready', legacyPerform: true, performAvailable: true });
+    f.hud.update(f.frame(undefined, 200));
+    expect(f.hud.root.getObjectByName('spatial-controls')!.visible).toBe(true);
+    expect(f.hud.root.getObjectByName('dial-left')!.visible).toBe(true);
+    f.hud.dispose();
+  });
+
+  it('opens a quiet upright reader in front of the wearer and keeps it fixed through a head turn', () => {
+    const f = setup(); f.hud.upsertTarget(target); f.hud.setLocked(target.id); f.hud.renderSpec(spec(), { targetId: target.id });
+    f.hud.setDeviceState?.({ targetId: target.id, connection: 'ready', silentVisual: true });
+    f.hud.setWire?.(wire('stopped')); f.hud.update(f.frame(undefined, 200));
+    const internal = f.hud as unknown as { lookAction(id: string): void; widgets: { group: Object3D; start(): void }[] };
+    internal.lookAction('wire-read-request'); f.hud.update(f.frame(undefined, 200));
+    const reader = f.hud.root.getObjectByName('wire-request-reader')!, placed = reader.position.clone(), facing = reader.quaternion.clone();
+    expect(reader.visible).toBe(true); expect(placed.z).toBeCloseTo(f.camera.position.z - 1);
+    expect(placed.y - (reader as Object3D & { height: number }).height / 2).toBeCloseTo(f.camera.position.y - .13);
+    for (const name of ['device-card', 'spatial-controls', 'wire-code-card', 'device-annotations']) expect(f.hud.root.getObjectByName(name)!.visible).toBe(false);
+    f.camera.position.x += .25; f.camera.quaternion.setFromAxisAngle(new Vector3(0, 1, 0), .6);
+    f.hud.update(f.frame(undefined, 200));
+    expect(reader.position).toEqual(placed); expect(reader.quaternion.angleTo(facing)).toBeLessThan(1e-6);
+    internal.widgets.find(w => w.group.name === 'wire-request-return')!.start(); f.hud.update(f.frame(undefined, 200));
+    expect(reader.visible).toBe(false); expect(f.hud.root.getObjectByName('device-card')!.visible).toBe(true);
+    expect(f.hud.root.userData.wire.phase).toBe('stopped');
     f.hud.dispose();
   });
 });

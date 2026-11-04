@@ -178,6 +178,8 @@ export class LeanHud implements Hud {
   private readonly codeQuaternion = new Quaternion();
   private readonly codeFace = new Quaternion();
   private codePlaced = false;
+  private readerPlaced = false;
+  private readonly readerForward = new Vector3();
   private wireOutlineKey = '';
   private readonly wireCorners: (Vector3 | null)[] = [null, null];
   private readonly wireTip = new Vector3();
@@ -309,7 +311,7 @@ export class LeanHud implements Hud {
     for (const [group, action] of [
       [this.requestReader.previous, () => this.requestReader.previousPage()],
       [this.requestReader.next, () => this.requestReader.nextPage()],
-      [this.requestReader.closeButton, () => this.requestReader.close()],
+      [this.requestReader.closeButton, () => { this.requestReader.close(); this.readerPlaced = false; this.place(); }],
     ] as const) this.widgets.push({ group, w: this.requestReader.buttonWidth, h: this.requestReader.buttonHeight,
       kind: 'handle', button: true, lastMove: 0, start: action });
     this.root.add(this.assistant);
@@ -655,6 +657,8 @@ export class LeanHud implements Hud {
         : this.wireView.phase === 'calibrating'
           ? 'Finish calibration, show both palms to stop, then Read request.'
           : 'After it finishes, show both palms to stop, then Read request.', 'info');
+      this.readerPlaced = false;
+      this.place();
       return;
     }
     if ((id.startsWith('control:') || id.startsWith('action:')) && !this.manualLookReady()) return;
@@ -709,7 +713,7 @@ export class LeanHud implements Hud {
   private refreshDials(): void {
     const look = this.look, m = this.mounted();
     if (!look) return;
-    if (!m) { look.rig.setDials(null, null); return; }
+    if (!m || !this.deviceState?.legacyPerform) { look.rig.setDials(null, null); return; }
     look.rig.setDials(this.dialModel(m, this.primaryContinuous(m)), this.dialModel(m, this.otherContinuous(m)));
   }
   private lookTitle(): string {
@@ -769,10 +773,10 @@ export class LeanHud implements Hud {
       if (state?.legacyPerform && m?.armed && state && !state.performAvailable && m.spec.controls.some((control) => this.isArmed(m, control))) actions.push({ id: 'gesture-setup', label: 'Set up gestures', icon: 'hand' });
       const presets = m ? m.spec.controls.filter((c) => this.isArmed(m, c) && (c.kind === 'trigger' || c.kind === 'toggle')) : [];
       const iconFor = (label: string): CardAction['icon'] => /flow|wave/i.test(label) ? 'waves' : /ring|circle/i.test(label) ? 'rings' : /prism|triangle/i.test(label) ? 'prism' : undefined;
-      if (m && presets.length) for (const c of presets.slice(0, 3 - actions.length)) {
+      if (state?.legacyPerform && m && presets.length) for (const c of presets.slice(0, 3 - actions.length)) {
         actions.push({ id: `control:${c.id}`, label: this.actionLabel(c.label), icon: iconFor(c.label),
           selected: c.kind === 'toggle' ? Boolean(m.values.get(c.id)) : m.selectedButton === c.id });
-      } else if (m?.armed) {
+      } else if (state?.legacyPerform && m?.armed) {
         const menu = this.menus.get(this.locked ?? this.menuTarget ?? '');
         for (const item of (menu?.items ?? []).filter((entry) => entry.kind !== 'control' && entry.status === 'verified').slice(0, 3 - actions.length)) {
           actions.push({ id: `action:${item.id}`, label: this.actionLabel(item.label), icon: iconFor(item.label), selected: this.selectedAction === item.id });
@@ -786,12 +790,13 @@ export class LeanHud implements Hud {
     const wire = this.wireView;
     if (wire && wire.targetId === this.locked && !working && connection === 'ready' && m?.armed) {
       subtitle = wire.prompt;
-      const chips: CardAsk['chips'] = wire.chips.map((label) => ({ id: label, label, ...(label === wire.activeChip ? { active: true } : {}) }));
-      if (wire.canRecalibrate) chips.push({ id: 'recalibrate', label: 'Recalibrate screen', icon: 'retry' });
+      const choosing = !['running', 'calibrating'].includes(wire.phase);
+      const chips: CardAsk['chips'] = choosing ? wire.chips.map((label) => ({ id: label, label, ...(label === wire.activeChip ? { active: true } : {}) })) : [];
+      if (wire.canRecalibrate && choosing) chips.push({ id: 'recalibrate', label: 'Recalibrate screen', icon: 'retry' });
       ask = { chips, mic: wire.mic };
-      if (!this.manualLookReady()) actions.length = 0;
+      if (!state?.legacyPerform) actions.length = 0;
     }
-    if (wire?.targetId === this.locked && this.requestReader.available) {
+    if (wire?.targetId === this.locked && this.requestReader.canOpen) {
       actions.unshift({ id: 'wire-read-request', label: 'Read request' });
     }
     return { title: name, subtitle, toggle, actions: actions.slice(0, 3), agent: this.lookAgent(working), ask };
@@ -809,13 +814,16 @@ export class LeanHud implements Hud {
     const target = this.selected(), m = this.mounted();
     const state = this.deviceState?.targetId === this.locked ? this.deviceState : null;
     const box = target ? this.boxes.boxes.get(target.id) : undefined;
-    const workspace = this.home.mode === 'control' && !!target?.tagged && !this.modal.visible && !this.deck.panel.visible && !this.helperPairingView && !this.projectView;
+    const workspace = this.home.mode === 'control' && !!target?.tagged && !this.requestReader.visible && !this.modal.visible && !this.deck.panel.visible && !this.helperPairingView && !this.projectView;
     const connection = this.selectedConnection();
     const ready = connection === 'ready' && !!m?.armed && !this.setupWorking() && !state?.busy;
-    // While Muse's wiring runs the hands are the control: the arcs only display, so a fingertip on the screen never grabs one.
+    // The default is gesture-first: no side arcs that suggest pinch-drag. Keep
+    // only setup progress, and preserve dials solely for explicit legacy mode.
     const wiring = this.wireView?.phase === 'running';
     const askFirst = this.wireView?.targetId === this.locked && !state?.legacyPerform;
-    const mode: DialMode = !workspace || !box ? 'hidden' : ready ? state?.handControl || wiring ? 'perform' : askFirst ? 'waiting' : 'armed' : 'setup';
+    const mode: DialMode = !workspace || !box ? 'hidden' : !state?.legacyPerform
+      ? ready ? 'hidden' : 'setup'
+      : ready ? state.handControl || wiring ? 'perform' : askFirst ? 'waiting' : 'armed' : 'setup';
     look.rig.setMode(mode);
     if (box && mode !== 'hidden') {
       this.boxes.facingQuaternion(this.head, box.center, this.lookFacing, box.facing);
@@ -873,9 +881,19 @@ export class LeanHud implements Hud {
       this.codeCard.quaternion.copy(this.codeQuaternion);
     } else if (!show) this.codePlaced = false;
     this.codeCard.update(dt * 1000, show);
-    this.requestReader.position.copy(this.codePosition);
-    this.requestReader.quaternion.copy(this.codeQuaternion);
-    if (this.requestReader.visible) this.codeCard.visible = false;
+    if (this.requestReader.visible) {
+      if (!this.readerPlaced) {
+        this.readerForward.set(0, 0, -1).applyQuaternion(frame.head.quaternion); this.readerForward.y = 0;
+        if (this.readerForward.lengthSq() < 1e-6) this.readerForward.set(0, 0, -1);
+        this.readerForward.normalize();
+        this.requestReader.position.copy(frame.head.position).add(this.readerForward);
+        // Reader origin is top-centre: its centre sits 13cm below the eyes.
+        this.requestReader.position.y += this.requestReader.height / 2 - .13;
+        this.requestReader.quaternion.setFromAxisAngle(UP_AXIS, Math.atan2(-this.readerForward.x, -this.readerForward.z));
+        this.readerPlaced = true;
+      }
+      this.codeCard.visible = false;
+    } else this.readerPlaced = false;
     this.requestReader.updateUi(dt * 1000);
     const cal = this.wireView?.calibration;
     this.wireCorners[0] = cal?.corners[0] ? (this.wireCorners0 ??= new Vector3()).fromArray(cal.corners[0]) : null;
@@ -888,6 +906,7 @@ export class LeanHud implements Hud {
       this.wireMarkers.showOutline(c);
     }
     this.wireOutlineKey = key;
+    if (this.requestReader.visible) this.wireMarkers.hideAll();
   }
   private wireCorners0?: Vector3;
   private wireCorners1?: Vector3;
@@ -1123,6 +1142,7 @@ export class LeanHud implements Hud {
     if (id !== this.locked) { this.requestReader.close(); this.setAssistant(null); this.setSetupProgress(null); this.setCanvas(null); }
     if (id !== this.locked && this.codeEntry && this.codeTarget !== HELPER_PAIRING_TARGET) this.closePairCode();
     const old = this.locked; this.locked = id;
+    if (id && old !== id) this.palette.anchor.dismiss(this.time * 1000);
     if (old !== id) { this.pinned = false; this.card.userData.pinned = false; this.evidence = null; this.upload = null; this.selectedAction = null; this.unfoldStarted = this.time; }
     // A newly selected device's panel spawns once in front of the wearer; it never follows the head afterwards.
     if (id && old !== id && !this.workspaceAnchorHeld()) this.workspaceAnchor.reset();
@@ -1507,12 +1527,13 @@ export class LeanHud implements Hud {
     const available = !this.modal.visible && !this.helperPairingView && !this.deck.panel.visible && !selection && !this.projectView;
     // One foreground task at a time. The device's physical anchor remains unchanged.
     const generalConversation = this.assistantView?.targetId === 'muse-general';
-    this.assistant.visible = available && (generalConversation || workspace && !this.onboarding && this.assistantView?.targetId === target?.id
+    const reading = this.requestReader.visible;
+    this.assistant.visible = !reading && available && (generalConversation || workspace && !this.onboarding && this.assistantView?.targetId === target?.id
       && (!this.setupWorking() || this.assistantView.state !== 'setup'));
-    this.card.visible = workspace && available && !this.assistant.visible;
+    this.card.visible = !reading && workspace && available && !this.assistant.visible;
     // Tag/use coaching is nonblocking: the wearer may keep finding devices before switching modes.
     // Only an actual foreground workspace/menu/dialog suppresses annotation targets.
-    this.annotationLayer.visible = !this.deck.panel.visible && !this.modal.visible && !this.helperPairingView && !workspace && !selection && !this.projectView && !this.assistant.visible;
+    this.annotationLayer.visible = !reading && !this.deck.panel.visible && !this.modal.visible && !this.helperPairingView && !workspace && !selection && !this.projectView && !this.assistant.visible;
     this.visualSelection.visible = !!selection && !this.deck.panel.visible && !this.modal.visible && !this.helperPairingView && !this.projectView;
     this.projectPanel.visible = !!this.projectView && !this.deck.panel.visible && !this.modal.visible && !this.helperPairingView;
     // Spawn the shared workspace pose the first time a panel needs it (~0.6 m, 15° below eye line), then never move it.

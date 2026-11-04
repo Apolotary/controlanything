@@ -24,18 +24,18 @@ export interface PaletteItem {
   segments?: { key: string; label: string; width: number }[];
   selected?: () => string;
   onSegment?: (key: string) => void;
-  /** A small companion action on the previous plain row (Tutorial beside Stop), preserving menu height. */
+  /** A companion footer action (Tutorial beside Stop); main actions keep their own full-width row. */
   compactWithPrevious?: boolean;
 }
 
-export const PALETTE_MAX_ITEMS = 6;
-const BUTTON_W = 0.15, BUTTON_H = 0.046, GAP = 0.01, SEGMENT_H = 0.036;
+export const PALETTE_MAX_ITEMS = 7;
+const BUTTON_W = 0.24, BUTTON_H = 0.045, GAP = 0.004, SEGMENT_H = 0.036, PADDING = 0.01;
 /**
  * Horizon look (look.ts, same as the device card and the Buddy): grayGlass plate, white = on, glass = off.
  * px = mm (LOOK.pixelSize). The palette draws above the device card and the Buddy (31-32), below the hands (101).
  */
 const UI = {
-  render: 33, padding: 10, border: 1.5, buttonFont: 16, segmentFont: 13,
+  render: 33, padding: PADDING * 1000, border: 1.5, buttonFont: 19, segmentFont: 16,
   on: { bg: withOpacity('#ffffff', 0.92), hover: '#d9d9d9', pressed: '#c0c0c0', text: '#272727' },
   off: { bg: withOpacity('#ffffff', 0.08), hover: withOpacity('#ffffff', 0.16), pressed: withOpacity('#ffffff', 0.24), text: withOpacity('#ffffff', 0.92) },
 } as const;
@@ -43,14 +43,14 @@ const UI = {
 interface Face { group: Group; box: Container; label: Text; state: number }
 
 /**
- * The wrist palette: turn the left palm toward your face and up to five big buttons appear beside the hand
- * (Visual synth · Stop · Exit, plus registered items such as Buddy). Poke or pinch selects. On a controller,
+ * The wrist palette: deliberately raise a flat left palm and clear action rows appear beside the hand.
+ * Full-width instrument choices do not require grabbing or dragging. Poke or pinch selects. On a controller,
  * the menu button pins it. In the desktop emulator (mouse) it docks low and to the left of the view.
  * It replaces the world launcher pill, the 74 cm menu panel and the dwell recall.
  */
 export class WristPalette extends Group {
   readonly anchor: HandDockAnchor;
-  width = BUTTON_W + 0.02;
+  width = BUTTON_W + PADDING * 2;
   /** Button groups in display order; LeanHud wires a widget to each after `rebuild`. */
   buttons: Group[] = [];
   private items: PaletteItem[] = [];
@@ -109,7 +109,8 @@ export class WristPalette extends Group {
     const rows: PaletteItem[][] = [];
     for (const item of items) {
       const previous = rows.at(-1);
-      if (item.compactWithPrevious && !item.hold && !item.segments && previous?.length === 1 && !previous[0]!.hold && !previous[0]!.segments) previous.push(item);
+      const footer = (item.order ?? 50) >= 80 && (previous?.[0]?.order ?? 50) >= 80;
+      if (footer && item.compactWithPrevious && !item.hold && !item.segments && previous?.length === 1 && !previous[0]!.hold && !previous[0]!.segments) previous.push(item);
       else rows.push([item]);
     }
     return rows;
@@ -122,13 +123,13 @@ export class WristPalette extends Group {
     this.cancelExitHold();
     const layout = this.rows(shown);
     const rows = layout.map((items) => items[0]!.segments ? SEGMENT_H : BUTTON_H);
-    const height = rows.reduce((a, b) => a + b, 0) + Math.max(0, rows.length - 1) * GAP + 0.02;
+    const height = rows.reduce((a, b) => a + b, 0) + Math.max(0, rows.length - 1) * GAP + PADDING * 2;
     const rowWidth = Math.max(BUTTON_W, ...shown.map((item) => item.segments ? item.segments.reduce((a, seg) => a + seg.width, 0) + (item.segments.length - 1) * 0.004 : 0));
-    this.width = rowWidth + 0.02;
+    this.width = rowWidth + PADDING * 2;
     this.userData.height = height;
     const ui = this.buildUi(height);
     const buttons: Group[] = [];
-    let y = height / 2 - 0.01;
+    let y = height / 2 - PADDING;
     layout.forEach((items, i) => {
       const item = items[0]!;
       const rowH = rows[i]!;
@@ -141,26 +142,28 @@ export class WristPalette extends Group {
           group.userData.width = width; group.userData.height = BUTTON_H; group.userData.menuButton = true;
           group.userData.primary = !!compact.primary; group.userData.paletteKey = compact.key;
           this.content.add(group); buttons.push(group);
-          faces?.add(this.face(group, compact.label, width, BUTTON_H, 14));
+          faces?.add(this.face(group, compact.label, width, BUTTON_H, 18));
         });
         if (faces) ui!.add(faces);
         y -= rowH + GAP; return;
       }
       if (item.segments) {
-        // One row of small pills; each segment is its own button (named `${key}:${segment}`).
+        // Layer/filter choices fill the row; their visible faces and hit targets share the same dimensions.
         const row = new Group(); row.name = item.key; row.position.set(0, y - rowH / 2, THEME.panel.depth); this.content.add(row);
-        const total = item.segments.reduce((a, seg) => a + seg.width, 0) + (item.segments.length - 1) * 0.004;
-        let x = -total / 2;
+        const gaps = (item.segments.length - 1) * 0.004;
+        const scale = (rowWidth - gaps) / item.segments.reduce((a, seg) => a + seg.width, 0);
+        let x = -rowWidth / 2;
         for (const seg of item.segments) {
+          const width = seg.width * scale;
           const group = new Group(); group.name = `${item.key}:${seg.key}`;
-          group.position.set(x + seg.width / 2, 0, 0); x += seg.width + 0.004;
-          group.userData.width = seg.width; group.userData.height = SEGMENT_H; group.userData.menuButton = true;
+          group.position.set(x + width / 2, 0, 0); x += width + 0.004;
+          group.userData.width = width; group.userData.height = SEGMENT_H; group.userData.menuButton = true;
           group.userData.paletteKey = item.key; group.userData.segmentKey = seg.key;
           row.add(group); buttons.push(group);
         }
         if (ui) {
           const faceRow = new Container({ flexDirection: 'row', gap: 4, height: SEGMENT_H * 1000, flexShrink: 0 });
-          item.segments.forEach((seg, k) => faceRow.add(this.face(buttons[buttons.length - item.segments!.length + k]!, seg.label, seg.width, SEGMENT_H, UI.segmentFont)));
+          item.segments.forEach((seg, k) => faceRow.add(this.face(buttons[buttons.length - item.segments!.length + k]!, seg.label, seg.width * scale, SEGMENT_H, UI.segmentFont)));
           ui.add(faceRow);
         }
         y -= rowH + GAP;
@@ -169,10 +172,10 @@ export class WristPalette extends Group {
       const group = new Group(); group.name = item.key;
       group.position.set(0, y - BUTTON_H / 2, THEME.panel.depth);
       y -= BUTTON_H + GAP;
-      group.userData.width = BUTTON_W; group.userData.height = BUTTON_H; group.userData.menuButton = true;
+      group.userData.width = rowWidth; group.userData.height = BUTTON_H; group.userData.menuButton = true;
       group.userData.primary = !!item.primary; group.userData.paletteKey = item.key;
       this.content.add(group); buttons.push(group);
-      if (ui) ui.add(this.face(group, item.hold ? `${item.label} · hold` : item.label, BUTTON_W, BUTTON_H, UI.buttonFont));
+      if (ui) ui.add(this.face(group, item.hold ? `${item.label} · hold` : item.label, rowWidth, BUTTON_H, UI.buttonFont));
     });
     this.buttons = buttons;
     return this.buttons;
@@ -182,7 +185,7 @@ export class WristPalette extends Group {
   private buildUi(height: number): Panel | undefined {
     this.disposeUi();
     if (!isBrowser) return undefined;
-    // padding + border = 10 mm, gap = GAP: the faces land on the hit groups' centres.
+    // Padding + border agree with the hit layout so a visible action is the action the pinch selects.
     const ui = glassPanel({ width: this.width, height, anchorX: 'center', anchorY: 'center', padding: UI.padding - UI.border, gap: GAP * 1000,
       alignItems: 'center', renderOrder: UI.render, pointerEvents: 'none' } as never);
     ui.name = 'palette-plate';
@@ -191,7 +194,7 @@ export class WristPalette extends Group {
     return ui;
   }
   private face(group: Group, text: string, w: number, h: number, fontSize: number): Container {
-    const box = new Container({ width: w * 1000, height: h * 1000, flexShrink: 0, borderRadius: 1000, alignItems: 'center', justifyContent: 'center',
+    const box = new Container({ width: w * 1000, height: h * 1000, flexShrink: 0, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
       paddingX: 8, backgroundColor: UI.off.bg, panelMaterialClass: FlatMaterial } as never);
     const label = new Text({ text, fontSize, fontWeight: 'medium', color: UI.off.text, whiteSpace: 'nowrap' } as never);
     box.add(label);

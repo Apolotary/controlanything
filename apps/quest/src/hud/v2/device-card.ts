@@ -6,7 +6,7 @@ import { LOOK } from './theme';
 
 /**
  * The selected device's card in the Meta Horizon OS style (pmndrs uikit-horizon, dark scheme):
- * name + one status line, one oversized round Perform/Stop toggle, at most three pill buttons and an
+ * name + one status line, generous full-width request/action rows and an
  * agent pill (NVIDIA XR AI response contract: "Thinking…" only after 700 ms, then streamed text, model id small).
  * No JSON, provenance, Details or paragraphs. One uikit root = one instanced panel batch + one glyph batch, so the
  * plate and its buttons can never depth-sort against each other (the head-turn blink).
@@ -14,7 +14,7 @@ import { LOOK } from './theme';
 export type CardIcon = IconName;
 export interface CardAction { id: string; label: string; icon?: CardIcon; selected?: boolean; primary?: boolean }
 export interface CardAgent { state: 'listening' | 'thinking' | 'reply' | 'done' | 'error'; text: string; model?: string }
-/** "Muse writes the glue": the ask section. Chips send a request; the round button is hold-to-talk. */
+/** "Muse writes the glue": suggestions send a request; the labelled mic row is hold-to-talk. */
 export interface CardAsk {
   chips: { id: string; label: string; active?: boolean; icon?: CardIcon }[];
   mic: 'off' | 'idle' | 'listening' | 'busy';
@@ -48,7 +48,7 @@ function clip(text: string, max = 44): string {
 interface ActionSlot { button: Button; icon: ButtonIcon; label: Text; iconKind?: CardIcon; id?: string }
 
 export class DeviceCard extends Group {
-  readonly widthM = LOOK.card.width * LOOK.pixelSize;
+  readonly widthM = .36;
   private readonly root?: Panel;
   private readonly title?: Text;
   private readonly subtitle?: Text;
@@ -88,7 +88,8 @@ export class DeviceCard extends Group {
     const header = new Container({ flexDirection: 'row', alignItems: 'center', gap: 12 });
     const titles = new Container({ flexDirection: 'column', flexGrow: 1, flexShrink: 1, gap: 4 });
     this.title = new Text({ text: '', fontSize: card.titleSize, fontWeight: 'semi-bold', color: LOOK.text.primary, wordBreak: 'keep-all' });
-    this.subtitle = new Text({ text: '', fontSize: card.subtitleSize, fontWeight: 'medium', color: LOOK.text.secondary });
+    this.subtitle = new Text({ text: '', fontSize: 18, lineHeight: '125%', fontWeight: 'medium', color: LOOK.text.secondary,
+      whiteSpace: 'normal', wordBreak: 'break-word' } as never);
     titles.add(this.title, this.subtitle);
     this.toggleColumn = new Container({ flexDirection: 'column', alignItems: 'center', gap: 4, flexShrink: 0 });
     this.toggle = new Button({ variant: 'secondary', icon: true, size: 'lg', width: card.toggle, height: card.toggle,
@@ -98,16 +99,17 @@ export class DeviceCard extends Group {
     this.toggle.add(this.toggleIcon);
     this.toggleLabel = new Text({ text: 'Perform', fontSize: 12, fontWeight: 'medium', color: LOOK.text.secondary });
     this.toggleColumn.add(this.toggle, this.toggleLabel);
-    this.micColumn = new Container({ flexDirection: 'column', alignItems: 'center', gap: 4, flexShrink: 0, display: 'none' });
-    this.mic = new Button({ variant: 'secondary', icon: true, size: 'lg', width: card.toggle, height: card.toggle,
+    this.micColumn = new Container({ flexDirection: 'column', alignItems: 'stretch', flexShrink: 0, display: 'none' });
+    this.mic = new Button({ variant: 'secondary', size: 'lg', width: '100%', height: 52, borderRadius: 12, gap: 10,
       backgroundColor: withOpacity('#ffffff', 0.14), panelMaterialClass: flatPanel,
       onPointerDown: () => this.handlers.mic?.(true), onPointerUp: () => this.handlers.mic?.(false) } as never);
     this.mic.name = 'wire-mic';
-    this.micIcon = new ButtonIcon({ '*': { width: 30, height: 30 } } as never);
+    this.micIcon = new ButtonIcon({ '*': { width: 24, height: 24 } } as never);
     this.mic.add(this.micIcon);
-    this.micLabel = new Text({ text: 'Hold to talk', fontSize: 12, fontWeight: 'medium', color: LOOK.text.secondary, whiteSpace: 'nowrap' } as never);
-    this.micColumn.add(this.mic, this.micLabel);
-    header.add(titles, this.toggleColumn, this.micColumn);
+    this.micLabel = new Text({ text: 'Hold to ask Muse', fontSize: 18, fontWeight: 'medium', whiteSpace: 'nowrap' } as never);
+    const micLabelBox = new ButtonLabel(); micLabelBox.add(this.micLabel); this.mic.add(micLabelBox);
+    this.micColumn.add(this.mic);
+    header.add(titles, this.toggleColumn);
     this.agentRow = new Container({ flexDirection: 'row', alignItems: 'center', gap: 8, height: LOOK.pill.height + 4, paddingX: 14,
       borderRadius: 1000, backgroundColor: withOpacity('#ffffff', 0.08), panelMaterialClass: flatPanel, display: 'none' });
     this.agentRow.name = 'agent-pill';
@@ -115,30 +117,30 @@ export class DeviceCard extends Group {
     this.agentText = new Text({ text: '', fontSize: LOOK.pill.fontSize, fontWeight: 'medium', flexGrow: 1, flexShrink: 1, color: LOOK.text.primary, whiteSpace: 'nowrap' } as never);
     this.agentModel = new Text({ text: '', fontSize: 11, color: LOOK.text.secondary, flexShrink: 0 });
     this.agentRow.add(this.agentDot, this.agentText, this.agentModel);
-    this.actionsRow = new Container({ flexDirection: 'row', gap: 8, display: 'none' });
+    this.actionsRow = new Container({ flexDirection: 'column', gap: 8, display: 'none' });
     for (let i = 0; i < 3; i++) {
-      const button = new Button({ variant: 'secondary', size: 'lg', flexGrow: 1, flexBasis: 0, paddingX: 10, gap: 6, panelMaterialClass: flatPanel,
+      const button = new Button({ variant: 'secondary', size: 'lg', width: '100%', height: 48, borderRadius: 12, paddingX: 16, gap: 8, panelMaterialClass: flatPanel,
         onClick: () => { const id = this.slots[i]?.id; if (id) this.handlers.action(id); } });
       const icon = new ButtonIcon({ '*': { width: 18, height: 18 } } as never);
       const labelBox = new ButtonLabel();
-      const label = new Text({ text: '', fontSize: 14, fontWeight: 'medium', whiteSpace: 'nowrap' } as never);
+      const label = new Text({ text: '', fontSize: 18, fontWeight: 'medium', whiteSpace: 'nowrap' } as never);
       labelBox.add(label); button.add(icon, labelBox);
       this.actionsRow.add(button);
       this.slots.push({ button, icon, label });
     }
-    this.chipsRow = new Container({ flexDirection: 'row', flexWrap: 'wrap', gap: 6, display: 'none' } as never);
+    this.chipsRow = new Container({ flexDirection: 'column', gap: 8, display: 'none' } as never);
     this.chipsRow.name = 'wire-chips';
     for (let i = 0; i < 4; i++) {
-      const button = new Button({ variant: 'secondary', size: 'sm', paddingX: 10, gap: 5, panelMaterialClass: flatPanel,
+      const button = new Button({ variant: 'secondary', size: 'lg', width: '100%', height: 52, borderRadius: 12, paddingX: 16, gap: 8, panelMaterialClass: flatPanel,
         onClick: () => { const id = this.chipSlots[i]?.id; if (id) this.handlers.chip?.(id); } });
-      const chipIcon = new ButtonIcon({ '*': { width: 14, height: 14 } } as never);
+      const chipIcon = new ButtonIcon({ '*': { width: 20, height: 20 } } as never);
       const chipLabelBox = new ButtonLabel();
-      const chipLabel = new Text({ text: '', fontSize: 13, fontWeight: 'medium', whiteSpace: 'nowrap' } as never);
+      const chipLabel = new Text({ text: '', fontSize: 18, fontWeight: 'medium', whiteSpace: 'nowrap' } as never);
       chipLabelBox.add(chipLabel); button.add(chipIcon, chipLabelBox);
       this.chipsRow.add(button);
       this.chipSlots.push({ button, icon: chipIcon, label: chipLabel });
     }
-    this.root.add(header, this.chipsRow, this.agentRow, this.actionsRow);
+    this.root.add(header, this.chipsRow, this.micColumn, this.agentRow, this.actionsRow);
     this.add(this.root);
   }
 
@@ -197,7 +199,7 @@ export class DeviceCard extends Group {
       this.mic!.setProperties(on
         ? { variant: 'primary', color: '#272727', backgroundColor: withOpacity('#ffffff', 0.92), hover: { backgroundColor: '#d9d9d9', color: '#272727' }, active: { backgroundColor: '#c0c0c0', color: '#272727' } }
         : { variant: 'secondary', color: withOpacity('#ffffff', 0.92), backgroundColor: withOpacity('#ffffff', 0.14), hover: { backgroundColor: withOpacity('#ffffff', 0.22), color: '#ffffff' }, active: { backgroundColor: withOpacity('#ffffff', 0.3), color: '#ffffff' } } as never);
-      this.micLabel!.setProperties({ text: mic === 'listening' ? 'Listening…' : mic === 'busy' ? 'Hearing…' : 'Hold to talk' });
+      this.micLabel!.setProperties({ text: mic === 'listening' ? 'Listening… release to send' : mic === 'busy' ? 'Transcribing your request…' : 'Hold to ask Muse' });
       this.setIcon(this.micIcon!, 'mic', (kind) => { this.micIconKind = kind; }, this.micIconKind);
     }
     const chips = ask?.chips.slice(0, 4) ?? [];
@@ -205,7 +207,7 @@ export class DeviceCard extends Group {
     this.chipSlots.forEach((slot, index) => {
       const chip = chips[index];
       slot.id = chip?.id;
-      const on = !!chip?.active;
+      const on = !!chip?.active || !!chip && index === 0 && !chips.some(item => item.active) && chip.id !== 'recalibrate';
       slot.button.setProperties((on
         ? { display: chip ? 'flex' : 'none', variant: 'primary', color: '#272727', backgroundColor: withOpacity('#ffffff', 0.92), hover: { backgroundColor: '#d9d9d9', color: '#272727' }, active: { backgroundColor: '#c0c0c0', color: '#272727' } }
         : { display: chip ? 'flex' : 'none', variant: 'secondary', color: withOpacity('#ffffff', 0.92), backgroundColor: withOpacity('#ffffff', 0.08), hover: { backgroundColor: withOpacity('#ffffff', 0.16), color: '#ffffff' }, active: { backgroundColor: withOpacity('#ffffff', 0.24), color: '#ffffff' } }) as never);
