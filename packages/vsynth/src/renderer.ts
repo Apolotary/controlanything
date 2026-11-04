@@ -94,17 +94,20 @@ float touchWaves(vec2 p, out vec2 gradient, out float crest, out float flash, ou
     vec2 pa = p - a;
     vec2 offset = pa - ba * clamp(dot(pa, ba) / max(dot(ba, ba), 1e-5), 0.0, 1.0);
     float radius = sqrt(dot(offset, offset) + .004); // a rounded cone tip: no crease along the path or spike at the contact
-    float sigma = mix(.085, .2, big) + .06 * age;
-    float front = radius - age * mix(.55, 1.2, big);
+    float sigma = mix(.12, .2, big) + .06 * age;
+    float front = radius - age * mix(.5, 1.2, big);
+    float foam = (1.0 - big) * abs(strength) * exp(-age * 5.0) * exp(-dot(offset, offset) / (.0035 + .04 * age));
+    flash += .6 * foam; // the trail: a soft bright line right where the finger passed, gone in half a second
     if (abs(front) > 3.5 * sigma) continue;
     float life = exp(-age * mix(3.4, .9, big)) / (1.0 + 1.5 * radius);
     float envelope = exp(-.5 * front * front / (sigma * sigma));
-    float amplitude = strength * life * mix(.085, .11, big);
-    float phase = front * 15.0;
+    float amplitude = strength * life * mix(.1, .11, big);
+    float k = mix(11.0, 15.0, big); // the wake's ripples are a little longer than the splash's
+    float phase = front * k;
     float c = cos(phase);
     height += amplitude * envelope * c;
-    gradient += offset / radius * amplitude * envelope * (-front / (sigma * sigma) * c - 15.0 * sin(phase));
-    crest += abs(strength) * life * envelope * pow(max(c, 0.0), 3.0) * mix(.55, 1.0, big);
+    gradient += offset / radius * amplitude * envelope * (-front / (sigma * sigma) * c - k * sin(phase));
+    crest += abs(strength) * life * envelope * pow(max(c, 0.0), 3.0) * mix(.45, 1.0, big);
     body += abs(strength) * life * envelope;
     // the splash's pop: a bright disc at the contact that opens and fades in a quarter second
     flash += big * abs(strength) * exp(-age * 7.0) * exp(-radius * radius / (.008 + .09 * age));

@@ -228,6 +228,9 @@ try {
     await page.screenshot({ path: join(OUT, `${pattern}-hover.png`) });
     await page.evaluate(() => window.__touch.cc(24, 0));
   }
+  // The spec: touch -> first visible ripple within ~80 ms, and no frame-time cliff with a full wake.
+  for (const ms of report.touchToFirstPixelMs) assert(ms <= 80, `touch -> first changed pixels took ${ms} ms (limit 80)`);
+  assert(report.dragFrames.p95 < 25, `frame p95 ${report.dragFrames.p95} ms while dragging`);
   report.audioAttempts = await page.evaluate(() => window.__audioAttempts);
   assert.equal(report.audioAttempts, 0);
   assert.deepEqual(errors, []);
