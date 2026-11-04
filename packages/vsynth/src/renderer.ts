@@ -1,6 +1,8 @@
 import { applyVisualSynthMidi, createVisualSynthState, isVisualSynthState } from './state.js';
 import type { VisualSynthParameters } from './state.js';
-import { WaterRipples } from './ripples.js';
+import { TouchWater, WaterRipples } from './ripples.js';
+import type { TouchWaveInfo } from './ripples.js';
+import type { TouchPhase } from './state.js';
 
 const vertexSource = `#version 300 es
 void main() {
@@ -14,9 +16,12 @@ precision highp float;
 uniform vec2 resolution;
 uniform float time;
 uniform vec4 colour; // brightness, hue, saturation, warp
-uniform vec4 shape; // zoom, symmetry, pattern, spare
+uniform vec4 shape; // zoom, symmetry, pattern, touch presence (quiets the steady centre rings)
 uniform vec2 water; // real animation seconds, forward/back depth value
 uniform vec4 ripples[6]; // origin xy, start time, signed strength
+uniform vec4 touchSeg[24]; // fingertip wave segments: a.uv, b.uv (canvas fractions, v from the top)
+uniform vec4 touchWave[24]; // start seconds, signed strength, bigness 0 wake .. 1 splash, spare
+uniform vec4 finger; // fingertip u, v, hover glow 0..1, contact 0..1
 out vec4 outputColour;
 float hash(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
@@ -70,22 +75,84 @@ float rippleWaves(vec2 p, out vec2 gradient, out float crest) {
   }
   return height;
 }
+// Touch the water. Canvas fractions (u from the left, v from the top) become the shader's screen space (p), so a
+// fingertip lands where it touches whatever the aspect.
+vec2 toScreen(vec2 uv) { return vec2((uv.x * 2.0 - 1.0) * resolution.x / max(resolution.y, 1.0), 1.0 - uv.y * 2.0); }
+// Fingertip waves: each slot is a damped wave packet leaving a point (a tap) or a short segment of the finger's
+// path (a wake). Big wavelengths (~0.4 of the screen height), bright crests and dark troughs, so they read through a
+// headset's passthrough camera. A bigger strength travels faster, rings wider and lingers longer.
+float touchWaves(vec2 p, out vec2 gradient, out float crest, out float flash, out float body) {
+  gradient = vec2(0.0); crest = 0.0; flash = 0.0; body = 0.0;
+  float height = 0.0;
+  for (int i = 0; i < 24; i++) {
+    float strength = touchWave[i].y;
+    float age = water.x - touchWave[i].x;
+    if (strength == 0.0 || age < 0.0 || age > 6.0) continue;
+    float big = touchWave[i].z;
+    vec2 a = toScreen(touchSeg[i].xy);
+    vec2 ba = toScreen(touchSeg[i].zw) - a;
+    vec2 pa = p - a;
+    vec2 offset = pa - ba * clamp(dot(pa, ba) / max(dot(ba, ba), 1e-5), 0.0, 1.0);
+    float radius = sqrt(dot(offset, offset) + .004); // a rounded cone tip: no crease along the path or spike at the contact
+    float sigma = mix(.085, .2, big) + .06 * age;
+    float front = radius - age * mix(.55, 1.2, big);
+    if (abs(front) > 3.5 * sigma) continue;
+    float life = exp(-age * mix(3.4, .9, big)) / (1.0 + 1.5 * radius);
+    float envelope = exp(-.5 * front * front / (sigma * sigma));
+    float amplitude = strength * life * mix(.085, .11, big);
+    float phase = front * 15.0;
+    float c = cos(phase);
+    height += amplitude * envelope * c;
+    gradient += offset / radius * amplitude * envelope * (-front / (sigma * sigma) * c - 15.0 * sin(phase));
+    crest += abs(strength) * life * envelope * pow(max(c, 0.0), 3.0) * mix(.55, 1.0, big);
+    body += abs(strength) * life * envelope;
+    // the splash's pop: a bright disc at the contact that opens and fades in a quarter second
+    flash += big * abs(strength) * exp(-age * 7.0) * exp(-radius * radius / (.008 + .09 * age));
+  }
+  gradient /= 1.0 + .3 * length(gradient); // many overlapping wake segments never fold the surface into hard edges
+  return height;
+}
+// The fingertip itself. Hovering: a soft lens (a dome of water drawn toward the finger) with a caustic glow and
+// rings drifting inward, growing as the finger gets closer. Touching: a dimple with a bright rim around the contact.
+float fingerLens(vec2 p, out vec2 gradient, out float glow) {
+  float hover = finger.z, contact = finger.w;
+  gradient = vec2(0.0); glow = 0.0;
+  if (hover + contact < .003) return 0.0;
+  vec2 offset = p - toScreen(finger.xy);
+  float d2 = dot(offset, offset);
+  float radius = sqrt(d2);
+  float lens = hover * (1.0 - contact);
+  float size = mix(.1, .32, hover);
+  float domeSigma2 = size * size * .35;
+  float dome = .07 * lens * exp(-.5 * d2 / domeSigma2);
+  float pitSigma2 = .0045;
+  float pit = .06 * contact * exp(-.5 * d2 / pitSigma2);
+  gradient = -offset * (dome / domeSigma2) + offset * (pit / pitSigma2);
+  float rings = pow(.5 + .5 * cos(radius * 24.0 + water.x * 6.0), 3.0) * exp(-.5 * d2 / (size * size * 2.0));
+  glow = (.1 + .6 * hover * hover) * exp(-.5 * d2 / (size * size * .3)) * (1.0 - .75 * contact) + lens * rings * .45
+    + contact * (.34 * exp(-pow(radius - .085, 2.0) / .0009) + .1 * exp(-.5 * d2 / .02));
+  return dome - pit;
+}
 // An analytic water surface lit from the ripple gradient. Warp tints the pool and quickens its caustics,
 // so height control stays visible while Water is active.
 vec3 waterSurface(vec2 p) {
-  vec2 gradient, steadyGradient;
-  float crest, steadyCrest;
+  vec2 gradient, steadyGradient, touchGradient, lensGradient;
+  float crest, steadyCrest, touchCrest, flash, glow, touchBody;
   float height = rippleWaves(p, gradient, crest);
-  height += steadyRipple(p, steadyGradient, steadyCrest);
-  gradient += steadyGradient;
-  crest += steadyCrest * .12;
+  float calm = 1.0 - .7 * shape.w; // the steady centre rings step back while a fingertip is playing
+  height += steadyRipple(p, steadyGradient, steadyCrest) * calm;
+  float touchHeight = touchWaves(p, touchGradient, touchCrest, flash, touchBody) + fingerLens(p, lensGradient, glow);
+  height += touchHeight;
+  gradient += steadyGradient * calm + touchGradient + lensGradient;
+  crest += steadyCrest * .12 * calm;
   float warp = colour.w;
   vec3 normal = normalize(vec3(-gradient * .9, 1.0));
   vec3 light = normalize(vec3(-.45, .65, .9));
   float diffuse = max(0.0, dot(normal, light));
   float sheen = pow(max(0.0, dot(normal, normalize(light + vec3(0, 0, 1)))), 24.0);
-  float caustic = pow(.5 + .5 * sin(p.x * (5.0 + 4.0 * warp) + height * 18.0 + .25 * water.x)
-    * cos(p.y * (6.0 + 5.0 * warp) - height * 20.0 - .18 * water.x), 4.0);
+  vec2 seen = p + gradient * .05; // the lit pool is seen through its own waves: a lens at every crest
+  float caustic = pow(.5 + .5 * sin(seen.x * (5.0 + 4.0 * warp) + height * 18.0 + .25 * water.x)
+    * cos(seen.y * (6.0 + 5.0 * warp) - height * 20.0 - .18 * water.x), 4.0);
   float hue = colour.y - .01 + warp * .30;
   vec3 deep = hsv(hue + .04, .9, .14 + .08 * warp);
   vec3 shallow = hsv(hue - .02, .72, .74);
@@ -93,6 +160,9 @@ vec3 waterSurface(vec2 p) {
   pool += hsv(hue - .05, .35, 1.0) * caustic * (.14 + .2 * warp);
   pool += vec3(.75, .95, 1.0) * (sheen * .8 + crest * 2.4);
   pool *= (.5 + colour.x * .7) * (1.0 - .07 * dot(p, p));
+  // Fingertip crests are lit white and the troughs fall dark: that contrast is what the passthrough camera sees.
+  pool *= 1.0 - clamp(-touchHeight * 5.0, 0.0, .5);
+  pool += vec3(.8, .96, 1.0) * ((1.0 - exp(-1.6 * touchCrest)) * 1.25 + flash * .9 + glow);
   return pool;
 }
 void main() {
@@ -103,7 +173,11 @@ void main() {
   float waveCrest, steadyCrest;
   rippleWaves(p, waveGradient, waveCrest);
   float steadyHeight = steadyRipple(p, steadyGradient, steadyCrest);
-  p += waveGradient * .03 + steadyGradient * .16;
+  float calm = 1.0 - .7 * shape.w;
+  vec2 touchGradient, lensGradient;
+  float touchCrest, flash, glow, touchBody;
+  float touchHeight = touchWaves(p, touchGradient, touchCrest, flash, touchBody) + fingerLens(p, lensGradient, glow);
+  p += waveGradient * .03 + steadyGradient * .16 * calm + (touchGradient + lensGradient) * .12;
   p *= 0.65 + shape.x * 3.2;
   float radius = length(p);
   if (shape.y > 1.5) {
@@ -131,8 +205,10 @@ void main() {
   float edge = pow(0.5 + 0.5 * cos(structure * 22.0), 8.0);
   vec3 colourOut = mix(base, ribbon, edge * 0.52);
   // Troughs darken and crests glow, so the rings keep their contrast on every palette.
-  colourOut *= 1.0 - clamp(-steadyHeight * 9.0, 0.0, .35);
-  colourOut += vec3(.80, .95, 1.0) * (steadyCrest * .55 + waveCrest * 2.0);
+  colourOut *= 1.0 - clamp(-steadyHeight * 9.0 * calm, 0.0, .35);
+  // Under a fingertip's waves the busy field steps back (a dark pool) so the white crests stand out on every pattern.
+  colourOut *= (1.0 - .5 * clamp(touchBody * 3.0, 0.0, 1.0)) * (1.0 - clamp(-touchHeight * 5.0, 0.0, .5));
+  colourOut += vec3(.80, .95, 1.0) * (steadyCrest * .55 * calm + waveCrest * 2.0 + (1.0 - exp(-1.6 * touchCrest)) * 1.25 + flash * .9 + glow);
   outputColour = vec4(colourOut, 1.0);
 }`;
 
@@ -143,6 +219,8 @@ export interface VisualSynthRenderer {
   getState(): VisualSynthParameters;
   /** Read-only evidence for the actual rendered effect; not a capability or control API. */
   getWaterDiagnostics(): { pattern: number; depth: number; seconds: number; waves: { x: number; y: number; age: number; strength: number }[] };
+  /** Read-only evidence for the fingertip: its phase, the lens, and the live wave segments (canvas fractions). */
+  getTouchDiagnostics(): { phase: TouchPhase; x: number; y: number; pressure: number; glow: number; contact: number; waves: TouchWaveInfo[] };
   /** Frames drawn so far and whether the animation loop is running (for the renderer self-report). */
   stats(): { frames: number; running: boolean };
   render(nowMs: number): void;
@@ -192,6 +270,9 @@ export function createVisualSynth(
     shape: gl.getUniformLocation(program, 'shape'),
     water: gl.getUniformLocation(program, 'water'),
     ripples: gl.getUniformLocation(program, 'ripples[0]'),
+    touchSeg: gl.getUniformLocation(program, 'touchSeg[0]'),
+    touchWave: gl.getUniformLocation(program, 'touchWave[0]'),
+    finger: gl.getUniformLocation(program, 'finger'),
   };
   let target = createVisualSynthState();
   let current = { ...target };
@@ -199,6 +280,8 @@ export function createVisualSynth(
   let phase = 0;
   let waterSeconds = 0;
   const waterRipples = new WaterRipples();
+  const touchWater = new TouchWater();
+  const touchSample = (parameters: VisualSynthParameters) => ({ x: parameters.touchX, y: parameters.touchY, pressure: parameters.touchPressure });
   let frame = 0;
   let frames = 0;
   let disposed = false;
@@ -210,9 +293,12 @@ export function createVisualSynth(
     gl.uniform2f(uniforms.resolution, canvas.width, canvas.height);
     gl.uniform1f(uniforms.time, phaseSeconds);
     gl.uniform4f(uniforms.colour, parameters.brightness, parameters.hue, parameters.saturation, parameters.warp);
-    gl.uniform4f(uniforms.shape, parameters.zoom, parameters.symmetry, parameters.pattern, 0);
+    gl.uniform4f(uniforms.shape, parameters.zoom, parameters.symmetry, parameters.pattern, touchWater.activity);
     gl.uniform2f(uniforms.water, waterTime, parameters.ripple);
     gl.uniform4fv(uniforms.ripples, waterRipples.data);
+    gl.uniform4fv(uniforms.touchSeg, touchWater.segments);
+    gl.uniform4fv(uniforms.touchWave, touchWater.waves);
+    gl.uniform4fv(uniforms.finger, touchWater.finger);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   };
   const change = (parameters: VisualSynthParameters, label: string, liveMidi = false): void => {
@@ -220,6 +306,12 @@ export function createVisualSynth(
     // reset never manufactures a splash merely because a saved value differs from the current one.
     if (liveMidi && parameters.ripple !== target.ripple) waterRipples.push(target.ripple, parameters.ripple, waterSeconds);
     else if (!liveMidi && parameters.ripple !== target.ripple) waterRipples.reset();
+    // The fingertip (CC22/23/24) is applied the instant it arrives: no smoothing between a touch and its splash.
+    const touched = parameters.touchX !== target.touchX || parameters.touchY !== target.touchY || parameters.touchPressure !== target.touchPressure;
+    if (touched) {
+      if (liveMidi) touchWater.receive(touchSample(parameters), waterSeconds);
+      else touchWater.adopt(touchSample(parameters), waterSeconds);
+    }
     target = { ...parameters };
     options.onChange?.(label, { ...target });
   };
@@ -228,12 +320,12 @@ export function createVisualSynth(
       const result = applyVisualSynthMidi(target, bytes);
       if (!result) return false;
       const resetAll = bytes[0] === 0xff || (bytes[0] & 0xf0) === 0xb0 && [120, 121, 123].includes(bytes[1]);
-      if (resetAll) { phase = waterSeconds = 0; waterRipples.reset(); }
+      if (resetAll) { phase = waterSeconds = 0; waterRipples.reset(); touchWater.reset(); }
       change(result.parameters, result.label, !resetAll);
       return true;
     },
     reset() {
-      phase = waterSeconds = 0; waterRipples.reset();
+      phase = waterSeconds = 0; waterRipples.reset(); touchWater.reset();
       previousMs = null;
       change(createVisualSynthState(), 'Reset · Ready');
     },
@@ -247,6 +339,7 @@ export function createVisualSynth(
         age: Math.max(0, waterSeconds - waterRipples.data[offset + 2]!), strength: waterRipples.data[offset + 3]!,
       }; }).filter(wave => Math.abs(wave.strength) > 0 && wave.age >= 0 && wave.age < 6),
     }),
+    getTouchDiagnostics: () => touchWater.diagnostics(),
     stats: () => ({ frames, running: frame !== 0 }),
     render(nowMs) {
       const delta = previousMs === null ? 0 : Math.min(Math.max(nowMs - previousMs, 0), 100);
@@ -257,6 +350,7 @@ export function createVisualSynth(
       phase += delta / 1000 * current.speed * 2.5;
       waterSeconds += delta / 1000;
       current.pattern = target.pattern; // modes are discrete; never blend through unrelated patterns
+      touchWater.frame(waterSeconds, delta / 1000, canvas.width / Math.max(canvas.height, 1));
       draw(current, phase);
     },
     renderAt(timeMs) { draw(target, Math.max(0, timeMs) / 1000 * target.speed * 2.5, Math.max(0, timeMs) / 1000); },

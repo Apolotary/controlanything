@@ -24,10 +24,18 @@ const RAD = Math.PI / 180;
 
 /** The buddy's footprint in its own frame (+x = the user's right, +z = toward the user), metres. */
 export function footprint(side: CardSide, out: Box3): Box3 {
-  // mascot ±0.1 · bubble above (up to 3 lines, offset toward the card) · quest card 34 cm on one side
-  if (side === 'left') out.min.set(-0.46, -0.1, -0.08), out.max.set(0.1, 0.22, 0.08);
-  else if (side === 'right') out.min.set(-0.1, -0.1, -0.08), out.max.set(0.46, 0.22, 0.08);
-  else out.min.set(-0.17, -0.1, -0.08), out.max.set(0.17, 0.22, 0.08);
+  // mascot ±0.1 · bubble above (up to 3 lines, offset away from the card) · quest card 34 cm on one side · the
+  // show-me frame above the card, next to the mascot (frameAnchor; ~0.24 m square seen at the buddy's depth)
+  if (side === 'left') out.min.set(-0.46, -0.1, -0.08), out.max.set(0.17, 0.3, 0.08);
+  else if (side === 'right') out.min.set(-0.17, -0.1, -0.08), out.max.set(0.46, 0.3, 0.08);
+  else out.min.set(-0.33, -0.1, -0.08), out.max.set(0.17, 0.27, 0.08);
+  return out;
+}
+
+/** Where the show-me frame's centre sits in the buddy's frame (seen at the buddy's depth): above the card, beside the mascot. */
+export function frameAnchor(side: CardSide, out: { x: number; y: number }): { x: number; y: number } {
+  out.x = side === 'right' ? 0.23 : side === 'left' ? -0.23 : -0.21;
+  out.y = side === 'tucked' ? 0.14 : 0.18;
   return out;
 }
 
