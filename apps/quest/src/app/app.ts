@@ -296,7 +296,7 @@ export class QuestApp {
       this.page.log(`desktop emulator: IWER ${this.emulator.device.version} (${this.emulator.device.name}${this.emulator.devui ? ', DevUI' : ''})`, 'ok');
     }
     await this.setupHud();
-    this.spatial = createSpatialInput(this.scene, this.desktopCam, this.renderer);
+    this.spatial = createSpatialInput(this.scene, this.desktopCam, this.renderer, { meshes: this.params.get('hands') !== '0' });
     (this.hud as Hud & { setSpatialInput?: (s: SpatialInput) => void }).setSpatialInput?.(this.spatial);
     // buddy: the Muse buddy mascot (src/buddy), wrist palette → Buddy; window.__ce.buddy for scripts; ?buddy=0 turns it off
     if (this.params.get('buddy') !== '0') {
@@ -1579,7 +1579,9 @@ export class QuestApp {
   }
 
   private helloPayload(): PayloadOf<'hello'> {
-    return { deviceToken: WsClient.allowsSavedToken(this.ws.url) || this.freshSocketIdentity ? this.identity?.deviceToken ?? '' : '', role: 'hmd', capabilities: ['camera', ...(this.mic.ready && this.params.get('mic') !== '0' ? ['mic' as const] : []), 'hands', 'display'], app: APP_VERSION };
+    // foreground: a hidden tab that reconnects (e.g. after a server restart) must not kick the tab the user is wearing.
+    const hello = { deviceToken: WsClient.allowsSavedToken(this.ws.url) || this.freshSocketIdentity ? this.identity?.deviceToken ?? '' : '', role: 'hmd' as const, capabilities: ['camera' as const, ...(this.mic.ready && this.params.get('mic') !== '0' ? ['mic' as const] : []), 'hands' as const, 'display' as const], app: APP_VERSION, foreground: typeof document === 'undefined' || document.visibilityState === 'visible' };
+    return hello as PayloadOf<'hello'>;
   }
 
   private async repairPairing(): Promise<void> {
@@ -1639,8 +1641,8 @@ export class QuestApp {
     ws.on('mode.state', (m) => this.onModeState(m.payload as PayloadOf<'mode.state'>));
     ws.on('tags.state', (m) => this.onTagsState(m.payload as PayloadOf<'tags.state'>));
     ws.on('library.state', (m) => this.onLibraryState(m.payload as PayloadOf<'library.state'>));
-    ws.on(SUPERSEDED_MESSAGE, (m) => {
-      if (m.from !== 'server') return;
+    // Server-only type ({ reason: 'newer-tab' | 'other-tab-active', at, graceMs }); the 4409 close follows.
+    ws.on(SUPERSEDED_MESSAGE, () => {
       this.ws.stop();
       if (this.instance) this.instance.supersede('server'); else this.suspendForOtherTab('server');
     });
@@ -2564,7 +2566,9 @@ export class QuestApp {
   /** `session.claim` on an already-open socket (a new socket's hello is its claim). */
   sendClaim(reason: ClaimReason): void {
     if (this.superseded || !this.ws.open) return;
-    const id = this.ws.send(CLAIM_MESSAGE, { reason }, { to: 'server' });
+    // payload {} (the hub handles it and never relays it); the reason stays local
+    const id = this.ws.send(CLAIM_MESSAGE, {});
+    this.page.log(`claimed this tab (${reason})`);
     if (id) { this.claimIds.add(id); if (this.claimIds.size > 20) this.claimIds.delete(this.claimIds.values().next().value!); }
   }
 
