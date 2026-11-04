@@ -1,7 +1,7 @@
 # Sim room (`apps/sim`)
 
 A virtual room that stands in for the hardware, so the whole ControlAnything loop runs from the repo: a desk with a
-**laptop** whose screen runs the silent **visual synth** (the golden path), a photo-real Japanese LED **ceiling light**
+**laptop** whose screen runs the **visual synth** (the golden path), a photo-real Japanese LED **ceiling light**
 with its **IR remote**, and a **synth** that takes the same MIDI CC numbers as a Teenage Engineering OP-1 Field. The
 sim pairs with the server like any other client and plays several roles at once: the paired Mac (visual-synth
 renderer), IR executor, MIDI executor, camera and audio sensor. The server, the agent and the Meta model calls are
@@ -13,26 +13,28 @@ exactly the same as with real devices; only the transport is simulated.
 npm install
 cp .env.example .env     # optional: put MODEL_API_KEY in .env for live Meta models.
                          # Without a key the server runs in FIXTURE mode and replays recorded real responses.
-npm run demo:sim         # builds missing apps; starts a silent server (CE_DEMO=1, CE_MAC_SILENT=1)
+npm run demo:sim         # builds missing apps; sound on after the first browser gesture
+# Add -- --fixture to force recorded/scripted replies; -- --mute is for unattended checks.
 ```
 
-1. Open [the muted sim room](http://localhost:8787/sim/?mute=1) first. It pairs automatically on localhost and acts as your Mac.
-2. Open [the desktop Quest emulator](http://localhost:8787/quest/?emulate=1&camera=sim&mute=1&mic=0) and choose **Enter AR**. Click = pinch, right-drag = look.
-3. Click the laptop's box. The setup ring runs on the screen (identify → driver → verify → controls), then two arc dials appear beside the screen and the device card says **Visual synth · On**. Drag a dial and watch the sim's laptop screen change.
-4. Choose **Perform** on the card to drive the dials with tracked hands (left fist = clutch). **Stop** is on the wrist palette (lower right) or the `X` key.
+1. Open [the sim room](http://localhost:8787/sim/) first. It pairs automatically on localhost and acts as your Mac.
+2. Open [the desktop Quest emulator](http://localhost:8787/quest/?emulate=1&camera=sim&mic=0) and choose **Enter AR**. Click = pinch, right-drag = look.
+3. Tag the laptop's box in Annotate, then deliberately choose **Control**. Ask Muse to make an instrument for the visual synth. Watch the connector/code stream, then use the generated keys, XY surface or controls.
+4. Choose **Stop** or press `X` to retire the connector. If a requested hand program needs screen calibration, follow its two-corner guidance; the emulator does not substitute mouse clicks for real screen contact.
 
-The ceiling light and the OP-1-style synth are still in the room for the IR and MIDI paths (tag them in Annotate, then **Set up**); they are off the golden path.
+For a simpler touch/webcam route without emulated hands, open [the reviewer demo](http://localhost:8787/quest/reviewer.html). Its instruments use the same Muse agent path. No-key runs are visibly **FIXTURE**, not live recognition/generation.
+
+The light and OP-1-style synth remain protocol twins for other checks. Historical setup-first scripts require `CE_AGENT=0`; they are not the default flow.
 
 ```sh
-npm run build
-PORT=8796 npm run e2e:judge     # the golden path above, 8 phases, own muted fixture server
-PORT=8798 npm run e2e:vsynth    # the explicit path (Set up → Enable controls) with a pixel check on the sim laptop
+node scripts/e2e-muse-agent.mjs   # current agent golden path, own muted fixture server
+node scripts/e2e-reviewer.mjs     # phone/webcam, Buddy and isolated browser instruments
+PORT=8796 npm run e2e:judge      # older compatibility flow, own muted fixture server
 ```
 
-Both checks require installed Chrome, use muted fixture servers and disable local YOLOX in favour of server fixture
-detections. Screenshots and diagnostics go to `research/screens/judge/` and `research/screens/vsynth/`.
+These checks require installed Chrome and use explicit fixture detections. They do not measure real SAM detector accuracy, headset comfort or physical device output. Screenshots stay under the private `research/screens/` directory.
 
-`npm run demo:sim -- --fixture` forces fixture mode; `-- --live` forces live calls; `-- --open` opens the pages.
+`npm run demo:sim -- --fixture` forces fixture mode; `-- --live` forces live calls; `-- --open` opens the pages; `-- --mute` silences unattended playback. Existing served builds are reused; `-- --build` is refused while a live server is using them.
 
 ### Replay a recorded real session
 

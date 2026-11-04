@@ -2,7 +2,7 @@
 
 **Pinch a device, ask Muse what your hands should do, and watch it write the connection.**
 
-ControlAnything connects a Meta Quest 3 to supported hardware and software through a server on your laptop. Meta's SAM 3.1 outlines objects in passthrough. You select a device and ask what your hands should do. Muse Spark writes the device driver and a small JavaScript wiring program; you watch the source appear in AR while the server checks it. The wiring runs in a restricted Web Worker on the headset, sending validated actions to the device through the Mac bridge.
+ControlAnything connects a Meta Quest 3 to supported hardware and software through a server on your laptop. Meta's SAM 3.1 outlines objects in passthrough. You select a device and ask what your hands should do. After you ask, Muse Spark writes and tests a Node connector on your Mac and designs an AR instrument for it. You watch the code and terminal stream in AR. An optional hand program runs in a restricted Web Worker on the headset; generated controls send their values to the connector through the Mac bridge.
 
 <!-- VIDEO_URL -->
 **▶ 3-minute demo video:** _link coming soon_
@@ -32,7 +32,7 @@ ControlAnything has two layers. **Annotate** looks at the room: SAM 3.1 outlines
 
 | Tool | What it does |
 |---|---|
-| `bash` | Runs shell commands in its workspace on the Mac (inspect, `npm install`, run scripts and tests). System-level and destructive commands are refused. |
+| `bash` | Runs shell commands in its workspace on the Mac (inspect, `npm install`, run scripts and tests). Obvious system-level/destructive commands are filtered; the process still has the Mac user’s OS permissions. |
 | `read_file` / `write_file` / `edit_file` | Reads the workspace and this repo; writes only inside the workspace. Files stream into AR as they are written. |
 | `deploy_connector` | Starts `node <entry>` as a background service for the selected device and declares the actions it accepts. A crash on start comes back with its stack trace. |
 | `test_action` | Sends a value to the running connector, exactly as an AR control would, and returns the connector's log plus the device acknowledgements from the Mac companion. |
@@ -89,13 +89,13 @@ The wiring API is `wire(s, out, mem)`: read hand/screen signals, call `out.set(a
 
 Live generation is the normal keyed route. The gesture-program harness fails visibly if Muse cannot finish checked code; it installs no implicit template. Older experimental generation paths can show a **Template**, labelled *no Meta model wrote this*. No-key runs are **FIXTURE**, including scripted tool calls and chunked code playback. Driver-library reuse is labelled separately and does not mean the wiring was newly generated. Each new wiring request still asks for a new program; this path does not silently restore an old hand mapping.
 
-After setup, each hand frame needs **no model call**: worker output → `control.event` (`wire:<actionId>`) → validated driver → Mac executor/renderer. See [architecture](docs/ARCHITECTURE.md) for the protocol and limits.
+After Muse finishes, each hand frame needs **no model call**: worker output → `control.event` (`wire:<actionId>`) → validated driver → Mac executor/renderer. See [architecture](docs/ARCHITECTURE.md) for the protocol and limits.
 
 **Evidence boundary:** the earlier real-Quest dial/Perform build reached 81 fps at p95 and applied 100/100 commands in a November 4 run. A separate live Muse wiring probe streamed **Touch the water** in 14 deltas and reached ready in 8.1 seconds; **Hands as knobs** took about 11 seconds. These are separate measurements, not a measured end-to-end touch-water headset pass. The current ask → code → calibrate → touch route needs its own real-headset acceptance record.
 
 ## Honest verification
 
-Every action is tried once before you get the control, and the HUD says how the result was known:
+Muse can test connector actions and reports the returned acknowledgements. Those receipts establish transport/software results, not an independently observed physical effect. The older setup harness additionally uses these verification labels:
 
 | Label | Meaning |
 |---|---|
@@ -112,10 +112,10 @@ In emulator runs, the camera at about 1 m usually does **not** see the Mac's scr
 - **Physical objects as controllers.** Once a device is armed, choose *Use an object* and pick a mug or bottle. SAM 3.1 finds it; once you pick it up it follows the hand that holds it (WebXR joints, One Euro filter). Lifting it drives the first control and sliding it drives the second. This is an earlier deterministic controller mode, not proof that Muse generated its hand-to-object behavior; it is outside the new wiring demo.
 - **DJI Osmo gimbal.** A Bluetooth adapter for the Osmo Mobile: DUML framing, a safety envelope (≤ 90°/s, pan ±120°, tilt ±45°) and three links (`CE_OSMO=ble` via a small bleak helper, `web` via Chrome Web Bluetooth, `mock`). Server integration covers identify, link, driver and controls. Current evidence is mock/terminal testing, not a demonstrated headset-driven physical move. A physical move test is `npx tsx apps/server/scripts/osmo.ts test --move`.
 - **Hand and head pose recording.** Record a take from the headset: passthrough video plus head and 25-joint hand poses at up to 30 Hz. On the Quest it is under `?lab=1`; in the emulator it is in the side panel. Review it in **Motion lab** (`/companion/tracking/`): video and 3D hands on one timeline, tracking gaps, *Export dataset* for physical-AI training data. See [tracking review](docs/TRACKING-REVIEW.md).
-- **Other bridges.** These paths exist but are off the critical path, and physical acceptance is still pending:
-  - an OP-1 Field over USB-MIDI (via the Mac companion);
-  - an IR ceiling light via an M5Stack Cardputer;
-  - iPhone, DevTerm and Cardputer clients that pair by QR code or passcode.
+- **Additional hardware.** Verification is specific to each route:
+  - OP-1 Field notes/CCs over USB-MIDI were confirmed with the earlier UI; the revised instrument UI needs fresh acceptance;
+  - the IR ceiling-light path through an M5Stack Cardputer still needs physical acceptance;
+  - native iPhone, DevTerm and Cardputer clients pair by QR code or passcode; their device acceptance is separate from the browser reviewer demo.
 
 ## Judge path (no hardware)
 
@@ -123,11 +123,11 @@ Needs **Node 22.12+** and **Chrome**. No API key: without one, the server replay
 
 ```sh
 npm install
-npm run demo:sim            # builds what's missing; silent server with CE_DEMO=1 on :8787
+npm run demo:sim            # builds what's missing; attended demo with sound on :8787
 ```
 
-1. Open **[the sim room](http://localhost:8787/sim/?mute=1)** first. It stands in for your Mac: it pairs itself on localhost, and the laptop on its desk runs the visual synth.
-2. Open **[the desktop Quest emulator](http://localhost:8787/quest/?emulate=1&camera=sim&mute=1&mic=0)** and choose **Enter AR**. Click = pinch, right-drag = look, W/A/D/Q/E = move.
+1. Open **[the sim room](http://localhost:8787/sim/)** first. It stands in for your Mac: it pairs itself on localhost, and the laptop on its desk runs the visual synth.
+2. Open **[the desktop Quest emulator](http://localhost:8787/quest/?emulate=1&camera=sim&mic=0)** and choose **Enter AR**. Click = pinch, right-drag = look, W/A/D/Q/E = move.
 3. **Click the laptop’s box** to tag it, press `M` (or the wrist menu) for **Control**, then choose a suggestion on the device card. The scripted FIXTURE agent writes a visual-synth connector and returns knobs and/or a touch program.
 4. Follow calibration, then use the emulated tracked hand to touch the screen. The automated wiring check below supplies fingertip poses; ordinary mouse clicks are UI pinches, not physical screen contact. **Stop** is on the wrist palette or the `X` key. Keys: `G` Visual synth, `1/2/3` Electronics/Objects/All (Annotate only), `B` Buddy.
 
@@ -141,6 +141,8 @@ node scripts/e2e-muse-agent.mjs        # Muse agent golden path: tag -> Control 
 PORT=8796 node scripts/e2e-judge.mjs   # older setup-first water flow (CE_AGENT=0)
 node --import tsx apps/server/scripts/wire-e2e.ts  # fixture WIRE over WebSocket
 ```
+
+For unattended playback, use `npm run demo:sim -- --mute`; attended demos keep sound on after a browser gesture.
 
 These checks use server fixture detections. They do not measure detector accuracy, headset frame rate or the real Mac display.
 

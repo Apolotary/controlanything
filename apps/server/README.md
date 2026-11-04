@@ -1,7 +1,7 @@
 # ControlAnything server (the "malleable server")
 
 Node 22.12+ / TypeScript (developed on Node 26). One process on the Mac: the WebSocket hub every client pairs with, the Meta model
-adapters, and the **brain**: an explicit setup loop that turns a tagged device into verified, generated controls when the user asks.
+adapters, and the **Muse coding agent**: it writes, deploys and tests device connectors after the user asks, then returns generated AR instruments and optional hand programs.
 
 ```
 npm run dev            # server + companion + Quest in watch mode (http://localhost:8787, https://<lan-ip>:8443)
@@ -14,11 +14,15 @@ MUSE_RECORD=1 npx tsx apps/server/scripts/brain-live.ts [frame.jpg] [--pick synt
 
 **Annotate by default.** `tag.add` identifies a selected device with Muse Spark and persists the tag. It does not link, learn or test anything. `mode.set` switches the space between Annotate and Control; `tags.state` reports Ready / Needs setup / Not connected from the current bridge presence.
 
-**Setup only by request.** `control.setup` requires Control mode, a tagged device and an online bridge. It starts the chain below; the setup request permits verification commands, then `arm.confirm` separately enables the generated controls. Dispatch also checks these gates. Stop cancels setup, queued commands and automations and disarms controls. Returning to Annotate cancels unfinished setup, while completed arming is retained for returning to Control.
+**Ask before interacting.** In the default agent flow, choose Control and ask Muse immediately. Muse Spark uses file, terminal, deploy and test tools to create a Node connector on the Mac. `finish` returns a validated 3D instrument and/or a sandboxed hand program. No connector or hand mapping is pre-wired. Stop retires the connector; a new ask starts a new request. See [the current architecture](../../docs/ARCHITECTURE.md) and [instrument format](../../docs/GENERATED-INSTRUMENTS.md).
 
-**Deterministic execution.** `control.event` → driver action → `exec.command` → MIDI / IR / local operation uses validated data and rate limits, without a model call. Voice transcription and edits still use models. The Quest's local YOLOX preview is separate from the server's SAM segmentation.
+**No headset required.** `/quest/reviewer.html` offers webcam/phone capture, Buddy and the same Muse connector flow with browser software instruments. It requests no hardware permissions. Native mobile AR is feature-detected; other browsers use the honest camera/touch fallback. See [the reviewer guide](../../docs/REVIEWER-DEMO.md).
 
-## The discovery loop (`src/agent/`)
+**Execution and permissions.** Runtime models are Meta models only. Hand/head tracking, system voices and browser audio are platform features. Generated Node connectors and Bash commands use the Mac user's OS permissions; this is a trusted local prototype, not a hosted untrusted-code sandbox. See [the security review](../../docs/SECURITY-REVIEW.md).
+
+The setup/Enable pipeline below is the older **`CE_AGENT=0`** compatibility path. Its driver validation and deterministic execution remain useful, but it is not a prerequisite for asking Muse in the default flow.
+
+## Legacy discovery loop (`CE_AGENT=0`, `src/agent/`)
 
 | Step | What happens | Model |
 |---|---|---|
@@ -38,7 +42,7 @@ Every step is an `agent.step` with the model id, effort and latency; every model
 from `fixtures/recorded/` (SAM, identification, driver drafts, forge runs), each labelled `FIXTURE` with the
 model that produced it.
 
-### WIRE: Muse writes the glue (`wire.ts`, `wire-check.ts`, `wire-fixture.ts`)
+### Legacy hand-program WIRE (`CE_AGENT=0`)
 
 After the driver exists, nothing connects the wearer's hands to it until the wearer asks. Nothing is prefetched
 (`CE_PREFETCH=1` is a rehearsal-only opt-in) and nothing is pre-wired. On `wire.request {cardId, text, source}` the server
@@ -117,4 +121,4 @@ curl -s "http://<mac>:8787/api/pair/status?pairingId=<id>&pollSecret=<secret>"
 # After approval: deviceId and deviceToken (returned once; store them).
 ```
 
-Connect to `/ws` and send `hello` with `{ deviceToken }` in the protocol envelope. See [architecture](../../docs/ARCHITECTURE.md#3-protocol).
+Connect to `/ws` and send `hello` with `{ deviceToken }` in the protocol envelope. See [architecture](../../docs/ARCHITECTURE.md#runtime-components).
