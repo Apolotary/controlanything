@@ -505,7 +505,9 @@ export class WiringController {
       if (cur.phase === 'calibrating') this.calibrateFrame(frame, timeMs, this.screenGuess?.position ?? sel.anchor);
       else if (cur.phase === 'running') {
         if (cur.needsScreen && this.runtime.running) this.findScreen(frame, timeMs);
-        const sf = this.tracker.update(frame, timeMs, { plane: this.screenPending ? null : this.plane, tapBlocked: (hand) => this.host.tapBlocked(hand) });
+        // Only a program that reads the screen gets the plane: a plane left from an earlier touch program must not keep
+        // blocking the both-palms stop (signals.ts) of a program that never touches the screen.
+        const sf = this.tracker.update(frame, timeMs, { plane: cur.needsScreen && !this.screenPending ? this.plane : null, tapBlocked: (hand) => this.host.tapBlocked(hand) });
         this.screenTouching = !!sf.signals.screen?.touching;
         const screen = sf.signals.screen;
         this.live.found = !this.screenPending && !!this.plane;

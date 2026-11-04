@@ -210,7 +210,7 @@ export function createApp(ctx: ServerContext): express.Express {
   const speechCache = new Map<string, Buffer>();
   const speechVoice = process.env.CE_SPEECH_VOICE || 'Samantha';
   // Warm the voice once so the first Buddy line is not the slow one.
-  if (process.platform === 'darwin') {
+  if (process.platform === 'darwin' && !process.env.VITEST) {
     const warm = mkdtempSync(join(tmpdir(), 'ce-speech-'));
     execFile('say', ['-v', speechVoice, '-o', join(warm, 'warm.wav'), '--file-format=WAVE', '--data-format=LEI16@22050', '--', 'ready'], { timeout: 15_000 },
       () => rmSync(warm, { recursive: true, force: true }));

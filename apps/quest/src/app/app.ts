@@ -288,7 +288,8 @@ export class QuestApp {
 
   constructor(params: URLSearchParams) {
     this.params = params;
-    this.demoAudio = new QuestDemoAudio(params, text => !!this.ws.send('audio.speak', { text }, { to: 'server' }));
+    this.demoAudio = new QuestDemoAudio(params, text => !!this.ws.send('audio.speak', { text }, { to: 'server' }),
+      () => this.ws && WsClient.allowsSavedToken(this.ws.url) ? this.identity?.deviceToken : undefined);
     this.onboarding = new HelperOnboarding(params.get('camera') === 'sim');
     this.nonDominant = params.get('dominant') === 'left' ? 'right' : 'left';
   }
@@ -2826,7 +2827,7 @@ export class QuestApp {
     if (this.recordingFinalizing) return;
     if (this.recorder.recording) { void this.finishRecording(); return; }
     const k = this.capture.last?.intrinsics;
-    // ?rec=1 (filming): poses only, up to 5 minutes. The Quest's own recorder films the video; the take's startedAt syncs them.
+    // ?rec=1 (filming): poses only (the 24 MB tracking budget lasts about 100 s with both hands). The Quest's own recorder films the video; the take's startedAt syncs them.
     const poseOnly = this.params.get('rec') === '1' && !labEnabled();
     const limitMs = poseOnly ? 300_000 : TAKE_DURATION_LIMIT_MS;
     const take = this.recorder.start({
@@ -2845,7 +2846,7 @@ export class QuestApp {
     this.recordingHasVideo = !poseOnly && !videoIssue;
     if (videoIssue) warning(videoIssue);
     this.page.log(`recording ${take}: ${poseOnly ? 'hand/head poses only (film with the Quest recorder)' : this.recordingHasVideo ? 'camera video + hand/head tracking' : 'tracking only'} · maximum ${Math.round(limitMs / 1000)} seconds · no microphone audio`, 'ok');
-    this.page.recordStatus(poseOnly ? 'Recording hand + head poses. Start the Quest recorder too, enter AR and do the demo; exit AR to finish. Maximum 5 minutes.' : this.recordingHasVideo ? 'Recording camera + hand/head tracking. Enter AR; exit AR to finish. No audio. Maximum 90 seconds.' : 'Recording tracking only — camera video is unavailable. Enter AR to capture hand/head poses.');
+    this.page.recordStatus(poseOnly ? 'Recording hand + head poses. Start the Quest recorder too, enter AR and do the demo; exit AR to finish. About 100 seconds with both hands tracked.' : this.recordingHasVideo ? 'Recording camera + hand/head tracking. Enter AR; exit AR to finish. No audio. Maximum 90 seconds.' : 'Recording tracking only — camera video is unavailable. Enter AR to capture hand/head poses.');
     this.page.setButton(this.page.record, 'Stop recording', true);
     this.page.save.disabled = true;
     this.hud.toast(this.recordingHasVideo ? 'Recording video + tracking · exit AR to finish' : 'Recording tracking only · camera unavailable', this.recordingHasVideo ? 'ok' : 'warn');

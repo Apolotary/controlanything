@@ -307,6 +307,8 @@ import { createInterface } from 'node:readline';
 import { execFile } from 'node:child_process';
 const listeners = { set: [], trigger: [], stop: [] };
 const emit = (msg) => process.stdout.write(JSON.stringify(msg) + '\\n');
+// The server's end of the pipe is gone (it exited or was killed): stop, instead of logging the write error forever.
+process.stdout.on('error', () => process.exit(0));
 export const log = (...a) => emit({ type: 'log', text: a.map(String).join(' ').slice(0, 500) });
 createInterface({ input: process.stdin }).on('line', (line) => {
   let m; try { m = JSON.parse(line); } catch { return; }

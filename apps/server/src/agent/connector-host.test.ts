@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -102,4 +103,16 @@ it('does not let queued old-generation commands inherit a replacement and report
   expect(host.allows('card', old, true)).toBe(false);
   await expect.poll(() => sent.some(packet => !packet.release && packet.generation !== old)).toBe(true);
   expect(host.allows('card', sent.find(packet => !packet.release && packet.generation !== old)!.generation)).toBe(true);
+});
+it.skipIf(process.platform === 'win32')('exits when the server end of its output pipe is gone instead of spinning on write errors', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ce-connector-orphan-')); dirs.push(dir);
+  await writeFile(join(dir, 'ce.mjs'), CONNECTOR_SDK);
+  await writeFile(join(dir, 'index.mjs'), `import { log } from './ce.mjs'; setInterval(() => log('tick'), 20);`);
+  const child = spawn(process.execPath, ['index.mjs'], { cwd: dir, stdio: ['pipe', 'pipe', 'ignore'] });
+  try {
+    await new Promise((resolve) => child.stdout!.once('data', resolve));
+    const exited = new Promise<number | null>((resolve) => child.once('exit', (code) => resolve(code)));
+    child.stdout!.destroy();
+    expect(await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve('still running'), 3000))])).toBe(0);
+  } finally { child.kill('SIGKILL'); }
 });

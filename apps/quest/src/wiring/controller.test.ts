@@ -214,6 +214,34 @@ describe('the wiring flow', () => {
     expect(t.runtime.running).toBe(false);
   });
 
+  it('a screen found for an earlier touch program does not block the both-palms stop of a later program', async () => {
+    const t = setup();
+    t.controller.ask('Touch the water', 'chip');
+    t.receiveReady(ready());
+    t.controller.frame(finger(new Vector3(-0.6, 1.5, -0.35)), clock += 16);
+    for (let i = 0; i <= 20; i++) { t.controller.frame(finger(new Vector3(-0.2 + i * 0.02, 1.47, -0.5)), clock += 16); await wait(1); }
+    await hold(t.controller, new Vector3(0, 1.47, -0.6), 400);
+    expect(t.controller.snapshot()).toMatchObject({ screen: 'found' });
+    t.controller.ask('Hands as knobs', 'chip');
+    t.receiveReady({ ...ready(['right']), wiringId: 'w2' });
+    expect(t.controller.phase).toBe('running');
+    await wait(10);
+    // Both palms out, 15 cm in front of the old screen plane (inside its 25 cm touch clearance).
+    const palms = () => {
+      const f = makeGestureFrame('open_palm', 'open_palm'); f.head.position.set(0, 1.6, 0); f.head.quaternion.copy(new Quaternion());
+      const out = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), Math.PI / 2);
+      for (const hand of [f.hands.left!, f.hands.right!]) {
+        moveHand(hand, hand === f.hands.left ? -0.2 : 0.2, 1.5, -0.31);
+        for (const joint of Object.values(hand.joints)) joint!.quaternion.copy(out);
+      }
+      return f;
+    };
+    for (let end = clock + 700; clock < end && t.controller.phase === 'running'; clock += 16) { t.controller.frame(palms(), clock); await wait(1); }
+    expect(t.userStopped).toHaveBeenLastCalledWith('both palms out', expect.objectContaining({ wiringId: 'w2' }));
+    expect(t.controller.phase).toBe('stopped');
+    t.controller.reset();
+  });
+
   it('a fingertip resting behind a found plane pushes it back; with no detected screen the first rest places it', async () => {
     const t = setup(); t.controller.ask('Touch the water', 'chip'); t.receiveReady(ready());
     await hold(t.controller, new Vector3(-0.6, 1.5, -0.35), 100);

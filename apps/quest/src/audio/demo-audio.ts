@@ -22,7 +22,8 @@ export class QuestDemoAudio {
     macSpeechQueued: 0, speechProvider: 'none' as 'none' | 'browser-os' | 'mac-os' | 'mac-os-on-headset',
     thinking: false, unlocked: false, speechAvailable: typeof speechSynthesis !== 'undefined' };
 
-  constructor(params: URLSearchParams, private readonly speechFallback?: (text: string) => boolean | void) {
+  /** `speechToken`: the paired device token for /api/speech when the page is not on localhost (Quest over the LAN). */
+  constructor(params: URLSearchParams, private readonly speechFallback?: (text: string) => boolean | void, private readonly speechToken?: () => string | undefined) {
     this.quiet = params.get('mute') === '1';
     if (this.quiet) demoAudioMaster.forceMute(true);
     this.removeOutput = demoAudioMaster.registerOutput(volume => {
@@ -157,7 +158,10 @@ export class QuestDemoAudio {
     const seq = ++this.speechSeq;
     if (!ctx || !out || ctx.state !== 'running') { this.macSpeech(text); return; }
     try {
-      const res = await fetch('/api/speech', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const token = this.speechToken?.();
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const res = await fetch('/api/speech', { method: 'POST', headers, body: JSON.stringify({ text }) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buffer = await ctx.decodeAudioData(await res.arrayBuffer());
       if (seq !== this.speechSeq || !this.maySpeak()) return;
