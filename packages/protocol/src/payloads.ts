@@ -145,11 +145,27 @@ export type WireProgressPayload = z.infer<typeof WireProgressPayload>;
  * The headset runs `code` as the body of `function wire(s, out, mem)` and sends each output as a
  * `control.event` with widgetId `wire:<actionId>` on this card; the server dispatches it through the driver.
  */
+/**
+ * One AR control the Muse agent generated for the wearer (a knob, slider, button or toggle beside the device).
+ * Moving it sends `control.event` with widgetId `wire:<actionId>`, the same route as a hand program's output.
+ */
+export const WireControl = z.object({
+  id: z.string().min(1).max(64),
+  actionId: z.string().min(1).max(64),
+  label: z.string().max(24),
+  kind: z.enum(['knob', 'slider', 'button', 'toggle']),
+  min: z.number().optional(),
+  max: z.number().optional(),
+  value: z.number().optional(),
+});
+export type WireControl = z.infer<typeof WireControl>;
+
 export const WireReadyPayload = z.object({
   requestId: Id.optional(),
   cardId: z.string().min(1).max(128),
   wiringId: z.string().min(1).max(64),
-  code: z.string().min(1).max(8192),
+  /** The hand program; empty when the wearer asked only for AR controls. */
+  code: z.string().max(8192),
   title: z.string().max(80),
   explanation: z.string().max(300),
   model: z.string().max(64),
@@ -157,6 +173,10 @@ export const WireReadyPayload = z.object({
   actions: z.array(WireAction).min(1).max(16),
   /** Signals the program reads (e.g. ["screen", "right"]); "screen" means the wearer must calibrate the screen first. */
   needs: z.array(z.enum(['right', 'left', 'screen'])).max(3),
+  /** Generated AR controls (Muse agent); absent on older hand-program-only wirings. */
+  controls: z.array(WireControl).max(8).optional(),
+  /** Where the glue runs on the Mac (Muse agent): the connector entry file and its process. */
+  connector: z.object({ entry: z.string().max(200), pid: z.number().int().optional() }).optional(),
 });
 export type WireReadyPayload = z.infer<typeof WireReadyPayload>;
 

@@ -57,6 +57,13 @@ export function agentRouter(ctx: ServerContext): express.Router {
       })),
     });
   });
+  /** The Muse agent's live connectors on this Mac: entry file, process, actions and recent output. */
+  r.get('/connectors', (req, res) => {
+    if (!harnessAccess(req, res)) return;
+    const host = agent.connectorHost;
+    res.json({ agent: 'Muse coding agent (muse-spark-1.3 tools: bash, files, deploy, test)', mode: ctx.muse.mode, workspace: agent.agentWorkspace,
+      connectors: host.cards().map((cardId) => ({ cardId, ...host.info(cardId), actions: host.actions(cardId), logs: host.logs(cardId).slice(-40), wiring: agent.wireReady(cardId) ? { title: agent.wireReady(cardId)!.title, controls: agent.wireReady(cardId)!.controls ?? [] } : null })) });
+  });
   r.get('/harness/runs/:runId', (req, res) => {
     if (!harnessAccess(req, res)) return;
     const run = agent.harness.get(String(req.params.runId));

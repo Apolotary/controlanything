@@ -44,6 +44,9 @@ import { validateDriver } from '../devices/validate';
 import { verifyDriver } from './verify';
 import { releaseWireOutputs } from './wire-stop';
 import { libraryDriverNote, WireService } from './wire';
+import { ConnectorHost } from './connector-host';
+import { MuseAgent, type AgentContext } from './muse-agent';
+import { MUSICAL_SYNTH_PORT_ID } from '../devices/musicalSynth';
 import { MuseBridgeHarness } from './muse-harness';
 import { CodingAgentService } from './coding-agent';
 import { FreshConnectorGenerator } from './fresh-connector';
@@ -77,6 +80,10 @@ export interface Agent {
   freshConnectors: FreshConnectorGenerator;
   connectors: GeneratedConnectorRegistry;
   harness: MuseBridgeHarness;
+  /** The Muse coding agent and the connectors it deployed (one Node process per device). */
+  museAgent: MuseAgent;
+  connectorHost: ConnectorHost;
+  agentWorkspace: string;
   wireReady(cardId: string): WireReadyPayload | undefined;
   targets: TargetStore;
   steps: StepLog;
@@ -254,7 +261,10 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const connectorPorts = (executorId: string) => hub.devices().filter(d => d.deviceId === executorId && d.online && d.app?.includes('+generated-midi-v1'))
     .flatMap(d => (d.ports ?? []).filter(p => p.kind === 'midi-out'));
   const connectors = new GeneratedConnectorRegistry(connectorPorts);
+  // Connectors the Muse agent wrote and deployed (one background Node process per device card).
+  let connectorHost: ConnectorHost | undefined;
   const dispatcher = new Dispatcher({ hub, macLocal, log, prepareMidi: request => connectors.encode(request), canExec: (request) => {
+    if (request.actionId?.startsWith('agent:') && request.cardId) return Boolean(connectorHost?.has(request.cardId));
     const t = request.cardId ? targets.get(request.cardId) : undefined;
     const verifying = request.cardId ? wireVerifying.get(request.cardId) : undefined;
     if (t && wireReleasing.has(t.cardId) && request.priorityRelease && isNeutralSoftwareRelease(request)) {
@@ -1020,7 +1030,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (!visualHost(intent.from).executor) return;
     clearVisualIntent();
     log(`[visual] ${intent.hostId}'s screen is up after ${((Date.now() - intent.at) / 1000).toFixed(1)} s${demoMode() ? '; continuing into setup' : ''}`);
-    if (demoMode()) selectVisualSynth({ virtual: 'visual-synth' }, intent.from);
+    if (demoMode() && !agentEnabled) selectVisualSynth({ virtual: 'visual-synth' }, intent.from);
     else { const t = targets.get(VISUAL_SYNTH_CARD_ID); if (t) hub.broadcast('target.status', targets.status(t)); }
   };
   /** Explicit selection of the Mac visual synth. In CE_DEMO=1 it also starts setup. */
@@ -1053,8 +1063,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     identifyVisualHost(target, detection);
     if (target.specId) showControls(target, from.deviceId);
     const running = setups.has(target.cardId) || !!(target.abort && !target.abort.signal.aborted);
-    const auto = demoMode() && !canControl(target);
-    reply(true, target.cardId, auto ? 'Setting up the Mac visuals…' : canControl(target) ? 'Mac visuals ready: your controls are on' : VIRTUAL_SCREEN_GUIDANCE, auto || running);
+    // With the Muse agent there is no setup ceremony: the wearer asks, Muse writes and tests the connector.
+    const auto = demoMode() && !agentEnabled && !canControl(target);
+    reply(true, target.cardId, agentEnabled ? 'Mac visuals open. Ask Muse what you want.' : auto ? 'Setting up the Mac visuals…' : canControl(target) ? 'Mac visuals ready: your controls are on' : VIRTUAL_SCREEN_GUIDANCE, auto || running);
     if (auto && !running) setup(target.cardId, from);
     return target;
   };
@@ -1087,7 +1098,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       reply(false, card.cardId, MUSICAL_SYNTH_GUIDANCE); return target;
     }
     const running = setups.has(card.cardId) || !!(target.abort && !target.abort.signal.aborted);
-    const auto = demoMode() && !canControl(target);
+    const auto = demoMode() && !agentEnabled && !canControl(target);
     if (target.specId) showControls(target, from.deviceId);
     reply(true, card.cardId, auto ? 'Setting up ControlAnything Synth…' : 'Ask Muse how your hands should play this synth.', auto || running);
     if (auto && !running) setup(card.cardId, from);
@@ -1274,7 +1285,58 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     apiKey: ctx.config.muse.apiKey, baseUrl: ctx.config.muse.baseUrl, log, callLog: ctx.calls });
   const freshConnectors = new FreshConnectorGenerator({ dataDir: ctx.config.dataDir,
     apiKey: ctx.config.muse.apiKey, baseUrl: ctx.config.muse.baseUrl, log, callLog: ctx.calls });
+  /** The paired Mac companion (the client app with the QR code): it runs Web MIDI, the visual and musical synths. */
+  const companionDevice = (): DeviceInfo | undefined => {
+    // The sim room stands in for the Mac in the no-hardware judge path (its laptop runs the visual synth).
+    const online = hub.devices().filter((d) => d.online && d.capabilities.includes('midi') && (d.role === 'companion' || d.kind === 'sim'));
+    const real = online.filter((d) => d.kind !== 'sim');
+    return real.find((d) => d.ports?.some((p) => p.kind === 'midi-out' && p.id !== 'ce-visual-synth' && p.id !== MUSICAL_SYNTH_PORT_ID)) ?? real[0] ?? online[0];
+  };
+  connectorHost = new ConnectorHost({ log,
+    send: (out, done) => {
+      const mac = companionDevice();
+      if (!mac) { done(false, 'the Mac companion is not connected'); return; }
+      dispatcher.fire(mac.deviceId, out.op, { port: out.port, cardId: out.cardId, actionId: `agent:${out.op.msg}`, onResult: done });
+    },
+  });
+  const agentWorkspace = process.env.CE_AGENT_WORKSPACE?.trim() || join(ctx.config.dataDir, 'muse-agent');
+  const museAgent = new MuseAgent({ model: muse.model, mode: muse.mode, workspace: agentWorkspace, repoRoot: REPO_ROOT, host: connectorHost, log, callLog: ctx.calls,
+    ...(streamClient ? { stream: { model: muse.model, stream: streamClient.stream.bind(streamClient) } } : {}),
+    // Muse narrates its progress through macOS speech (an OS voice, not a model). CE_MAC_SILENT=1 mutes it.
+    speak: (text) => { void macLocal.exec({ kind: 'local', op: 'say', arg: text.slice(0, 160) }).catch(() => {}); },
+    openVisuals: () => {
+      const mac = companionDevice();
+      if (!mac) return 'The Mac companion is not connected: open ControlAnything on the Mac first.';
+      hub.sendToDevice(mac.deviceId, 'visual.open', { requestId: newId('visual-') });
+      return `Asked ${mac.name} to open the visual synth.`;
+    },
+  });
+  void museAgent.init().catch((e) => log(`[muse-agent] workspace: ${(e as Error).message}`));
+  log(`[muse-agent] ${muse.mode} · workspace ${agentWorkspace}`);
+  const agentEnabled = process.env.CE_AGENT !== '0';
+  const agentContext = (cardId: string): AgentContext => {
+    const t = targets.get(cardId);
+    const tag = tags.get(cardId) as unknown as { card?: DeviceCardPayload; label?: string } | undefined;
+    const card = t?.card ?? tag?.card;
+    const mac = companionDevice();
+    const outs = (mac?.ports ?? []).filter((p) => p.kind === 'midi-out');
+    return {
+      cardId, deviceName: card?.name ?? t?.detection?.label ?? tag?.label ?? cardId, ...(card ? { card } : {}),
+      ...(t?.detection?.jpeg ? { observation: { jpeg: t.detection.jpeg, capturedAt: t.detection.capturedAt, label: t.detection.label } } : {}),
+      companion: { online: !!mac, ...(mac ? { deviceId: mac.deviceId, name: mac.name, ...(mac.app ? { app: mac.app } : {}) } : {}),
+        midiOutputs: outs.map((p) => p.name), visualsOpen: outs.some((p) => p.id === 'ce-visual-synth' && p.state === 'connected'),
+        musicalOpen: outs.some((p) => p.id === MUSICAL_SYNTH_PORT_ID && p.state === 'connected') },
+    };
+  };
   const wireService = new WireService({
+    ...(agentEnabled ? {
+      agentBuild: async (cardId: string, request: string, emit: Parameters<MuseAgent['build']>[3], o: { signal: AbortSignal }) => {
+        const built = await museAgent.build(cardId, agentContext(cardId), request, emit, { signal: o.signal });
+        const info = connectorHost!.info(cardId);
+        return { ...built, ...(built.ok && info ? { connector: { entry: info.entry, ...(info.pid ? { pid: info.pid } : {}) } } : {}) };
+      },
+      agentSet: (cardId: string, actionId: string, value: number | boolean) => connectorHost!.set(cardId, actionId, value),
+    } : {}),
     hub, targets, spark: muse, wonder, log, callLog: ctx.calls, harness,
     ...(streamClient ? { stream: { model: muse.model, stream: streamClient.stream.bind(streamClient) } } : {}),
     chunkDelayMs: Number.isFinite(Number(process.env.CE_WIRE_CHUNK_MS)) && process.env.CE_WIRE_CHUNK_MS !== undefined ? Number(process.env.CE_WIRE_CHUNK_MS) : 70,
@@ -1291,7 +1353,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     },
     cardOfSpec: (specId) => specs.get(specId)?.cardId,
     ...(muse.mode === 'live' ? { buildConnector: freshConnectorWriter({ generator: freshConnectors, registry: connectors, ports: connectorPorts }) } : {}),
-    retireConnector: cardId => connectors.clear(cardId),
+    retireConnector: cardId => { connectors.clear(cardId); if (cardId) connectorHost!.stop(cardId, 'wiring retired'); else connectorHost!.stopAll('wiring retired'); },
     useAuthoredTransport: cardId => connectors.useAuthored(cardId),
     developConnector: async (task, onProgress, signal) => {
       if (signal.aborted) throw new RequestCancelledError();
@@ -1398,6 +1460,11 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         arm.onConfirm(m.payload, from);
         return;
       case 'control.event': {
+        const agentRoute = wireService.routeAgent(m.payload);
+        if (agentRoute) {
+          if (!agentRoute.ok && Date.now() - lastWireLog > 2000) { lastWireLog = Date.now(); log(`[control] ${m.payload.widgetId}: ${agentRoute.reason}`); }
+          return;
+        }
         const r = control.onControlEvent(m.payload, from.deviceId);
         if (!r.ok && r.reason && r.reason !== 'not armed' && r.reason !== 'rate limited' && r.reason !== 'paused') {
           // a wiring program can send 60 events a second: one line per 2 s is enough
@@ -1461,6 +1528,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     freshConnectors,
     connectors,
     harness,
+    museAgent,
+    connectorHost: connectorHost!,
+    agentWorkspace,
     wireReady: (cardId: string) => wireService.readyFor(cardId),
     targets,
     steps,
@@ -1513,6 +1583,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       clearTimeout(publishTimer);
       clearVisualIntent();
       wireService.close();
+      connectorHost?.stopAll('server closing');
       tags.flushPending();
       canvas.invalidate();
       voice.invalidate();

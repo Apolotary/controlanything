@@ -444,7 +444,14 @@ export function wireHack(widgetId: string, a: DriverAction, hz: number): Hack {
   } as Hack;
 }
 
-interface ActiveWiring { cardId: string; wiringId: string; driverId: string; ready: WireReadyPayload; actions: Map<string, WireAction>; at: number }
+interface ActiveWiring { cardId: string; wiringId: string; driverId: string; ready: WireReadyPayload; actions: Map<string, WireAction>; at: number; agent?: boolean }
+
+/** What the Muse agent (muse-agent.ts) hands back: a running connector plus AR controls and/or a hand program. */
+export interface AgentBuilt {
+  ok: boolean; title: string; explanation: string; code: string; needs: ('right' | 'left' | 'screen')[];
+  actions: WireAction[]; controls: NonNullable<WireReadyPayload['controls']>; model: string; source: 'live' | 'fixture';
+  connector?: { entry: string; pid?: number }; issues: string[];
+}
 
 export type WireResolve = { target: Target; hack: Hack; driver: Driver } | { reason: string };
 
@@ -464,6 +471,13 @@ export interface WireServiceDeps extends WireDeps {
   buildConnector?(input: WireInput, emit: WireEmit, opts: { signal: AbortSignal; wiringId: string }): Promise<WireWritten>;
   retireConnector?(cardId?: string): void;
   useAuthoredTransport?(cardId: string): void;
+  /**
+   * The Muse coding agent: when present it handles every ask. It writes and deploys the connector on the Mac and
+   * returns the controls; no separate setup, driver or verification ceremony is needed first.
+   */
+  agentBuild?(cardId: string, request: string, emit: WireEmit, opts: { signal: AbortSignal; wiringId: string; from: { deviceId: string; name?: string } }): Promise<AgentBuilt>;
+  /** Forward one control value to the card's running connector. */
+  agentSet?(cardId: string, actionId: string, value: number | boolean): { ok: boolean; reason?: string };
 }
 
 export class WireService {
@@ -537,9 +551,9 @@ export class WireService {
       // Retiring authority must not strand a held note/pressure while the next model call runs.
       if (replacing && target0) await this.d.stopOutputs?.(target0, 'A new wiring was requested');
       if (abort.signal.aborted) return;
-      const freshConnector = isFreshConnectorRequest(p.text);
+      const freshConnector = !this.d.agentBuild && isFreshConnectorRequest(p.text);
       if (freshConnector && !this.d.buildConnector) return fail('Live connector generation is unavailable. No template or old connector was installed.');
-      if (target0 && this.d.developConnector && isConnectorDevelopmentRequest(p.text) && !freshConnector) {
+      if (!this.d.agentBuild && target0 && this.d.developConnector && isConnectorDevelopmentRequest(p.text) && !freshConnector) {
         send('writing', { title: 'Muse Code · connector development', note: 'Starting a project coding task on the Mac. No hand wiring is being installed.' });
         const job = await this.d.developConnector(p.text, note => send('writing', { title: 'Muse Code · connector development', note }), abort.signal);
         if (abort.signal.aborted) return;
@@ -550,12 +564,27 @@ export class WireService {
           explanation: `Coding task ${job.jobId}. No new hand wiring was installed.` });
         return;
       }
-      if (target0?.card && isDifferentConnectedOp1ControlRequest(p.text, { name: target0.card.name, category: target0.card.category, port: target0.driver?.executor.port })) {
+      if (!this.d.agentBuild && target0?.card && isDifferentConnectedOp1ControlRequest(p.text, { name: target0.card.name, category: target0.card.category, port: target0.driver?.executor.port })) {
         const hint = 'Select the OP-1 in Annotate. Use Correct device if its label is wrong, then set it up.';
         this.log(`[wire] ${cardId}: connected OP-1 request belongs to a different target; no model called`);
         send('failed', { model: 'not-called', title: 'Choose the OP-1 first', note: `This card is not the connected OP-1. ${hint}`,
           explanation: 'Use Correct device if its label is wrong. This card is not your connected OP-1.',
           issues: ['Select the OP-1 in Annotate, then set it up.'] });
+        return;
+      }
+      if (this.d.agentBuild) {
+        send('writing', { note: 'Muse is looking at the device…' });
+        const built = await this.d.agentBuild(cardId, p.text, send, { signal: abort.signal, wiringId, from });
+        if (abort.signal.aborted) return;
+        if (!built.ok) { this.log(`[wire] ${cardId} agent failed after ${((Date.now() - t0) / 1000).toFixed(1)} s: ${built.issues[0] ?? ''}`); return; }
+        const payload: WireReadyPayload = { cardId, wiringId, ...(p.requestId ? { requestId: p.requestId } : {}), code: built.code.slice(0, 8192),
+          title: built.title.slice(0, 80), explanation: built.explanation.slice(0, 300), model: built.model.slice(0, 64), source: built.source,
+          actions: built.actions.slice(0, 16), needs: built.needs, controls: built.controls.slice(0, 8), ...(built.connector ? { connector: built.connector } : {}) };
+        this.active.set(cardId, { cardId, wiringId, driverId: 'agent', ready: payload, actions: new Map(payload.actions.map((a) => [a.actionId, a])), at: Date.now(), agent: true });
+        send('ready', { code: built.code || undefined, title: payload.title, explanation: payload.explanation, model: built.model, source: built.source, latencyMs: Date.now() - t0,
+          note: `ready · ${payload.controls?.length ?? 0} control${payload.controls?.length === 1 ? '' : 's'}${built.code ? ' + hand program' : ''}` });
+        hub.broadcast('wire.ready', payload);
+        this.log(`[wire] ${cardId} ready ${wiringId} "${built.title}" by ${built.model} (${built.source}) · agent · ${payload.actions.map((a) => a.actionId).join(',')} · total ${((Date.now() - t0) / 1000).toFixed(1)} s`);
         return;
       }
       send('writing', { note: target0?.driver ? 'Getting ready to write…' : 'Setting the device up first (identify · link · driver)…' });
@@ -630,6 +659,26 @@ export class WireService {
     return { target, driver, hack: wireHack(ev.widgetId, action, wireRateHz(driver, action)) };
   }
 
+  /**
+   * A "wire:<actionId>" control.event for a Muse-agent wiring goes straight to its connector on the Mac.
+   * Returns undefined when the event is not for an agent wiring (the ControlRouter handles it).
+   */
+  routeAgent(ev: Pick<ControlEventPayload, 'widgetId' | 'specId' | 'requestId' | 'wiringId' | 'value'>): { ok: boolean; reason?: string } | undefined {
+    if (!ev.widgetId.startsWith('wire:')) return undefined;
+    const actionId = ev.widgetId.slice('wire:'.length);
+    const agentEntries = [...this.active.values()].filter((a) => a.agent);
+    if (!agentEntries.length) return undefined;
+    const entry = agentEntries.find((a) => a.wiringId === ev.wiringId) ?? (agentEntries.length === 1 && !ev.wiringId ? agentEntries[0] : undefined);
+    if (!entry) return this.active.size > agentEntries.length ? undefined : { ok: false, reason: 'this output belongs to a retired wiring request' };
+    if (entry.ready.requestId && ev.requestId && ev.requestId !== entry.ready.requestId) return { ok: false, reason: 'this output belongs to a retired wiring request' };
+    const action = entry.actions.get(actionId);
+    if (!action) return { ok: false, reason: `"${actionId}" is not part of the current wiring` };
+    const raw = ev.value;
+    const value = typeof raw === 'boolean' ? raw : typeof raw === 'number' ? Math.min(action.max ?? Infinity, Math.max(action.min ?? -Infinity, raw)) : undefined;
+    if (value === undefined) return { ok: false, reason: 'unsupported control value' };
+    return this.d.agentSet?.(entry.cardId, actionId, value) ?? { ok: false, reason: 'no connector host' };
+  }
+
   /** User's both-palms Stop: retire only this epoch, without disarming the selected verified device. */
   async stop(p: WireStopPayload, from: { deviceId: string }): Promise<WireStoppedPayload> {
     const epoch = this.epochs.get(p.cardId);
@@ -639,11 +688,13 @@ export class WireService {
         reason: 'That request is no longer the current wiring owned by this headset.' });
     }
     const target = this.d.targets.get(p.cardId);
-    const executor = target?.driver?.executor.deviceId;
+    const wasAgent = this.active.get(p.cardId)?.agent || (!!this.d.agentBuild && this.jobs.has(p.cardId));
+    const executor = wasAgent ? undefined : target?.driver?.executor.deviceId;
     // Synchronous revocation precedes every await: no old event, queued output or late ready keeps authority.
     this.clear(p.cardId);
     let release: { released: boolean; reason?: string } | undefined;
-    try { if (target) release = await this.d.stopOutputs?.(target, p.reason ?? 'Both palms out'); }
+    // An agent connector releases its own notes/touches in onStop when clear() retires it.
+    try { if (wasAgent) release = { released: true }; else if (target) release = await this.d.stopOutputs?.(target, p.reason ?? 'Both palms out'); }
     catch (e) { this.log(`[wire] release ${p.cardId}: ${(e as Error).message}`); release = { released: false }; }
     const payload: WireStoppedPayload = { cardId: p.cardId, requestId: p.requestId, wiringId: epoch.wiringId, ok: true,
       ...(release ? { releaseConfirmed: release.released } : {}),
