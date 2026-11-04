@@ -4,7 +4,9 @@ Hardware: **Meta Quest 3 + MacBook**, with the paired companion showing the visu
 
 **Current sound policy (user override, November 4):** use water/UI sounds, audible music and OS/browser Buddy speech. Live startup is `CE_DEMO=1 npm start`, without `CE_MAC_SILENT`. The first browser gesture unlocks audio. One shared master volume/mute controls Mac and Quest. `mute=1` is allowed for unattended automation; analyser/graph evidence is separate from listening.
 
-**Golden path:** Enter AR → SAM outline → pinch MacBook → setup → ask Muse → watch JavaScript stream → validate/dry-run/verify → calibrate two corners → touch the water → lift → palms Stop → ask again → Stop all → hold Exit.
+**Default flow:** Enter AR in Annotate → choose object filter → pinch/tag an object → stay in Annotate → deliberately choose Control → connect the required companion/transport → Set up → Enable → ask Muse for controls. No automatic laptop-to-visual-synth redirect.
+
+**Optional water demo:** explicitly choose More → Visual synth → setup → ask Muse → watch JavaScript stream → validate/dry-run/verify → calibrate two corners → touch the water → lift → palms Stop → ask again → Stop all → hold Exit.
 
 ## Prepare once
 
@@ -20,7 +22,9 @@ Hardware: **Meta Quest 3 + MacBook**, with the paired companion showing the visu
 |---|---|---|---|
 | W1 | Enter AR; look at the Mac | Camera and hands work; SAM 3.1 outline appears. No competing camera tab. Annotate frame rate is measured again after the SAM-only change. | Pending |
 | W2 | Raise a deliberate flat left palm | Quick actions are easy to target; More/Back reaches instruments, Tutorial, layers and filters without changing the device or running anything. It closes after selection and stays away from active control. | Pending |
-| W3 | Pinch the MacBook box once | Same selected object continues through setup. Mac visuals open/recover; progress and source are visible. A generic electronic-device box may need identification, but should not silently require a second pinch. | Pending |
+| W3 | Pinch a device box once, then wait for identification | It is tagged in Annotate. Scanning continues; no software synth opens, no setup or device commands start, and delayed identification does not change the layer. | Pending |
+| W3a | Choose Control for that tagged device | The same physical object is selected, with its real companion/transport instructions. Setup waits for Set up; an older saved demo never steals selection. | Pending |
+| W3b | For water, deliberately choose More → Visual synth | The optional software instrument opens and starts its disclosed demo setup; the separately tagged physical device is retained. | Pending |
 | W4 | Wait for setup | A compact device invitation makes voice primary and offers one example; Ideas reveals the other suggestions. No side dials or parameter handles appear in the default flow; hands do not drive the device yet. Driver verification is labelled camera / renderer / acknowledgement honestly. | Pending |
 | W5 | Choose **Touch the water**, or hold-to-talk and ask for it | Exact request stays on the selected device. JavaScript streams into the AR code card and Mac code view; a live take is labelled Live with the actual model, not FIXTURE or Template. | Pending |
 | W6 | Watch checking finish | Validating → dry-run → action verification → ready. Failed generation never appears as successful live generation. Retain source, model, code and relevant call/step/exec records. | Pending |

@@ -8,11 +8,14 @@ export interface TutorialProbe {
   boxes: number;
   selected: boolean;
   controllable: boolean;
+  mode?: 'annotate' | 'control';
+  needsBridge?: boolean;
+  needsSetup?: boolean;
   needsEnable?: boolean;
   /** Explicit full Stop observed by the app before the selected wiring is discarded. */
   fullStopRequestId?: string;
   cardId?: string;
-  instrument?: 'musical-synth';
+  instrument?: 'visual-synth' | 'musical-synth';
   wire: { phase?: string; request?: string; requestId?: string; wiringId?: string; needsScreen?: boolean; touching?: boolean; stats?: { sent?: number } };
   menuOpen: boolean;
   buddyOpen: boolean;
@@ -82,13 +85,20 @@ export class TutorialSteps {
   view(s: TutorialProbe, now: number): TutorialView | undefined {
     if (this.finished || !s.inXr || s.busy) return;
     switch (this.step) {
-      case 'look': return { title: 'Look at your Mac', detail: 'SAM will outline the devices it sees.' };
-      case 'pinch': return { title: 'Pinch the Mac’s box', detail: 'Aim, then tap thumb to index.', pinch: true };
-      case 'ask': return s.needsEnable
+      case 'look': return { title: 'Look at a device', detail: 'Choose Electronics in the wrist menu. SAM will outline the devices it sees.' };
+      case 'pinch': return { title: 'Pinch a device’s box', detail: 'Aim, then tap thumb to index to tag it. You stay in Annotate.', pinch: true };
+      case 'ask': return s.mode === 'annotate'
+        ? { title: 'Switch to Control', detail: 'Your device is tagged. Open the wrist menu and choose Control.' }
+        : s.needsBridge
+        ? { title: 'Connect a companion', detail: 'Open the Mac companion and follow this device’s connection instructions.' }
+        : s.needsSetup
+        ? { title: 'Set up this device', detail: 'Press Set up on the selected device card. Keep your Mac companion open.' }
+        : s.needsEnable
         ? { title: 'Enable this device', detail: 'Press Enable controls on the confirmation, then ask Muse.' }
         : s.controllable
         ? { title: ['failed', 'stopped'].includes(s.wire.phase ?? '') ? 'Ask Muse to try again' : 'What should your hands do?', detail: s.instrument === 'musical-synth'
-          ? 'Choose Play like a theremin, or hold the mic to ask Muse.' : 'Choose Touch the water, or hold the mic to ask Muse.' }
+          ? 'Choose Play like a theremin, or hold the mic to ask Muse.' : s.instrument === 'visual-synth'
+          ? 'Choose Touch the water, or hold the mic to ask Muse.' : 'Hold the mic and describe the controls you want.' }
         : { title: 'Getting the device ready', detail: 'Keep the Mac in view while its controls are checked.' };
       case 'wiring': return s.wire.phase === 'failed' || s.wire.phase === 'stopped'
         ? { title: 'Try your request again', detail: 'Choose a suggestion on the device card.' }

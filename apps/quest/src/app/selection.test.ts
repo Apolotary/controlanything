@@ -59,7 +59,7 @@ describe('selected device setup progress', () => {
       const physical = { targetId: target.id, cardId: 'op1-field', label: 'OP-1 Field', connection: 'setup' as const };
       const mac = { targetId: 'saved-mac', cardId: 'visual-synth-mac', label: 'Visual synth', connection: 'ready' as const };
       if (alreadySelected) { modes.tags.set(target.id, physical); modes.tags.set(mac.targetId, mac); app.lockedId = target.id; }
-      else { modes.tags.set(mac.targetId, mac); modes.tags.set(target.id, physical); }
+      else { modes.tags.set(mac.targetId, mac); modes.tags.set(target.id, physical); Reflect.set(app, 'annotationSelection', target.id); }
       Reflect.get(app, 'armedCards').add(mac.cardId);
       Reflect.get(app, 'switchLayer').call(app, 'control');
       expect(modes.mode).toBe('control'); expect(app.lockedId).toBe(target.id);
@@ -160,6 +160,23 @@ describe('saved device placement', () => {
   const saved = (cardId: string) => ({ cardId, displayName: 'Saved laptop', identity: { label: 'Laptop' }, hidden: false,
     enabled: true, versions: [], createdAt: 1, updatedAt: 1, connection: 'ready',
     placement: { headsetId: 'quest', origin: 'https://room.test', panelOffset: { x: 0, y: 0, z: 0 }, fallback: { label: 'Laptop' }, updatedAt: 1 } });
+
+  it('never reattaches or tags a physical screen as a saved software demo with the same label', () => {
+    const { app, target, receive, modes, ws } = shell();
+    app.roomAnchors.begin({}, 'quest', 'https://room.test');
+    receive('onLibraryState', { devices: [saved('visual-synth-mac')] });
+    receive('onTagsState', { tags: [{ cardId: 'visual-synth-mac', label: 'Laptop', connection: 'ready' }] });
+    expect(Reflect.get(app, 'locationHint').call(app)).toBeUndefined();
+    receive('reassociateDetections', [target]);
+    expect(target.cardId).toBeUndefined();
+    ws.send.mockClear();
+    app.lock(target.id, 'ray');
+    expect(modes.mode).toBe('annotate');
+    expect(modes.tags.get(target.id)?.cardId).toBeUndefined();
+    expect(modes.tags.get(target.id)?.pending?.label).toBe('Laptop');
+    expect(modes.byCard('visual-synth-mac')?.targetId).not.toBe(target.id);
+    expect(ws.send.mock.calls.map(([type]) => type)).toEqual(['tag.add']);
+  });
 
   it('ignores stored XYZ and reattaches the identical interface to a fresh detection without setup', () => {
     const { app, target, receive, hud, ws, modes } = shell();
@@ -474,13 +491,57 @@ describe('explicit annotation and control', () => {
     expect(ws.send).toHaveBeenCalledTimes(1);
   });
 
-  it('opens the visual synth on the first pinch of SAM 3.1\'s "laptop" box (no on-device detector)', () => {
-    const { app, target, ws, modes } = shell();
-    Object.assign(app, { session: {}, lastFrame: { head: { position: new Vector3(0, 1.6, 0), quaternion: new Quaternion() } }, visualSynthReadyKey: '', release: vi.fn(), refreshHome: vi.fn(), setMode: vi.fn() });
+  it('keeps a laptop pinch in Annotate even when a visual synth companion is ready', () => {
+    const { app, target, ws, modes, scanner, receive } = shell();
+    Object.assign(app, { session: {}, lastFrame: { head: { position: new Vector3(0, 1.6, 0), quaternion: new Quaternion() } } });
+    receive('updateVisualSynthPresence', [{ deviceId: 'mac', name: 'Mac', kind: 'mac', role: 'companion', online: true, capabilities: ['midi'],
+      ports: [{ id: 'ce-visual-synth', kind: 'midi-out', state: 'connected' }] }]);
     app.lock(target.id, 'ray');
-    expect(modes.tags.size).toBe(0);
-    expect(ws.send).toHaveBeenCalledWith('target.select', expect.objectContaining({ virtual: 'visual-synth', label: 'Laptop', frameId: 'sam-frame', detId: 'sam-device' }), { to: 'server' });
-    Reflect.get(app, 'clearVirtualSelection').call(app, false);
+    expect(modes.mode).toBe('annotate');
+    expect(modes.tags.has(target.id)).toBe(true);
+    expect(ws.send.mock.calls.map(([type]) => type)).toEqual(['tag.add']);
+    expect(scanner.stop).not.toHaveBeenCalled();
+    expect(Reflect.get(app, 'virtualSelection')).toBeUndefined();
+    expect(Reflect.get(app, 'visualSynthIntent')).toBeUndefined();
+  });
+
+  it('shows a physical synthesizer in the Electronics annotation layer', () => {
+    const { app, receive } = shell();
+    Object.assign(app, { annotationLabels: new Set(), drawTarget: vi.fn(), eraseTarget: vi.fn() });
+    receive('observeTarget', { id: 'physical-synth', label: 'synthesizer', score: .95,
+      position: [.1, 1.4, -1], confirmed: false, status: 'scanned' });
+    expect(Reflect.get(app, 'visibleTargets').has('physical-synth')).toBe(true);
+  });
+
+  it('does not follow a delayed Mac identification into a demo and preserves that pick for explicit Control', () => {
+    const { app, target, ws, modes, receive, hud } = shell();
+    target.label = 'electronic device';
+    app.lock(target.id, 'ray');
+    receive('onTagsState', { tags: [
+      { cardId: 'physical-mac', label: 'electronic device', name: 'MacBook Pro', connection: 'setup',
+        position: { x: 0, y: 1.6, z: -1 }, action: 'select-visual-synth' },
+      { cardId: 'old-visual', label: 'Saved visual synth', connection: 'ready' },
+    ] });
+    expect(modes.mode).toBe('annotate');
+    expect(ws.send.mock.calls.map(([type]) => type)).toEqual(['tag.add']);
+    expect(Reflect.get(app, 'visualSynthIntent')).toBeUndefined();
+    Reflect.get(app, 'switchLayer').call(app, 'control');
+    expect(modes.mode).toBe('control');
+    expect(app.lockedId).toBe(target.id);
+    expect(modes.tags.get(target.id)?.cardId).toBe('physical-mac');
+    expect(hud.setDeviceState).toHaveBeenLastCalledWith(expect.objectContaining({ targetId: target.id, connection: 'setup' }));
+    expect(ws.send.mock.calls.map(([type]) => type)).toEqual(['tag.add', 'mode.set']);
+    app.setupControl(target.id);
+    expect(ws.send).toHaveBeenLastCalledWith('control.setup', { cardId: 'physical-mac' }, { to: 'server' });
+  });
+
+  it('opens an empty Control layer without selecting an old saved demo', () => {
+    const { app, modes, ws } = shell();
+    modes.tags.set('old', { targetId: 'old', cardId: 'visual-synth-mac', label: 'Visual synth', connection: 'ready' });
+    Reflect.get(app, 'switchLayer').call(app, 'control');
+    expect(modes.mode).toBe('control'); expect(app.lockedId).toBeNull();
+    expect(ws.send.mock.calls.map(([type]) => type)).toEqual(['mode.set']);
+    expect(Reflect.get(app, 'virtualSelection')).toBeUndefined();
   });
 
   it('keeps the tag identifying until the server supplies its device name', () => {

@@ -1,6 +1,6 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DeviceInfo } from '@ce/protocol';
 import type { Roster } from './executors';
 import { evaluateConnection, TagStore, tagSnapshot, tagCapability } from './tags';
@@ -10,6 +10,7 @@ import type { Target } from './types';
 const temporary: string[] = [];
 afterEach(() => {
   for (const dir of temporary.splice(0)) rmSync(dir, { recursive: true, force: true });
+  vi.unstubAllEnvs();
 });
 
 function target(category: NonNullable<Target['card']>['category'] = 'synthesizer'): Target {
@@ -195,6 +196,19 @@ describe('tag connection evaluation', () => {
     expect(tagCapability(t)).toBe('local');
     expect(evaluateConnection(t, { devices: () => [], macLocal: true, helperUrl: () => 'http://localhost:9876/pair' })).toEqual({
       connection: 'offline', hint: 'Open localhost:9876/pair on this laptop', action: 'open-companion',
+    });
+  });
+
+  it('keeps physical laptop connection guidance independent of the optional visual synth', () => {
+    vi.stubEnv('CE_DEMO', '1');
+    const laptop = target('computer');
+    laptop.card!.name = 'MacBook';
+    const visualHost = device({ ports: [{ id: 'ce-visual-synth', name: 'ControlAnything Visual Synth', kind: 'midi-out', state: 'connected' }] });
+    expect(evaluateConnection(laptop, { devices: () => [visualHost], macLocal: true })).toEqual({
+      connection: 'setup', hint: 'Set up control for this device',
+    });
+    expect(evaluateConnection(laptop, { devices: () => [visualHost], macLocal: false })).toEqual({
+      connection: 'offline', hint: 'Open the Mac app and enable control of this Mac', action: 'open-companion',
     });
   });
 

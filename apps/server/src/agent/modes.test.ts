@@ -88,6 +88,7 @@ afterEach(async () => {
   await vi.advanceTimersByTimeAsync(0);
   expect(vi.getTimerCount()).toBe(0);
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -155,6 +156,56 @@ describe('annotation and control mode boundary', () => {
     expect(s.sent).toHaveBeenCalledWith('second-quest', 'mode.state', { mode: 'control' });
     s.emit('mode.set', { mode: 'annotate' });
     expect(s.agent.mode()).toBe('annotate');
+    expect(tryLink).not.toHaveBeenCalled();
+    expect(s.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('keeps a tagged laptop as the physical target through selection and explicit setup when a visual synth is available', () => {
+    vi.stubEnv('CE_DEMO', '1');
+    const mac: DeviceInfo = { deviceId: 'mac', name: 'Mac', kind: 'mac', role: 'companion', capabilities: ['local', 'midi'],
+      online: true, canApprove: true, connections: 1, pairedAt: 1,
+      ports: [{ id: 'ce-visual-synth', name: 'ControlAnything Visual Synth', kind: 'midi-out', state: 'connected' }] };
+    const s = setup({ devices: [mac] });
+    const laptop = s.addKnown({ ...lightCard, cardId: 'physical-laptop', name: 'Apple MacBook laptop', maker: 'Apple', model: 'MacBook',
+      category: 'computer', protocols: ['other'], requires: ['local'] });
+    const identity = structuredClone(laptop.card);
+    expect(s.agent.mode()).toBe('annotate');
+    expect(s.agent.targets.list()).toEqual([laptop]);
+    expect(s.agent.tagsState().tags).toEqual([expect.objectContaining({ cardId: laptop.cardId, connection: 'setup', hint: 'Set up control for this device' })]);
+    expect(s.sent.mock.calls.some(([, type]) => type === 'visual.open')).toBe(false);
+    expect(tryLink).not.toHaveBeenCalled();
+
+    s.agent.setMode('control');
+    expect(s.agent.select({ cardId: laptop.cardId }, owner)).toBe(laptop);
+    expect(tryLink).not.toHaveBeenCalled();
+    expect(s.agent.setup(laptop.cardId, owner)).toBe(laptop);
+    expect(tryLink).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ cardId: laptop.cardId, category: 'computer' }), 'local',
+      expect.objectContaining({ preferDeviceId: mac.deviceId, probeIdentity: false }));
+    expect(laptop.card).toEqual(identity);
+    expect(s.agent.targets.list()).toEqual([laptop]);
+    expect(laptop.armed).toBe(false);
+    expect(s.sent.mock.calls.some(([, type]) => type === 'visual.open')).toBe(false);
+    expect(s.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('opens the visual synth only on an explicit software selection and retains physical laptop tags', () => {
+    vi.stubEnv('CE_DEMO', '1');
+    const mac: DeviceInfo = { deviceId: 'mac', name: 'Mac', kind: 'mac', role: 'companion', capabilities: ['local', 'midi'],
+      online: true, canApprove: true, connections: 1, pairedAt: 1,
+      ports: [{ id: 'ce-visual-synth', name: 'ControlAnything Visual Synth', kind: 'midi-out', state: 'disconnected' }] };
+    const s = setup({ devices: [mac] });
+    const laptop = s.addKnown({ ...lightCard, cardId: 'physical-laptop', name: 'Apple MacBook laptop', maker: 'Apple', model: 'MacBook',
+      category: 'computer', protocols: ['other'], requires: ['local'] });
+    const identity = structuredClone(laptop.card);
+    expect(s.sent.mock.calls.some(([, type]) => type === 'visual.open')).toBe(false);
+    expect(s.agent.mode()).toBe('annotate');
+    s.agent.select({ virtual: 'visual-synth', requestId: 'explicit-software-demo' }, owner);
+    expect(s.agent.mode()).toBe('control');
+    expect(s.sent.mock.calls.some(([id, type]) => id === mac.deviceId && type === 'visual.open')).toBe(true);
+    expect(s.agent.tagsState().tags.map(tag => tag.cardId)).toEqual(expect.arrayContaining([laptop.cardId, 'visual-synth-mac']));
+    expect(s.agent.targets.get(laptop.cardId)).toBe(laptop);
+    expect(laptop.card).toEqual(identity);
+    expect(laptop.armed).toBe(false);
     expect(tryLink).not.toHaveBeenCalled();
     expect(s.dispatch).not.toHaveBeenCalled();
   });

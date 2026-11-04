@@ -4,41 +4,41 @@ import type { HandState, HudFrame } from '../contract';
 import { DockHold, FingerTouchDetector, HandDockAnchor, type FingerMenuFinger } from './hand-dock';
 import { WristPalette, type PaletteItem } from './wrist-palette';
 
-it('keeps purpose actions small and every utility one More press away with persistent Stop and held Exit', () => {
+it('puts layer and object filters first while keeping virtual demos on More with persistent Stop and held Exit', () => {
   const palette = new WristPalette({} as never);
   let annotate = true, actions = 0;
   const add = (key: string, order: number, extra: Partial<PaletteItem> = {}) => palette.register({ key, label: key, order, onSelect() { actions++; }, ...extra });
-  add('ask-muse', -40, { section: 'primary' }); add('find-objects', -30, { section: 'primary' });
-  add('layer', -20, { segments: [{ key: 'annotate', label: 'Annotate', width: .094 }, { key: 'control', label: 'Control', width: .094 }] });
-  add('track', -10, { visible: () => annotate, segments: [{ key: 'electronics', label: 'Electronics', width: .086 }, { key: 'objects', label: 'Objects', width: .064 }, { key: 'everything', label: 'All', width: .04 }] });
+  add('ask-muse', -40, { section: 'primary', visible: () => !annotate });
+  add('layer', -100, { section: 'primary', segments: [{ key: 'annotate', label: 'Annotate', width: .094 }, { key: 'control', label: 'Control', width: .094 }] });
+  add('track', -90, { section: 'primary', visible: () => annotate, segments: [{ key: 'electronics', label: 'Electronics', width: .086 }, { key: 'objects', label: 'Objects', width: .064 }, { key: 'everything', label: 'All', width: .04 }] });
   add('visual-synth', 0); add('musical-synth', 1); add('buddy', 10);
   add('tangible:pick', 60, { visible: () => !annotate });
   add('deck:panic', 80); add('tutorial', 85); add('exit-ar', 90, { hold: true });
   const rebuild = () => { palette.contentGroup.clear(); palette.rebuild(); };
   rebuild();
-  const main = ['ask-muse', 'find-objects', 'palette-more', 'deck:panic', 'exit-ar'];
+  const main = ['layer:annotate', 'layer:control', 'track:electronics', 'track:objects', 'track:everything', 'palette-more', 'deck:panic', 'exit-ar'];
   expect(palette.buttons.map(button => button.name)).toEqual(main);
   expect(palette.userData.height).toBeLessThan(.25);
   expect(palette.item('palette-more')?.keepOpen).toBe(true);
   expect(palette.item('exit-ar')?.hold).toBe(true);
+  expect(palette.getObjectByName('track:electronics')!.userData.width).toBeGreaterThan(.10);
   const stop = palette.getObjectByName('deck:panic')!, exit = palette.getObjectByName('exit-ar')!;
   expect(stop.position.y).toBe(exit.position.y);
   expect(stop.position.x + stop.userData.width / 2).toBeLessThan(exit.position.x - exit.userData.width / 2);
 
   palette.item('palette-more')!.onSelect(); expect(palette.needsRebuild()).toBe(true); rebuild();
   expect(palette.userData.page).toBe('more');
-  expect(palette.buttons.map(button => button.name)).toEqual(['palette-back', 'layer:annotate', 'layer:control',
-    'track:electronics', 'track:objects', 'track:everything', 'visual-synth', 'musical-synth', 'buddy', 'tutorial', 'deck:panic', 'exit-ar']);
+  expect(palette.buttons.map(button => button.name)).toEqual(['palette-back', 'visual-synth', 'musical-synth', 'buddy', 'tutorial', 'deck:panic', 'exit-ar']);
   expect(palette.userData.height).toBeLessThan(.31);
   expect(palette.item('palette-back')?.keepOpen).toBe(true);
-  expect(palette.getObjectByName('track:electronics')!.userData.width).toBeGreaterThan(.10);
   expect(actions).toBe(0); // Browsing never selects a feature or starts a command.
   annotate = false; expect(palette.needsRebuild()).toBe(true); rebuild();
   expect(palette.buttons.some(button => button.name === 'tangible:pick')).toBe(true);
   expect(palette.buttons.some(button => button.name.startsWith('track:'))).toBe(false);
   expect(palette.userData.height).toBeLessThan(.31);
 
-  palette.item('palette-back')!.onSelect(); rebuild(); expect(palette.buttons.map(button => button.name)).toEqual(main);
+  palette.item('palette-back')!.onSelect(); rebuild();
+  expect(palette.buttons.map(button => button.name)).toEqual(['layer:annotate', 'layer:control', 'ask-muse', 'palette-more', 'deck:panic', 'exit-ar']);
   palette.item('palette-more')!.onSelect(); rebuild();
   palette.update({ time: 0, dt: .016, head: { position: new Vector3(0, 1.6, 0), quaternion: new Quaternion() },
     hands: { left: hand(-.2, false) } });

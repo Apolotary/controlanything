@@ -1,7 +1,8 @@
 /**
  * The judge path, automated: npm run build && npm run e2e:judge (system Chrome; no browser download).
  *
- *   Enter AR → pinch the MacBook's box → setup ring → Ask Muse. No side dials or hand interaction before the request:
+ *   Enter AR in Annotate → pinch/tag the MacBook without opening a demo → More → Visual synth → setup ring → Ask Muse.
+ *   The software demo is an explicit choice. No side dials or hand interaction before the request:
  *   Touch the water → code → calibration → touch → palms Stop → Ask again without setup → wrist Stop all.
  *
  * Runs its own muted FIXTURE server (CE_DEMO=1, CE_MAC_SILENT=1, fresh data dir) on PORT (default 8796,
@@ -9,7 +10,8 @@
  * emulator with camera=sim. Never reuses an existing server. Screenshots/diagnostics: research/screens/judge/.
  * Boxes come only from SAM 3.1 (here the server's SAM fixtures; there is no on-device detector), so this does not measure
  * detector accuracy, headset frame rate or the real Mac display.
- * Optional: CE_QUEST_DIST / CE_SIM_DIST / CE_COMPANION_DIST point the server at scratch builds.
+ * Optional: CE_QUEST_DIST / CE_SIM_DIST / CE_COMPANION_DIST point the server at scratch builds;
+ * CE_E2E_OUT writes evidence to a separate directory instead of replacing the default captures.
  */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -22,7 +24,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright-core';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const SCREENS = join(ROOT, 'research/screens/judge');
+const SCREENS = process.env.CE_E2E_OUT?.trim() ? resolve(ROOT, process.env.CE_E2E_OUT.trim()) : join(ROOT, 'research/screens/judge');
 const PORT = Number(process.env.PORT || 8796);
 const BASE = `http://127.0.0.1:${PORT}`;
 const UI_TIMEOUT = 30_000;
@@ -34,6 +36,7 @@ let currentPhase = '00-server';
 const browserLog = [];
 const timings = {};
 let harnessProof;
+let deliberateSelectionProof;
 const abort = new AbortController();
 
 async function json(path) {
@@ -233,6 +236,8 @@ async function run() {
     await waitQuest(() => window.__ce?.welcome && window.__ce.ws.open && window.__ce.room?.sim?.canvas);
     assert.equal(await quest.evaluate(() => window.__ce.welcome.mode), 'fixture');
     assert.equal(await quest.evaluate(() => window.__ce.hudKind), 'v2');
+    assert.equal(await quest.evaluate(() => window.__ce.modes.mode), 'annotate', 'A ready companion must not choose Control on startup');
+    assert.equal(await quest.evaluate(() => !!window.__ce.virtualSelection || !!window.__ce.visualSynthIntent), false, 'Startup must not choose a software instrument');
     await quest.evaluate(() => {
       window.__judge = { events: [], requests: [], ringSeen: false };
       const types = new Set(['tags.state', 'device.card', 'agent.step', 'verify.result', 'ui.spec', 'arm.request', 'arm.result', 'wire.ready', 'wire.stopped', 'panic']);
@@ -248,6 +253,8 @@ async function run() {
     await quest.locator('#btn-enter').click();
     await waitQuest(() => window.__ce.renderer.xr.isPresenting && window.__ce.cameraState === 'on');
     await waitQuest(() => window.__ce.tutorial?.snapshot().visible);
+    assert.equal(await quest.evaluate(() => window.__ce.modes.mode), 'annotate', 'Entering AR preserves Annotate until the wearer chooses Control');
+    assert.equal(await quest.evaluate(() => window.__judge.requests.some(r => ['target.select', 'control.setup', 'wire.request'].includes(r.type))), false, 'Entering AR must not select or set up a demo');
     const tutorialWidth = await quest.evaluate(() => window.__ce.scene.getObjectByName('tutorial-bubble-plate').size.peek()[0] * .001);
     assert(tutorialWidth <= .221, `Tutorial must fit a 22cm bubble (${tutorialWidth}m)`);
   });
@@ -265,12 +272,16 @@ async function run() {
       return { visible: !!p?.visible, keys: p ? p.buttons.map((b) => b.name) : [] };
     });
     assert(palette.visible, 'The wrist palette docks in view in the desktop emulator');
-    for (const key of ['find-objects', 'palette-more', 'deck:panic', 'exit-ar']) assert(palette.keys.includes(key), `Quick actions offer ${key} (has ${palette.keys})`);
-    assert(!palette.keys.includes('visual-synth')&&!palette.keys.includes('layer:annotate'),'Primary wrist actions do not expose the instrument/settings dashboard');
+    for (const key of ['layer:annotate', 'layer:control', 'track:electronics', 'track:objects', 'track:everything', 'palette-more', 'deck:panic', 'exit-ar']) {
+      assert(palette.keys.includes(key), `Primary wrist actions offer ${key} (has ${palette.keys})`);
+    }
+    assert(!palette.keys.includes('visual-synth') && !palette.keys.includes('musical-synth'), 'Software demos remain deliberate choices under More');
+    assert.equal(await quest.evaluate(() => window.__ce.modes.mode), 'annotate', 'Companion presence and detection must not choose Control');
     console.log(`  box: "${screen.label}"; palette: ${palette.keys.join(' · ')}`);
   });
 
-  await phase('03-pinch-the-mac', async () => {
+  let physicalCardId;
+  await phase('03-pinch-tags-the-mac', async () => {
     // Stand ~1 m from the screen, as a seated wearer would.
     await quest.evaluate((c) => {
       const app = window.__ce, target = app.desktopCam.position.clone().fromArray(c), head = app.emulator.head();
@@ -281,11 +292,88 @@ async function run() {
     await frames(20);
     const pinchedAt = Date.now();
     await click({ world: screen.position });
-    await waitQuest(() => [...window.__ce.modes.tags.values()].some((t) => t.cardId?.startsWith('visual-synth')));
-    cardId = await quest.evaluate(() => [...window.__ce.modes.tags.values()].find((t) => t.cardId?.startsWith('visual-synth')).cardId);
-    assert(await quest.evaluate(() => window.__judge.requests.some((r) => r.type === 'target.select' && r.payload.virtual === 'visual-synth')),
-      'Pinching the Mac screen selects its visual synth');
+    await waitQuest((id) => {
+      const tag = window.__ce.modes.tags.get(id);
+      return !!tag?.cardId && !!tag.name && !tag.pending;
+    }, screen.id);
+    // Wait beyond the asynchronous identity snapshot: naming a laptop must not continue into a software demo.
+    await frames(15);
+    const state = await quest.evaluate((id) => {
+      const app = window.__ce;
+      return { mode: app.modes.mode, tag: app.modes.tags.get(id), virtualSelection: !!app.virtualSelection,
+        virtualIntent: !!app.visualSynthIntent, virtualTags: [...app.modes.tags.values()].filter(t => /^(visual|musical)-synth/.test(t.cardId ?? '')),
+        requests: window.__judge.requests.filter(r => ['tag.add', 'target.select', 'control.setup', 'wire.request'].includes(r.type)) };
+    }, screen.id);
+    assert.equal(state.mode, 'annotate', 'Pinching and identifying the Mac keeps the wearer in Annotate');
+    assert(state.tag?.cardId && !/^(visual|musical)-synth/.test(state.tag.cardId), 'The pinched object remains a physical laptop tag');
+    assert.equal(state.virtualSelection || state.virtualIntent, false, 'Tagging the Mac creates no implicit software-demo intent');
+    assert.deepEqual(state.virtualTags, [], 'Identifying a laptop must not add a virtual instrument');
+    assert.deepEqual(state.requests.map(r => r.type), ['tag.add'], 'The physical pinch only tags the object; no virtual selection, setup or wiring');
+    physicalCardId = state.tag.cardId;
+    const physicalTarget = await json(`/api/agent/targets/${encodeURIComponent(physicalCardId)}`);
+    assert.equal(physicalTarget.armed, false, 'Identification must not arm the physical Mac');
+    assert.equal((await exec(pinchedAt)).length, 0, 'No device command follows a tag-only pinch');
+    deliberateSelectionProof = { physicalCardId, tag: state.tag, modeAfterIdentity: state.mode, requestsBeforeDemoChoice: state.requests,
+      noImplicitVirtualSelection: true, noCommandsAfterTag: true };
     timings.pinchedAt = pinchedAt;
+  });
+
+  await phase('03a-choose-physical-control-without-setup', async () => {
+    const since = Date.now();
+    await click({ name: 'layer:control' });
+    await waitQuest((id) => {
+      const app = window.__ce;
+      return app.modes.mode === 'control' && app.lockedId === id && app.hud.deviceState?.targetId === id;
+    }, screen.id);
+    await frames(10);
+    const state = await quest.evaluate((id) => {
+      const app = window.__ce, card = app.scene.getObjectByName('device-card-v3');
+      let visible = !!card;
+      for (let parent = card; parent; parent = parent.parent) if (!parent.visible) visible = false;
+      return { mode: app.modes.mode, lockedId: app.lockedId, tag: app.modes.tags.get(id),
+        deviceState: app.hud.deviceState, card: card?.userData.view, cardVisible: visible,
+        virtualCard: app.virtualCards.has(app.modes.tags.get(id)?.cardId),
+        requests: window.__judge.requests.filter(request => ['target.select', 'control.setup', 'wire.request'].includes(request.type)) };
+    }, screen.id);
+    assert.equal(state.lockedId, screen.id, 'Choosing Control selects the tagged physical object');
+    assert.equal(state.tag?.cardId, physicalCardId, 'Control preserves the identity of the physical Mac');
+    assert.equal(state.deviceState.connection, state.tag.connection, 'The physical card displays its current connection state');
+    assert(state.cardVisible && state.card?.title && state.card.subtitle, 'The wearer sees the physical object card and connection guidance');
+    assert.equal(!!state.deviceState.silentVisual || !!state.deviceState.musicalSynth || state.virtualCard, false,
+      'Physical Control must not substitute a software instrument, even when its screen displays a synth');
+    assert.deepEqual(state.requests, [], 'Choosing Control alone neither selects a virtual instrument nor starts setup or wiring');
+    assert.equal((await exec(since)).length, 0, 'Choosing Control alone sends no device commands');
+    deliberateSelectionProof.explicitPhysicalControl = { mode: state.mode, lockedId: state.lockedId,
+      connection: state.tag.connection, card: state.card, noSetupOrCommands: true };
+    await screenshot('03a-physical-mac-control-card');
+    await click({ name: 'layer:annotate' });
+    await waitQuest(() => window.__ce.modes.mode === 'annotate');
+    assert.equal(await quest.evaluate(({ id, card }) => window.__ce.modes.tags.get(id)?.cardId === card, { id: screen.id, card: physicalCardId }), true,
+      'Returning to Annotate retains the tagged physical object');
+    assert.equal(await quest.evaluate(() => !!window.__ce.virtualSelection || !!window.__ce.visualSynthIntent), false);
+    deliberateSelectionProof.returnedToAnnotateBeforeDemo = true;
+  }, false);
+
+  await phase('03b-choose-visual-demo-explicitly', async () => {
+    await click({ name: 'palette-more' });
+    await waitQuest(() => {
+      const palette = window.__ce.hud.root.getObjectByName('wrist-palette');
+      return palette?.userData.page === 'more' && palette.buttons.some(button => button.name === 'visual-synth');
+    });
+    timings.virtualSelectedAt = Date.now();
+    await click({ name: 'visual-synth' });
+    await waitQuest(() => [...window.__ce.modes.tags.values()].some(tag => tag.cardId?.startsWith('visual-synth')));
+    cardId = await quest.evaluate(() => [...window.__ce.modes.tags.values()].find(tag => tag.cardId?.startsWith('visual-synth')).cardId);
+    assert(await quest.evaluate(() => window.__judge.requests.some(r => r.type === 'target.select' && r.payload.virtual === 'visual-synth')),
+      'The visible More → Visual synth choice explicitly selects the software instrument');
+    assert.equal(await quest.evaluate(() => window.__ce.modes.mode), 'control');
+    assert.equal(await quest.evaluate(({ id, card }) => window.__ce.modes.tags.get(id)?.cardId === card, { id: screen.id, card: physicalCardId }), true,
+      'Choosing the optional software demo preserves the separately tagged physical Mac');
+    assert.equal(await quest.evaluate(id => window.__judge.requests.some(r => r.type === 'control.setup' && r.payload.cardId === id), physicalCardId), false,
+      'The demo choice must not silently set up the physical laptop');
+    deliberateSelectionProof.explicitDemoChoice = 'More → Visual synth';
+    deliberateSelectionProof.virtualCardId = cardId;
+    deliberateSelectionProof.physicalTagPreserved = true;
   });
 
   await phase('04-setup-ring', async () => {
@@ -306,7 +394,7 @@ async function run() {
       });
       return shown===0;
     });
-    timings.pinchToArmed = +((Date.now() - timings.pinchedAt) / 1000).toFixed(1);
+    timings.virtualSelectionToArmed = +((Date.now() - timings.virtualSelectedAt) / 1000).toFixed(1);
     const results = await quest.evaluate((id) => window.__judge.events.filter((e) => e.type === 'verify.result' && e.payload.cardId === id).map((e) => e.payload), cardId);
     assert(results.some((r) => r.pass), 'At least one action passed verification');
     const notes = results.filter((r) => r.pass).map((r) => r.observed?.note ?? r.observed?.sense ?? '').join(' | ');
@@ -314,7 +402,7 @@ async function run() {
     verifiedBy = /verified by renderer/i.test(notes) ? 'renderer report' : results.some((r) => r.pass && r.observed?.sense === 'camera') ? 'camera' : 'acknowledgement';
     assert(await quest.evaluate(() => window.__judge.ringSeen), 'The setup ring showed progress on the screen');
     assert.equal(await quest.evaluate(() => !!window.__ce.pendingArm), false, 'CE_DEMO=1 needs no Enable tap');
-    console.log(`  pinch → armed ${timings.pinchToArmed}s; verified by: ${verifiedBy}; evidence: ${notes.slice(0, 160)}`);
+    console.log(`  explicit visual choice → armed ${timings.virtualSelectionToArmed}s; verified by: ${verifiedBy}; evidence: ${notes.slice(0, 160)}`);
     // Show the real hand workflow, with the wrist lowered once the device is selected.
     await hands({ left: {offset:[-.25,-.7,-.15],pose:'default'}, right: {offset:[.2,-.7,-.15],pose:'default'} },40);
   });
@@ -458,7 +546,7 @@ async function run() {
     assert.equal(await quest.evaluate(() => localStorage.getItem('ce.tutorial.wire.v1')), 'skipped');
   });
   assert.equal((await json(`/api/agent/harness/runs/${harnessProof.runId}`)).currentlyAuthorized, false, 'Stop all revokes harness-created wiring');
-  await writeFile(join(SCREENS, 'summary.json'), JSON.stringify({ fixture: true, demo: true, verifiedBy, timings, harness: harnessProof }, null, 2));
+  await writeFile(join(SCREENS, 'summary.json'), JSON.stringify({ fixture: true, demo: true, verifiedBy, timings, deliberateSelection: deliberateSelectionProof, harness: harnessProof }, null, 2));
 }
 
 async function diagnostics() {

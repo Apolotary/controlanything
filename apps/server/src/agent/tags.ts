@@ -10,7 +10,7 @@ import { synthConnectionGuidance } from './guidance';
 import type { Target } from './types';
 import { isHelperDevice } from '../helpers';
 import type { StoredTag } from './library-schema';
-import { virtualScreenExecutor, visualSynthHosts, VIRTUAL_SCREEN_GUIDANCE } from './visual-synth';
+import { virtualScreenExecutor, VIRTUAL_SCREEN_GUIDANCE } from './visual-synth';
 
 export { TagStore } from './library-store';
 export type { AssetRef, LibraryRecord, SetupVersion, StoredTag } from './library-schema';
@@ -48,13 +48,6 @@ export function tagCapability(t: Target): LinkCapability | undefined {
 export function evaluateConnection(t: Target, roster: Roster, label?: string): Pick<TaggedDevice, 'connection' | 'hint' | 'action'> {
   if (t.card?.protocols.includes('hid') && !tagCapability(t)) return { connection: 'offline',
     hint: 'This is a typing keyboard. This demo does not control HID keyboards; choose Try visual synth from Menu.' };
-  // The Mac in this demo is controlled through its visual synth: select and setup reroute a tagged laptop there.
-  if (isLaptopTarget(t, label) && !virtualScreenExecutor(t.card) && visualSynthHosts(roster.devices()).length) {
-    // CE_DEMO: Muse named it the Mac, so the headset that just pinched it continues into the visual synth by itself.
-    return process.env.CE_DEMO === '1'
-      ? { connection: 'setup', hint: 'This is the Mac: opening its visual synth…', action: 'select-visual-synth' }
-      : { connection: 'setup', hint: 'Pinch to play the Mac visual synth' };
-  }
   if (isLaptopTarget(t, label) && !roster.devices().some((device) => device.online && isHelperDevice(device))) {
     const url = (roster.helperUrl?.() ?? 'http://localhost:8787/pair').replace(/^https?:\/\//, '');
     return { connection: 'offline', hint: `Open ${url} on this laptop`, action: 'open-companion' };

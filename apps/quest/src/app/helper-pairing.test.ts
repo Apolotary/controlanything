@@ -9,11 +9,12 @@ import type { PttEvents, PushToTalk } from '../voice/ptt';
 
 afterEach(() => vi.useRealTimers());
 
-function setup(mode: 'annotate' | 'control' = 'annotate') {
+function setup(mode: 'annotate' | 'control' = 'annotate', openPairing = false) {
   const app = Object.create(QuestApp.prototype) as QuestApp;
   const onboarding = new HelperOnboarding();
   onboarding.update({ urls: ['http://localhost:8797/pair'], helpers: [] }, 0);
   onboarding.enter(0);
+  if (openPairing) onboarding.show();
   const modes = new ModeState();
   modes.mode = mode;
   const frame = { payload: { frameId: 'helper-qr', purpose: 'pair' } };
@@ -35,6 +36,27 @@ function setup(mode: 'annotate' | 'control' = 'annotate') {
 }
 
 describe('helper pairing in the Quest app', () => {
+  it('explains a missing device connection instead of silently re-pairing an already online Mac', () => {
+    const { app, onboarding, modes, hud } = setup('control');
+    onboarding.skip();
+    onboarding.updateHelpers([{ deviceId: 'mac', name: 'Mac', kind: 'mac', online: true }], 1);
+    modes.tags.set('physical-mac', { targetId: 'physical-mac', cardId: 'mac-card', label: 'MacBook', connection: 'offline',
+      action: 'open-companion', hint: 'Open the Mac app and enable control of this Mac' });
+    Reflect.get(app, 'pairDevice').call(app, 'physical-mac');
+    expect(hud.toast).toHaveBeenLastCalledWith('Open the Mac app and enable control of this Mac', 'info');
+    expect(onboarding.visible).toBe(false);
+    expect(onboarding.scanning).toBe(false);
+  });
+
+  it('leaves annotation available on entry without a companion and captures no pairing frames', async () => {
+    const { onboarding, capture, captureAt, send, hud } = setup();
+    await captureAt(0); await captureAt(30_000);
+    expect(onboarding.visible).toBe(false); expect(onboarding.scanning).toBe(false);
+    expect(capture).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled();
+    expect(hud.showHelperPairing).toHaveBeenLastCalledWith(null);
+    expect(hud.setOnboarding).toHaveBeenLastCalledWith(expect.objectContaining({ step: 'tag' }));
+  });
+
   it.each(['thinking', 'proposal'] as const)('explicit helper navigation cancels a %s Muse request and ignores its late setup reply', (state) => {
     vi.useFakeTimers();
     const { app, skip } = setup();
@@ -74,7 +96,7 @@ describe('helper pairing in the Quest app', () => {
   });
 
   it.each(['annotate', 'control'] as const)('captures at most twice a second in %s, including after 30 seconds', async (mode) => {
-    const { onboarding, capture, captureAt, send, frame } = setup(mode);
+    const { onboarding, capture, captureAt, send, frame } = setup(mode, true);
     for (const time of [0, 499, 500, 999, 1000, 30_001, 300_000]) {
       onboarding.tick(time);
       await captureAt(time);
@@ -87,7 +109,7 @@ describe('helper pairing in the Quest app', () => {
   });
 
   it('keeps a single camera capture in flight', async () => {
-    const { capture, captureAt, frame, send } = setup();
+    const { capture, captureAt, frame, send } = setup('annotate', true);
     let finish!: (value: typeof frame) => void;
     capture.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     const pending = captureAt(0);
@@ -100,7 +122,7 @@ describe('helper pairing in the Quest app', () => {
   });
 
   it.each(['skip', 'leave'] as const)('drops an in-flight frame after %s and stops taking frames', async (stop) => {
-    const { onboarding, capture, captureAt, frame, send, skip } = setup();
+    const { onboarding, capture, captureAt, frame, send, skip } = setup('annotate', true);
     let finish!: (value: typeof frame) => void;
     capture.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     const pending = captureAt(0);
@@ -115,12 +137,12 @@ describe('helper pairing in the Quest app', () => {
   });
 
   it.each(['skip', 'leave'] as const)('does not send a stale frame when pairing restarts after %s', async (stop) => {
-    const { onboarding, capture, captureAt, frame, send, skip, refresh } = setup();
+    const { onboarding, capture, captureAt, frame, send, skip, refresh } = setup('annotate', true);
     let finish!: (value: typeof frame) => void;
     capture.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const pending = captureAt(0);
     if (stop === 'skip') { skip(); onboarding.show(); }
-    else { onboarding.leave(); onboarding.enter(500); }
+    else { onboarding.leave(); onboarding.enter(500); onboarding.show(); }
     refresh();
     expect(onboarding.scanning).toBe(true);
     finish(frame);
@@ -131,7 +153,7 @@ describe('helper pairing in the Quest app', () => {
   });
 
   it('allows a typed helper code in Annotate only while the onboarding loop is open', () => {
-    const { app, onboarding, submit, send, hud, skip } = setup();
+    const { app, onboarding, submit, send, hud, skip } = setup('annotate', true);
     submit(' k7q-4m2 ');
     expect(send).toHaveBeenCalledExactlyOnceWith('pair.approve', { code: 'K7Q4M2' }, { to: 'server' });
     expect(Reflect.get(app, 'pairCodeRequest')).toBe('pair-request');
@@ -144,7 +166,7 @@ describe('helper pairing in the Quest app', () => {
   });
 
   it('does not approve malformed codes or accept a code after leaving AR', () => {
-    const { onboarding, submit, send } = setup();
+    const { onboarding, submit, send } = setup('annotate', true);
     submit('K7Q');
     submit('https://example.test/K7Q4M2');
     onboarding.leave();

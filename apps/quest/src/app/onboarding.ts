@@ -14,7 +14,7 @@ export interface HelperInfo {
 
 export type OnboardingState = 'hidden' | 'shown' | 'scanning' | 'paired' | 'skipped';
 
-/** Pairing belongs to the AR session, independently of Annotate / Control. */
+/** Annotation starts immediately; only an explicit Connect/Pair action opens helper pairing. */
 export class HelperOnboarding {
   state: OnboardingState = 'hidden';
   urls: string[] = [];
@@ -88,9 +88,9 @@ export class HelperOnboarding {
 
   /** Guidance is informational: only a deliberate mode choice completes it. */
   guide(tagged: number): OnboardingView | null {
-    if (!this.active || this.guideComplete || this.visible || !this.skipped && !this.online) return null;
+    if (!this.active || this.guideComplete || this.visible) return null;
     return tagged > 0
-      ? { step: 'use', title: 'Your device is tagged', message: "When you're ready, open Menu and choose Use devices." }
+      ? { step: 'use', title: 'Your device is tagged', message: 'Open the wrist menu and choose Control, then Set up on your device.' }
       : { step: 'tag', title: 'Look around', message: 'Boxes appear on devices. Pinch one to tag it.' };
   }
 
@@ -117,6 +117,6 @@ export class HelperOnboarding {
         this.pairingBaseline = undefined;
         this.generation++;
       } else this.state = this.skipped ? 'skipped' : 'hidden';
-    } else if (!this.skipped && this.helpers && this.urls.length && !this.visible) this.show();
+    }
   }
 }

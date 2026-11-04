@@ -4,15 +4,19 @@ import type { WireProgressPayload, WireReadyPayload } from '@ce/protocol';
 import type { WireView } from '../hud/contract';
 import { makeGestureFrame, moveHand } from '../gestures/fixtures.test-support';
 import { fakeWorkerFactory } from './fake-worker.test-support';
-import { WiringController, WIRE_CHIPS, MUSICAL_WIRE_CHIPS, type WiringHost } from './controller';
+import { WiringController, WIRE_CHIPS, MUSICAL_WIRE_CHIPS, PHYSICAL_WIRE_CHIPS, type WiringHost } from './controller';
 import { WiringRuntime, type WireEmit } from './runtime';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const anchor = new Vector3(0, 1.45, -0.6);
 
-function setup(options: { micError?: string; instrument?: 'musical-synth' } = {}) {
+function setup(options: { micError?: string; instrument?: 'visual-synth' | 'musical-synth' | null } = {}) {
   const sent: { type: string; payload: unknown }[] = [], controls: WireEmit[] = [], toasts: string[] = [], views: (WireView | null)[] = [];
-  let busy = false, canControl = true, selected: ReturnType<WiringHost['selected']> = { cardId: options.instrument ? 'musical-synth-mac' : 'visual-synth-mac', targetId: 't1', anchor, label: options.instrument ? 'ControlAnything Synth' : 'Visual synth', instrument: options.instrument };
+  const instrument = options.instrument === null ? undefined : options.instrument ?? 'visual-synth';
+  let busy = false, canControl = true, selected: ReturnType<WiringHost['selected']> = {
+    cardId: instrument === 'musical-synth' ? 'musical-synth-mac' : instrument === 'visual-synth' ? 'visual-synth-mac' : 'physical-device',
+    targetId: 't1', anchor, label: instrument === 'musical-synth' ? 'ControlAnything Synth' : instrument === 'visual-synth' ? 'Visual synth' : 'Physical device', instrument,
+  };
   const voice = { error: vi.fn(() => options.micError), available: () => true, press: vi.fn(async () => {}), release: vi.fn(), cancel: vi.fn() };
   const holder: { controller?: WiringController } = {};
   const runtime = new WiringRuntime({
@@ -65,6 +69,21 @@ describe('the wiring flow', () => {
     expect(t.feedback.mock.calls.filter(([cue]) => cue === 'ready')).toHaveLength(1);
     t.controller.stop('both palms out');
     expect(t.feedback.mock.calls.filter(([cue]) => cue === 'stop')).toHaveLength(1);
+    t.controller.reset();
+  });
+
+  it('offers generic physical-device requests without water or music assumptions or an automatic request', () => {
+    const t = setup({ instrument: null });
+    t.controller.frame(finger(new Vector3(0, 1.4, -.4)), clock += 16);
+    expect(t.view()).toMatchObject({ phase: 'idle', chips: [...PHYSICAL_WIRE_CHIPS] });
+    expect(t.view()?.chips).not.toContain('Touch the water');
+    expect(t.view()?.chips).not.toContain('Play like a theremin');
+    expect(t.controller.chipText(0)).toBe('Hands as knobs');
+    expect(t.controller.chipText(1)).toBe('Surprise me');
+    expect(t.sent).toEqual([]); expect(t.controls).toEqual([]); expect(t.runtime.running).toBe(false);
+    expect(t.controller.ask(t.controller.chipText(0)!, 'chip')).toBe(true);
+    expect(t.sent).toEqual([{ type: 'wire.request', payload: { cardId: 'physical-device', text: 'Hands as knobs', source: 'chip', requestId: expect.any(String) } }]);
+    expect(t.runtime.running).toBe(false); expect(t.controls).toEqual([]);
     t.controller.reset();
   });
 

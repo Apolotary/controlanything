@@ -7,6 +7,40 @@ import type { ShellFrame } from '../app/hud-contract';
 const probe = (): TutorialProbe => ({ inXr: true, busy: false, boxes: 0, selected: false, controllable: false,
   wire: {}, menuOpen: false, buddyOpen: false });
 describe('first-run wiring tutorial', () => {
+  it('teaches explicit Control and Set up after tagging without advancing on time or mode alone', () => {
+    const steps = new TutorialSteps(), s = probe();
+    Object.assign(s, { mode: 'annotate', selected: true, cardId: 'real-laptop' });
+    steps.update(s, 0);
+    expect(steps.step).toBe('ask');
+    expect(steps.view(s, 0)).toMatchObject({ title: 'Switch to Control', detail: expect.stringContaining('wrist menu') });
+    steps.update(s, 60_000); expect(steps.step).toBe('ask');
+    s.mode = 'control'; s.needsBridge = true;
+    steps.update(s, 60_050);
+    expect(steps.view(s, 60_050)).toMatchObject({ title: 'Connect a companion', detail: expect.stringContaining('Mac companion') });
+    expect(steps.step).toBe('ask');
+    s.needsBridge = false; s.needsSetup = true;
+    steps.update(s, 60_100);
+    expect(steps.view(s, 60_100)).toMatchObject({ title: 'Set up this device', detail: expect.stringContaining('Press Set up') });
+    s.needsSetup = false; s.needsEnable = true;
+    expect(steps.view(s, 60_200)?.title).toBe('Enable this device');
+    s.needsEnable = false; s.controllable = true;
+    steps.update(s, 60_300);
+    expect(steps.step).toBe('ask'); expect(steps.view(s, 60_300)?.title).toBe('What should your hands do?');
+    s.wire = { phase: 'writing', request: 'Touch the water', requestId: 'explicit-ask' };
+    steps.update(s, 60_400); expect(steps.step).toBe('wiring');
+  });
+
+  it('suggests water only for the visual demo and leaves physical controls to the wearer’s request', () => {
+    const steps = new TutorialSteps(), s = probe();
+    Object.assign(s, { mode: 'control', selected: true, cardId: 'op1', controllable: true });
+    steps.update(s, 0);
+    expect(steps.view(s, 0)?.detail).toBe('Hold the mic and describe the controls you want.');
+    s.instrument = 'visual-synth';
+    expect(steps.view(s, 0)?.detail).toContain('Touch the water');
+    s.instrument = 'musical-synth';
+    expect(steps.view(s, 0)?.detail).toContain('Play like a theremin');
+  });
+
   it('waits for a real request and keeps a failed write out of the touch step', () => {
     const steps = new TutorialSteps(), s = probe(); steps.update(s, 0);
     expect(steps.step).toBe('look');

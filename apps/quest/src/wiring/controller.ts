@@ -18,6 +18,7 @@ import { WiringRuntime, type StopKind, type WireEmit, type WiringProgram } from 
 
 export const WIRE_CHIPS = ['Touch the water', 'Hands as knobs', 'Surprise me'] as const;
 export const MUSICAL_WIRE_CHIPS = ['Play like a theremin', 'Pinch to play notes', 'Surprise me'] as const;
+export const PHYSICAL_WIRE_CHIPS = ['Hands as knobs', 'Surprise me'] as const;
 export const WIRE_TIMING = {
   /** title + explanation stay up this long once the program runs, then the card collapses to a pill */
   explainMs: 6000,
@@ -527,7 +528,8 @@ export class WiringController {
             : phase === 'running' ? `${w.title || 'Wiring'} · running`
               : phase === 'failed' ? 'Could not wire that · try again'
                 : phase === 'stopped' ? 'Stopped · ask again' : `${w.title || 'Wiring'} · ready`;
-    const chips = busy ? [] : [...(sel.instrument === 'musical-synth' ? MUSICAL_WIRE_CHIPS : WIRE_CHIPS)];
+    const chips = busy ? [] : [...(sel.instrument === 'musical-synth' ? MUSICAL_WIRE_CHIPS
+      : sel.instrument === 'visual-synth' ? WIRE_CHIPS : PHYSICAL_WIRE_CHIPS)];
     const code: WireCodeView | undefined = w ? {
       wiringId: w.wiringId || 'pending', requestId: w.requestId, phase, model: w.model || 'Muse', source: w.wireSource, request: w.request, code: w.code, phaseLine: w.phaseLine,
       ...(w.title ? { title: w.title } : {}), ...(w.explanation ? { explanation: w.explanation } : {}),
@@ -547,7 +549,9 @@ export class WiringController {
 
   /** For the HUD's own chip ids. */
   chipText(index: number): string | undefined {
-    const chips = this.host.selected()?.instrument === 'musical-synth' ? MUSICAL_WIRE_CHIPS : WIRE_CHIPS;
+    const instrument = this.host.selected()?.instrument;
+    const chips = instrument === 'musical-synth' ? MUSICAL_WIRE_CHIPS
+      : instrument === 'visual-synth' ? WIRE_CHIPS : PHYSICAL_WIRE_CHIPS;
     return chips[clamp(index, 0, chips.length - 1)];
   }
 }

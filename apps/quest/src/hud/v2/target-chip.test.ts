@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { targetChipLabel } from './target-chip';
 
 describe('target chip words', () => {
+  it.each(['Laptop', 'MacBook', 'Monitor', 'Visual synth'])('tags a %s detection without offering an automatic demo', label => {
+    expect(targetChipLabel({ label }, 'annotate', true)).toBe(`${label} · Pinch to tag`);
+    expect(targetChipLabel({ label, tagged: true }, 'annotate')).toBe(`✓ ${label}`);
+    expect(targetChipLabel({ label, tagged: true }, 'annotate', true)).toBe('Pinch to untag');
+  });
+
   it('distinguishes a detection, a pending tag, and the identified device name', () => {
     expect(targetChipLabel({ label: 'Ceiling light' }, 'annotate')).toBe('Ceiling light');
     expect(targetChipLabel({ label: 'Ceiling light', tagged: true, identifying: true }, 'annotate')).toBe('✓ Ceiling light · Identifying…');

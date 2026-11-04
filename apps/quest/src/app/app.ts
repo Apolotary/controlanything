@@ -657,7 +657,8 @@ export class QuestApp {
         const tag = this.modes.mode === 'control' && this.lockedId ? this.modes.tags.get(this.lockedId) : undefined;
         const target = tag ? this.targets.get(tag.targetId) : undefined;
         return tag?.cardId && target ? { cardId: tag.cardId, targetId: tag.targetId, anchor: target.position, label: tag.name ?? tag.label ?? 'device',
-          instrument: tag.cardId === 'musical-synth-mac' ? 'musical-synth' as const : undefined } : undefined;
+          instrument: tag.cardId === 'musical-synth-mac' ? 'musical-synth' as const
+            : tag.cardId === 'visual-synth-mac' ? 'visual-synth' as const : undefined } : undefined;
       },
       canControl: (cardId) => this.canControl(cardId),
       send: (type, payload) => !!this.ws.send(type, payload, { to: 'server' }),
@@ -803,17 +804,14 @@ export class QuestApp {
     this.wireMessages();
   }
 
-  /** The wrist's Annotate | Control switch. Control needs a device: resume the one in use, or say how to pick one. */
+  /** Only an explicit layer choice enters Control; retain the object the user picked, never guess from saved tags. */
   private switchLayer(mode: AppMode): void {
     if (mode !== 'control' || this.modes.mode === 'control') { this.setMode(mode); return; }
-    const tags = [...this.modes.tags.values()], armed = (cardId?: string) => !!cardId && this.armedCards.has(cardId);
-    // A new physical tag needs the Control card to reach Set up. An older armed Mac must not steal that choice.
-    const current = this.lockedId ? this.modes.tags.get(this.lockedId) : undefined;
-    const tag = current?.cardId ? current : tags.slice().reverse().find(t => !!t.cardId) ?? tags.find(t => armed(t.cardId));
-    if (!tag?.cardId) { this.hud.toast('Control needs a device: pinch its box, or tap Visual synth', 'info'); return; }
-    if (tag.cardId === 'visual-synth-mac' && !this.canControl(tag.cardId)) { this.selectVisualSynth(); return; }
+    const selected = this.lockedId ?? this.annotationSelection;
+    const tag = selected ? this.modes.tags.get(selected) : undefined;
     this.setMode('control');
-    if (!this.canControl(tag.cardId)) this.lock(tag.targetId, 'api');
+    if (tag && this.targets.get(tag.targetId)) this.lock(tag.targetId, 'api');
+    else this.hud.toast('Choose a tagged object. Use Annotate to find and tag another device.', 'info');
   }
 
   setMode(mode: AppMode, send = true): void {
@@ -912,7 +910,7 @@ export class QuestApp {
       tag.position = { x: target.position[0], y: target.position[1], z: target.position[2] };
       target = { ...target, label: tag.name || tag.label, tagged: true, connection: tag.connection, identifying: !tag.name?.trim(), busy: tag.busy };
     }
-    // Annotate shows only screens/keyboards/phones (and lane-allowed classes); everything else stays undrawn.
+    // The selected object filter decides which untagged detections are shown.
     if (!this.annotationAllowed(target)) return;
     const tracked = this.targets.get(target.id);
     // Repainting a saved label is not another camera observation.
@@ -1057,6 +1055,7 @@ export class QuestApp {
       this.pairingUntil = 0; this.pairCodeRequest = null;
     }
     for (const tag of removed) {
+      if (this.annotationSelection === tag.targetId) this.annotationSelection = undefined;
       if (tag.cardId) this.setupProgress?.clear(tag.cardId);
       if (tag.cardId) { this.armedCards.delete(tag.cardId); this.controls.clear(); }
       const target = this.targets.get(tag.targetId);
@@ -1085,17 +1084,9 @@ export class QuestApp {
     }
     for (const cardId of this.modes.removals) this.ws.send('tag.remove', { cardId }, { to: 'server' });
     this.refreshTags(); this.refreshHome();
-    // CE_DEMO: Muse identified the box just pinched in Annotate as the Mac; continue into the visual synth once.
-    for (const tag of this.modes.tags.values()) {
-      if (tag.action !== 'select-visual-synth' || (this.macPinchUntil.get(tag.targetId) ?? 0) < Date.now()) continue;
-      this.macPinchUntil.delete(tag.targetId);
-      const t = this.targets.get(tag.targetId);
-      this.selectVisualSynth(undefined, { label: tag.name ?? tag.label, frameId: t?.frameId, detId: t?.detId, position: t?.position.clone() });
-      break;
-    }
   }
-  /** Boxes pinched in Annotate in the last minute (targetId → deadline): a Muse "it is the Mac" continues them. */
-  private readonly macPinchUntil = new Map<string, number>();
+  /** Most recent deliberate Annotate pick, including one still waiting for identification. */
+  private annotationSelection?: string;
 
   /** Identity corrections revoke the old controls while preserving the selected object's pose and conversation. */
   private invalidateIdentityControls(cardId: string, targetId: string): void {
@@ -1134,7 +1125,7 @@ export class QuestApp {
   }
 
   private locationHint(): string | undefined {
-    const saved = [...this.roomAnchors.devices.values()].filter((device) => !device.hidden);
+    const saved = this.physicalSavedDevices().filter((device) => !device.hidden);
     if (saved.some((device) => this.roomAnchors.states.get(device.cardId) === 'locating')) return 'Locating saved devices…';
     const unlocated = saved.find((device) => this.roomAnchors.states.get(device.cardId) === 'unlocated');
     return unlocated ? `Look at ${unlocated.displayName} to place it` : undefined;
@@ -1180,7 +1171,7 @@ export class QuestApp {
   }
 
   private reassociateDetections(targets: Target[]): void {
-    const saved = [...this.roomAnchors.devices.values()].filter((device) => !device.hidden);
+    const saved = this.physicalSavedDevices().filter((device) => !device.hidden);
     const matches = targets.map((target) => ({ target, match: matchSavedDevice(saved, target) }));
     for (const { target, match } of matches) {
       if (match.kind !== 'match') continue;
@@ -1188,6 +1179,12 @@ export class QuestApp {
       if (this.roomAnchors.states.get(match.device.cardId) === 'located' && target.id === this.modes.byCard(match.device.cardId)?.targetId) continue;
       this.reattachSavedDevice(target, match.device);
     }
+  }
+
+  /** A saved software demo is never the physical object a camera happens to see on a screen. */
+  private physicalSavedDevices(): LibraryDevice[] {
+    return [...this.roomAnchors.devices.values()].filter(device => !/^(visual|musical)-synth(?:-|$)/.test(device.cardId)
+      && !['ce-visual-synth', 'ce-musical-synth'].includes(device.identity.portId ?? ''));
   }
 
   private reattachSavedDevice(target: Target, device: LibraryDevice): void {
@@ -1235,6 +1232,7 @@ export class QuestApp {
     if (this.modes.mode !== 'annotate') return;
     const tag = this.modes.remove(targetId);
     if (!tag) return;
+    if (this.annotationSelection === targetId) this.annotationSelection = undefined;
     const target = this.targets.get(targetId);
     if (target) target.label = tag.label;
     if (tag.cardId) {
@@ -1251,7 +1249,7 @@ export class QuestApp {
     return this.selectVirtualInstrument('visual-synth', deviceId, from);
   }
 
-  /** The second software instrument still needs an explicit Mac Sound on and a Muse wiring request. */
+  /** The second software instrument needs a normal Mac click to unlock audio, then a Muse wiring request. */
   selectMusicalSynth(deviceId?: string): boolean { return this.selectVirtualInstrument('musical-synth', deviceId); }
 
   private selectVirtualInstrument(instrument: 'visual-synth' | 'musical-synth', deviceId?: string, from?: { label?: string; frameId?: string; detId?: string; position?: Vector3 }): boolean {
@@ -1261,7 +1259,7 @@ export class QuestApp {
     this.release();
     this.setMode('control');
     this.visualSynthFrom = from;
-    this.visualSynthIntent = { phase: 'pending', message: music ? 'Opening the musical synth. Choose Sound on in the paired Mac companion.' : 'Opening visuals in your paired Mac companion…', deviceId,
+    this.visualSynthIntent = { phase: 'pending', message: music ? 'Opening the musical synth. Click the paired Mac companion once to enable audio.' : 'Opening visuals in your paired Mac companion…', deviceId,
       attemptedReadyKey: (music ? this.musicalSynthReadyKey : this.visualSynthReadyKey) ?? '', instrument };
     if (!this.ws.open) { this.visualSynthUnavailable('Reconnect to the server and keep your paired Mac companion tab visible.'); return false; }
     // A pinched laptop/monitor box places the ring on the real screen; the wrist palette places it ahead.
@@ -1288,7 +1286,7 @@ export class QuestApp {
     if (clearIntent) { this.visualSynthIntent = undefined; this.visualSynthFrom = undefined; }
   }
 
-  /** The pinched screen (laptop/monitor/TV box) that started the current visual-synth selection. */
+  /** Optional placement context supplied by an explicit visual-synth choice. */
   private visualSynthFrom?: { label?: string; frameId?: string; detId?: string; position?: Vector3 };
 
   /** Annotate shows only these detector classes (plus any a lane allows, e.g. tangible cups). */
@@ -1309,12 +1307,7 @@ export class QuestApp {
     if (/\b(person|people|human)\b/.test(label)) return false;
     if (labEnabled() || target.tagged || target.cardId || this.filter === 'everything') return true;
     if (this.filter === 'objects') return this.objectLabels.has(label) || /\b(cup|mug|bottle|book|ball)s?\b/.test(label);
-    // SAM 3.1's "laptop" prompt names the Mac; a generic "electronic device" box may be it too; the sim's screen is "… Visual Synth".
-    return this.annotationLabels.has(label) || /^(laptop|macbook|monitor|tv|television|screen|display|computer|electronic device)\b|visual[\s-]?synth/.test(label);
-  }
-  /** A laptop/monitor/TV box is the Mac's screen: pinching it selects the visual synth (WP1 golden path). */
-  private isScreenBox(label: string | undefined): boolean {
-    return !!label && /\b(laptop|macbook|monitor|tv|television|screen|display|computer|visual[\s-]?synth)\b/i.test(label);
+    return this.annotationLabels.has(label) || /\b(laptop|macbook|monitor|tv|television|screen|display|computer|electronic device|synthesizer|synth|midi controller|musical keyboard|remote|speaker)\b/.test(label);
   }
 
   private visualSynthUnavailable(message: string): void {
@@ -1442,6 +1435,10 @@ export class QuestApp {
       this.hud.showApprovals([]);
       void this.startCamera();
       this.refreshHome();
+      return;
+    }
+    if (this.onboarding.online) {
+      this.hud.toast(tag.hint ?? 'Open the Mac companion and enable the connection this device needs.', 'info');
       return;
     }
     this.onboarding.show();
@@ -2267,24 +2264,13 @@ export class QuestApp {
     // releases that workspace; annotation and explicit API selections remain available.
     if (this.modes.mode === 'control' && (this.visualSynthIntent || this.lockedId && this.lockedId !== id)
       && ['chip', 'touch', 'ray', 'gaze'].includes(how)) return;
-    // In Annotate, a pinch on the Mac's screen (tagged or not) opens the visual synth; in Control it is already selected.
-    if (['chip', 'touch', 'ray', 'gaze'].includes(how) && (this.modes.mode === 'annotate' || !this.modes.tags.get(id)?.cardId?.startsWith('visual-synth'))) {
-      const t = this.targets.get(id);
-      // SAM 3.1's "laptop" prompt (or a name like "MacBook") is the Mac: the first pinch opens its visual synth.
-      // A box still called "electronic device" is tagged; when Muse names it the Mac, the same pinch continues (eea4eca).
-      if (t && (this.isScreenBox(t.label) || this.isScreenBox(t.prompt))) {
-        this.demoAudio?.play('tap');
-        this.selectVisualSynth(undefined, { label: this.isScreenBox(t.label) ? t.label : t.prompt!, frameId: t.frameId, detId: t.detId, position: t.position.clone() });
-        return;
-      }
-    }
     this.clearVirtualSelection();
     if (this.modes.mode === 'control' && !this.modes.tags.has(id)) return;
     const t = this.targets.get(id);
     if (!t) return;
     if (['chip', 'touch', 'ray', 'gaze'].includes(how)) this.demoAudio?.play('tap');
     if (this.modes.mode === 'annotate' && !this.modes.tags.has(id)) {
-      const match = matchSavedDevice([...this.roomAnchors.devices.values()], t);
+      const match = matchSavedDevice(this.physicalSavedDevices(), t);
       if (match.kind === 'ambiguous') { this.pendingPlacement = { target: t, devices: match.devices, index: 0 }; this.showPlacementChoice(); return; }
       if (match.kind === 'match') { this.reattachSavedDevice(t, match.device); id = t.id; }
     }
@@ -2296,6 +2282,7 @@ export class QuestApp {
     if (this.lockedId !== id) this.assistant?.cancel();
     this.pairingUntil = 0;
     this.lockedId = id;
+    if (this.modes.mode === 'annotate') this.annotationSelection = id;
     const savedCard = this.modes.tags.get(id)?.cardId;
     if (savedCard) this.roomAnchors.touch(savedCard);
     this.hud.setCandidate(null);
@@ -2307,8 +2294,6 @@ export class QuestApp {
       if (t.cardId) this.modes.removals.delete(t.cardId);
       this.modes.add(id, payload);
       if (opts.send !== false) this.ws.send('tag.add', payload, { to: 'server' });
-      // If Muse names this box the Mac (CE_DEMO), the same pinch continues into its visual synth.
-      if (opts.send !== false) this.macPinchUntil.set(id, Date.now() + 60_000);
       this.recorder.input('tag', { targetId: id, label: t.label, how });
       this.lockedId = null;
       this.hud.setLocked(null);
@@ -2324,6 +2309,7 @@ export class QuestApp {
     this.clearHandControl();
     this.pairingUntil = 0;
     this.lockedId = null;
+    this.annotationSelection = undefined;
     this.hud.setLocked(null);
     this.hud.setDeviceState?.(null);
     this.refreshHome();
@@ -2356,13 +2342,17 @@ export class QuestApp {
     try { storage = localStorage; } catch { /* Storage is optional in private browsing. */ }
     const tutorial = this.tutorial = new TutorialController({ parent: this.scene, storage,
       probe: (): TutorialProbe => {
-        const cardId = this.lockedId ? this.modes.tags.get(this.lockedId)?.cardId : undefined;
+        const selectedId = this.lockedId ?? this.annotationSelection;
+        const selectedTag = selectedId ? this.modes.tags.get(selectedId) : undefined;
+        const cardId = selectedTag?.cardId;
         const palette = (this.hud as Hud & { palette?: { visible: boolean; anchor: { open: boolean } } }).palette;
         return { inXr: !!this.session && !this.superseded && this.session.visibilityState !== 'hidden',
           busy: !!this.onboarding?.visible || this.onboarding?.state === 'shown' || !!this.hud.isReadingRequest?.(), boxes: this.visibleTargets.size,
-          selected: !!this.lockedId || !!this.visualSynthIntent || !!this.virtualSelection,
+          selected: !!selectedId || !!this.visualSynthIntent || !!this.virtualSelection, mode: this.modes.mode,
+          needsSetup: !!selectedId && this.modes.canSetup(selectedId),
+          needsBridge: selectedTag?.connection === 'offline',
           controllable: !!cardId && this.canControl(cardId), needsEnable: !!this.pendingArm, fullStopRequestId: this.tutorialStoppedRequestId,
-          cardId, instrument: cardId === 'musical-synth-mac' ? 'musical-synth' : undefined,
+          cardId, instrument: cardId === 'musical-synth-mac' ? 'musical-synth' : cardId === 'visual-synth-mac' ? 'visual-synth' : undefined,
           wire: (this.wiring?.snapshot() ?? {}) as TutorialProbe['wire'],
           menuOpen: !!palette?.visible && palette.anchor.open,
           buddyOpen: !!(this as unknown as { buddy?: { isOpen(): boolean } }).buddy?.isOpen() };

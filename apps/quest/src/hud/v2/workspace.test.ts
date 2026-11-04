@@ -31,8 +31,9 @@ describe('one persistent task workspace', () => {
     if (key === 'master-audio') hud.palette.register({ key, label: 'Sound', onSelect() {},
       segments: [{ key: 'mute', label: 'Mute', width: .075 }], onSegment: vi.fn() });
     const dismiss = vi.spyOn(hud.palette.anchor, 'dismiss');
-    hud.palette.item('palette-more')!.onSelect(); hud.rebuildPalette();
-    expect(hud.palette.userData.page).toBe('more');
+    if (key === 'master-audio') hud.palette.item('palette-more')!.onSelect();
+    hud.rebuildPalette();
+    expect(hud.palette.userData.page).toBe(key === 'master-audio' ? 'more' : 'primary');
     const widget = hud.widgets.find(w => w.group.name.startsWith(key + ':'))!;
     expect(widget).toBeDefined(); widget.start(new Vector3());
     expect(dismiss).toHaveBeenCalledOnce(); expect(hud.palette.userData.page).toBe('primary');

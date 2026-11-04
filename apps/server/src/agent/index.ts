@@ -23,7 +23,7 @@ import { CanvasService, registerCanvasFixture } from '../canvas/service';
 import { createSam, type Sam } from '../scan/sam';
 import { VoiceRelay, type VoiceActions } from '../voice/relay';
 import { DeviceAssistant, registerAssistantFixtures } from '../voice/assistant';
-import { isLaptopLabel, VISUAL_PAUSED_HINT, VISUAL_PRESENCE_GRACE_MS, VISUAL_REMIND_MS, VISUAL_WAIT_MS, VISUAL_SYNTH_CARD_ID, visualSynthCard, visualSynthCompanions, visualSynthHosts, virtualScreenExecutor, VIRTUAL_SCREEN_GUIDANCE } from './visual-synth';
+import { VISUAL_PAUSED_HINT, VISUAL_PRESENCE_GRACE_MS, VISUAL_REMIND_MS, VISUAL_WAIT_MS, VISUAL_SYNTH_CARD_ID, visualSynthCard, visualSynthCompanions, visualSynthHosts, virtualScreenExecutor, VIRTUAL_SCREEN_GUIDANCE } from './visual-synth';
 import { currentControlSpec, verifiedControlCount } from './control-readiness';
 import { IdentityCorrections } from './identity-correction';
 import { ConnectedPeripherals, GENERAL_ASSISTANT_CARD } from './connected-peripheral';
@@ -63,7 +63,7 @@ import { loadRecordedSpeech } from './recordedSpeech';
 import { ScanService } from './scan';
 import { StepLog } from './steps';
 import { TargetStore } from './targets';
-import { TagStore, evaluateConnection, isLaptopTarget, tagCapability, tagSnapshot } from './tags';
+import { TagStore, evaluateConnection, tagCapability, tagSnapshot } from './tags';
 import { interactionReferences } from './interaction-references';
 import { helperPairUrls } from '../net';
 import type { Target, TargetDetection } from './types';
@@ -658,7 +658,6 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         hub.broadcast('device.card', r.card);
         log(`[tag] ${t.cardId} is ${r.card.name} (${r.card.maker} ${r.card.model}) · ${r.model} ${r.latencyMs} ms`);
         publishTags();
-        // A laptop/computer (by Muse) now reads "Pinch to play the Mac visual synth"; the next pinch selects it (evaluateConnection).
       } catch (e) {
         if (!abort.signal.aborted) log(`[tag] could not name ${t.cardId}: ${(e as Error).message}`);
       } finally {
@@ -668,11 +667,6 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   };
   const addTag = (p: TagAddPayload, from: { deviceId: string; name?: string }): Target | undefined => {
     if (mode !== 'annotate' || /\b(person|people|human|man|woman|child|face|hand|body)\b/i.test(p.label)) return undefined;
-    // Golden path: tagging the Mac (laptop/screen) gives its visual synth card, never a "Mac audio" dead end.
-    if (!p.cardId && isLaptopLabel(p.label)) {
-      const routed = routeToVisualSynth(from, { position: p.position, label: p.label, frameId: p.frameId, detId: p.detId ?? p.targetId });
-      if (routed) return routed;
-    }
     const frame = p.frameId ? scan.frame(p.frameId) : scan.latest(from.deviceId);
     const match = frame?.detections.find((d) => (p.detId && d.detId === p.detId) || (p.targetId && (d.trackId === p.targetId || d.detId === p.targetId)));
     const savedId = p.cardId ?? p.targetId;
@@ -772,12 +766,6 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (t.driver) send('driver.status', { driverId: t.driver.driverId, cardId: t.cardId, phase: t.armed ? 'armed' : 'disarmed', actions: t.driver.actions.map((a) => ({ actionId: a.actionId, verified: t.verification[a.actionId] ?? 'untested' })), modelId: t.driver.modelId });
   };
   const setup = (cardId: string, from: { deviceId: string; name?: string }, rerun = false): Target | undefined => {
-    const laptop = targets.get(cardId);
-    if (laptop && tags.has(cardId) && mode === 'control' && !virtualScreenExecutor(laptop.card) && isLaptopTarget(laptop, tags.get(cardId)?.label)) {
-      const visual = routeToVisualSynth(from, { position: tags.get(cardId)?.position, label: tags.get(cardId)?.label, replaces: cardId });
-      if (visual && visualSynthCompanions(hub.devices()).some((d) => d.deviceId === virtualScreenExecutor(visual.card))) return setup(visual.cardId, from, rerun);
-      if (visual) return visual;
-    }
     const t = targets.get(cardId);
     // The visual synth with its screen closed: ask the Mac to open it and continue from there (never a dead end).
     if (t && tags.has(cardId) && mode === 'control' && virtualScreenExecutor(t.card) && !(t.abort && !t.abort.signal.aborted)) {
@@ -937,13 +925,6 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     const card = visualSynthCard(executor);
     // Older builds keyed the card on the executor; keep one card in the room.
     for (const tag of tags.list()) if (tag.cardId !== card.cardId && virtualScreenExecutor(tag.card)) removeTag(tag.cardId);
-    // The Mac is the visual synth in this demo: a tagged laptop next to it would be a second card in the same sightline.
-    let inherited: { seen: DeviceCardPayload; identity: Omit<IdentifyResult, 'card'> } | undefined;
-    for (const other of targets.list()) if (other.cardId !== card.cardId && tags.has(other.cardId) && !virtualScreenExecutor(other.card) && isLaptopTarget(other, tags.get(other.cardId)?.label)) {
-      const identity = tagIdentity.get(other.cardId);
-      if (identity && other.card) inherited = { seen: other.card, identity };
-      removeTag(other.cardId);
-    }
     const saved = tags.get(card.cardId);
     if (!saved && tags.library().length >= 64) return undefined;
     let target = targets.get(card.cardId);
@@ -966,9 +947,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     target.detection = undefined;
     tags.add(target, label, position ?? saved?.position);
     canvas.select(from.deviceId, target.cardId);
-    // Muse already named the tagged laptop: reuse that answer instead of calling it again.
-    if (inherited) adoptHostIdentity(target, inherited.seen, inherited.identity);
-    else hub.broadcast('device.card', target.card);
+    hub.broadcast('device.card', target.card);
     publishTags();
     return target;
   };
@@ -993,20 +972,6 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       ? 'More than one Mac has visuals open. Keep only the screen you want open, then try again.'
       : hosts.length > 1 && !deviceId ? 'More than one paired companion can open visuals. Keep only the Mac companion you want connected, then try again.'
       : 'Open ControlAnything on the Mac (paired companion) and keep it visible.' };
-  };
-  /** Tag / setup reroute: bind the visual synth (renderer open or not) and open the Mac visuals if needed. */
-  const routeToVisualSynth = (from: { deviceId: string }, o: { position?: Vec3; label?: string; frameId?: string; detId?: string; replaces?: string }): Target | undefined => {
-    const { executor, host } = visualHost(from);
-    if (!host) return undefined;
-    const target = bindVisualSynth(executor ?? host, from, o.position);
-    if (!target) return undefined;
-    if (o.replaces && o.replaces !== target.cardId) removeTag(o.replaces);
-    identifyVisualHost(target, visualDetection(from, o));
-    if (!executor) {
-      if (mode === 'control') awaitVisuals(host, from);
-      else hub.sendToDevice(host.deviceId, 'visual.open', { requestId: newId('visual-') });
-    }
-    return target;
   };
   /**
    * A selection waiting for the Mac renderer. It never hangs silently: the headset (and the Mac, every client gets
@@ -1058,12 +1023,12 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (demoMode()) selectVisualSynth({ virtual: 'visual-synth' }, intent.from);
     else { const t = targets.get(VISUAL_SYNTH_CARD_ID); if (t) hub.broadcast('target.status', targets.status(t)); }
   };
-  /** Explicit (or rerouted) selection of the Mac visual synth. In CE_DEMO=1 it also starts setup. */
-  const selectVisualSynth = (p: TargetSelectPayload, from: { deviceId: string; name?: string }, replaces?: string): Target | undefined => {
+  /** Explicit selection of the Mac visual synth. In CE_DEMO=1 it also starts setup. */
+  const selectVisualSynth = (p: TargetSelectPayload, from: { deviceId: string; name?: string }): Target | undefined => {
     const reply = (ok: boolean, cardId?: string, reason?: string, autoSetup?: boolean) => {
       if (p.requestId) hub.sendToDevice(from.deviceId, 'target.select.result', { requestId: p.requestId, ok, cardId, reason, ...(autoSetup ? { autoSetup } : {}) });
     };
-    // The headset switches itself to Control before it selects; a rerouted pinch may still arrive from Annotate.
+    // Choosing the software demo explicitly may enter Control from Annotate.
     if (mode !== 'control') setMode('control');
     const { executor, host, reason } = visualHost(from, p.deviceId);
     const detection = visualDetection(from, { frameId: p.frameId, detId: p.detId, label: p.label });
@@ -1072,7 +1037,6 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         // Bind now so the card (and Muse's identify) is there while the Mac opens its visuals.
         const pending = bindVisualSynth(host, from, p.position);
         if (pending) {
-          if (replaces && replaces !== pending.cardId) removeTag(replaces);
           identifyVisualHost(pending, detection);
         }
         awaitVisuals(host, from, p.requestId);
@@ -1086,7 +1050,6 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     clearVisualIntent();
     const target = bindVisualSynth(executor, from, p.position);
     if (!target) { reply(false, undefined, 'Your device library is full. Forget an unused device, then try again.'); return; }
-    if (replaces && replaces !== target.cardId) removeTag(replaces);
     identifyVisualHost(target, detection);
     if (target.specId) showControls(target, from.deviceId);
     const running = setups.has(target.cardId) || !!(target.abort && !target.abort.signal.aborted);
@@ -1137,10 +1100,6 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (mode === 'control') {
       const existing = p.cardId ? targets.get(p.cardId) : undefined;
       if (!existing || !tags.has(existing.cardId)) return undefined;
-      // A tagged laptop is the Mac's visual synth in this demo; the visual card itself sets up on select (CE_DEMO).
-      if (!virtualScreenExecutor(existing.card) && isLaptopTarget(existing, tags.get(existing.cardId)?.label) && visualSynthHosts(hub.devices()).length) {
-        return selectVisualSynth({ ...p, virtual: 'visual-synth', position: p.position ?? tags.get(existing.cardId)?.position, label: tags.get(existing.cardId)?.label }, from, existing.cardId);
-      }
       if (musicalSynthExecutor(existing.card)) return selectMusicalSynth({ ...p, virtual: 'musical-synth', position: p.position ?? tags.get(existing.cardId)?.position }, from);
       if (virtualScreenExecutor(existing.card)) return selectVisualSynth({ ...p, virtual: 'visual-synth', position: p.position ?? tags.get(existing.cardId)?.position }, from);
       if (canControl(existing)) showControls(existing, from.deviceId);

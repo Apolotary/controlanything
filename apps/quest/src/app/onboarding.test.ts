@@ -5,14 +5,27 @@ const urls = ['http://localhost:8797/pair', 'http://192.168.1.10:8797/pair'];
 const mac: HelperDevice = { deviceId: 'mac', name: 'My laptop', kind: 'mac', online: true };
 
 describe('helper onboarding', () => {
-  it('shows the server URLs on AR entry and scans without a timeout', () => {
+  it('starts annotation guidance without opening or scanning helper pairing when no Mac is online', () => {
     const flow = new HelperOnboarding();
     flow.update({ urls, helpers: [] }, 0);
     expect(flow.visible).toBe(false);
     flow.enter(0);
-    expect(flow.state).toBe('shown');
+    expect(flow.state).toBe('hidden');
     expect(flow.urls).toEqual(urls);
     flow.scan();
+    flow.updateUrls(urls, 100);
+    flow.updateHelpers([], 200);
+    flow.tick(60_000);
+    expect(flow.visible).toBe(false);
+    expect(flow.scanning).toBe(false);
+    expect(flow.guide(0)).toMatchObject({ step: 'tag', message: 'Boxes appear on devices. Pinch one to tag it.' });
+    expect(flow.guide(1)?.step).toBe('use');
+  });
+
+  it('shows the server URLs and scans without a timeout after an explicit Pair action', () => {
+    const flow = new HelperOnboarding();
+    flow.update({ urls, helpers: [] }, 0);
+    flow.enter(0); flow.show(); flow.scan();
     for (const time of [500, 30_001, 3_600_000]) flow.tick(time);
     expect(flow.state).toBe('scanning');
     expect(flow.scanning).toBe(true);
@@ -25,6 +38,7 @@ describe('helper onboarding', () => {
     const flow = new HelperOnboarding();
     flow.enter(0);
     flow.update({ urls, helpers: [{ ...mac, online: false }] }, 0);
+    flow.show();
     flow.scan();
     expect(flow.state).toBe('scanning');
     flow.updateHelpers([mac], 100);
@@ -44,6 +58,7 @@ describe('helper onboarding', () => {
     const flow = new HelperOnboarding();
     flow.update({ urls, helpers: [] }, 0);
     flow.enter(0);
+    flow.show();
     flow.scan();
     const generation = flow.generation;
     flow.skip();
@@ -54,7 +69,8 @@ describe('helper onboarding', () => {
     flow.show(); flow.scan();
     expect(flow.scanning).toBe(true);
     flow.skip(); flow.leave(); flow.enter(70_000);
-    expect(flow.state).toBe('shown');
+    expect(flow.state).toBe('hidden');
+    expect(flow.guide(0)?.step).toBe('tag');
   });
 
   it('counts the sim as a helper only for the sim camera', () => {
@@ -62,22 +78,25 @@ describe('helper onboarding', () => {
       const flow = new HelperOnboarding(allowSim);
       flow.update({ urls, helpers: [{ ...mac, kind: 'sim' }] }, 0);
       flow.enter(0);
-      expect(flow.visible).toBe(!allowSim);
+      expect(flow.visible).toBe(false);
+      expect(!!flow.online).toBe(allowSim);
     }
   });
 
-  it('guides pairing, tagging, and choosing Use devices without advancing automatically', () => {
+  it('guides pairing, tagging, and explicit Control and Set up without advancing automatically', () => {
     const flow = new HelperOnboarding();
     flow.enter(0);
-    expect(flow.guide(0)).toBeNull();
+    expect(flow.guide(0)?.step).toBe('tag');
     flow.update({ urls, helpers: [] }, 1);
+    expect(flow.guide(0)?.step).toBe('tag');
+    flow.show();
     expect(flow.guide(0)).toBeNull();
     flow.scan();
     flow.updateHelpers([mac], 100);
     expect(flow.guide(0)).toBeNull();
     flow.tick(1600);
     expect(flow.guide(0)).toMatchObject({ step: 'tag', message: 'Boxes appear on devices. Pinch one to tag it.' });
-    expect(flow.guide(1)).toMatchObject({ step: 'use', message: "When you're ready, open Menu and choose Use devices." });
+    expect(flow.guide(1)).toMatchObject({ step: 'use', message: 'Open the wrist menu and choose Control, then Set up on your device.' });
     flow.tick(60_000);
     expect(flow.guide(1)?.step).toBe('use');
     flow.chooseControl();

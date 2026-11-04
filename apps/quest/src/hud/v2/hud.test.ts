@@ -773,6 +773,20 @@ describe('explicit Menu and guided onboarding', () => {
 });
 
 describe('explicit annotation and control modes', () => {
+  it.each(['ControlAnything Visual Synth', 'Visual MIDI keyboard'])('keeps a physical %s separate from an explicitly selected virtual demo', label => {
+    const { hud, frame } = setup();
+    try {
+      hud.upsertTarget({ ...target, label, connection: 'setup' }); hud.setLocked(target.id);
+      hud.setDeviceState?.({ targetId: target.id, connection: 'setup' }); hud.update(frame(undefined, 200));
+      const card = () => hud.root.getObjectByName('device-card-v3')!.userData.view;
+      expect(card().title).toBe(label.slice(0, 24));
+      expect(card().actions.map((action: { id: string }) => action.id)).toEqual(['control-setup', 'correct-device']);
+      hud.setDeviceState?.({ targetId: target.id, connection: 'setup', silentVisual: true });
+      expect(card().title).toBe('Visual synth');
+      expect(card().actions.map((action: { id: string }) => action.id)).toEqual(['control-setup']);
+    } finally { hud.dispose(); }
+  });
+
   it.skip('shows only the requested connection action and updates the open synth card in place', () => {
     const { hud, frame, pinch } = setup();
     hud.upsertTarget({ ...target, label: 'OP-1 Field', connection: 'offline' }); hud.setLocked(target.id);
@@ -1133,11 +1147,13 @@ describe('gesture-first device workspace', () => {
       return rectangles.map(rect => rect.name);
     };
     try {
-      expect(check()).toContain('find-objects');
+      const primary = check();
+      expect(primary).toEqual(['layer:annotate', 'layer:control', 'track:electronics', 'track:objects', 'track:everything', 'palette-more', 'deck:panic', 'exit-ar']);
       palette.item('palette-more')!.onSelect();
       const utilities = check();
-      expect(utilities).toContain('layer:annotate');
-      expect(utilities).toContain('track:electronics');
+      expect(utilities).toContain('visual-synth');
+      expect(utilities).not.toContain('layer:annotate');
+      expect(utilities).not.toContain('track:electronics');
       expect(utilities).toContain('buddy');
       expect(utilities).toContain('exit-ar');
     } finally { f.hud.dispose(); }

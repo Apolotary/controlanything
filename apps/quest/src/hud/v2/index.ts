@@ -262,17 +262,13 @@ export class LeanHud implements Hud {
     this.palette.register({ key: 'exit-ar', label: 'Exit', order: 90, hold: true, onSelect: () => this.events.emit('exit', {}) });
     if (lab) this.palette.register({ key: 'lab-menu', label: 'More (lab)', order: 95, onSelect: () => this.setMenuOpen(!this.deck.panel.visible) });
     // The two layers from the spec, always first: Annotate (look, box, track) and Control (talk to the device).
-    this.palette.register({ key: 'layer', label: 'Layer', order: -20, onSelect: () => {},
+    this.palette.register({ key: 'layer', label: 'Layer', order: -100, section: 'primary', onSelect: () => {},
       segments: [{ key: 'annotate', label: 'Annotate', width: 0.094 }, { key: 'control', label: 'Control', width: 0.094 }],
       selected: () => this.home.mode, onSegment: (key) => this.events.emit('mode', { mode: key === 'control' ? 'control' : 'annotate' }) });
     // What to track (spec: "switch tracking to electronics"): one compact segmented row, Annotate only.
-    this.palette.register({ key: 'track', label: 'Track', order: -10, onSelect: () => {}, visible: () => this.home.mode === 'annotate',
+    this.palette.register({ key: 'track', label: 'Track', order: -90, section: 'primary', onSelect: () => {}, visible: () => this.home.mode === 'annotate',
       segments: [{ key: 'electronics', label: 'Electronics', width: 0.086 }, { key: 'objects', label: 'Objects', width: 0.064 }, { key: 'everything', label: 'All', width: 0.04 }],
       selected: () => this.home.filter, onSegment: (key) => this.events.emit('filter', { filter: key as HomeState['filter'] }) });
-    this.palette.register({ key: 'find-objects', label: 'Find objects', order: -40, section: 'primary', onSelect: () => {
-      this.events.emit('mode', { mode: 'annotate' });
-      this.toast('Look at an object, point at its outline and pinch to select it.', 'info');
-    } });
     this.palette.register({ key: 'ask-muse', label: 'Ask Muse', order: -50, section: 'primary',
       visible: () => this.canOfferInvitation(), onSelect: () => {
         if (this.keepVoiceInvitation()) return;
@@ -747,8 +743,8 @@ export class LeanHud implements Hud {
   private lookTitle(): string {
     const target = this.selected(), m = this.mounted(), menu = this.menus.get(this.locked ?? this.menuTarget ?? '');
     const name = target?.label ?? menu?.title ?? m?.spec.title ?? 'Device';
-    return this.deviceState?.targetId === this.locked && this.deviceState.musicalSynth ? 'Musical synth'
-      : /visual.?synth/i.test(name) ? 'Visual synth' : title(name, 24);
+    const state = this.deviceState?.targetId === this.locked ? this.deviceState : null;
+    return state?.musicalSynth ? 'Musical synth' : state?.silentVisual ? 'Visual synth' : title(name, 24);
   }
   private lookAgent(working: boolean): CardAgent | null {
     const view = this.assistantView;
@@ -779,7 +775,7 @@ export class LeanHud implements Hud {
     const state = this.deviceState?.targetId === this.locked ? this.deviceState : null;
     const connection = this.selectedConnection();
     const name = this.lookTitle();
-    const visual = /visual/i.test(name) || !!state?.silentVisual;
+    const visual = !!state?.silentVisual;
     const route = visual || state?.musicalSynth ? 'via Mac' : routeLabel(m?.spec.device?.transport, target?.channel).replace(/ \(.*\)$/, '');
     const working = this.setupWorking() || !!state?.busy;
     const actions: CardAction[] = [];
@@ -792,13 +788,13 @@ export class LeanHud implements Hud {
       subtitle = checks.passed ? `Setting up… ${checks.passed} of ${checks.total} checked` : 'Setting up…';
       actions.push({ id: 'control-cancel', label: 'Cancel', icon: 'cancel' });
     } else if (connection === 'offline' && state?.musicalSynth) {
-      subtitle = 'Choose Sound on in the Mac companion';
+      subtitle = 'Click the Mac companion to enable audio';
       actions.push({ id: 'musical-retry', label: 'Retry', icon: 'retry', primary: true });
     } else if (connection === 'offline' && (state?.action === 'open-companion' || state?.action === 'pair-device')) {
       subtitle = 'Not connected';
       const pairLabel = state.hint?.includes('/pair on this laptop') ? 'Pair' : state.action === 'open-companion' ? 'Connect Mac' : 'Connect';
       actions.push({ id: 'control-pair', label: pairLabel, icon: 'link', primary: true }, { id: 'control-pair-code', label: 'Type code', icon: 'keyboard' });
-    } else if (connection === 'offline') subtitle = state?.musicalSynth ? 'Choose Sound on in the Mac companion' : 'Offline · open the Mac app';
+    } else if (connection === 'offline') subtitle = state?.musicalSynth ? 'Click the Mac companion to enable audio' : 'Offline · open the Mac app';
     else if (connection === 'unknown') subtitle = 'Connecting…';
     else if (connection === 'setup') {
       const failed = !!this.setupProgressView?.stages.some((stage) => stage.status === 'failed');
