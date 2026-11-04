@@ -11,8 +11,59 @@ export type ObjectFilter = 'electronics' | 'objects' | 'lights' | 'everything';
 export type DeviceConnection = 'ready' | 'setup' | 'offline' | 'unknown';
 export interface HomeState { mode: AppMode; filter: ObjectFilter; tagged: number; status: string; canStop?: boolean; visualSynthSelection?: { phase: 'pending' | 'unavailable'; message: string } }
 export type MappingOutcome = 'working' | 'review' | 'applied' | 'unchanged' | 'failed' | 'cancelled';
-export interface DeviceState { targetId: string; connection: DeviceConnection; hint?: string; action?: TaggedDevice['action']; busy?: boolean; sentence?: string; handControl?: boolean; performAvailable?: boolean; performingLive?: boolean; performanceRoute?: string; pairingSeconds?: number; screenGuide?: boolean; canvasReady?: boolean; silentVisual?: boolean; mappingSummary?: string; mappingActionId?: string; mappingOutcome?: MappingOutcome }
+export interface DeviceState { targetId: string; connection: DeviceConnection; hint?: string; action?: TaggedDevice['action']; busy?: boolean; sentence?: string; handControl?: boolean; performAvailable?: boolean; performingLive?: boolean; performanceRoute?: string; pairingSeconds?: number; screenGuide?: boolean; canvasReady?: boolean; silentVisual?: boolean; mappingSummary?: string; mappingActionId?: string; mappingOutcome?: MappingOutcome;
+  /** `?perform=1`: the old hand-written Perform mapping (Perform toggle, "Set up gestures") is offered; off by default. Muse writes the wiring now. */
+  legacyPerform?: boolean }
 export interface CanvasView { targetId: string; state: CanvasStatePayload }
+
+/**
+ * "Muse writes the glue": what the wearer asked their hands to do, and the program Muse wrote for it. The wiring
+ * controller (wiring/controller.ts) owns the state; the HUD only draws it (device card + code card).
+ */
+export type WirePhase = 'idle' | 'asked' | 'writing' | 'validating' | 'dry-run' | 'verifying' | 'calibrating' | 'ready' | 'running' | 'stopped' | 'failed';
+export interface WireCodeView {
+  wiringId: string;
+  phase: WirePhase;
+  model: string;
+  /** live = a Meta model wrote it now; fixture = a recorded answer; template = no Meta model wrote it (always shown) */
+  source: 'live' | 'fixture' | 'template';
+  request: string;
+  /** everything streamed so far (the card types it out) */
+  code: string;
+  phaseLine: string;
+  title?: string;
+  explanation?: string;
+  /** full = the streaming panel; pill = collapsed while it runs */
+  mode: 'full' | 'pill';
+  stopped?: boolean;
+}
+export interface WireCalibrationView {
+  step: 'top-left' | 'bottom-right';
+  /** 0..1 of the hold on the current corner */
+  progress: number;
+  message: string;
+  /** world points captured so far (top-left, bottom-right) */
+  corners: ([number, number, number] | null)[];
+  /** the held fingertip, world */
+  tip?: [number, number, number];
+  /** the calibrated screen corners (TL, TR, BR, BL), world, shown briefly when done */
+  outline?: [number, number, number][];
+}
+export interface WireView {
+  targetId: string;
+  phase: WirePhase;
+  /** the line under the device name */
+  prompt: string;
+  /** suggestion chips; empty = none shown */
+  chips: string[];
+  activeChip?: string;
+  /** the hold-to-talk button: off = hidden (no microphone) */
+  mic: 'off' | 'idle' | 'listening' | 'busy';
+  code?: WireCodeView;
+  calibration?: WireCalibrationView;
+  /** "Recalibrate screen" offered (a screen wiring is calibrated or running) */
+  canRecalibrate?: boolean;
+}
 export interface ProjectView {
   title: string; status: string; projectCount: number; actionCount: number; ready: boolean; running: boolean; engaged: boolean;
   action?: { label: string; kind: 'number' | 'trigger'; value: number };
@@ -187,6 +238,11 @@ export interface HudEvents {
   canvasRestore: { targetId: string; revision: number; baseRevision: number };
   canvasClose: { targetId: string };
   assistantTalk: { targetId: string };
+  /** The wearer asked their hands to do something: a chip, spoken words or typed text. */
+  wireAsk: { targetId: string; text: string; source: 'chip' | 'voice' | 'text' };
+  /** Hold-to-talk for a wiring request: down = start listening, up = send. */
+  wireTalk: { targetId: string; down: boolean };
+  wireRecalibrate: { targetId: string };
   assistantConfirm: { targetId: string; proposalId: string; accept: boolean };
   assistantDismiss: { targetId: string };
   handControl: { targetId: string; enabled: boolean };
@@ -207,6 +263,10 @@ export interface Hud {
   update(f: HudFrame): void;
   setHome?(state: HomeState): void;
   setDeviceState?(state: DeviceState | null): void;
+  /** The selected device's wiring: the ask section of its card and the code card beside it. */
+  setWire?(view: WireView | null): void;
+  /** The wiring is running and the hands are working (right hand in the play zone, or a finger near the screen): the wrist menu stays shut. */
+  setHandsBusy?(busy: boolean): void;
   /** Actual setup events and artifact previews for the selected card. */
   setSetupProgress?(view: SetupProgressView | null): void;
   setCanvas?(view: CanvasView | null): void;
@@ -256,6 +316,10 @@ export interface Hud {
   setDeck(d: { open?: boolean; scanning?: boolean; daemons?: boolean; at?: [number, number, number] }): void;
   /** Discard captured input without firing release actions (for hidden/suspended XR). */
   cancelInteractions?(): void;
+  /** Hands-first control: this hand is working UI (touching/near a panel or dial, or holding one) or the wrist menu is open. */
+  handBusy?(hand: 'left' | 'right'): boolean;
+  /** This hand's ray rests on UI: a pinch now is a UI press, not a gesture. */
+  handRayOnUi?(hand: 'left' | 'right'): boolean;
   toast(text: string, level?: 'info' | 'ok' | 'warn' | 'error'): void;
 
   on<K extends keyof HudEvents>(k: K, fn: (e: HudEvents[K]) => void): () => void;

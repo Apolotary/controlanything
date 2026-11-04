@@ -1,8 +1,8 @@
 /**
  * The judge path, automated: npm run build && npm run e2e:judge (system Chrome; no browser download).
  *
- *   Enter AR → pinch the MacBook's box → setup ring → armed arc dials → drag Warp → Perform (left fist,
- *   right hand up) → both palms out = Stop.
+ *   Enter AR → pinch the MacBook's box → setup ring → armed arc dials → drag Warp → hands do nothing until Muse
+ *   writes the wiring: "Touch the water" chip → code card → calibrate the screen → touch the water → both palms out = stop.
  *
  * Runs its own muted FIXTURE server (CE_DEMO=1, CE_MAC_SILENT=1, fresh data dir) on PORT (default 8796,
  * HTTPS off), the sim room as the paired Mac (its laptop screen runs the visual synth) and the desktop Quest
@@ -128,13 +128,13 @@ async function phase(name, action, capture = true) {
 
 /** Screen point of a visible named node (HUD or scene) or of a world position. */
 function screenPoint(spec) {
-  return quest.evaluate(({ name, world }) => {
+  return quest.evaluate(({ name, world, any }) => {
     const app = window.__ce;
     const shown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
     let position;
     if (name) {
       let node = null;
-      app.scene.traverse((o) => { if (!node && o.name === name && shown(o)) node = o; });
+      app.scene.traverse((o) => { if (!node && o.name === name && (any || shown(o))) node = o; });
       if (!node) throw new Error(`Node not visible: ${name}`);
       position = node.getWorldPosition(app.desktopCam.position.clone());
     } else position = app.desktopCam.position.clone().fromArray(world);
@@ -178,22 +178,56 @@ async function dragArc(side, from, to) {
   await quest.mouse.up(); await frames(8);
 }
 
-/** Emulated tracked hands (IWER): pose both hands relative to the head. */
+/** Press a card chip with the emulator mouse (a held pinch). uikit buttons need the ray settled on them first, so retry; the last
+ *  resort dispatches the button's own click (and says so), which still goes through the card's handler -> app -> wiring. */
+async function pressChip(label) {
+  const name = `wire-chip:${label}`;
+  for (let attempt = 0; attempt < 3 && await quest.evaluate(() => window.__ce.wiring.phase === 'idle' || window.__ce.wiring.phase === 'stopped' || window.__ce.wiring.phase === 'failed'); attempt++) {
+    const p = await screenPoint({ name, any: true });
+    await quest.mouse.move(p.x - 6, p.y - 6); await frames(4);
+    await quest.mouse.move(p.x, p.y); await frames(8);
+    await quest.mouse.down(); await frames(3); await quest.mouse.up(); await frames(8);
+  }
+  if (await quest.evaluate(() => ['idle', 'stopped', 'failed'].includes(window.__ce.wiring.phase))) {
+    console.log(`  (the emulator mouse did not latch on "${label}"; dispatching the button's click)`);
+    await quest.evaluate((n) => { let node; window.__ce.scene.traverse((o) => { if (o.name === n) node = o; }); node.dispatchEvent({ type: 'click', stopPropagation() {}, nativeEvent: {}, point: node.getWorldPosition(node.position.clone()) }); }, name);
+  }
+}
+
+/** Emulated tracked hands (IWER): pose both hands relative to the head, or put the index fingertip at a WORLD point (`tip`). */
 const hands = (poses, wait = 20) => quest.evaluate(async ({ poses, wait }) => {
-  const app = window.__ce, remote = app.emulator.device.remote, head = app.emulator.head();
+  const app = window.__ce, remote = app.emulator.device.remote, head = app.emulator.head(), V = head.position.constructor;
   app.input.mouseAsHand = false; app.input.pointer.inside = app.input.pointer.down = app.input.pointer.latched = false;
   await remote.dispatch('set_input_mode', { mode: 'hand' });
   const xyz = (v) => ({ x: v.x, y: v.y, z: v.z });
-  for (const [side, { offset, pose, palm }] of Object.entries(poses)) {
+  const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  for (const [side, { offset, tip, pose, palm }] of Object.entries(poses)) {
     const device = `hand-${side}`;
-    const position = head.position.clone().add(head.position.clone().fromArray(offset).applyQuaternion(head.quaternion));
-    const palmDir = palm === 'out' ? head.position.clone().set(0, 0, -1).applyQuaternion(head.quaternion) : head.position.clone().sub(position).normalize();
-    const fingers = head.position.clone().set(0, 1, 0).applyQuaternion(head.quaternion);
-    fingers.addScaledVector(palmDir, -fingers.dot(palmDir)).normalize();
-    await remote.dispatch('set_connected', { device, connected: true });
-    await remote.dispatch('set_select_value', { device, value: 0 });
-    await remote.dispatch('set_hand_pose', { device, poseId: pose });
-    await remote.dispatch('set_transform', { device, anchor: 'wrist', position: xyz(position), orientation: { fingers: xyz(fingers), palm: xyz(palmDir) } });
+    const place = async (position, fingers, palmDir) => {
+      await remote.dispatch('set_connected', { device, connected: true });
+      await remote.dispatch('set_select_value', { device, value: 0 });
+      await remote.dispatch('set_hand_pose', { device, poseId: pose });
+      await remote.dispatch('set_transform', { device, anchor: 'wrist', position: xyz(position), orientation: { fingers: xyz(fingers), palm: xyz(palmDir) } });
+    };
+    if (offset) {
+      const position = head.position.clone().add(new V().fromArray(offset).applyQuaternion(head.quaternion));
+      const palmDir = palm === 'out' ? new V(0, 0, -1).applyQuaternion(head.quaternion) : head.position.clone().sub(position).normalize();
+      const fingers = new V(0, 1, 0).applyQuaternion(head.quaternion);
+      fingers.addScaledVector(palmDir, -fingers.dot(palmDir)).normalize();
+      await place(position, fingers, palmDir);
+    } else {
+      // Fingertip at a WORLD point: palm down, fingers forward (a fixed orientation), so wrist -> tip is one constant offset,
+      // measured once away from the screen. One placement, so the fingertip never lingers anywhere on the way.
+      const forward = new V(0, 0, -1).applyQuaternion(head.quaternion).setY(0).normalize(), down = new V(0, -1, 0);
+      window.__tipOffset ??= {};
+      const key = `${side}:${pose}`;
+      if (!window.__tipOffset[key]) {
+        await place(head.position.clone().add(new V(0.3, -0.7, -0.2)), forward, down); await frame(); await frame();
+        const j = app.lastFrame.hands[side].joints;
+        window.__tipOffset[key] = j['index-finger-tip'].position.clone().sub(j.wrist.position);
+      }
+      await place(new V().fromArray(tip).sub(window.__tipOffset[key]), forward, down);
+    }
   }
   await new Promise((r) => { let k = 0; const f = () => (++k >= wait ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
 }, { poses, wait });
@@ -308,28 +342,62 @@ async function run() {
     console.log(`  CC${sent.op.number} → the sim Mac's screen changed`);
   });
 
-  await phase('07-perform', async () => {
-    // Perform is the card's round toggle (a uikit button); the emulator mouse is the pinching hand (a held press).
-    for (let attempt = 0; attempt < 3 && !await quest.evaluate(() => !!window.__ce['handMapping']); attempt++) {
-      const p = await screenPoint({ name: 'hand-control' });
-      await quest.mouse.move(p.x - 6, p.y - 6); await frames(4);
-      await quest.mouse.move(p.x, p.y); await frames(6);
-      await quest.mouse.down(); await frames(2); await quest.mouse.up(); await frames(10);
-    }
-    await waitQuest(() => !!window.__ce['handMapping']);
-    // Tracked hands: left fist = clutch, right hand rises.
-    const since = Date.now(), left = { offset: [-0.2, -0.25, -0.4], pose: 'fist' };
-    await hands({ left: { ...left, pose: 'open' }, right: { offset: [0.2, -0.25, -0.4], pose: 'open' } });
-    await hands({ left, right: { offset: [0.2, -0.25, -0.4], pose: 'open' } });
-    for (let i = 1; i <= 15; i++) await hands({ left, right: { offset: [0.2, -0.25 + i * 0.016, -0.4], pose: 'open' } }, 4);
-    await until('hand movement sends control changes', async () => (await exec(since)).length > 0);
-    console.log(`  ${(await exec(since)).length} control changes from the left-fist clutch + right hand`);
+  await phase('07-hands-do-nothing-until-muse-wires-it', async () => {
+    // Armed and selected, but nothing is wired: raising and moving the right hand changes nothing on the Mac.
+    const since = Date.now(), left = { offset: [-0.25, -0.7, -0.15], pose: 'default' };
+    for (let i = 0; i < 10; i++) await hands({ left, right: { offset: [0.2, -0.3 + i * 0.02, -0.4 - i * 0.01], pose: 'open' } }, 3);
+    await frames(10);
+    assert.equal(await quest.evaluate(() => !!window.__ce['handMapping']), false, 'No hand-written mapping starts by itself');
+    assert.equal(await quest.evaluate(() => window.__ce.wiring.phase), 'idle');
+    assert.equal((await exec(since)).length, 0, 'Hands alone send nothing to the Mac');
+    const ask = await quest.evaluate(() => window.__ce.hud.root.userData.wire);
+    assert.equal(ask.prompt, 'What should your hands do?');
+    assert.deepEqual(ask.chips, ['Touch the water', 'Hands as knobs', 'Surprise me']);
+    await hands({ left, right: { offset: [0.2, -0.7, -0.15], pose: 'default' } });
   });
 
-  await phase('08-both-palms-stop', async () => {
+  let geometry;
+  await phase('08-ask-muse-then-calibrate', async () => {
+    // The wearer taps the "Touch the water" chip; Muse (fixture here) writes the wiring and the code card shows it.
+    await pressChip('Touch the water');
+    await waitQuest(() => window.__judge.requests.some((r) => r.type === 'wire.request'));
+    const request = await quest.evaluate(() => window.__judge.requests.find((r) => r.type === 'wire.request').payload);
+    assert.deepEqual(request, { cardId: request.cardId, text: 'Touch the water', source: 'chip' });
+    await until('Muse wrote the wiring and it needs the screen calibrated', () => quest.evaluate(() => window.__ce.wiring.phase === 'calibrating'), PIPELINE_TIMEOUT);
+    const card = await quest.evaluate(() => window.__ce.hud.root.userData.wire.card);
+    assert(/ (is wiring|wired) "Touch the water"/.test(card.header) && card.badge === 'FIXTURE', `the code card names the request and its source (${card.header} / ${card.badge})`);
+    await screenshot('08-code-card');
+    geometry = await quest.evaluate((c) => {
+      const app = window.__ce, p = app.desktopCam.position.clone().fromArray(c), head = app.emulator.head();
+      const f = p.clone().sub(head.position).setY(0).normalize(), right = f.clone().cross(head.position.clone().set(0, 1, 0));
+      const at = (u, v) => p.clone().addScaledVector(right, (u - 0.5) * 0.5).add(head.position.clone().set(0, 0.16 - v * 0.3, 0));
+      return { tl: at(0, 0).toArray(), br: at(1, 1).toArray(), mid: at(0.5, 0.5).toArray(), toward: f.clone().negate().toArray(), right: right.toArray() };
+    }, screen.position);
+    const pt = (a, d = 0) => a.map((n, i) => n + geometry.toward[i] * d);
+    const left = { offset: [-0.25, -0.7, -0.15], pose: 'default' };
+    await hands({ left, right: { tip: pt(geometry.mid.map((n, k) => n - geometry.right[k] * 0.3 + (k === 1 ? -0.3 : 0)), 0.2), pose: 'point' } }, 8);
+    await hands({ left, right: { tip: pt(geometry.tl), pose: 'point' } }, 40);
+    await until('top-left corner taken', () => quest.evaluate(() => window.__ce.wiring.calibrator.step === 'bottom-right'), 10_000);
+    await hands({ left, right: { tip: pt(geometry.br), pose: 'point' } }, 40);
+    await until('the wiring runs', () => quest.evaluate(() => window.__ce.wiring.phase === 'running'), 10_000);
+  });
+
+  await phase('09-touch-the-water', async () => {
+    const pt = (a, d = 0) => a.map((n, i) => n + geometry.toward[i] * d), left = { offset: [-0.25, -0.7, -0.15], pose: 'default' };
+    const since = Date.now(), before = await visualState();
+    await hands({ left, right: { tip: pt(geometry.mid, 0.06), pose: 'point' } }, 20);
+    await hands({ left, right: { tip: pt(geometry.mid, 0.003), pose: 'point' } }, 25);
+    for (let i = 1; i <= 8; i++) await hands({ left, right: { tip: pt(geometry.mid.map((n, k) => n + geometry.right[k] * i * 0.02), 0.003), pose: 'point' } }, 3);
+    const touch = await until('the fingertip reached the driver (touch CCs 22-24)', async () => (await exec(since)).filter((e) => [22, 23, 24].includes(e.op?.number)), 10_000);
+    await sim.waitForFunction((s) => JSON.stringify(window.ceSimDebug.visualSynth.getState()) !== s, before);
+    console.log(`  ${touch.length} touch ops reached the sim Mac (CC ${[...new Set(touch.map((e) => e.op.number))].join('/')})`);
+    const busy = await quest.evaluate(() => { const p = window.__ce.hud.root.getObjectByName('wrist-palette'); return p?.anchor.blockOpen; });
+    assert.equal(busy, true, 'The wrist menu stays shut while the finger works the screen');
+  });
+
+  await phase('10-both-palms-stop', async () => {
     await hands({ left: { offset: [-0.22, -0.05, -0.45], pose: 'open', palm: 'out' }, right: { offset: [0.22, -0.05, -0.45], pose: 'open', palm: 'out' } });
-    await until('server disarmed', async () => !(await target()).armed);
-    await waitQuest(() => window.__judge.events.some((e) => e.type === 'panic') || !window.__ce['handMapping']);
+    await until('the wiring stopped', () => quest.evaluate(() => window.__ce.wiring.phase === 'stopped'), 5000);
     for (const page of [sim, quest]) for (const frame of page.frames()) {
       assert.equal(await frame.evaluate(() => window.__audioAttempts ?? 0), 0, 'No page may construct an audio graph');
     }

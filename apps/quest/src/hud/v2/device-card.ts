@@ -14,15 +14,21 @@ import { LOOK } from './theme';
 export type CardIcon = IconName;
 export interface CardAction { id: string; label: string; icon?: CardIcon; selected?: boolean; primary?: boolean }
 export interface CardAgent { state: 'listening' | 'thinking' | 'reply' | 'done' | 'error'; text: string; model?: string }
+/** "Muse writes the glue": the ask section. Chips send a request; the round button is hold-to-talk. */
+export interface CardAsk {
+  chips: { id: string; label: string; active?: boolean; icon?: CardIcon }[];
+  mic: 'off' | 'idle' | 'listening' | 'busy';
+}
 export interface CardView {
   title: string;
   subtitle: string;
   /** The round toggle. `name` is kept for scripts that address the control by name ('hand-control'). */
-  toggle: { on: boolean; label: string; name: string } | null;
+  toggle: { on: boolean; label: string; name: string; icon?: CardIcon } | null;
   actions: CardAction[];
   agent: CardAgent | null;
+  ask?: CardAsk | null;
 }
-export interface CardHandlers { toggle(): void; action(id: string): void }
+export interface CardHandlers { toggle(): void; action(id: string): void; chip?(id: string): void; mic?(down: boolean): void }
 const browser = isBrowser;
 const flatPanel = FlatMaterial;
 
@@ -56,6 +62,13 @@ export class DeviceCard extends Group {
   private readonly agentModel?: Text;
   private readonly actionsRow?: Container;
   private readonly slots: ActionSlot[] = [];
+  private readonly micColumn?: Container;
+  private readonly mic?: Button;
+  private readonly micIcon?: ButtonIcon;
+  private readonly micLabel?: Text;
+  private micIconKind?: CardIcon;
+  private readonly chipsRow?: Container;
+  private readonly chipSlots: ActionSlot[] = [];
   private toggleIconKind?: CardIcon;
   private view: CardView = { title: '', subtitle: '', toggle: null, actions: [], agent: null };
   private agentSince = 0;
@@ -85,7 +98,16 @@ export class DeviceCard extends Group {
     this.toggle.add(this.toggleIcon);
     this.toggleLabel = new Text({ text: 'Perform', fontSize: 12, fontWeight: 'medium', color: LOOK.text.secondary });
     this.toggleColumn.add(this.toggle, this.toggleLabel);
-    header.add(titles, this.toggleColumn);
+    this.micColumn = new Container({ flexDirection: 'column', alignItems: 'center', gap: 4, flexShrink: 0, display: 'none' });
+    this.mic = new Button({ variant: 'secondary', icon: true, size: 'lg', width: card.toggle, height: card.toggle,
+      backgroundColor: withOpacity('#ffffff', 0.14), panelMaterialClass: flatPanel,
+      onPointerDown: () => this.handlers.mic?.(true), onPointerUp: () => this.handlers.mic?.(false) } as never);
+    this.mic.name = 'wire-mic';
+    this.micIcon = new ButtonIcon({ '*': { width: 30, height: 30 } } as never);
+    this.mic.add(this.micIcon);
+    this.micLabel = new Text({ text: 'Hold to talk', fontSize: 12, fontWeight: 'medium', color: LOOK.text.secondary, whiteSpace: 'nowrap' } as never);
+    this.micColumn.add(this.mic, this.micLabel);
+    header.add(titles, this.toggleColumn, this.micColumn);
     this.agentRow = new Container({ flexDirection: 'row', alignItems: 'center', gap: 8, height: LOOK.pill.height + 4, paddingX: 14,
       borderRadius: 1000, backgroundColor: withOpacity('#ffffff', 0.08), panelMaterialClass: flatPanel, display: 'none' });
     this.agentRow.name = 'agent-pill';
@@ -104,7 +126,19 @@ export class DeviceCard extends Group {
       this.actionsRow.add(button);
       this.slots.push({ button, icon, label });
     }
-    this.root.add(header, this.agentRow, this.actionsRow);
+    this.chipsRow = new Container({ flexDirection: 'row', flexWrap: 'wrap', gap: 6, display: 'none' } as never);
+    this.chipsRow.name = 'wire-chips';
+    for (let i = 0; i < 4; i++) {
+      const button = new Button({ variant: 'secondary', size: 'sm', paddingX: 10, gap: 5, panelMaterialClass: flatPanel,
+        onClick: () => { const id = this.chipSlots[i]?.id; if (id) this.handlers.chip?.(id); } });
+      const chipIcon = new ButtonIcon({ '*': { width: 14, height: 14 } } as never);
+      const chipLabelBox = new ButtonLabel();
+      const chipLabel = new Text({ text: '', fontSize: 13, fontWeight: 'medium', whiteSpace: 'nowrap' } as never);
+      chipLabelBox.add(chipLabel); button.add(chipIcon, chipLabelBox);
+      this.chipsRow.add(button);
+      this.chipSlots.push({ button, icon: chipIcon, label: chipLabel });
+    }
+    this.root.add(header, this.chipsRow, this.agentRow, this.actionsRow);
     this.add(this.root);
   }
 
@@ -134,8 +168,9 @@ export class DeviceCard extends Group {
         ? { variant: 'primary', color: '#272727', backgroundColor: withOpacity('#ffffff', 0.92), hover: { backgroundColor: '#d9d9d9', color: '#272727' }, active: { backgroundColor: '#c0c0c0', color: '#272727' } }
         : { variant: 'secondary', color: withOpacity('#ffffff', 0.92), backgroundColor: withOpacity('#ffffff', 0.14), hover: { backgroundColor: withOpacity('#ffffff', 0.22), color: '#ffffff' }, active: { backgroundColor: withOpacity('#ffffff', 0.3), color: '#ffffff' } } as never);
       this.toggleLabel!.setProperties({ text: toggle.label });
-      this.setIcon(this.toggleIcon!, toggle.on ? 'stop' : 'hand', (kind) => { this.toggleIconKind = kind; }, this.toggleIconKind);
+      this.setIcon(this.toggleIcon!, toggle.icon ?? (toggle.on ? 'stop' : 'hand'), (kind) => { this.toggleIconKind = kind; }, this.toggleIconKind);
     }
+    this.setAsk(view.ask ?? null);
     const actions = view.actions.slice(0, 3);
     this.actionsRow!.setProperties({ display: actions.length ? 'flex' : 'none' });
     this.slots.forEach((slot, index) => {
@@ -152,6 +187,34 @@ export class DeviceCard extends Group {
       if (action.icon) this.setIcon(slot.icon, action.icon, (kind) => { slot.iconKind = kind; }, slot.iconKind);
     });
     this.refreshAgent();
+  }
+
+  private setAsk(ask: CardAsk | null): void {
+    const mic = ask?.mic ?? 'off';
+    this.micColumn!.setProperties({ display: mic === 'off' ? 'none' : 'flex' });
+    if (mic !== 'off') {
+      const on = mic === 'listening';
+      this.mic!.setProperties(on
+        ? { variant: 'primary', color: '#272727', backgroundColor: withOpacity('#ffffff', 0.92), hover: { backgroundColor: '#d9d9d9', color: '#272727' }, active: { backgroundColor: '#c0c0c0', color: '#272727' } }
+        : { variant: 'secondary', color: withOpacity('#ffffff', 0.92), backgroundColor: withOpacity('#ffffff', 0.14), hover: { backgroundColor: withOpacity('#ffffff', 0.22), color: '#ffffff' }, active: { backgroundColor: withOpacity('#ffffff', 0.3), color: '#ffffff' } } as never);
+      this.micLabel!.setProperties({ text: mic === 'listening' ? 'Listening…' : mic === 'busy' ? 'Hearing…' : 'Hold to talk' });
+      this.setIcon(this.micIcon!, 'mic', (kind) => { this.micIconKind = kind; }, this.micIconKind);
+    }
+    const chips = ask?.chips.slice(0, 4) ?? [];
+    this.chipsRow!.setProperties({ display: chips.length ? 'flex' : 'none' });
+    this.chipSlots.forEach((slot, index) => {
+      const chip = chips[index];
+      slot.id = chip?.id;
+      const on = !!chip?.active;
+      slot.button.setProperties((on
+        ? { display: chip ? 'flex' : 'none', variant: 'primary', color: '#272727', backgroundColor: withOpacity('#ffffff', 0.92), hover: { backgroundColor: '#d9d9d9', color: '#272727' }, active: { backgroundColor: '#c0c0c0', color: '#272727' } }
+        : { display: chip ? 'flex' : 'none', variant: 'secondary', color: withOpacity('#ffffff', 0.92), backgroundColor: withOpacity('#ffffff', 0.08), hover: { backgroundColor: withOpacity('#ffffff', 0.16), color: '#ffffff' }, active: { backgroundColor: withOpacity('#ffffff', 0.24), color: '#ffffff' } }) as never);
+      if (!chip) return;
+      slot.button.name = `wire-chip:${chip.id}`;
+      slot.label.setProperties({ text: chip.label });
+      slot.icon.setProperties({ display: chip.icon ? 'flex' : 'none' });
+      if (chip.icon) this.setIcon(slot.icon, chip.icon, (kind) => { slot.iconKind = kind; }, slot.iconKind);
+    });
   }
 
   private setIcon(holder: ButtonIcon, kind: CardIcon, remember: (kind: CardIcon) => void, current?: CardIcon): void {

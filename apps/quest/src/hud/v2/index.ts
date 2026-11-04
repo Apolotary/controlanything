@@ -3,7 +3,7 @@ import { applyPatch, type Control, type ControlEvent, type Gen3dSpec, type HackI
 import type { SetupProgressView } from '@ce/protocol';
 import { Emitter } from '../../gen3d/events';
 import { handCursor, newCursor, type Cursor } from '../../gen3d/interact';
-import type { AgentStepLike, AssistantView, CanvasView, ConfirmRequest, DeviceState, HomeState, EvidenceState, HelperPairingView, OnboardingView, Hud, HudEvents, HudFrame, HudTarget, PingLine, UploadState, ProjectView, ProjectUiCommand } from '../contract';
+import type { AgentStepLike, AssistantView, CanvasView, ConfirmRequest, DeviceState, HomeState, EvidenceState, HelperPairingView, OnboardingView, Hud, HudEvents, HudFrame, HudTarget, PingLine, UploadState, ProjectView, ProjectUiCommand, WireView } from '../contract';
 import { controlPower, isBrightness } from './control-state';
 import { cardControlShape, controlFraction, controlValue, DIAL_DIAMETER, LEVER_TRAVEL } from './control-shape';
 import { PairCodeEntry, PAIR_CODE_KEYS } from './pair-code';
@@ -29,7 +29,8 @@ import { labEnabled } from '../../app/lab';
 import { PinchTargetHistory, expandedRayBounds, rayTargetWithinAngle } from '../../app/precision';
 import { EdgePlacement } from './comfort';
 import { acceptsCommandResult, commandTimedOut, commandSubtitle, routeLabel, type CommandState } from './command-state';
-import { DeviceCard, type CardAction, type CardAgent, type CardView } from './device-card';
+import { DeviceCard, type CardAction, type CardAgent, type CardAsk, type CardView } from './device-card';
+import { CalibrationMarkers, CodeCard } from '../../wiring/code-card';
 import { DialRig, type DialMode, type DialModel } from './radial-dial';
 import { setupChecks, setupFraction } from './setup-ring';
 import { liveGesture } from '../../gestures/feedback';
@@ -75,6 +76,7 @@ function title(value: string, length = 36): string {
   const s = value.trim().slice(0, length);
   return s === s.toUpperCase() ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
 }
+const UP_AXIS = new Vector3(0, 1, 0);
 function visible(object: Object3D | null): boolean {
   for (let current = object; current; current = current.parent) if (!current.visible) return false;
   return true;
@@ -164,6 +166,24 @@ export class LeanHud implements Hud {
   private readonly deck = new MainMenu(this.surfaces);
   private home: HomeState = { mode: 'annotate', filter: 'everything', tagged: 0, status: 'Pinch a device to tag it' };
   private deviceState: DeviceState | null = null;
+  /** "Muse writes the glue": the selected device's wiring (ask chips on the card, code card beside the device). */
+  private wireView: WireView | null = null;
+  private readonly codeCard = new CodeCard();
+  private readonly wireMarkers = new CalibrationMarkers();
+  private readonly codePosition = new Vector3();
+  private readonly wireGoal = new Vector3();
+  private readonly codeRight = new Vector3();
+  private readonly codeQuaternion = new Quaternion();
+  private readonly codeFace = new Quaternion();
+  private codePlaced = false;
+  private wireOutlineKey = '';
+  private readonly wireCorners: (Vector3 | null)[] = [null, null];
+  private readonly wireTip = new Vector3();
+  /** The wiring is running and the hands are working: the wrist menu stays shut. */
+  private handsBusy = false;
+  private frameHands: HudFrame['hands'] = {};
+  private readonly nearLocal = new Vector3();
+  private readonly nearWorld = new Vector3();
   private readonly coach = new Group();
   private onboarding: OnboardingView | null = null;
   private readonly coachTitle = makeText({ text: '', size: THEME.font.title, weight: 600, anchorX: 'center', maxWidth: 0.38 });
@@ -280,6 +300,7 @@ export class LeanHud implements Hud {
     this.annotationLayer.add(this.boxes);
     this.root.add(this.annotationLayer, this.card, this.modalLayer, this.deck, this.deck.panel, this.coach, this.notice, this.reticles, this.tether);
     this.root.add(this.helperPairing);
+    this.root.add(this.codeCard, this.wireMarkers);
     this.root.add(this.assistant);
     this.root.add(this.projectPanel);
     this.widgets.push({ group: this.projectPanel.hitArea, w: this.projectPanel.width, h: this.projectPanel.height, kind: 'handle', start: () => {}, lastMove: 0 });
@@ -568,6 +589,12 @@ export class LeanHud implements Hud {
           if (this.locked && state?.performAvailable) this.events.emit('handControl', { targetId: this.locked, enabled: !state.handControl });
         },
         action: (id) => this.lookAction(id),
+        chip: (id) => {
+          if (!this.locked) return;
+          if (id === 'recalibrate') this.events.emit('wireRecalibrate', { targetId: this.locked });
+          else this.events.emit('wireAsk', { targetId: this.locked, text: id, source: 'chip' });
+        },
+        mic: (down) => { if (this.locked) this.events.emit('wireTalk', { targetId: this.locked, down }); },
       });
       // Centred on the legacy card origin, so the workspace anchor, drag bar and tether keep working.
       card.position.set(0, 0, THEME.panel.depth * 4);
@@ -702,12 +729,12 @@ export class LeanHud implements Hud {
       subtitle = failed ? 'Setup stopped' : 'Ready to set up';
       actions.push({ id: 'control-setup', label: failed ? 'Try again' : 'Set up', icon: failed ? 'retry' : 'setup', primary: true });
     } else {
-      if (m?.armed && state?.performAvailable) toggle = { on: !!state.handControl, label: state.handControl ? 'Stop' : 'Perform', name: 'hand-control' };
+      if (m?.armed && state?.performAvailable && state.legacyPerform) toggle = { on: !!state.handControl, label: state.handControl ? 'Stop' : 'Perform', name: 'hand-control' };
       subtitle = state?.handControl ? state.performingLive ? `Live · ${route}` : 'Paused · hold left fist'
         : m?.command?.phase === 'sending' ? 'Sending…'
           : m?.command?.phase === 'fail' ? 'Not delivered · try again'
             : m?.armed ? `${m.power === false ? 'Off' : 'On'} · ${route}` : 'Confirm to enable controls';
-      if (m?.armed && state && !state.performAvailable && m.spec.controls.some((control) => this.isArmed(m, control))) actions.push({ id: 'gesture-setup', label: 'Set up gestures', icon: 'hand' });
+      if (state?.legacyPerform && m?.armed && state && !state.performAvailable && m.spec.controls.some((control) => this.isArmed(m, control))) actions.push({ id: 'gesture-setup', label: 'Set up gestures', icon: 'hand' });
       const presets = m ? m.spec.controls.filter((c) => this.isArmed(m, c) && (c.kind === 'trigger' || c.kind === 'toggle')) : [];
       const iconFor = (label: string): CardAction['icon'] => /flow|wave/i.test(label) ? 'waves' : /ring|circle/i.test(label) ? 'rings' : /prism|triangle/i.test(label) ? 'prism' : undefined;
       if (m && presets.length) for (const c of presets.slice(0, 3 - actions.length)) {
@@ -720,7 +747,15 @@ export class LeanHud implements Hud {
         }
       }
     }
-    return { title: name, subtitle, toggle, actions: actions.slice(0, 3), agent: this.lookAgent(working) };
+    let ask: CardAsk | null = null;
+    const wire = this.wireView;
+    if (wire && wire.targetId === this.locked && !working && connection === 'ready' && m?.armed) {
+      subtitle = wire.prompt;
+      const chips: CardAsk['chips'] = wire.chips.map((label) => ({ id: label, label, ...(label === wire.activeChip ? { active: true } : {}) }));
+      if (wire.canRecalibrate) chips.push({ id: 'recalibrate', label: 'Recalibrate screen', icon: 'retry' });
+      ask = { chips, mic: wire.mic };
+    }
+    return { title: name, subtitle, toggle, actions: actions.slice(0, 3), agent: this.lookAgent(working), ask };
   }
   private refreshLook(): void {
     if (!this.look) return;
@@ -738,7 +773,9 @@ export class LeanHud implements Hud {
     const workspace = this.home.mode === 'control' && !!target?.tagged && !this.modal.visible && !this.deck.panel.visible && !this.helperPairingView && !this.projectView;
     const connection = this.selectedConnection();
     const ready = connection === 'ready' && !!m?.armed && !this.setupWorking() && !state?.busy;
-    const mode: DialMode = !workspace || !box ? 'hidden' : ready ? state?.handControl ? 'perform' : 'armed' : 'setup';
+    // While Muse's wiring runs the hands are the control: the arcs only display, so a fingertip on the screen never grabs one.
+    const wiring = this.wireView?.phase === 'running';
+    const mode: DialMode = !workspace || !box ? 'hidden' : ready ? state?.handControl || wiring ? 'perform' : 'armed' : 'setup';
     look.rig.setMode(mode);
     if (box && mode !== 'hidden') {
       this.boxes.facingQuaternion(this.head, box.center, this.lookFacing, box.facing);
@@ -753,10 +790,61 @@ export class LeanHud implements Hud {
       const live = c?.binding?.action ? liveGesture.values.get(c.binding.action) : undefined;
       if (live !== undefined) dial.target = live;
     }
+    this.updateWire(frame, dt, workspace ? box : undefined);
     const registered = !!look.spatial;
     look.rig.update(dt, mode !== 'hidden', !registered);
     look.card.update(dt * 1000, this.card.visible && visible(this.card), !registered);
   }
+  setWire(view: WireView | null): void {
+    const mine = view && view.targetId === this.locked ? view : null;
+    const previous = this.wireView;
+    this.wireView = mine;
+    const askChanged = JSON.stringify([previous?.prompt, previous?.chips, previous?.activeChip, previous?.mic, previous?.canRecalibrate, previous?.phase])
+      !== JSON.stringify([mine?.prompt, mine?.chips, mine?.activeChip, mine?.mic, mine?.canRecalibrate, mine?.phase]);
+    if (askChanged) this.refreshLook();
+    this.codeCard.set(mine?.code ?? null, mine?.calibration ?? null);
+    this.root.userData.wire = mine ? { phase: mine.phase, prompt: mine.prompt, chips: mine.chips, mic: mine.mic, card: this.codeCard.state } : undefined;
+  }
+  setHandsBusy(busy: boolean): void { this.handsBusy = busy; }
+  /** Place the code card beside the selected device (opposite the device card), the calibration markers in world space. */
+  private updateWire(frame: HudFrame, dt: number, box: { center: Vector3; w: number; h: number } | undefined): void {
+    const wire = this.wireView;
+    const show = !!wire?.code && !!box;
+    if (box && show) {
+      const W = Math.max(LOOK.dial.minW, Math.min(LOOK.dial.maxW, box.w)), H = Math.max(LOOK.dial.minH, Math.min(LOOK.dial.maxH, box.h));
+      const f = this.codeRight.set(box.center.x - this.head.x, 0, box.center.z - this.head.z);
+      if (f.lengthSq() < 1e-6) f.set(0, 0, -1);
+      f.normalize();
+      // wearer's right = forward x up; the device card spawns on that side, the code card goes to the other
+      this.codeRight.set(-f.z, 0, f.x);
+      const cardW = this.codeCard.widthM;
+      this.wireGoal.copy(box.center).addScaledVector(this.codeRight, -(W / 2 + 0.14 + cardW / 2));
+      this.wireGoal.y = box.center.y + Math.min(H / 2, 0.2) + 0.04;
+      this.codeFace.setFromAxisAngle(UP_AXIS, Math.atan2(this.head.x - this.wireGoal.x, this.head.z - this.wireGoal.z));
+      if (!this.codePlaced) { this.codePosition.copy(this.wireGoal); this.codeQuaternion.copy(this.codeFace); this.codePlaced = true; }
+      else {
+        const k = 1 - Math.exp(-dt * 8);
+        this.codePosition.lerp(this.wireGoal, k);
+        this.codeQuaternion.slerp(this.codeFace, k);
+      }
+      this.codeCard.position.copy(this.codePosition);
+      this.codeCard.quaternion.copy(this.codeQuaternion);
+    } else if (!show) this.codePlaced = false;
+    this.codeCard.update(dt * 1000, show);
+    const cal = this.wireView?.calibration;
+    this.wireCorners[0] = cal?.corners[0] ? (this.wireCorners0 ??= new Vector3()).fromArray(cal.corners[0]) : null;
+    this.wireCorners[1] = cal?.corners[1] ? (this.wireCorners1 ??= new Vector3()).fromArray(cal.corners[1]) : null;
+    if (cal?.tip) this.wireTip.fromArray(cal.tip);
+    this.wireMarkers.set(this.wireCorners, cal?.tip ? this.wireTip : null, cal?.progress ?? 0, frame.head.quaternion, dt);
+    const key = cal?.outline ? cal.outline.join('|') : '';
+    if (key && key !== this.wireOutlineKey) {
+      const c = cal!.outline!.map((p) => new Vector3().fromArray(p)) as [Vector3, Vector3, Vector3, Vector3];
+      this.wireMarkers.showOutline(c);
+    }
+    this.wireOutlineKey = key;
+  }
+  private wireCorners0?: Vector3;
+  private wireCorners1?: Vector3;
   private selectButton(group: Group, selected: boolean, width = THEME.control.buttonWidth as number): void {
     group.userData.selected = selected;
     group.userData.feedbackStyle = undefined;
@@ -1856,6 +1944,34 @@ export class LeanHud implements Hud {
       } else if (text.color === LOOK.text.onLight) setText(text, text.text, (text.userData.offColor as string | undefined) ?? THEME.color.text);
     }
   }
+  /**
+   * Is this hand working UI right now? True while the wrist menu is open, while the hand holds/drags a panel or dial,
+   * while it touches or ray-pinches UI, or while its index tip is within reach of the device card or an arc.
+   * The wiring's pinch-tap uses it so a press on UI is never a gesture.
+   */
+  handBusy(hand: 'left' | 'right'): boolean {
+    const anchor = this.palette.anchor;
+    if (this.palette.visible && anchor.open && anchor.source === 'hand') return true;
+    for (const hold of this.holds.values()) if (hold.hand === hand) return true;
+    const state = this.frameHands[hand];
+    if (this.spatial?.uiOwns(hand) && (this.spatial.pointerKind(hand) !== 'ray' || !!state?.pinching)) return true;
+    const tip = state && !state.controller ? state.joints['index-finger-tip']?.position : undefined;
+    const look = this.look;
+    if (!tip || !look) return false;
+    if (visible(look.card) && this.card.visible) {
+      const local = look.card.worldToLocal(this.nearLocal.copy(tip));
+      if (Math.abs(local.x) < look.card.widthM / 2 + 0.06 && Math.abs(local.y) < look.card.heightM / 2 + 0.06 && Math.abs(local.z) < 0.1) return true;
+    }
+    for (const dial of look.rig.dials) {
+      if (!visible(dial)) continue;
+      const geometry = dial.hit.geometry;
+      if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+      const sphere = geometry.boundingSphere!;
+      if (this.nearWorld.copy(sphere.center).applyMatrix4(dial.hit.matrixWorld).distanceTo(tip) < sphere.radius + 0.06) return true;
+    }
+    return false;
+  }
+  handRayOnUi(hand: 'left' | 'right'): boolean { return !!this.spatial?.uiOwns(hand); }
   update(frame: HudFrame): void {
     this.time = frame.time / 1000;
     for (const m of this.specs.values()) if (commandTimedOut(m.command, frame.time)) {
@@ -1874,7 +1990,9 @@ export class LeanHud implements Hud {
     const menuHand = this.palette.anchor.nonDominant, otherHand = frame.hands[menuHand === 'left' ? 'right' : 'left'];
     const usingControl = [...this.captures.values()].some((c) => !!c.widget && !this.isPaletteWidget(c.widget));
     if (usingControl) this.lastControlAt = this.time;
-    this.palette.anchor.blockOpen = usingControl || this.time - this.lastControlAt < 1 || (!!otherHand?.pinching && !otherHand.controller);
+    this.palette.anchor.blockOpen = usingControl || this.time - this.lastControlAt < 1 || (!!otherHand?.pinching && !otherHand.controller)
+      || this.handsBusy;
+    this.frameHands = frame.hands;
     if (this.palette.needsRebuild()) this.rebuildPalette();
     this.palette.update(frame);
     const held = this.palette.updateHold(frame.time);
@@ -1949,6 +2067,7 @@ export class LeanHud implements Hud {
     this.projectPanel.disposeSpatial();
     this.root.traverse((o) => { if ('sync' in o && 'dispose' in o) (o as SdfText).dispose(); });
     this.helperPairing.dispose();
+    this.codeCard.dispose(); this.wireMarkers.dispose();
     this.boxes.dispose();
     this.checkGeometry.dispose(); this.arrowGeometry.dispose(); this.lockGeometry.dispose();
     this.screenGuideGeometry.dispose(); this.screenGuideMaterial.dispose();

@@ -67,6 +67,7 @@ import { CATEGORIES, type Category } from '../scan/categories';
 import { Mic } from '../voice/mic';
 import { pairingApi } from '../io/api';
 import { PushToTalk } from '../voice/ptt';
+import { WiringController } from '../wiring/controller';
 import { VoiceAssistant } from '../voice/assistant';
 import { mappingSummary } from '../voice/mapping-summary';
 import { workspaceContext } from './demo-workspace';
@@ -222,6 +223,8 @@ export class QuestApp {
   pairing!: PairingFlow;
   approvals!: Approvals;
   ptt!: PushToTalk;
+  /** Muse writes the glue: the wiring flow for the selected device (ask, code card, calibration, sandboxed run). */
+  wiring!: WiringController;
   assistant?: VoiceAssistant;
   controls!: ControlSender;
   emulator?: Emulator;
@@ -562,6 +565,9 @@ export class QuestApp {
     hud.on('canvasClose', (e) => { this.canvas?.close(e.targetId); this.refreshHome(); });
     hud.on('pairCode', (e) => this.submitPairCode(e.targetId, e.code));
     hud.on('handControl', (e) => this.setHandControl(e.targetId, e.enabled));
+    hud.on('wireAsk', (e) => { if (e.targetId === this.lockedId) this.wiring?.ask(e.text, e.source); });
+    hud.on('wireTalk', (e) => { if (e.targetId === this.lockedId) { if (e.down) this.wiring?.micPress(); else this.wiring?.micLetGo(); } });
+    hud.on('wireRecalibrate', (e) => { if (e.targetId === this.lockedId) this.wiring?.recalibrate(); });
     hud.on('assistantTalk', (e) => { this.clearHandControl(); void this.assistant?.toggle(e.targetId); });
     hud.on('assistantConfirm', (e) => this.assistant?.confirm(e.targetId, e.proposalId, e.accept));
     hud.on('assistantDismiss', () => this.assistant?.cancel());
@@ -621,6 +627,34 @@ export class QuestApp {
     this.ptt = new PushToTalk(this.mic, this.ws, () => WsClient.allowsSavedToken(this.ws.url) ? this.identity?.deviceToken : undefined, () => {
       const cardId = this.lockedId ? this.modes.tags.get(this.lockedId)?.cardId : undefined;
       return { cardId, specId: cardId ? this.specByCard.get(cardId) : undefined };
+    });
+    this.wiring = new WiringController({
+      selected: () => {
+        const tag = this.modes.mode === 'control' && this.lockedId ? this.modes.tags.get(this.lockedId) : undefined;
+        const target = tag ? this.targets.get(tag.targetId) : undefined;
+        return tag?.cardId && target ? { cardId: tag.cardId, targetId: tag.targetId, anchor: target.position, label: tag.name ?? tag.label ?? 'device' } : undefined;
+      },
+      canControl: (cardId) => this.canControl(cardId),
+      send: (type, payload) => !!this.ws.send(type, payload, { to: 'server' }),
+      sendControl: (cardId, event) => {
+        if (!this.canControl(cardId)) return false;
+        const specId = this.specByCard.get(cardId);
+        return !!this.ws.send('control.event', { widgetId: event.widgetId, value: event.value, ts: Date.now(), phase: event.phase, ...(specId ? { specId } : {}) });
+      },
+      render: (view) => this.hud.setWire?.(view),
+      setHandsBusy: (busy) => this.hud.setHandsBusy?.(busy),
+      toast: (text, level) => this.hud.toast(text, level),
+      log: (text, level) => this.page.log(text, level),
+      voice: {
+        error: () => !this.ws.open ? 'The server is disconnected. Reconnect and try again.'
+          : this.params.get('mic') === '0' ? 'Microphone is disabled for this session. Enable it on the entry page before entering AR.'
+          : this.session && !this.mic.ready ? 'Exit AR, choose Camera + mic and allow microphone access, then enter AR again.' : undefined,
+        available: () => this.params.get('mic') !== '0',
+        press: (cardId) => this.ptt.press({ cardId, local: true }),
+        release: () => this.ptt.release(),
+        cancel: () => this.ptt.cancel(),
+      },
+      tapBlocked: (hand) => (this.hud.handBusy?.(hand) ?? false) || (this.hud.handRayOnUi?.(hand) ?? false),
     });
     this.assistant = new VoiceAssistant({
       ptt: this.ptt,
@@ -683,7 +717,7 @@ export class QuestApp {
         this.assistant?.cancel();
         const active = this.activeSetup ? this.modes.byCard(this.activeSetup) : undefined;
         if (active) this.cancelControl(active.targetId);
-        this.controls.clear(); this.clearHandControl(); this.modes.disconnected(); this.refreshHome(); this.refreshTags();
+        this.controls.clear(); this.clearHandControl(); this.wiring.reset('the server disconnected'); this.modes.disconnected(); this.refreshHome(); this.refreshTags();
       }
       if (s === 'closed' && info?.code === CLOSE_SUPERSEDED) {
         // Final: reconnecting would kick the newer tab, which would kick this one back.
@@ -722,10 +756,12 @@ export class QuestApp {
       if (list.length && !onboardingActive && !this.pairingUntil && !connectingMac) this.hud.toast(`${list[0].name} wants to join · ${list[0].display}`, 'info');
     });
     this.approvals.on('resolved', (r) => this.page.log(`pairing ${r.approved ? 'approved' : 'denied'}${r.name ? `: ${r.name}` : ''}`, r.approved ? 'ok' : 'warn'));
-    this.ptt.on('listening', ({ listening }) => {
+    this.ptt.on('listening', ({ listening, utteranceId }) => {
+      this.wiring.onVoiceListening(listening, utteranceId);
       if (listening) this.chip('muse-voice-transcribe-1.0', 'live');
     });
     this.ptt.on('text', (t) => {
+      if ((t as { local?: boolean }).local) { this.wiring.onVoiceText(t.text, t.utteranceId, !!t.final); if (t.final) this.chip(t.modelId ?? 'muse-voice-transcribe-1.0', 'done'); return; }
       if (t.recipientId && t.recipientId !== this.identity?.deviceId) return;
       if (t.final) {
         this.chip(t.modelId ?? 'muse-voice-transcribe-1.0', 'done');
@@ -733,6 +769,7 @@ export class QuestApp {
       }
     });
     this.ptt.on('error', (e) => {
+      this.wiring.onVoiceError(e);
       this.page.log(e, 'warn');
     });
     this.wireMessages();
@@ -793,7 +830,8 @@ export class QuestApp {
       silentVisual: !!tag.cardId && !!this.virtualCards?.has(tag.cardId),
       pairingSeconds: this.pairingUntil ? Math.max(1, Math.ceil((this.pairingUntil - performance.now()) / 1000)) : undefined,
       busy: tag.busy, sentence: tag.sentence, canvasReady: !!tag.cardId && this.canvas?.hasDocument(tag.cardId), handControl: this.handMapping?.targetId === tag.targetId,
-      performAvailable: !!tag.cardId && this.gestureSpecs.has(tag.cardId),
+      legacyPerform: this.params.has('perform'),
+      performAvailable: this.params.has('perform') && !!tag.cardId && this.gestureSpecs.has(tag.cardId),
       mappingSummary: tag.cardId ? mappingSummary(this.gestureSpecs.get(tag.cardId)) : undefined,
       mappingActionId: tag.cardId ? this.gestureSpecs.get(tag.cardId)?.gestureMap?.axes[0]?.actionId : undefined,
       mappingOutcome: tag.cardId ? this.assistant?.mappingOutcome?.(tag.cardId) : undefined,
@@ -1611,6 +1649,8 @@ export class QuestApp {
     ws.on('project.catalog', (m) => { if (m.from === 'server') this.projects?.receiveCatalog(m.payload as PayloadOf<'project.catalog'>); });
     ws.on('project.state', (m) => { if (m.from === 'server') this.projects?.receive(m.payload as PayloadOf<'project.state'>); });
     ws.on('sense.request', (m) => void this.onSenseRequest(m.payload as SenseRequestPayload));
+    ws.on('wire.progress', (m) => { if (m.from === 'server') this.wiring.onProgress(m.payload as PayloadOf<'wire.progress'>); });
+    ws.on('wire.ready', (m) => { if (m.from === 'server') this.wiring.onReady(m.payload as PayloadOf<'wire.ready'>); });
     ws.on('panic', (m) => {
       const p = m.payload as PayloadOf<'panic'>;
       this.stopControls();
@@ -1974,7 +2014,7 @@ export class QuestApp {
       if (tag.connection === 'ready') tag.connection = 'setup';
     }
     this.activeSetup = undefined; this.pendingArm = undefined; this.armRequest = undefined; this.acceptedArm = undefined;
-    this.armedCards.clear(); this.controls.clear(); this.clearHandControl();
+    this.wiring?.stop('Stop', 'external'); this.armedCards.clear(); this.controls.clear(); this.clearHandControl();
     for (const specId of this.specByCard.values()) this.hud.setArmed(this.gen3dIdFor(specId), false);
     this.hud.showConfirm(null); this.release(); this.refreshTags();
   }
@@ -2335,6 +2375,7 @@ export class QuestApp {
     this.room?.update(time);
     this.refreshAnnotations();
     this.updateHandControl(f, time);
+    this.wiring?.frame(f, time);
     this.projects?.update(f);
     if (this.session) {
       this.onboarding.tick(time);

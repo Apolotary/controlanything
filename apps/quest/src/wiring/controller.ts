@@ -1,0 +1,467 @@
+/**
+ * "Muse writes the glue", headset half. Owns the whole flow for the selected device:
+ *
+ *   ask (chip / voice) -> wire.request -> wire.progress (code streams into the code card) -> wire.ready
+ *   -> [calibrate the screen once, if the program needs it] -> run the program in the sandbox -> stop
+ *
+ * Until a wire.ready has arrived and is running, the hands do nothing to the device: this class is the only thing that
+ * turns signals into control events, and only through the sandbox (wiring/runtime.ts).
+ */
+import { Vector3 } from 'three';
+import type { WireProgressPayload, WireReadyPayload } from '@ce/protocol';
+import type { ShellFrame } from '../app/hud-contract';
+import type { WireCalibrationView, WireCodeView, WirePhase, WireView } from '../hud/contract';
+import { SignalTracker } from '../gestures/signals';
+import { ScreenCalibrator } from '../gestures/screen-calibration';
+import { clearPlane, loadPlane, planePoint, savePlane, type ScreenPlane } from '../gestures/screen-plane';
+import { WiringRuntime, type StopKind, type WireEmit, type WiringProgram } from './runtime';
+
+export const WIRE_CHIPS = ['Touch the water', 'Hands as knobs', 'Surprise me'] as const;
+export const WIRE_TIMING = {
+  /** title + explanation stay up this long once the program runs, then the card collapses to a pill */
+  explainMs: 6000,
+  /** no progress at all for this long after asking = Muse did not answer */
+  silenceMs: 90_000,
+  /** a tap on the mic (not a hold) keeps listening; it is sent after this at the latest */
+  maxListenMs: 15_000,
+  /** holding the mic button longer than this = hold-to-talk (release sends) */
+  holdMs: 450,
+} as const;
+
+export interface WiringHost {
+  /** The selected, set-up device the wiring applies to; undefined when none (or not in Control). */
+  selected(): { cardId: string; targetId: string; anchor: Vector3; label: string } | undefined;
+  canControl(cardId: string): boolean;
+  /** Send a client message to the server. */
+  send(type: 'wire.request', payload: { cardId: string; text: string; source: 'chip' | 'voice' | 'text' }): boolean;
+  /** One program output as control.event on the card. */
+  sendControl(cardId: string, event: WireEmit): boolean;
+  render(view: WireView | null): void;
+  setHandsBusy(busy: boolean): void;
+  toast(text: string, level?: 'info' | 'ok' | 'warn' | 'error'): void;
+  log(text: string, level?: 'info' | 'ok' | 'warn' | 'error'): void;
+  /** hold-to-talk plumbing (voice/ptt.ts, local mode) */
+  voice: {
+    /** why the microphone cannot be used right now, or undefined */
+    error(): string | undefined;
+    /** false = no microphone path at all (hide the button) */
+    available(): boolean;
+    press(cardId: string): Promise<void>;
+    release(): void;
+    cancel(): void;
+  };
+  /** the right/left hand is working UI right now (a pinch is a press, not a pinch-tap) */
+  tapBlocked(hand: 'left' | 'right'): boolean;
+  now?(): number;
+  /** tests: stand-in sandbox */
+  runtime?: WiringRuntime;
+}
+
+interface Wiring {
+  cardId: string; targetId: string; label: string;
+  request: string; source: 'chip' | 'voice' | 'text';
+  wiringId: string;
+  phase: WirePhase;
+  code: string; model: string; wireSource: 'live' | 'fixture' | 'template';
+  phaseLine: string;
+  title?: string; explanation?: string;
+  program?: WiringProgram; needsScreen: boolean;
+  runStartedAt?: number;
+  stopped: boolean;
+  askedAt: number;
+}
+
+const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
+
+export class WiringController {
+  readonly tracker = new SignalTracker();
+  readonly calibrator = new ScreenCalibrator();
+  readonly runtime: WiringRuntime;
+  private w: Wiring | null = null;
+  private plane: ScreenPlane | null = null;
+  private mic: 'idle' | 'listening' | 'busy' = 'idle';
+  private micStartedAt = 0;
+  private micTimer?: ReturnType<typeof setTimeout>;
+  private voiceId: string | undefined;
+  private calibrationOutline: [number, number, number][] | undefined;
+  private outlineUntil = 0;
+  private lastRender = -Infinity;
+  private dirty = true;
+  private lastBusy = false;
+  private lastCardId: string | undefined;
+  private readonly corners: (Vector3 | null)[] = [null, null];
+
+  constructor(private readonly host: WiringHost) {
+    this.runtime = host.runtime ?? new WiringRuntime({
+      send: (event) => (this.w ? this.host.sendControl(this.w.cardId, event) : false),
+      onStop: (reason, kind) => this.onRuntimeStop(reason, kind),
+    });
+  }
+
+  private now(): number { return this.host.now ? this.host.now() : performance.now(); }
+
+  // --- public state ------------------------------------------------------------------------------------------------
+
+  get phase(): WirePhase { return this.w?.phase ?? 'idle'; }
+  get running(): boolean { return this.w?.phase === 'running' && this.runtime.running; }
+  get request(): string | undefined { return this.w?.request; }
+  /** Debug/test view of the whole thing. */
+  snapshot(): Record<string, unknown> {
+    const w = this.w;
+    return { phase: this.phase, request: w?.request, wiringId: w?.wiringId, title: w?.title, model: w?.model, source: w?.wireSource, codeChars: w?.code.length,
+      running: this.running, calibrated: !!this.plane, mic: this.mic, stats: { ...this.runtime.stats }, step: this.calibrator.step };
+  }
+
+  // --- asking -----------------------------------------------------------------------------------------------------
+
+  /** A chip, a transcript or typed text. Nothing is wired until Muse answers and the program is running. */
+  ask(text: string, source: 'chip' | 'voice' | 'text'): boolean {
+    const sel = this.host.selected();
+    const request = text.trim().slice(0, 500);
+    if (!sel || !request) return false;
+    if (!this.host.canControl(sel.cardId)) { this.host.toast('Set up this device first, then tell it what your hands should do', 'info'); return false; }
+    this.cancelVoice();
+    // A new request replaces whatever was wired: the hands go quiet until the new program is ready and running.
+    if (this.runtime.running) this.runtime.stop('asking Muse for something new', 'external', true);
+    this.calibrator.reset(); this.corners[0] = this.corners[1] = null; this.calibrationOutline = undefined;
+    if (!this.host.send('wire.request', { cardId: sel.cardId, text: request, source })) {
+      this.host.toast('Not connected to the server. Try again in a moment.', 'warn');
+      this.w = null; this.changed();
+      return false;
+    }
+    this.w = { cardId: sel.cardId, targetId: sel.targetId, label: sel.label, request, source, wiringId: '', phase: 'asked', code: '', model: '', wireSource: 'live', phaseLine: 'sent to Muse…',
+      needsScreen: false, stopped: false, askedAt: this.now() };
+    this.host.log(`wire.request (${source}): "${request}" for ${sel.cardId}`, 'info');
+    this.changed();
+    return true;
+  }
+
+  // --- server messages --------------------------------------------------------------------------------------------
+
+  onProgress(p: WireProgressPayload): void {
+    const sel = this.host.selected();
+    if (!sel || sel.cardId !== p.cardId) return;
+    let w = this.w;
+    if (!w || w.cardId !== p.cardId) {
+      // Muse is writing for this device although this headset did not ask (the Mac asked): show it too.
+      w = this.w = { cardId: sel.cardId, targetId: sel.targetId, label: sel.label, request: p.request ?? 'your request', source: 'text', wiringId: p.wiringId, phase: 'writing', code: '',
+        model: p.model, wireSource: p.source, phaseLine: '', needsScreen: false, stopped: false, askedAt: this.now() };
+    }
+    if (w.wiringId && p.wiringId !== w.wiringId && w.phase === 'running') this.runtime.stop('a new program is being written', 'external', true);
+    if (w.wiringId !== p.wiringId) { w.wiringId = p.wiringId; w.code = ''; w.stopped = false; w.program = undefined; }
+    if (p.request) w.request = p.request;
+    w.model = p.model; w.wireSource = p.source;
+    w.askedAt = this.now();
+    if (p.code !== undefined) w.code = p.code;
+    else if (p.codeDelta) w.code += p.codeDelta;
+    if (p.title) w.title = p.title;
+    if (p.explanation) w.explanation = p.explanation;
+    switch (p.phase) {
+      case 'writing': w.phase = 'writing'; w.phaseLine = p.note ?? 'writing…'; break;
+      case 'validating': w.phase = 'validating'; w.phaseLine = p.note ?? 'validating…'; break;
+      case 'dry-run': w.phase = 'dry-run'; w.phaseLine = p.note ?? 'dry-run…'; break;
+      case 'verifying': w.phase = 'verifying'; w.phaseLine = p.note ?? 'verifying…'; break;
+      case 'ready': if (w.phase !== 'running' && w.phase !== 'calibrating') { w.phase = 'ready'; w.phaseLine = p.note ?? 'ready'; } break;
+      case 'failed': {
+        w.phase = 'failed';
+        const why = p.issues?.[0] ?? p.note ?? 'Muse could not finish it';
+        w.phaseLine = why;
+        this.host.toast(`Muse could not wire that: ${why}`, 'warn');
+        break;
+      }
+    }
+    this.changed();
+  }
+
+  onReady(p: WireReadyPayload): void {
+    const sel = this.host.selected();
+    if (!sel || sel.cardId !== p.cardId) return;
+    let w = this.w;
+    if (!w || w.cardId !== p.cardId) {
+      w = this.w = { cardId: sel.cardId, targetId: sel.targetId, label: sel.label, request: 'your request', source: 'text', wiringId: p.wiringId, phase: 'ready', code: p.code,
+        model: p.model, wireSource: p.source, phaseLine: 'ready', needsScreen: false, stopped: false, askedAt: this.now() };
+    }
+    if (w.wiringId && w.wiringId !== p.wiringId && this.runtime.running) this.runtime.stop('a new program arrived', 'external', true);
+    w.wiringId = p.wiringId; w.code = p.code; w.model = p.model; w.wireSource = p.source; w.title = p.title; w.explanation = p.explanation;
+    w.needsScreen = p.needs.includes('screen');
+    w.program = { wiringId: p.wiringId, cardId: p.cardId, code: p.code, title: p.title, explanation: p.explanation, model: p.model, source: p.source, actions: p.actions };
+    w.stopped = false; w.phase = 'ready'; w.phaseLine = 'ready';
+    this.host.log(`wire.ready "${p.title}" · ${p.model} · ${p.source} · ${p.actions.length} actions · needs ${p.needs.join(',') || 'hands'}`, 'ok');
+    if (w.needsScreen) {
+      this.plane = loadPlane(w.cardId, sel.anchor);
+      if (!this.plane) { this.beginCalibration(); this.changed(); return; }
+    }
+    this.start();
+  }
+
+  // --- running ------------------------------------------------------------------------------------------------------
+
+  private start(): void {
+    const w = this.w;
+    if (!w?.program) return;
+    const err = this.runtime.start(w.program);
+    if (err) {
+      // the runtime has already told onRuntimeStop
+      return;
+    }
+    this.tracker.reset(this.now());
+    this.collapsed = false;
+    w.phase = 'running'; w.runStartedAt = this.now(); w.stopped = false;
+    this.host.toast(`${w.title || 'Wiring'} is running`, 'ok');
+    this.changed();
+  }
+
+  /** The wearer (or the app) stops the wiring. Safe at any time. */
+  stop(reason: string, kind: StopKind = 'user'): void {
+    const w = this.w;
+    if (!w) return;
+    if (w.phase === 'calibrating') { this.cancelCalibration(); w.phase = 'stopped'; w.stopped = true; this.changed(); return; }
+    if (this.runtime.running) this.runtime.stop(reason, kind, true);
+  }
+
+  /** Disconnect, deselect, leaving Control: stop quietly and forget the card. */
+  reset(reason = 'reset'): void {
+    this.cancelVoice();
+    if (this.runtime.running) this.runtime.stop(reason, 'external', false);
+    this.cancelCalibration();
+    this.w = null; this.host.setHandsBusy(false); this.lastBusy = false;
+    this.changed();
+  }
+
+  private onRuntimeStop(reason: string, kind: StopKind): void {
+    const w = this.w;
+    this.host.setHandsBusy(false); this.lastBusy = false;
+    if (!w) return;
+    if (reason === 'replaced' || kind === 'external') { if (w.phase === 'running') { w.phase = 'stopped'; w.stopped = true; } this.changed(); return; }
+    w.phase = kind === 'user' ? 'stopped' : kind === 'refused' || kind === 'unavailable' ? 'failed' : 'stopped';
+    w.stopped = true;
+    w.phaseLine = kind === 'user' ? 'stopped' : reason;
+    if (kind === 'user') this.host.toast(`Wiring stopped · ${reason}`, 'info');
+    else this.host.toast(`Muse's wiring stopped: ${reason}`, 'warn');
+    this.host.log(`wiring stopped (${kind}): ${reason}`, kind === 'user' ? 'info' : 'warn');
+    this.changed();
+  }
+
+  // --- screen calibration -------------------------------------------------------------------------------------------
+
+  private beginCalibration(): void {
+    const w = this.w;
+    if (!w) return;
+    this.calibrator.reset(); this.corners[0] = this.corners[1] = null; this.calibrationOutline = undefined;
+    w.phase = 'calibrating'; w.phaseLine = 'calibrating…';
+    this.host.toast('Touch the top-left corner of your screen', 'info');
+  }
+
+  private cancelCalibration(): void {
+    this.calibrator.reset(); this.corners[0] = this.corners[1] = null;
+  }
+
+  /** "Recalibrate screen" in the card menu. */
+  recalibrate(): void {
+    const w = this.w, sel = this.host.selected();
+    if (!w || !sel || !w.program) return;
+    clearPlane(w.cardId);
+    this.plane = null;
+    if (this.runtime.running) this.runtime.stop('recalibrating', 'external', true);
+    this.beginCalibration();
+    this.changed();
+  }
+
+  private calibrationView(): WireCalibrationView | undefined {
+    const w = this.w;
+    if (!w || w.phase !== 'calibrating') return undefined;
+    const step = this.calibrator.step;
+    return {
+      step, progress: this.calibrator.progress,
+      message: step === 'top-left' ? 'Touch the top-left corner of your screen' : 'Now touch the bottom-right corner',
+      corners: this.corners.map((c) => (c ? [c.x, c.y, c.z] as [number, number, number] : null)),
+      ...(this.calibrator.hasTip ? { tip: [this.calibrator.tip.x, this.calibrator.tip.y, this.calibrator.tip.z] as [number, number, number] } : {}),
+      ...(this.calibrationOutline ? { outline: this.calibrationOutline } : {}),
+    };
+  }
+
+  // --- per frame ---------------------------------------------------------------------------------------------------
+
+  private lastControllable = false;
+  frame(frame: ShellFrame, timeMs: number): void {
+    const sel = this.host.selected();
+    const w = this.w;
+    // The card's ask section appears and disappears with "selected and under control"; redraw when that flips.
+    const controllable = !!sel && this.host.canControl(sel.cardId);
+    if (controllable !== this.lastControllable) { this.lastControllable = controllable; this.dirty = true; this.lastRender = -Infinity; }
+    if (!sel || !this.host.canControl(sel.cardId)) {
+      if (w) { if (this.runtime.running) this.runtime.stop('the device is not under control any more', 'external', false); this.w = null; this.cancelCalibration(); this.changed(); }
+      this.setBusy(false);
+      this.syncView(sel?.cardId);
+      return;
+    }
+    if (w && w.cardId !== sel.cardId) {
+      // Another device was selected: the wiring belongs to the old one.
+      if (this.runtime.running) this.runtime.stop('another device was selected', 'external', false);
+      this.cancelCalibration(); this.w = null; this.changed();
+    }
+    const cur = this.w;
+    if (cur) {
+      if (cur.phase === 'asked' && this.now() - cur.askedAt > WIRE_TIMING.silenceMs) { cur.phase = 'failed'; cur.phaseLine = 'Muse did not answer'; this.host.toast('Muse did not answer in time. Try again.', 'warn'); this.changed(); }
+      if (cur.phase === 'calibrating') this.calibrateFrame(frame, timeMs, sel.anchor);
+      else if (cur.phase === 'running') {
+        const sf = this.tracker.update(frame, timeMs, { plane: this.plane, tapBlocked: (hand) => this.host.tapBlocked(hand) });
+        if (sf.stop) this.stop('both palms out', 'user');
+        else this.runtime.tick(sf.signals);
+        this.setBusy(this.runtime.running && (sf.rightInZone || sf.hovering));
+        if (cur.runStartedAt !== undefined && this.now() - cur.runStartedAt >= WIRE_TIMING.explainMs && !this.collapsed) { this.collapsed = true; this.changed(); }
+      } else this.setBusy(false);
+    } else this.setBusy(false);
+    if (this.mic === 'listening' && this.now() - this.micStartedAt > WIRE_TIMING.maxListenMs) this.micRelease();
+    this.syncView(sel.cardId);
+  }
+
+  private collapsed = false;
+
+  private calibrateFrame(frame: ShellFrame, timeMs: number, anchor: Vector3): void {
+    const w = this.w!;
+    const before = this.calibrator.step;
+    const update = this.calibrator.update(frame, timeMs, anchor);
+    this.setBusy(false);
+    if (update.kind === 'corner') {
+      this.corners[0] = update.point;
+      this.host.toast('Got it. Now touch the bottom-right corner', 'ok');
+      this.changed();
+    } else if (update.kind === 'rejected') {
+      this.corners[0] = this.corners[1] = null;
+      this.host.toast(update.message, 'warn');
+      this.changed();
+    } else if (update.kind === 'done') {
+      this.plane = update.plane;
+      savePlane(w.cardId, update.plane);
+      this.corners[1] = this.calibrator.tip.clone();
+      const at = (u: number, v: number) => { const p = planePoint(update.plane, u, v); return [p.x, p.y, p.z] as [number, number, number]; };
+      this.calibrationOutline = [at(0, 0), at(1, 0), at(1, 1), at(0, 1)];
+      this.outlineUntil = this.now() + 3000;
+      this.host.toast('Screen calibrated', 'ok');
+      this.calibrator.reset();
+      this.start();
+      return;
+    } else if (before !== this.calibrator.step) this.changed();
+    this.dirty = true;
+  }
+
+  private setBusy(busy: boolean): void {
+    if (busy === this.lastBusy) return;
+    this.lastBusy = busy;
+    this.host.setHandsBusy(busy);
+  }
+
+  // --- voice ---------------------------------------------------------------------------------------------------------
+
+  /** Mic button pressed. A second press while listening sends. */
+  micPress(): void {
+    const sel = this.host.selected();
+    if (!sel || !this.host.canControl(sel.cardId)) return;
+    if (this.mic === 'listening') { this.micRelease(); return; }
+    if (this.mic === 'busy') return;
+    const err = this.host.voice.error();
+    if (err) { this.host.toast(err, 'warn'); return; }
+    this.mic = 'listening'; this.micStartedAt = this.now(); this.voiceId = undefined;
+    this.changed();
+    void this.host.voice.press(sel.cardId).catch(() => this.cancelVoice());
+  }
+
+  /** Mic button released: a hold sends, a tap keeps listening until the next press. */
+  micLetGo(): void {
+    if (this.mic !== 'listening') return;
+    if (this.now() - this.micStartedAt >= WIRE_TIMING.holdMs) this.micRelease();
+  }
+
+  private micRelease(): void {
+    if (this.mic !== 'listening') return;
+    this.mic = 'busy'; this.changed();
+    this.host.voice.release();
+  }
+
+  private cancelVoice(): void {
+    if (this.mic === 'idle') return;
+    this.mic = 'idle'; this.voiceId = undefined;
+    clearTimeout(this.micTimer);
+    this.host.voice.cancel();
+    this.changed();
+  }
+
+  /** ptt 'listening' events: remember which utterance is ours. */
+  onVoiceListening(listening: boolean, utteranceId?: string): void {
+    if (this.mic === 'idle') return;
+    if (listening) this.voiceId = utteranceId;
+  }
+
+  /** ptt 'text' events. */
+  onVoiceText(text: string, utteranceId: string | undefined, final: boolean): void {
+    if (this.mic === 'idle' || !final) return;
+    if (this.voiceId && utteranceId && utteranceId !== this.voiceId) return;
+    this.mic = 'idle'; this.voiceId = undefined;
+    const said = text.trim();
+    if (!said) { this.host.toast('I did not catch that. Hold the mic and try again.', 'info'); this.changed(); return; }
+    this.host.toast(`Heard: "${said.slice(0, 60)}"`, 'info');
+    if (!this.ask(said, 'voice')) this.changed();
+  }
+
+  onVoiceError(message: string): void {
+    if (this.mic === 'idle') return;
+    this.mic = 'idle'; this.voiceId = undefined;
+    this.host.toast(message, 'warn');
+    this.changed();
+  }
+
+  // --- view ------------------------------------------------------------------------------------------------------------
+
+  private changed(): void {
+    this.dirty = true;
+    if (this.w?.phase !== 'running') this.collapsed = false;
+    this.lastRender = -Infinity;
+  }
+
+  private syncView(cardId: string | undefined): void {
+    const t = this.now();
+    if (cardId !== this.lastCardId) { this.lastCardId = cardId; this.dirty = true; }
+    const calibrating = this.w?.phase === 'calibrating';
+    // streamed code arrives often: the card is refreshed at most ~12 Hz, calibration progress every frame
+    if (!this.dirty && !calibrating) return;
+    if (!calibrating && t - this.lastRender < 80) return;
+    this.lastRender = t; this.dirty = false;
+    this.host.render(cardId ? this.view(cardId) : null);
+  }
+
+  /** The prompt line and chips for the device card, and the code card, for the selected device. */
+  view(cardId: string): WireView | null {
+    const sel = this.host.selected();
+    if (!sel || sel.cardId !== cardId || !this.host.canControl(cardId)) return null;
+    const w = this.w && this.w.cardId === cardId ? this.w : null;
+    const phase: WirePhase = w?.phase ?? 'idle';
+    const busy = phase === 'asked' || phase === 'writing' || phase === 'validating' || phase === 'dry-run' || phase === 'verifying' || phase === 'calibrating';
+    const prompt = !w ? 'What should your hands do?'
+      : phase === 'asked' ? `Asking Muse: ${w.request}`
+        : phase === 'calibrating' ? 'Touch your screen\'s two corners'
+          : busy ? `Muse is wiring: ${w.request}`
+            : phase === 'running' ? `${w.title || 'Wiring'} · running`
+              : phase === 'failed' ? 'Could not wire that · try again'
+                : phase === 'stopped' ? 'Stopped · ask again' : `${w.title || 'Wiring'} · ready`;
+    const chips = busy ? [] : [...WIRE_CHIPS];
+    const code: WireCodeView | undefined = w ? {
+      wiringId: w.wiringId || 'pending', phase, model: w.model || 'Muse', source: w.wireSource, request: w.request, code: w.code, phaseLine: w.phaseLine,
+      ...(w.title ? { title: w.title } : {}), ...(w.explanation ? { explanation: w.explanation } : {}),
+      mode: (phase === 'running' && this.collapsed) || phase === 'stopped' ? 'pill' : 'full', stopped: w.stopped,
+    } : undefined;
+    const calibration = this.calibrationView();
+    if (this.calibrationOutline && this.now() > this.outlineUntil) this.calibrationOutline = undefined;
+    const outline = this.calibrationOutline && this.now() <= this.outlineUntil ? this.calibrationOutline : undefined;
+    return {
+      targetId: sel.targetId, phase, prompt, chips: chips as string[], ...(w?.request && !busy && w.source === 'chip' ? { activeChip: w.request } : {}),
+      mic: this.host.voice.available() ? this.mic : 'off',
+      ...(code ? { code } : {}),
+      ...(calibration ? { calibration } : outline ? { calibration: { step: 'bottom-right' as const, progress: 1, message: 'Screen calibrated', corners: [], outline } } : {}),
+      canRecalibrate: !!w?.needsScreen && !!w.program && (phase === 'running' || phase === 'stopped' || phase === 'ready'),
+    };
+  }
+
+  /** For the HUD's own chip ids. */
+  chipText(index: number): string | undefined { return WIRE_CHIPS[clamp(index, 0, WIRE_CHIPS.length - 1)]; }
+}

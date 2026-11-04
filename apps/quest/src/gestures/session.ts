@@ -1,6 +1,7 @@
 import type { ControlEventPayload, GestureMap, UiSpecPayload } from '@ce/protocol';
 import type { ControlEvent } from '@ce/gen3d';
 import { GestureEngine } from './engine';
+import type { GestureEngineOptions } from './engine';
 
 /** Match only a single-action control; compound generated controls are not performance parameters. */
 function controlForAction(spec: UiSpecPayload, actionId: string): string | undefined {
@@ -21,6 +22,7 @@ export class GestureSession {
     current: ReadonlyMap<string, ControlEvent['value']>,
     send: (event: ControlEventPayload) => void,
     mirror: (specId: string, controlId: string, value: number | boolean) => void,
+    options: GestureEngineOptions = {},
   ) {
     this.specId = spec.specId;
     this.map = spec.gestureMap;
@@ -41,6 +43,22 @@ export class GestureSession {
       send({ specId: this.specId, widgetId, value, phase: phase === 'move' ? 'move' : 'end', ts: Date.now() });
       const controlId = controls.get(actionId);
       if (spec.gen3d && controlId) mirror(spec.gen3d.specId, controlId, value);
-    }, initial);
+    }, initial, options);
   }
+}
+
+export interface PatternHack { id: string; name: string; program: number }
+
+/**
+ * The armed spec's pattern buttons (single program-change hacks, `pattern<program>`), in program order. A pinch-tap
+ * cycles through these on the same control path as the card's buttons; nothing outside the verified spec is sent.
+ */
+export function patternHacks(spec: UiSpecPayload | undefined): PatternHack[] {
+  const out: PatternHack[] = [];
+  for (const hack of spec?.hackset?.hacks ?? []) {
+    const match = hack.kind === 'action' && hack.commands.length === 1 ? /^pattern(\d+)$/.exec(hack.commands[0]?.action ?? '') : null;
+    if (!match || hack.status === 'failed' || out.some((p) => p.program === Number(match[1]))) continue;
+    out.push({ id: hack.id, name: hack.name, program: Number(match[1]) });
+  }
+  return out.sort((a, b) => a.program - b.program);
 }
