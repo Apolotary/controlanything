@@ -143,7 +143,7 @@ describe('two-corner calibration', () => {
       }
     };
     // a fingertip waving about never completes
-    for (let i = 0; i < 30; i++) { t += 16; cal.update(fingerFrame(new Vector3(-0.25 + (i % 2) * 0.05, 1.62, -0.6), t), t, anchor); }
+    for (let i = 0; i < 30; i++) { t += 16; cal.update(fingerFrame(new Vector3(-0.25 + (i % 2) * 0.1, 1.62, -0.6), t), t, anchor); }
     expect(cal.progress).toBeLessThan(0.3);
     hold(new Vector3(-0.25, 1.62, -0.6), 600);
     expect(events).toEqual(['corner:top-left']);
@@ -153,6 +153,17 @@ describe('two-corner calibration', () => {
     expect(events).toEqual(['corner:top-left']);
     hold(new Vector3(0.25, 1.3, -0.6), 600);
     expect(events).toEqual(['corner:top-left', 'done']);
+  });
+
+  it('ignores a hand that was already resting there when the prompt came up until it moves', () => {
+    const cal = new ScreenCalibrator();
+    let t = 0;
+    for (; t < 1500; t += 16) cal.update(fingerFrame(new Vector3(-0.25, 1.62, -0.6), t), t, anchor);
+    expect(cal.step).toBe('top-left');
+    for (let i = 0; i < 6; i++) { t += 16; cal.update(fingerFrame(new Vector3(-0.25 + i * 0.015, 1.62, -0.6), t), t, anchor); }
+    const events: string[] = [];
+    for (const end = t + 600; t < end; t += 16) { const e = cal.update(fingerFrame(new Vector3(-0.25, 1.62, -0.6), t), t, anchor); if (e.kind === 'corner') events.push(e.step); }
+    expect(events).toEqual(['top-left']);
   });
 
   it('refuses a fingertip far from the device or low on it for the top-left corner', () => {

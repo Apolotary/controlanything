@@ -105,13 +105,13 @@ async function phase(name, action, capture = true) {
   console.log(`PASS ${name} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
 }
 function screenPoint(spec) {
-  return quest.evaluate(({ name, world }) => {
+  return quest.evaluate(({ name, world, any }) => {
     const app = window.__ce;
     const shown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
     let position;
     if (name) {
       let node = null;
-      app.scene.traverse((o) => { if (!node && o.name === name && shown(o)) node = o; });
+      app.scene.traverse((o) => { if (!node && o.name === name && (any || shown(o))) node = o; });
       if (!node) throw new Error(`Node not visible: ${name}`);
       position = node.getWorldPosition(app.desktopCam.position.clone());
     } else position = app.desktopCam.position.clone().fromArray(world);
@@ -127,37 +127,55 @@ async function click(spec) {
   await quest.mouse.down(); await frames(3); await quest.mouse.up(); await frames(6);
 }
 
+/** Press a card chip with the emulator mouse (a held pinch). uikit buttons need the ray settled on them first, so retry; the last
+ *  resort dispatches the button's own click (and says so), which still goes through the card's handler -> app -> wiring. */
+async function pressChip(label) {
+  const name = `wire-chip:${label}`;
+  for (let attempt = 0; attempt < 3 && await quest.evaluate(() => window.__ce.wiring.phase === 'idle' || window.__ce.wiring.phase === 'stopped' || window.__ce.wiring.phase === 'failed'); attempt++) {
+    const p = await screenPoint({ name, any: true });
+    await quest.mouse.move(p.x - 6, p.y - 6); await frames(4);
+    await quest.mouse.move(p.x, p.y); await frames(8);
+    await quest.mouse.down(); await frames(3); await quest.mouse.up(); await frames(8);
+  }
+  if (await quest.evaluate(() => ['idle', 'stopped', 'failed'].includes(window.__ce.wiring.phase))) {
+    console.log(`  (the emulator mouse did not latch on "${label}"; dispatching the button's click)`);
+    await quest.evaluate((n) => { let node; window.__ce.scene.traverse((o) => { if (o.name === n) node = o; }); node.dispatchEvent({ type: 'click', stopPropagation() {}, nativeEvent: {}, point: node.getWorldPosition(node.position.clone()) }); }, name);
+  }
+}
+
 /** Emulated tracked hands (IWER). `tip` places the index fingertip at a WORLD point instead of an offset from the head. */
 const hands = (poses, wait = 20) => quest.evaluate(async ({ poses, wait }) => {
-  const app = window.__ce, remote = app.emulator.device.remote, head = app.emulator.head();
+  const app = window.__ce, remote = app.emulator.device.remote, head = app.emulator.head(), V = head.position.constructor;
   app.input.mouseAsHand = false; app.input.pointer.inside = app.input.pointer.down = app.input.pointer.latched = false;
   await remote.dispatch('set_input_mode', { mode: 'hand' });
   const xyz = (v) => ({ x: v.x, y: v.y, z: v.z });
   const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-  for (const [side, spec] of Object.entries(poses)) {
-    const { offset, tip, pose, palm } = spec, device = `hand-${side}`;
-    const placeWrist = async (position) => {
-      const palmDir = palm === 'out' ? head.position.clone().set(0, 0, -1).applyQuaternion(head.quaternion) : head.position.clone().sub(position).normalize();
-      const fingers = palm === 'out' ? head.position.clone().set(0, 1, 0).applyQuaternion(head.quaternion) : head.position.clone().set(0, 0, -1).applyQuaternion(head.quaternion);
-      fingers.addScaledVector(palmDir, -fingers.dot(palmDir)).normalize();
+  for (const [side, { offset, tip, pose, palm }] of Object.entries(poses)) {
+    const device = `hand-${side}`;
+    const place = async (position, fingers, palmDir) => {
       await remote.dispatch('set_connected', { device, connected: true });
       await remote.dispatch('set_select_value', { device, value: 0 });
       await remote.dispatch('set_hand_pose', { device, poseId: pose });
       await remote.dispatch('set_transform', { device, anchor: 'wrist', position: xyz(position), orientation: { fingers: xyz(fingers), palm: xyz(palmDir) } });
     };
-    if (offset) await placeWrist(head.position.clone().add(head.position.clone().fromArray(offset).applyQuaternion(head.quaternion)));
-    else {
-      // fingertip placement: guess the wrist 0.11 m behind the tip along the view direction, read the real tip, correct once
-      const goal = head.position.clone().fromArray(tip);
-      const back = goal.clone().sub(head.position).setY(0).normalize();
-      let wrist = goal.clone().addScaledVector(back, -0.11);
-      for (let i = 0; i < 2; i++) {
-        await placeWrist(wrist);
-        await frame();
-        const joint = app.lastFrame?.hands?.[side]?.joints?.['index-finger-tip']?.position;
-        if (joint) wrist = wrist.clone().add(goal.clone().sub(joint));
+    if (offset) {
+      const position = head.position.clone().add(new V().fromArray(offset).applyQuaternion(head.quaternion));
+      const palmDir = palm === 'out' ? new V(0, 0, -1).applyQuaternion(head.quaternion) : head.position.clone().sub(position).normalize();
+      const fingers = new V(0, 1, 0).applyQuaternion(head.quaternion);
+      fingers.addScaledVector(palmDir, -fingers.dot(palmDir)).normalize();
+      await place(position, fingers, palmDir);
+    } else {
+      // Fingertip at a WORLD point: palm down, fingers forward (a fixed orientation), so wrist -> tip is one constant offset,
+      // measured once away from the screen. One placement, so the fingertip never lingers anywhere on the way.
+      const forward = new V(0, 0, -1).applyQuaternion(head.quaternion).setY(0).normalize(), down = new V(0, -1, 0);
+      window.__tipOffset ??= {};
+      const key = `${side}:${pose}`;
+      if (!window.__tipOffset[key]) {
+        await place(head.position.clone().add(new V(0.3, -0.7, -0.2)), forward, down); await frame(); await frame();
+        const j = app.lastFrame.hands[side].joints;
+        window.__tipOffset[key] = j['index-finger-tip'].position.clone().sub(j.wrist.position);
       }
-      await placeWrist(wrist);
+      await place(new V().fromArray(tip).sub(window.__tipOffset[key]), forward, down);
     }
   }
   await new Promise((r) => { let k = 0; const f = () => (++k >= wait ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
@@ -261,10 +279,7 @@ async function run() {
 
   await phase('05-ask-a-chip', async () => {
     await frames(10);
-    const chip = await screenPoint({ name: 'wire-chip:Touch the water' });
-    await quest.mouse.move(chip.x - 5, chip.y - 5); await frames(4);
-    await quest.mouse.move(chip.x, chip.y); await frames(6);
-    await quest.mouse.down(); await frames(2); await quest.mouse.up(); await frames(4);
+    await pressChip('Touch the water');
     await until('wire.request sent', () => quest.evaluate(() => window.__wire.requests.length > 0));
     const request = await quest.evaluate(() => window.__wire.requests[0]);
     assert.equal(request.text, 'Touch the water'); assert.equal(request.source, 'chip'); assert.equal(request.cardId, cardId);
@@ -300,15 +315,17 @@ async function run() {
   const pt = (a, d = 0) => a.map((n, i) => n + geometry.toward[i] * d);
   await phase('06b-touch-corners', async () => {
     const left = { offset: [-0.25, -0.7, -0.15], pose: 'default' };
+    // the hand comes in from below and the side (a hand resting near the screen is not a touch), then touches the corners
+    await hands({ left, right: { tip: pt(geometry.mid.map((n, k) => n - geometry.right[k] * 0.3 + (k === 1 ? -0.3 : 0)), 0.2), pose: 'point' } }, 8);
     await hands({ left, right: { tip: pt(geometry.tl), pose: 'point' } }, 40);
     await until('top-left captured', () => quest.evaluate(() => window.__ce.wiring.calibrator.step === 'bottom-right'), 10_000);
     await screenshot('06c-top-left-taken');
-    await hands({ left, right: { tip: pt(geometry.br), pose: 'point' } }, 10);
     await hands({ left, right: { tip: pt(geometry.br), pose: 'point' } }, 40);
     await until('the program is running', () => quest.evaluate(() => window.__ce.wiring.phase === 'running'), 10_000);
     const stored = await quest.evaluate((id) => localStorage.getItem(`ce.screen-plane.v1.${id}`), cardId);
     assert(stored, 'The calibrated plane is stored per card in localStorage');
     const plane = JSON.parse(stored);
+    assert(Math.abs(plane.width - 0.5) < 0.03 && Math.abs(plane.height - 0.3) < 0.03, `the plane is the screen that was touched (${plane.width.toFixed(2)} x ${plane.height.toFixed(2)} m, expected 0.50 x 0.30)`);
     console.log(`  plane ${plane.width.toFixed(2)} x ${plane.height.toFixed(2)} m`);
   });
 

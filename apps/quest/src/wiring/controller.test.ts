@@ -73,7 +73,8 @@ describe('the wiring flow', () => {
     t.controller.onReady(ready());
     expect(t.controller.phase).toBe('calibrating');
     expect(t.runtime.running).toBe(false);
-    // touch the two corners of a screen at z = -0.6
+    // touch the two corners of a screen at z = -0.6 (the hand comes in from the side, it is not resting there)
+    await hold(t.controller, new Vector3(-0.6, 1.5, -0.35), 100);
     await hold(t.controller, new Vector3(-0.25, 1.62, -0.6), 600);
     expect(t.controller.calibrator.step).toBe('bottom-right');
     expect(t.view()!.calibration).toMatchObject({ step: 'bottom-right' });

@@ -773,7 +773,9 @@ export class LeanHud implements Hud {
     const workspace = this.home.mode === 'control' && !!target?.tagged && !this.modal.visible && !this.deck.panel.visible && !this.helperPairingView && !this.projectView;
     const connection = this.selectedConnection();
     const ready = connection === 'ready' && !!m?.armed && !this.setupWorking() && !state?.busy;
-    const mode: DialMode = !workspace || !box ? 'hidden' : ready ? state?.handControl ? 'perform' : 'armed' : 'setup';
+    // While Muse's wiring runs the hands are the control: the arcs only display, so a fingertip on the screen never grabs one.
+    const wiring = this.wireView?.phase === 'running';
+    const mode: DialMode = !workspace || !box ? 'hidden' : ready ? state?.handControl || wiring ? 'perform' : 'armed' : 'setup';
     look.rig.setMode(mode);
     if (box && mode !== 'hidden') {
       this.boxes.facingQuaternion(this.head, box.center, this.lookFacing, box.facing);

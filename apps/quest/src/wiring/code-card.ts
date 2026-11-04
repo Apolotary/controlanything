@@ -99,11 +99,14 @@ function clip(text: string, max: number): string {
 }
 
 export function headerText(view: Pick<WireCodeView, 'model' | 'source' | 'request' | 'title' | 'mode' | 'phase'>): string {
-  const what = clip(view.request, 44);
-  if (view.source === 'template') return `Template wiring for "${what}"`;
+  const what = clip(view.request, 40);
+  const done = view.phase === 'calibrating' || view.phase === 'ready' || view.phase === 'running' || view.phase === 'stopped';
+  // No Meta model wrote a template or a recorded fixture: say so instead of naming a model that did not write it.
+  if (view.source === 'template') return `Template wiring for "${what}" (no Meta model wrote it)`;
+  if (view.source === 'fixture' && (!view.model || /^(fixture|muse)$/i.test(view.model))) return `Recorded wiring for "${what}"`;
   const who = view.model || 'Muse';
   if (view.phase === 'failed') return `${who} could not wire "${what}"`;
-  return view.phase === 'running' || view.phase === 'ready' || view.phase === 'stopped' ? `${who} wired "${what}"` : `${who} is wiring "${what}"…`;
+  return done ? `${who} wired "${what}"` : `${who} is wiring "${what}"…`;
 }
 
 /** The whole card as the controller sees it; also what tests read back. */
@@ -131,6 +134,7 @@ export class CodeCard extends Group {
   private readonly pillDot?: Container;
   private readonly pillText?: Text;
   private readonly pillHint?: Text;
+  private readonly pillHintRow?: Container;
   private readonly code: SdfText;
   private view: WireCodeView | null = null;
   private target = '';
@@ -179,13 +183,18 @@ export class CodeCard extends Group {
     this.calibrate.add(this.calibrateText, track);
     this.footer.add(this.phaseRow, this.explain, this.calibrate);
     this.body.add(area, this.footer);
-    this.pillRow = new Container({ flexDirection: 'row', alignItems: 'center', gap: 8, height: 30, display: 'none' });
+    // two short lines: "<title> · running", then the stop gesture
+    this.pillRow = new Container({ flexDirection: 'column', gap: 6, display: 'none' });
+    const pillTop = new Container({ flexDirection: 'row', alignItems: 'center', gap: 8 });
     this.pillDot = new Container({ width: 10, height: 10, borderRadius: 5, backgroundColor: DOT.running, flexShrink: 0 });
-    this.pillText = new Text({ text: '', fontSize: 14, fontWeight: 'semi-bold', color: LOOK.text.primary, flexShrink: 1, whiteSpace: 'nowrap' } as never);
-    const hand = new Container({ width: 16, height: 16, flexShrink: 0, marginLeft: 4 });
+    this.pillText = new Text({ text: '', fontSize: 15, fontWeight: 'semi-bold', color: LOOK.text.primary, flexShrink: 1, wordBreak: 'break-word' } as never);
+    pillTop.add(this.pillDot, this.pillText);
+    this.pillHintRow = new Container({ flexDirection: 'row', alignItems: 'center', gap: 6 });
+    const hand = new Container({ width: 16, height: 16, flexShrink: 0 });
     hand.add(icon('hand', 16));
-    this.pillHint = new Text({ text: 'both palms out = stop', fontSize: 12, fontWeight: 'medium', color: LOOK.text.secondary, whiteSpace: 'nowrap' } as never);
-    this.pillRow.add(this.pillDot, this.pillText, hand, this.pillHint);
+    this.pillHint = new Text({ text: 'both palms out = stop', fontSize: 13, fontWeight: 'medium', color: LOOK.text.secondary, whiteSpace: 'nowrap' } as never);
+    this.pillHintRow.add(hand, this.pillHint);
+    this.pillRow.add(pillTop, this.pillHintRow);
     this.root.add(head, this.body, this.pillRow);
     // troika text is not a uikit component: it sits beside the panel in the same group (same origin: top centre)
     this.add(this.root, this.code);
@@ -213,7 +222,7 @@ export class CodeCard extends Group {
     this.state.phase = fontSafe(view.phaseLine.replace(/✓/g, '')).replace(/\s+/g, ' ').trim();
     this.state.explanation = view.explanation && view.mode === 'full' ? fontSafe(`${view.title ? `${view.title}. ` : ''}${view.explanation}`) : '';
     this.state.calibration = calibration ? calibration.message : '';
-    this.state.pill = view.mode === 'pill' ? `${clip(view.title || view.request, 30)} · ${view.stopped ? 'stopped · ask again' : view.phase === 'failed' ? 'failed' : 'running'}` : '';
+    this.state.pill = view.mode === 'pill' ? `${clip(view.title || view.request, 40)} · ${view.stopped ? 'stopped · ask again' : view.phase === 'failed' ? 'failed' : 'running'}` : '';
     if (!this.root) return;
     const full = view.mode === 'full';
     this.header!.setProperties({ text: this.state.header });
@@ -226,7 +235,7 @@ export class CodeCard extends Group {
     this.pillRow!.setProperties({ display: full ? 'none' : 'flex' });
     this.pillText!.setProperties({ text: this.state.pill });
     this.pillDot!.setProperties({ backgroundColor: view.stopped || view.phase === 'failed' ? (view.phase === 'failed' ? DOT.failed : DOT.stopped) : DOT.running });
-    this.pillHint!.setProperties({ display: view.stopped || view.phase === 'failed' ? 'none' : 'flex' });
+    this.pillHintRow!.setProperties({ display: view.stopped || view.phase === 'failed' ? 'none' : 'flex' });
     const calibrating = !!calibration && full;
     this.phaseRow!.setProperties({ display: calibrating ? 'none' : 'flex' });
     this.phaseText!.setProperties({ text: this.state.phase });

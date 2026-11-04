@@ -18,6 +18,8 @@ export const CALIBRATION = {
   reach: 0.9,
   /** the fingertip must have left the first corner by this much before the second may be captured */
   minTravel: 0.1,
+  /** a hand that is already still when a prompt appears does not count: it must first move this far (m) from where it was seen */
+  freshTravel: 0.06,
   /** the bottom-right corner is at least this far right and below (m) */
   minWidth: 0.1, minDrop: 0.06,
 } as const;
@@ -36,6 +38,10 @@ export class ScreenCalibrator {
   readonly tip = new Vector3();
   hasTip = false;
   topLeft: Vector3 | null = null;
+  /** where a fingertip was first seen since the prompt (or since it was lost); it must travel away before a hold counts */
+  private readonly baseline = new Vector3();
+  private fresh = false;
+  private hasBaseline = false;
   private readonly still = new Vector3();
   private since = -Infinity;
   private lastTime = -Infinity;
@@ -43,7 +49,7 @@ export class ScreenCalibrator {
   private readonly rel = new Vector3();
 
   reset(): void {
-    this.step = 'top-left'; this.progress = 0; this.hasTip = false; this.topLeft = null; this.since = -Infinity; this.lastTime = -Infinity;
+    this.step = 'top-left'; this.progress = 0; this.hasTip = false; this.topLeft = null; this.since = -Infinity; this.lastTime = -Infinity; this.fresh = false; this.hasBaseline = false;
   }
 
   /** The device the wearer is calibrating (world anchor) and where they stand are read per frame. */
@@ -55,13 +61,23 @@ export class ScreenCalibrator {
     if (this.right.lengthSq() < 1e-6) this.right.set(1, 0, 0);
     this.right.normalize();
     // Prefer the right hand, then the left; the first one still enough and in a plausible place wins.
-    let tip: Vector3 | undefined;
+    let tip: Vector3 | undefined, seen: Vector3 | undefined;
     for (const side of ['right', 'left'] as const) {
       const hand = frame.hands[side];
       const p = hand && !hand.controller ? hand.joints['index-finger-tip']?.position : undefined;
-      if (p && Number.isFinite(p.x + p.y + p.z) && this.plausible(p, frame, anchor)) { tip = p; break; }
+      if (!p || !Number.isFinite(p.x + p.y + p.z)) continue;
+      seen ??= p;
+      if (!tip && this.plausible(p, frame, anchor)) tip = p;
     }
-    if (!tip) { this.hasTip = false; this.progress = 0; this.since = -Infinity; return { kind: 'progress' }; }
+    // A hand that was already resting there when the prompt came up is not a touch: it has to move first.
+    if (!this.fresh) {
+      if (!seen) this.hasBaseline = false;
+      else {
+        if (!this.hasBaseline) { this.baseline.copy(seen); this.hasBaseline = true; }
+        if (seen.distanceTo(this.baseline) > CALIBRATION.freshTravel) this.fresh = true;
+      }
+    }
+    if (!tip || !this.fresh) { this.hasTip = false; this.progress = 0; this.since = -Infinity; return { kind: 'progress' }; }
     this.hasTip = true; this.tip.copy(tip);
     if (!Number.isFinite(this.since) || tip.distanceTo(this.still) > CALIBRATION.stillRadius) { this.still.copy(tip); this.since = timeMs; }
     this.progress = Math.min(1, (timeMs - this.since) / CALIBRATION.holdMs);
