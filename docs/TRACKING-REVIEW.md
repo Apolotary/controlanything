@@ -4,10 +4,11 @@ Open **Motion lab** from the Mac companion, or go to `/companion/tracking/`. Thi
 
 ## Make a Quest take
 
-1. Prepare the camera on the Quest launcher. Under **Record a demonstration**, choose **Record take** before entering AR.
+1. Outside AR, navigate the **existing** Quest app tab to `http://localhost:8787/quest/?lab=1`. Recording controls are hidden on the ordinary Quest launcher. Choose **Camera + mic** to prepare the camera (the take itself has no audio), then under **Record a demonstration** choose **Record take** before entering AR. Do not open a second Quest tab.
 2. Enter AR and perform a short interaction with both hands visible. The recorder samples head and hand poses at up to 30 Hz and records the existing passthrough camera stream, without audio. The camera video does not include the app's rendered AR panels.
 3. Exit AR to finish the recording, then choose **Save take**. Wait for video finalization before saving. If the camera or browser encoder is unavailable, the take still contains telemetry and reports that video is missing.
 4. Transfer the downloaded `take-….zip` to the Mac and import it in Motion lab. With an authorized USB connection, `adb pull /sdcard/Download/<take-name>.zip ~/Downloads/` copies a known take; it does not start a recording. The original ZIP stays on the headset.
+5. After saving, while outside AR, return the same tab to `http://localhost:8787/quest/` for the ordinary demo. Do not run the app take and the compositor video recorder together during the first acceptance pass.
 
 Recording is bounded to 90 seconds, with separate memory limits for video, telemetry and image snapshots. A limit stops the take and preserves the data captured so far. No recording starts merely by opening the viewer.
 

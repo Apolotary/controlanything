@@ -7,7 +7,7 @@ ControlAnything connects a Meta Quest 3 to supported hardware and software throu
 <!-- VIDEO_URL -->
 **▶ 3-minute demo video:** _link coming soon_
 
-<p align="center"><img src="docs/hero.jpg" alt="Desktop emulator, sim room: the laptop's visual synth armed, with two arc dials on the screen, the device card and the wrist palette" width="600"><br><sub>Desktop emulator, earlier dial-based build. The current demo asks Muse for wiring before hand interaction; the wrist palette switches Annotate / Control. This image is not evidence of the current real-headset wiring flow.</sub></p>
+<p align="center"><img src="docs/wiring-demo.png" alt="Current desktop emulator: requested fixture wiring in the code card, the visual synth and two-corner calibration guidance" width="800"><br><sub>Current desktop emulator during screen calibration, with requested code and its FIXTURE label visible. The scene is simulated; this is not real-headset or live-generation evidence.</sub></p>
 
 Built for the **Meta Global AI Developer Hackathon** (Indie Developer track, *Push the Frontier*). The name nods to Meta's *Segment Anything*; this is an independent project, not a Meta product.
 
