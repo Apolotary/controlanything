@@ -10,7 +10,7 @@
 import { Vector3 } from 'three';
 import { newId, type WireControl, type WireProgressPayload, type WireReadyPayload, type WireStoppedPayload, type WireStopPayload } from '@ce/protocol';
 import type { ShellFrame } from '../app/hud-contract';
-import type { WireCalibrationView, WireCodeView, WirePhase, WireView } from '../hud/contract';
+import type { WireCalibrationView, WireCodeView, WirePhase, WireView, WireOutputStream } from '../hud/contract';
 import { SignalTracker, SIGNAL_RANGE } from '../gestures/signals';
 import { ScreenCalibrator } from '../gestures/screen-calibration';
 import { clearPlane, loadPlane, planePoint, savePlane, type ScreenPlane } from '../gestures/screen-plane';
@@ -83,6 +83,8 @@ interface Wiring {
   askedAt: number;
   /** AR controls Muse generated for this wiring (knobs/buttons beside the device). */
   controls?: WireControl[];
+  ui?: WireReadyPayload['ui'];
+  visualizer?: WireReadyPayload['visualizer'];
 }
 
 const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
@@ -98,6 +100,11 @@ export class WiringController {
   private w: Wiring | null = null;
   /** Values sent by generated AR controls (counts as use, like a hand program's outputs). */
   private controlSends = 0;
+  private outgoing: WireOutputStream = { seq: 0, slots: Array.from({ length: 96 }, () => ({ seq: 0, actionId: '', value: 0, at: 0 })) };
+  private recordOutput(actionId: string, value: number | boolean): void {
+    const seq = ++this.outgoing.seq, e = this.outgoing.slots[(seq - 1) % this.outgoing.slots.length]!;
+    e.seq = seq; e.actionId = actionId; e.value = value; e.at = this.now();
+  }
   private plane: ScreenPlane | null = null;
   private mic: 'idle' | 'listening' | 'busy' = 'idle';
   private micStartedAt = 0;
@@ -115,9 +122,11 @@ export class WiringController {
 
   constructor(private readonly host: WiringHost) {
     this.runtime = host.runtime ?? new WiringRuntime({
-      send: (event, program) => this.host.sendControl(program.cardId, {
-        ...event, wiringId: program.wiringId, ...(program.requestId ? { requestId: program.requestId } : {}),
-      }),
+      send: (event, program) => {
+        const ok = this.host.sendControl(program.cardId, { ...event, wiringId: program.wiringId, ...(program.requestId ? { requestId: program.requestId } : {}) });
+        if (ok) this.recordOutput(event.widgetId.replace(/^wire:/, ''), event.value);
+        return ok;
+      },
       onStop: (reason, kind) => this.onRuntimeStop(reason, kind),
     });
   }
@@ -135,7 +144,7 @@ export class WiringController {
     return { phase: this.phase, request: w?.request, requestId: w?.requestId, wiringId: w?.wiringId, title: w?.title, model: w?.model, source: w?.wireSource, codeChars: w?.code.length,
       running: this.running, calibrated: !!this.plane, needsScreen: w?.needsScreen ?? false,
       touching: this.running && this.screenTouching, mic: this.mic, stats: { ...this.runtime.stats, sent: (this.runtime.stats.sent ?? 0) + this.controlSends }, step: this.calibrator.step,
-      controls: w?.controls?.length ?? 0 };
+      controls: w?.controls?.length ?? 0, instrument: w?.ui?.controls.length ?? 0, visualizerEvents: this.outgoing.seq };
   }
 
   // --- asking -----------------------------------------------------------------------------------------------------
@@ -217,6 +226,7 @@ export class WiringController {
     w.wiringId = p.wiringId; w.code = p.code || w.code; w.model = p.model; w.wireSource = p.source; w.title = p.title; w.explanation = p.explanation;
     w.needsScreen = !!p.code.trim() && p.needs.includes('screen');
     w.controls = p.controls?.length ? p.controls : undefined;
+    w.ui = p.ui; w.visualizer = p.visualizer; this.outgoing.seq = 0;
     w.program = { wiringId: p.wiringId, requestId: w.requestId, cardId: p.cardId, code: p.code, title: p.title, explanation: p.explanation, model: p.model, source: p.source, actions: p.actions };
     w.stopped = false; w.phase = 'ready'; w.phaseLine = 'ready';
     this.host.feedback?.('ready');
@@ -225,7 +235,7 @@ export class WiringController {
       // AR controls only: nothing runs per frame; the knobs send their own values.
       this.collapsed = false;
       w.phase = 'running'; w.runStartedAt = this.now();
-      this.host.toast(`${p.title || 'Controls'} ready · pinch a knob and twist`, 'ok');
+      this.host.toast(`${p.title || 'Controls'} ready · ${p.ui ? 'touch or press to play' : 'pinch a knob and twist'}`, 'ok');
       this.changed();
       return;
     }
@@ -259,7 +269,9 @@ export class WiringController {
     if (!w || w.phase !== 'running' || !w.program || !w.program.actions.some((a) => a.actionId === actionId) || !this.acceptServerWiring) return false;
     if (phase === 'start') return true;
     this.controlSends++;
-    return this.host.sendControl(w.cardId, { widgetId: `wire:${actionId}`, value, phase, requestId: w.requestId, ...(w.wiringId ? { wiringId: w.wiringId } : {}) });
+    const sent = this.host.sendControl(w.cardId, { widgetId: `wire:${actionId}`, value, phase, requestId: w.requestId, ...(w.wiringId ? { wiringId: w.wiringId } : {}) });
+    if (sent) this.recordOutput(actionId, value);
+    return sent;
   }
 
   /** The wearer (or the app) stops the wiring. Safe at any time. */
@@ -559,7 +571,7 @@ export class WiringController {
     const code: WireCodeView | undefined = w ? {
       wiringId: w.wiringId || 'pending', requestId: w.requestId, phase, model: w.model || 'Muse', source: w.wireSource, request: w.request, code: w.code, phaseLine: w.phaseLine,
       ...(w.title ? { title: w.title } : {}), ...(w.explanation ? { explanation: w.explanation } : {}),
-      mode: (phase === 'running' && this.collapsed) || phase === 'stopped' ? 'pill' : 'full', stopped: w.stopped,
+      mode: (phase === 'running' && (this.collapsed || !!w?.ui || !!w?.controls?.length)) || phase === 'stopped' ? 'pill' : 'full', stopped: w.stopped,
     } : undefined;
     const calibration = this.calibrationView();
     if (this.calibrationOutline && this.now() > this.outlineUntil) this.calibrationOutline = undefined;
@@ -571,6 +583,7 @@ export class WiringController {
       ...(calibration ? { calibration } : outline ? { calibration: { step: 'bottom-right' as const, progress: 1, message: 'Screen calibrated', corners: [], outline } } : {}),
       canRecalibrate: !!w?.needsScreen && !!w.program && (phase === 'running' || phase === 'stopped' || phase === 'ready'),
       ...(w?.controls && phase === 'running' ? { controls: w.controls } : {}),
+      ...(w?.ui && phase === 'running' ? { ui: w.ui, visualizer: w.visualizer, outgoing: this.outgoing } : {}),
     };
   }
 

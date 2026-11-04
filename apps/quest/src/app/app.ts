@@ -2831,7 +2831,7 @@ export class QuestApp {
     const name = this.recorder.download(zip);
     if (!name) return;
     this.page.log(`saved ${name} in Downloads`, 'ok');
-    // on the Mac the server keeps a copy in the repo (apps/quest/public/takes/<take>/), ready to replay and commit
+    // The server keeps this private recording under CE_DATA_DIR/takes for local replay; never in public assets.
     if (!isLocalPage()) return;
     const take = name.replace(/\.zip$/, '');
     const body = new Blob([zip as unknown as BlobPart], { type: 'application/zip' });

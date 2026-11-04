@@ -51,6 +51,11 @@ export interface WireCalibrationView {
   /** the calibrated screen corners (TL, TR, BR, BL), world, shown briefly when done */
   outline?: [number, number, number][];
 }
+/** Fixed-size ring of accepted outgoing values; visual feedback never invents input. */
+export interface WireOutputStream {
+  seq: number;
+  slots: { seq: number; actionId: string; value: number | boolean; at: number }[];
+}
 export interface WireView {
   targetId: string;
   phase: WirePhase;
@@ -67,6 +72,9 @@ export interface WireView {
   canRecalibrate?: boolean;
   /** AR knobs/buttons Muse generated, shown beside the device while the wiring runs. */
   controls?: import('@ce/protocol').WireControl[];
+  ui?: import('@ce/protocol').WireReadyPayload['ui'];
+  visualizer?: import('@ce/protocol').WireReadyPayload['visualizer'];
+  outgoing?: WireOutputStream;
 }
 export interface ProjectView {
   title: string; status: string; projectCount: number; actionCount: number; ready: boolean; running: boolean; engaged: boolean;

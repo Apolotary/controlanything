@@ -29,6 +29,8 @@ export interface GenEvents {
 }
 
 export interface SpecObjectOptions {
+  /** Instrument panels keep solid geometry and labels, without layered fake bloom. */
+  compact?: boolean;
   clock: MaterialClock;
   audio?: UiAudio;
   sink?: EventSink;
@@ -126,6 +128,7 @@ export class SpecObject extends Group {
   private parts = new Map<string, Part>();
   private tweens = new Tweens();
   private clock: MaterialClock;
+  private readonly compact: boolean;
   private audio?: UiAudio;
   private sink: EventSink;
   private armedAll = false;
@@ -149,6 +152,7 @@ export class SpecObject extends Group {
   constructor(spec: Gen3dSpec, opts: SpecObjectOptions) {
     super();
     this.clock = opts.clock;
+    this.compact = opts.compact ?? false;
     this.audio = opts.audio;
     this.sink = opts.sink ?? new ConsoleSink();
     this.emitter = opts.emitter ?? new Emitter<GenEvents>();
@@ -371,7 +375,7 @@ export class SpecObject extends Group {
     switch (p.kind) {
       case 'primitive': {
         const geo = buildGeometry(p);
-        const built = buildMaterial(p.material, this.clock, { style: 'holo' });
+        const built = buildMaterial(this.compact ? { ...p.material, glow: 0, edges: false, scanlines: false, flicker: 0 } : p.material, this.clock, { style: 'holo' });
         const mesh = new Mesh(geo, built.material);
         mesh.renderOrder = ROLE_ORDER[p.role ?? 'default'];
         if (p.shape === 'plane' || p.shape === 'ring') (mesh.material as { side: number }).side = DoubleSide;
@@ -397,7 +401,9 @@ export class SpecObject extends Group {
         break;
       }
       case 'text': {
-        const label = new Label(p.text ?? { value: '' });
+        const compactReadout = this.compact && p.id.endsWith('.value') && p.role === 'readout';
+        const label = new Label(compactReadout ? { ...p.text, value: p.text?.value ?? '', heightM: .009, font: 'sans', weight: 'medium', align: 'center', color: '#e7ebf2', background: '#13171c', uppercase: false } : p.text ?? { value: '' });
+        label.userData.compactReadout = compactReadout;
         label.renderOrder = ROLE_ORDER[p.role ?? 'text'];
         label.userData.billboard = p.text?.billboard ?? false;
         this.labels.set(p.id, label);
@@ -415,12 +421,16 @@ export class SpecObject extends Group {
       default:
         node = new Group();
     }
+    if (this.compact && /(?:\.rp(?:\.|$)|\.tick\d+$|\.name$|\.hint$)/.test(p.id) && node instanceof Mesh) {
+      const material = node.material as ThreeMaterial; material.visible = false;
+    }
     node.name = p.id;
     node.userData.partId = p.id;
     node.userData.role = p.role;
     node.userData.visibleWhen = p.visibleWhen ?? 'always';
     const t = p.transform;
     if (t?.position) node.position.set(t.position[0]!, t.position[1]!, t.position[2]!);
+    if (node.userData.compactReadout) node.position.x = 0;
     if (t?.rotationDeg) node.rotation.set(t.rotationDeg[0]! * DEG, t.rotationDeg[1]! * DEG, t.rotationDeg[2]! * DEG);
     if (t?.scale !== undefined) typeof t.scale === 'number' ? node.scale.setScalar(t.scale) : node.scale.set(t.scale[0]!, t.scale[1]!, t.scale[2]!);
     this.baseScale.set(p.id, node.scale.clone());
@@ -505,7 +515,10 @@ export class SpecObject extends Group {
     for (const fr of this.fruns) {
       if (fr.f.controlId !== c.control.id || fr.f.type !== 'readout') continue;
       const label = fr.node instanceof Label ? fr.node : undefined;
-      label?.setText(formatValue(c.control, c.value, fr.f.format));
+      if (label) {
+        const value = formatValue(c.control, c.value, fr.f.format);
+        label.setText(label.userData.compactReadout ? `${c.control.label} · ${value}` : value);
+      }
     }
   }
 

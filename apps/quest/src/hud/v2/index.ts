@@ -34,6 +34,7 @@ import { CalibrationMarkers, CodeCard } from '../../wiring/code-card';
 import { WireRequestReader } from '../../wiring/request-reader';
 import { DialRig, type DialMode, type DialModel } from './radial-dial';
 import { KnobStrip } from './knob-strip';
+import { InstrumentPanel } from './instrument-panel';
 import { setupChecks, setupFraction } from './setup-ring';
 import { liveGesture } from '../../gestures/feedback';
 export { whenSdfReady } from './text';
@@ -178,6 +179,7 @@ export class LeanHud implements Hud {
   private readonly codeCard = new CodeCard();
   /** Muse-generated AR controls (knobs/buttons) for the running wiring. */
   private readonly knobs = new KnobStrip();
+  private readonly instrument = new InstrumentPanel();
   private readonly knobAnchor = new Vector3();
   private readonly requestReader = new WireRequestReader(this.surfaces);
   private readonly wireMarkers = new CalibrationMarkers();
@@ -322,7 +324,9 @@ export class LeanHud implements Hud {
     this.annotationLayer.add(this.boxes);
     this.root.add(this.annotationLayer, this.card, this.modalLayer, this.deck, this.deck.panel, this.coach, this.notice, this.reticles, this.tether);
     this.root.add(this.helperPairing);
-    this.root.add(this.codeCard, this.wireMarkers, this.requestReader, this.knobs);
+    this.root.add(this.codeCard, this.wireMarkers, this.requestReader, this.knobs, this.instrument);
+    this.instrument.onControl = (actionId, value, phase) => { if (this.locked) this.events.emit('wireControl', { targetId: this.locked, actionId, value, phase }); };
+    this.instrument.onConsumed = hand => this.events.emit('consumed', { hand, widget: 'control' });
     this.knobs.onChange = (control, value, phase) => {
       if (this.locked) this.events.emit('wireControl', { targetId: this.locked, actionId: control.actionId, value, phase });
     };
@@ -974,8 +978,10 @@ export class LeanHud implements Hud {
     } else if (!show) this.codePlaced = false;
     this.codeCard.update(dt * 1000, show);
     // Generated controls: a row of knobs between the device and the wearer, a little below the device's centre.
-    const controls = wire?.phase === 'running' && box && !this.requestReader.visible ? wire.controls ?? null : null;
-    this.knobs.set(controls);
+    const instrumentVisible = wire?.phase === 'running' && !!box && !this.requestReader.visible;
+    const controls = instrumentVisible ? wire?.controls ?? [] : null;
+    this.knobs.set(wire?.ui ? null : controls);
+    this.instrument.set(controls && wire?.ui ? wire.ui : null, wire?.visualizer);
     if (controls && box) {
       const H = Math.max(LOOK.dial.minH, Math.min(LOOK.dial.maxH, box.h));
       this.knobAnchor.copy(box.center).lerp(this.head, 0.35);
@@ -983,8 +989,11 @@ export class LeanHud implements Hud {
       if (reach > 0.75) this.knobAnchor.sub(this.head).setLength(0.75).add(this.head);
       this.knobAnchor.y = Math.max(this.head.y - 0.32, Math.min(this.head.y - 0.12, box.center.y - Math.min(H / 2, 0.18) - 0.02));
       this.knobs.place(this.knobAnchor, this.head, dt);
+      this.instrument.place(this.knobAnchor, this.head);
     }
     this.knobs.update(dt);
+    this.instrument.update(frame, this.camera, wire?.outgoing);
+    this.root.userData.instrument = this.instrument.snapshot();
     this.root.userData.knobs = controls ? this.knobs.snapshot() : undefined;
     if (this.requestReader.visible) {
       if (!this.readerPlaced) {
@@ -2133,6 +2142,7 @@ export class LeanHud implements Hud {
    * The wiring's pinch-tap uses it so a press on UI is never a gesture.
    */
   handBusy(hand: 'left' | 'right'): boolean {
+    if (this.instrument.interacting) return true;
     const anchor = this.palette.anchor;
     if (this.palette.visible && anchor.open && anchor.source === 'hand') return true;
     for (const hold of this.holds.values()) if (hold.hand === hand) return true;
@@ -2171,7 +2181,7 @@ export class LeanHud implements Hud {
     this.palette.setSuppressed(performing || movingPanel || this.modal.visible);
     // Working a control (or just finished, or the other hand is pinching): a closed menu stays closed.
     const menuHand = this.palette.anchor.nonDominant, otherHand = frame.hands[menuHand === 'left' ? 'right' : 'left'];
-    const usingControl = [...this.captures.values()].some((c) => !!c.widget && !this.isPaletteWidget(c.widget));
+    const usingControl = this.instrument.interacting || [...this.captures.values()].some((c) => !!c.widget && !this.isPaletteWidget(c.widget));
     if (usingControl) this.lastControlAt = this.time;
     // Only a fresh pinch of the other hand (about to select something) keeps the menu closed. A pinch held for
     // longer is a hand holding an object or resting with curled fingers; it must not lock the menu away.
@@ -2265,7 +2275,7 @@ export class LeanHud implements Hud {
     this.projectPanel.disposeSpatial();
     this.root.traverse((o) => { if ('sync' in o && 'dispose' in o) (o as SdfText).dispose(); });
     this.helperPairing.dispose();
-    this.codeCard.dispose(); this.wireMarkers.dispose();
+    this.codeCard.dispose(); this.wireMarkers.dispose(); this.instrument.dispose();
     this.boxes.dispose();
     this.checkGeometry.dispose(); this.arrowGeometry.dispose(); this.lockGeometry.dispose();
     this.screenGuideGeometry.dispose(); this.screenGuideMaterial.dispose();
