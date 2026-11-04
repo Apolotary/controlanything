@@ -308,6 +308,14 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128
+        },
+        "filter": {
+          "type": "string",
+          "enum": [
+            "electronics",
+            "objects",
+            "everything"
+          ]
         }
       },
       "required": [

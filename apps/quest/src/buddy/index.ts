@@ -36,7 +36,6 @@ export interface BuddyHost {
   identity?: { deviceToken: string };
   cameraState: 'off' | 'starting' | 'on' | 'error';
   startCamera(): Promise<void>;
-  live?: { running: boolean; aimables(): { id: string; position: Vector3; size: number }[] };
   /** an everyday object bound as a controller and tracked right now (tangible lane); a crop hint, else null */
   tangible?: { heldObject(): { position: Vector3; sizeM: [number, number, number]; label: string } | null };
   registerPaletteItem(item: PaletteItem): () => void;
@@ -238,7 +237,7 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     stage.userData.phase = p;
   }
 
-  async function react(jpeg: string, photoBlob: Blob, via: 'hand' | 'yolo' | 'gaze' | 'photo'): Promise<void> {
+  async function react(jpeg: string, photoBlob: Blob, via: 'hand' | 'gaze' | 'photo'): Promise<void> {
     if (!built) return;
     const b = built;
     setPhase('thinking');
@@ -318,11 +317,10 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     }
     let crop = null;
     try {
-      crop = await cropPresented({ camera: app.camera, poses: app.poses, encoder: app.encoder, liveBoxes: () => {
-        const boxes = app.live?.running ? app.live.aimables() : [];
+      crop = await cropPresented({ camera: app.camera, poses: app.poses, encoder: app.encoder, objectHints: () => {
+        // an object bound as a controller follows the hand that holds it: centre the crop on it
         const held = app.tangible?.heldObject();
-        if (held) boxes.push({ id: 'tangible', position: held.position.clone(), size: Math.max(...held.sizeM) });
-        return boxes;
+        return held ? [{ position: held.position.clone(), size: Math.max(...held.sizeM) }] : [];
       } }, p, joints);
     } catch (e) {
       app.page.log(`[buddy] crop failed: ${(e as Error).message}`, 'warn');

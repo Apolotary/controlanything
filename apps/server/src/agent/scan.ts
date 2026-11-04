@@ -17,6 +17,16 @@ import type { TargetStore } from './targets';
 import type { TargetDetection } from './types';
 
 export const DEFAULT_SCAN_PROMPTS = ['electronic device', 'ceiling light', 'synthesizer', 'book'];
+/**
+ * The headset's wrist filter (scan.frame `filter`) → SAM 3.1 text prompts. SAM 3.1 is the only detector (no on-device
+ * model), so 'laptop' names the Mac's box for what it is and its first pinch opens the visual synth.
+ * CE_SCAN_PROMPTS (or ScanDeps.prompts) overrides every filter.
+ */
+export const FILTER_PROMPTS: Record<'electronics' | 'objects' | 'everything', string[]> = {
+  electronics: ['laptop', 'electronic device', 'synthesizer'],
+  objects: ['cup', 'bottle', 'book'],
+  everything: ['laptop', 'electronic device', 'ceiling light', 'synthesizer', 'book', 'cup', 'bottle'],
+};
 export const MIN_SCORE = 0.55;
 /** labels that must never be reported (the prompts never ask for them; this is the belt to those braces) */
 const FORBIDDEN = /person|people|face|hand|body|man|woman|child|human/i;
@@ -79,6 +89,8 @@ export class ScanService {
   private readonly lastBySender = new Map<string, StoredFrame>();
   private readonly log: (line: string) => void;
   readonly prompts: string[];
+  /** CE_SCAN_PROMPTS / ScanDeps.prompts were set: they win over the headset's filter */
+  private readonly fixedPrompts: boolean;
   /** frames handled / dropped (stats) */
   handled = 0;
   dropped = 0;
@@ -86,6 +98,12 @@ export class ScanService {
   constructor(private readonly d: ScanDeps) {
     this.log = d.log ?? (() => {});
     this.prompts = d.prompts ?? scanPrompts();
+    this.fixedPrompts = !!d.prompts || !!process.env.CE_SCAN_PROMPTS?.trim();
+  }
+
+  /** The SAM 3.1 prompts for this frame: its filter's, else the defaults (older headsets send no filter). */
+  promptsFor(frame: Pick<ScanFramePayload, 'filter'>): string[] {
+    return this.fixedPrompts || !frame.filter ? this.prompts : FILTER_PROMPTS[frame.filter];
   }
 
   frame(frameId: string): StoredFrame | undefined {
@@ -148,7 +166,8 @@ export class ScanService {
         stored.detections = detections;
         result = { frameId: frame.frameId, width: frame.width, height: frame.height, detections, modelId: 'fixture-layout', source: 'fixture', latencyMs: 0 };
       } else {
-        const runs = await this.d.sam.segmentAll(this.prompts, frame.jpeg, { width: frame.width, height: frame.height, pose: frame.camera?.cameraPose ?? frame.pose, label: 'scan' });
+        const prompts = this.promptsFor(frame);
+        const runs = await this.d.sam.segmentAll(prompts, frame.jpeg, { width: frame.width, height: frame.height, pose: frame.camera?.cameraPose ?? frame.pose, label: 'scan' });
         if (this.d.enabled?.() === false) return undefined;
         const latest = this.lastBySender.get(from.deviceId);
         if (latest && latest.frame.capturedAt >= frame.capturedAt) return undefined;
@@ -157,7 +176,7 @@ export class ScanService {
         this.matchTargets(stored, detections);
         stored.detections = detections;
         const model = runs.find((r) => r.records.length)?.recordedFrom ?? runs[0]?.recordedFrom ?? runs[0]?.model ?? this.d.sam.mode;
-        result = { frameId: frame.frameId, width: frame.width, height: frame.height, detections, modelId: model, source: this.d.sam.mode, latencyMs: Date.now() - started, prompts: this.prompts };
+        result = { frameId: frame.frameId, width: frame.width, height: frame.height, detections, modelId: model, source: this.d.sam.mode, latencyMs: Date.now() - started, prompts };
         const errors = runs.filter((r) => r.error).map((r) => `${r.prompt}: ${r.error}`);
         if (errors.length) this.log(`[scan] ${errors.join('; ')}`);
       }

@@ -7,7 +7,7 @@
  * Runs its own muted FIXTURE server (CE_DEMO=1, CE_MAC_SILENT=1, fresh data dir) on PORT (default 8796,
  * HTTPS off), the sim room as the paired Mac (its laptop screen runs the visual synth) and the desktop Quest
  * emulator with camera=sim. Never reuses an existing server. Screenshots/diagnostics: research/screens/judge/.
- * The on-device detector is off (yolo=0): boxes come from the server's SAM fixtures, so this does not measure
+ * Boxes come only from SAM 3.1 (here the server's SAM fixtures; there is no on-device detector), so this does not measure
  * detector accuracy, headset frame rate or the real Mac display.
  * Optional: CE_QUEST_DIST / CE_SIM_DIST / CE_COMPANION_DIST point the server at scratch builds.
  */
@@ -223,7 +223,7 @@ async function run() {
 
     quest = await context.newPage();
     watchPage(quest, 'quest');
-    await quest.goto(`${BASE}/quest/?emulate=1&camera=sim&mute=1&mic=0&yolo=0`, { waitUntil: 'domcontentloaded' });
+    await quest.goto(`${BASE}/quest/?emulate=1&camera=sim&mute=1&mic=0`, { waitUntil: 'domcontentloaded' });
     await waitQuest(() => window.__ce?.welcome && window.__ce.ws.open && window.__ce.room?.sim?.canvas);
     assert.equal(await quest.evaluate(() => window.__ce.welcome.mode), 'fixture');
     assert.equal(await quest.evaluate(() => window.__ce.hudKind), 'v2');

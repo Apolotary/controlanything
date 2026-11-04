@@ -1,7 +1,6 @@
 /**
- * Everyday objects that can become a controller. COCO indices of the bundled YOLOX detector (scan/yolo/classes.ts);
- * the worker already decodes these (they are in DEVICE_CLASSES). A "family" absorbs the detector's usual
- * confusions (a mug that reads "cup" one frame and "bottle" the next is still the same object).
+ * Everyday objects that can become a controller. `cls` is only a stable kind id (the old COCO numbers); names come
+ * from SAM 3.1 prompts or Muse. A "family" groups kinds that behave alike (a flat book is held with open fingers).
  */
 export interface TangibleKind {
   cls: number;

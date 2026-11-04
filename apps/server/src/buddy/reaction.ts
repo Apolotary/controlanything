@@ -58,8 +58,8 @@ export interface BuddyReactRequest {
   quest?: string;
   /** names of objects already shown (newest last), so the buddy can remember them */
   seen?: string[];
-  /** how the crop was taken: around a raised hand (hand/yolo), or the centre of the user's view (gaze) */
-  via?: 'hand' | 'yolo' | 'gaze' | 'photo';
+  /** how the crop was taken: around a raised hand (hand), or the centre of the user's view (gaze) */
+  via?: 'hand' | 'gaze' | 'photo';
 }
 
 export interface BuddyReactResult {

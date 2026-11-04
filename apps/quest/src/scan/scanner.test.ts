@@ -142,7 +142,7 @@ it('registers fixture captures with the server before exposing their selection b
         room: { imageWidth: 640, imageToWorld: (u: number, v: number) => new Vector3((u - 320) / 320, -(v - 240) / 320, -2) } as never }),
     });
     scanner.start(); scanner.tick(1000); await Promise.resolve(); await Promise.resolve();
-    expect(send).toHaveBeenCalledWith('scan.frame', { ...payload, fixtureDetections: [{ detId: 'fx0', label: 'laptop', prompt: 'laptop', score: 1, box: [220, 180, 200, 120] }] }, { to: 'server', droppable: true });
+    expect(send).toHaveBeenCalledWith('scan.frame', { ...payload, filter: 'everything', fixtureDetections: [{ detId: 'fx0', label: 'laptop', prompt: 'laptop', score: 1, box: [220, 180, 200, 120] }] }, { to: 'server', droppable: true });
     expect(upsertTarget).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(20);
     expect(upsertTarget).toHaveBeenCalledTimes(1);

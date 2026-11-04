@@ -222,6 +222,8 @@ export const ScanFramePayload = z.object({
   cardId: Id.optional(),
   /** when this frame answers a sense.request */
   senseId: Id.optional(),
+  /** scan frames: the wrist filter (Electronics · Objects · All); the server picks the SAM 3.1 text prompts from it */
+  filter: z.enum(['electronics', 'objects', 'everything']).optional(),
 });
 export type ScanFramePayload = z.infer<typeof ScanFramePayload>;
 

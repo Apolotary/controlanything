@@ -4,8 +4,8 @@
  * Presenter (per frame, allocation-free): a tracked hand raised in front of the face (joints within 18–65 cm of the
  * head, inside a 35° cone), else the point 45 cm along the gaze. The crop (once per show, off the render path):
  * grab the latest camera frame, project the presenter's joints with the head pose AT CAPTURE TIME, square and pad
- * the box so the object around the fingers fits (≥ 22 cm at that depth), snap to a live YOLO box near the hand
- * when SCAN is running, then encode ≤ 448 px JPEG through the app's encoder worker.
+ * the box so the object around the fingers fits (≥ 22 cm at that depth), centre on a held object the app already
+ * tracks through the hand (tangible), then encode ≤ 448 px JPEG through the app's encoder worker. No detector model.
  */
 import { Quaternion, Vector3 } from 'three';
 import type { ShellFrame, ShellHand } from '../app/hud-contract';
@@ -83,8 +83,8 @@ export interface CropDeps {
   camera: CameraSource;
   poses: PoseRing;
   encoder: JpegEncoder;
-  /** live YOLO boxes on screen (world), when SCAN is running */
-  liveBoxes?: () => { position: Vector3; size: number }[];
+  /** world positions of objects the app tracks near the hand (a held tangible controller), if any */
+  objectHints?: () => { position: Vector3; size: number }[];
 }
 
 export interface Crop {
@@ -94,7 +94,7 @@ export interface Crop {
   /** crop box in the camera frame, px */
   box: [number, number, number, number];
   /** what the crop was centred on */
-  via: 'hand' | 'gaze' | 'yolo';
+  via: 'hand' | 'gaze';
   /** world size of the crop square at the object's depth, metres */
   sizeM: number;
 }
@@ -123,9 +123,10 @@ export async function cropPresented(d: CropDeps, presenter: Presenter, joints: V
 
     let center = presenter.point.clone();
     let minSize = 0.22;
-    let via: Crop['via'] = presenter.kind;
-    // snap to a live YOLO box near the hand (the object itself, not the hand)
-    const boxes = d.liveBoxes?.() ?? [];
+    const via: Crop['via'] = presenter.kind;
+    let snapped = false;
+    // centre on a held object near the hand (the object itself, not the hand)
+    const boxes = d.objectHints?.() ?? [];
     let bestD = presenter.kind === 'hand' ? 0.2 : 0.12;
     for (const b of boxes) {
       const dist = b.position.distanceTo(presenter.point);
@@ -133,14 +134,14 @@ export async function cropPresented(d: CropDeps, presenter: Presenter, joints: V
         bestD = dist;
         center = b.position.clone();
         minSize = Math.min(0.45, Math.max(0.12, b.size * 1.25));
-        via = 'yolo';
+        snapped = true;
       }
     }
 
     const c = worldToPixel(center, k, cam);
     if (!c) return null;
     let x0 = c.u, x1 = c.u, y0 = c.v, y1 = c.v;
-    if (via === 'hand') {
+    if (via === 'hand' && !snapped) {
       for (const j of joints) {
         const p = worldToPixel(j, k, cam);
         if (!p) continue;
@@ -151,7 +152,7 @@ export async function cropPresented(d: CropDeps, presenter: Presenter, joints: V
     let side = Math.max(x1 - x0, y1 - y0) * 1.45;
     side = Math.max(side, minPx, 160);
     side = Math.min(side, Math.min(g.width, g.height));
-    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2 - (via === 'hand' ? side * 0.08 : 0);
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2 - (via === 'hand' && !snapped ? side * 0.08 : 0);
     const bx = Math.round(Math.min(Math.max(0, cx - side / 2), g.width - side));
     const by = Math.round(Math.min(Math.max(0, cy - side / 2), g.height - side));
     const s = Math.round(side);

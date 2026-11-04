@@ -124,7 +124,7 @@ try {
   questContext.setDefaultTimeout(30_000);
   quest = await questContext.newPage(); quest.on('pageerror', error => browserErrors.push(`quest: ${error.message}`));
   // A photo supplies camera pixels without creating a second simulated executor.
-  await quest.goto(`${BASE}/quest/?emulate=1&camera=photo&mute=1&mic=0&hud=v2&yolo=0`);
+  await quest.goto(`${BASE}/quest/?emulate=1&camera=photo&mute=1&mic=0&hud=v2`);
   await quest.waitForFunction(() => window.__ce?.welcome && window.__ce.ws.open);
   await quest.evaluate(() => {
     window.__launchEvents = [];
