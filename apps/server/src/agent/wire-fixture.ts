@@ -53,7 +53,8 @@ function knobsCode(sets: ActionBrief[], trigger?: ActionBrief): string {
   const [a, b, c] = sets;
   const lines = ['// Hands as knobs: each hand moves a different control.'];
   const smooth = (name: string, from: string) => `  mem.${name} = mem.${name} === undefined ? ${from} : mem.${name} + (${from} - mem.${name}) * 0.35; // smooth the motion`;
-  lines.push('const r = s.right;', 'const l = s.left;');
+  lines.push('const r = s.right;');
+  if (c) lines.push('const l = s.left;');
   if (a || b) {
     lines.push('if (r) {');
     if (a) lines.push(`  // Right hand height -> ${a.label}`, smooth('a', 'r.height'), `  out.set(${q(a.actionId)}, ${lerp(a, 'mem.a')});`);
@@ -68,11 +69,11 @@ function knobsCode(sets: ActionBrief[], trigger?: ActionBrief): string {
 const TOUCH_WORDS = /touch|water|ripple|splash|finger|screen|poke|tap on|press the/i;
 
 /** The wiring for a request, built from the driver's own actions. `prefix` labels who wrote it (FIXTURE / Template). */
-export function buildWiring(actions: ActionBrief[], request: string, prefix: 'FIXTURE' | 'Template', note: string): WireDraftData {
+export function buildWiring(actions: ActionBrief[], request: string, prefix: 'FIXTURE' | 'Template', note: string, controls = touchControls()): WireDraftData {
   const sets = actions.filter((a) => a.kind === 'set');
   const trigger = actions.find((a) => a.kind === 'trigger') ?? actions.find((a) => a.kind === 'toggle');
   if (TOUCH_WORDS.test(request) && sets.length) {
-    const touch = pickTouch(actions);
+    const touch = pickTouch(actions, controls);
     // A device without touch inputs (the manifest has none yet): the fingertip drives its first controls instead.
     const t = touch ?? { x: sets[0]!, y: sets[1] ?? sets[0]!, pressure: sets[2] ?? sets[1] ?? sets[0]! };
     return {
