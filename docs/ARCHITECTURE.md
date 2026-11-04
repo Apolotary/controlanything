@@ -129,6 +129,6 @@ Historical evidence remains scoped:
 - The current ask/code/calibrate/touch route needs its own real-Quest run and Annotate remeasurement after the SAM-only change.
 - Physical OP-1 Field, Osmo and IR effects remain separate acceptance gates. A mock, port discovery or byte acknowledgement is insufficient.
 
-The main HUD is a bounded Horizon-style shell with authored layout, generated descriptions and generated wiring. It does not promise arbitrary generated 3D meshes, universal device control or calibration-free touch. Optional dials are secondary; the default route does not require a manual Perform button. Legacy Perform is available only when deliberately enabled with `?perform=1`.
+The main HUD is a bounded Horizon-style shell with authored layout, generated descriptions and generated wiring. It does not promise arbitrary generated 3D meshes, universal device control or calibration-free touch. The normal route has large request buttons and no side dials or manual Perform button. Dials and legacy Perform are available only when deliberately enabled with `?perform=1`. Sustained request reading uses a separate flat panel, placed once about1m ahead and below eye level; the normal workspace clears while it is open. That reader remains inside the immersive session.
 
 Canvas, older assistant/gesture-map experiments and other lab UI remain off the primary path behind `?lab=1`. Buddy and Motion lab have their own evidence boundaries. Submission claims should describe only the paths actually demonstrated.

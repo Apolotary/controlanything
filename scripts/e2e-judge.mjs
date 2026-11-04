@@ -1,7 +1,7 @@
 /**
  * The judge path, automated: npm run build && npm run e2e:judge (system Chrome; no browser download).
  *
- *   Enter AR → pinch the MacBook's box → setup ring → checked readouts. Hands/dials stay inert until the request:
+ *   Enter AR → pinch the MacBook's box → setup ring → Ask Muse. No side dials or hand interaction before the request:
  *   Touch the water → code → calibration → touch → palms Stop → Ask again without setup → wrist Stop all.
  *
  * Runs its own muted FIXTURE server (CE_DEMO=1, CE_MAC_SILENT=1, fresh data dir) on PORT (default 8796,
@@ -159,25 +159,6 @@ const target = async () => {
   return result;
 };
 
-/** Point on an arc dial at `frac` of its sweep. */
-const arcPoint = (side, frac) => quest.evaluate(({ side, frac }) => {
-  const app = window.__ce; let dial;
-  app.scene.traverse((o) => { if (o.name === `dial-${side}`) dial = o; });
-  const sweep = Math.atan2(Math.sin(dial.to - dial.from), Math.cos(dial.to - dial.from));
-  const a = dial.from + sweep * frac;
-  const world = dial.localToWorld(app.desktopCam.position.clone().set(dial.center.x + dial.radius * Math.cos(a), dial.radius * Math.sin(a), 0.002));
-  const p = world.project(app.renderer.xr.getCamera().cameras[0]);
-  const r = app.renderer.domElement.getBoundingClientRect();
-  return { x: r.left + (p.x + 1) * r.width / 2, y: r.top + (1 - p.y) * r.height / 2 };
-}, { side, frac });
-
-async function dragArc(side, from, to) {
-  const start = await arcPoint(side, from);
-  await quest.mouse.move(start.x, start.y); await frames(4); await quest.mouse.down(); await frames(4);
-  for (let i = 1; i <= 15; i++) { const p = await arcPoint(side, from + (to - from) * i / 15); await quest.mouse.move(p.x, p.y); await frames(2); }
-  await quest.mouse.up(); await frames(8);
-}
-
 /** Press the visible chip through the production pointing/click path. No synthetic button events. */
 async function pressChip(label) {
   await click({ name: `wire-chip:${label}` });
@@ -311,10 +292,18 @@ async function run() {
   }, false);
 
   let verifiedBy;
-  await phase('05-armed-dials', async () => {
+  await phase('05-ready-to-ask', async () => {
     await until('controls armed (CE_DEMO=1 arms a verified, silent target itself)', async () => (await target()).armed, PIPELINE_TIMEOUT);
     await waitQuest((id) => window.__ce.modes.byCard(id)?.connection === 'ready', cardId);
-    await waitQuest(() => { let n = 0; window.__ce.scene.traverse((o) => { if (/^dial-(left|right)$/.test(o.name)) { let v = true; for (let p = o; p; p = p.parent) if (!p.visible) v = false; if (v) n++; } }); return n === 2; });
+    await waitQuest(() => {
+      let shown=0;
+      window.__ce.scene.traverse(o=>{
+        if(!/^dial-(left|right)$/.test(o.name))return;
+        for(let p=o;p;p=p.parent)if(!p.visible)return;
+        shown++;
+      });
+      return shown===0;
+    });
     timings.pinchToArmed = +((Date.now() - timings.pinchedAt) / 1000).toFixed(1);
     const results = await quest.evaluate((id) => window.__judge.events.filter((e) => e.type === 'verify.result' && e.payload.cardId === id).map((e) => e.payload), cardId);
     assert(results.some((r) => r.pass), 'At least one action passed verification');
@@ -324,14 +313,20 @@ async function run() {
     assert(await quest.evaluate(() => window.__judge.ringSeen), 'The setup ring showed progress on the screen');
     assert.equal(await quest.evaluate(() => !!window.__ce.pendingArm), false, 'CE_DEMO=1 needs no Enable tap');
     console.log(`  pinch → armed ${timings.pinchToArmed}s; verified by: ${verifiedBy}; evidence: ${notes.slice(0, 160)}`);
+    // Show the real hand workflow, with the wrist lowered once the device is selected.
+    await hands({ left: {offset:[-.25,-.7,-.15],pose:'default'}, right: {offset:[.2,-.7,-.15],pose:'default'} },40);
   });
 
   await phase('06-no-manual-bypass-before-muse', async () => {
     const since = Date.now(), before = await visualState();
-    assert.equal(await quest.evaluate(() => window.__ce.hud.root.getObjectByName('spatial-controls')?.userData.mode), 'waiting');
-    await dragArc('left', 0.1, 0.95);
+    assert.equal(await quest.evaluate(() => {
+      const rig=window.__ce.hud.root.getObjectByName('spatial-controls');
+      return !rig||!rig.visible;
+    }),true,'The default ready screen has no parameter handles or ring');
+    await click({world:screen.position});
     assert.equal((await exec(since)).length, 0, 'A setup driver alone must not allow interaction before the wearer asks Muse');
-    assert.equal(await visualState(), before, 'Pre-request dials are displays, not prewired controls');
+    assert.equal(await visualState(), before, 'Pinching the selected screen is not a prewired interaction');
+    assert.equal(await quest.evaluate(() => window.__judge.requests.some(r=>r.type==='wire.request')),false);
   });
 
   await phase('07-hands-do-nothing-until-muse-wires-it', async () => {

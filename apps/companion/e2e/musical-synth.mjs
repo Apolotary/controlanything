@@ -166,8 +166,13 @@ try {
   await quest.evaluate(text=>window.__ce.wiring.ask(text,'voice'),longRequest);
   await wait(()=>window.__ce.wiring.running,undefined,120000);
   const requestsBeforeRead=await quest.evaluate(()=>window.__musicOut.filter(m=>m.type==='wire.request').length);
-  await click('wire-read-request');
-  assert.equal(await quest.evaluate(()=>window.__ce.wiring.running),true,'Read request never interrupts active generation/play');
+  assert.equal(await quest.evaluate(()=>{
+    const n=window.__ce.scene.getObjectByName('wire-read-request');
+    if(!n)return false;
+    for(let p=n;p;p=p.parent){if(p.isVisible?.peek?!p.isVisible.peek():!p.visible)return false;}
+    return true;
+  }),false,'Reading is offered after stopping, keeping play uncluttered');
+  assert.equal(await quest.evaluate(()=>window.__ce.wiring.running),true,'The reading view never interrupts active generation/play');
   assert.equal(await quest.evaluate(()=>window.__ce.hud.root.getObjectByName('wire-request-reader').visible),false);
   await hand('left',-.12,0,true,true); await hand('right',-.12,0,true,true); await frames(20);
   await wait(()=>window.__ce.wiring.phase==='stopped');
@@ -175,15 +180,26 @@ try {
   await click('wire-read-request');
   const reading=()=>quest.evaluate(()=>window.__ce.hud.root.getObjectByName('wire-request-reader').userData.reading);
   await wait(()=>window.__ce.hud.root.getObjectByName('wire-request-reader').visible);
+  await wait(()=>window.__ce.hud.root.getObjectByName('wire-request-reader').reader.layout.ready);
+  assert.equal(await quest.evaluate(()=>window.__ce.hud.root.getObjectByName('wire-request-reader').reader.layout.overflow),false,'Full request must fit its larger reading surface without clipping');
+  const readerPose=await quest.evaluate(()=>{
+    const n=window.__ce.hud.root.getObjectByName('wire-request-reader');
+    return {position:n.position.toArray(),quaternion:n.quaternion.toArray()};
+  });
   const first=await reading(), pages=[first.text];
   await shot('03c-full-request-first');
   for(let i=1;i<first.pages;i++){
     await click('wire-request-next');
     await wait(i=>window.__ce.hud.root.getObjectByName('wire-request-reader').userData.reading.page===i,i);
     pages.push((await reading()).text);
+    assert.equal(await quest.evaluate(()=>window.__ce.hud.root.getObjectByName('wire-request-reader').reader.layout.overflow),false);
   }
   assert.equal(pages.join(' ').replace(/\s+/g,' ').trim(),longRequest.replace(/\s+/g,' ').trim(),'Every accepted request word is readable across pages');
   await shot('03d-full-request-last');
+  assert.deepEqual(await quest.evaluate(()=>{
+    const n=window.__ce.hud.root.getObjectByName('wire-request-reader');
+    return {position:n.position.toArray(),quaternion:n.quaternion.toArray()};
+  }),readerPose,'Reading and targeting page buttons must not move the reading panel');
   await click('wire-request-return');
   assert.equal(await quest.evaluate(()=>window.__ce.wiring.running),false,'Return never resumes or rewrites a stopped interaction');
   assert.equal(await quest.evaluate(()=>window.__musicOut.filter(m=>m.type==='wire.request').length),requestsBeforeRead,'Reading never asks Muse again');
