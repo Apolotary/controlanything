@@ -2344,17 +2344,15 @@ export class LeanHud implements Hud {
     const menuHand = this.palette.anchor.nonDominant, otherHand = frame.hands[menuHand === 'left' ? 'right' : 'left'];
     const usingControl = this.instrument.interacting || this.knobs.interacting || [...this.captures.values()].some((c) => !!c.widget && !this.isPaletteWidget(c.widget));
     if (usingControl) this.lastControlAt = this.time;
-    // Never open while the other hand pinches (tagging, hold-to-ask) or just let go, reaches into a control, or drives
-    // a running hand program near the screen (handsBusy).
-    const otherPinching = !!otherHand?.pinching && !otherHand.controller;
-    if (otherPinching) this.otherPinchAt = this.time;
-    const nearControl = !this.palette.anchor.open && this.handBusy(menuHand === 'left' ? 'right' : 'left');
-    const blockedBy = usingControl || nearControl || this.time - this.lastControlAt < 1 ? 'control' : this.time - this.otherPinchAt < 0.6 ? 'pinch' : this.handsBusy ? 'hands' : null;
+    // Only the menu hand decides: the other hand is free to pinch, press menu buttons or touch the screen. The menu
+    // stays closed only while the menu hand itself is working a control.
+    void otherHand; void usingControl;
+    const blockedBy = !this.palette.anchor.open && this.handBusy(menuHand) ? 'control' : null;
     this.palette.anchor.blockOpen = blockedBy !== null;
     // Say why (once per session, in small text) when a deliberately raised palm is refused for a while.
     if (blockedBy && !this.palette.anchor.open && this.palette.anchor.poseMs > 900 && !this.menuHints.has(blockedBy)) {
       this.menuHints.add(blockedBy);
-      this.toast(blockedBy === 'pinch' ? 'Relax your other hand to open the menu.' : blockedBy === 'hands' ? 'Your hands are controlling the device. Both palms out to stop, then open the menu.' : 'Let go of the control, then raise your palm again.', 'info');
+      this.toast('Let go of the control with this hand, then raise your palm again.', 'info');
       this.noticeText.scale.setScalar(0.7);
     }
     this.frameHands = frame.hands;
