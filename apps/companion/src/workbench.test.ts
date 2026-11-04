@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
     health: vi.fn(), calls: vi.fn(), approve: vi.fn(), deny: vi.fn(), pending: vi.fn(),
     pairStart: vi.fn(), pairStatus: vi.fn(), revoke: vi.fn(),
   },
-  claim: vi.fn(), attach: vi.fn(), start: vi.fn(), send: vi.fn(), permission: vi.fn(),
+  claim: vi.fn(), takeOver: vi.fn(), attach: vi.fn(), start: vi.fn(), send: vi.fn(), permission: vi.fn(),
   midiEnable: vi.fn(), serialChoose: vi.fn(), serialReconnect: vi.fn(), serialListen: vi.fn(), micStart: vi.fn(),
   replay: vi.fn(),
   identity: vi.fn(), localPage: true, bridgeOnline: false, serialReady: false,
@@ -50,9 +50,11 @@ vi.mock('./connection', () => {
 vi.mock('./executor', () => ({
   Executor: class {
     leader = false;
+    standby = false;
     tape = [];
-    onLeader?: (leader: boolean) => void;
-    claim() { mocks.claim(); this.leader = mocks.leader; this.onLeader?.(this.leader); }
+    onLeader?: (leader: boolean, takenOver?: boolean) => void;
+    claim() { mocks.claim(); this.leader = mocks.leader; this.standby = !mocks.leader; this.onLeader?.(this.leader); }
+    takeOver() { mocks.takeOver(); this.leader = true; this.standby = false; this.onLeader?.(true); }
     attach = mocks.attach;
     panicLocal = vi.fn();
   },
@@ -825,6 +827,24 @@ describe('Calm companion behavior', () => {
     expect(byId('home-devices').textContent).toContain('Mac audio is disabled');
     expect(byId('home-devices').textContent).toContain('Unavailable');
     expect(byId('home-devices').textContent).not.toContain('Controls enabled');
+  });
+
+  it('Open visuals in a standby tab takes over and opens; a screen showing elsewhere gets one line and Use this tab', async () => {
+    mocks.leader = false;
+    const app = await live();
+    await app.emit('presence', { devices: [{ deviceId: 'quest', name: 'Quest 3', kind: 'quest', online: true, capabilities: [], ports: [] }] });
+    expect(byId('simple-visuals').hidden).toBeFalsy();
+    expect(byId('simple-note').hidden).toBe(false);
+    expect(byId('simple-note-text').textContent).toBe('Another Chrome tab runs the visuals and devices.');
+    mocks.visualConnected = true; mocks.visualChanged?.(); await flush();
+    await byId('simple-visuals').click(); await flush();
+    expect(mocks.takeOver).not.toHaveBeenCalled();
+    expect(byId('simple-note-text').textContent).toBe('Visuals are open in another Chrome tab.');
+    expect(byId('simple-note-action').hidden).toBe(false);
+    await byId('simple-note-action').click(); await flush();
+    expect(mocks.takeOver).toHaveBeenCalledOnce();
+    expect(mocks.visualOpen).toHaveBeenCalledOnce();
+    expect(byId('simple-note').hidden).toBe(true);
   });
 
   it('shows same-Mac ports in a standby tab while keeping MIDI access disabled', async () => {

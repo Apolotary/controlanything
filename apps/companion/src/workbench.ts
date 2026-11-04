@@ -158,8 +158,41 @@ const visualLauncher = new VisualSynthLauncher({
   connected: () => !replaying && executor.leader && !!conn?.open && !serverDown,
   onClosed: () => { clearVisualsOpenTimer(); visualsOpening = false; render('calm'); },
 });
+/** One line under the simple bar saying why Open visuals cannot open here, with one fix (Use this tab). */
+let visualsNote: { text: string; takeOver?: boolean } | undefined;
+/** Open the visuals as soon as this tab holds the executor role (after Use this tab). */
+let visualsWanted = false;
+let takeOverTimer: ReturnType<typeof setTimeout> | undefined;
+const showVisualsNote = (text: string, takeOver = false): void => { visualsNote = { text, takeOver }; render('calm'); };
+/** The visible tab takes the executor role (the lock is stolen; the old tab goes to standby) and opens visuals. */
+const useThisTab = (): void => {
+  if (replaying || !identity) return;
+  visualsWanted = true;
+  if (executor.leader) { openVisuals(); return; }
+  showVisualsNote('Moving visuals to this tab…');
+  executor.takeOver();
+  clearTimeout(takeOverTimer);
+  takeOverTimer = setTimeout(() => {
+    if (executor.leader) return;
+    visualsWanted = false;
+    showVisualsNote('This tab could not take over. Close the other companion tab, then choose Open visuals.');
+  }, 3000);
+};
+/** Every click opens the visuals, brings them back, or says why not; it is never a silent no-op. */
 const openVisuals = (): void => {
-  if (!identity || replaying || !executor.leader) return;
+  if (replaying) { showVisualsNote('Visuals are off in this display-only demo.'); return; }
+  if (!identity) { showVisualsNote('Not paired yet. Pair this Mac with your Quest first.'); return; }
+  if (!executor.leader) {
+    // Another tab of this Chrome runs the visuals and devices. Never silently pull a screen that is showing.
+    if (visualPresence.connected()) showVisualsNote('Visuals are open in another Chrome tab.', true);
+    else useThisTab();
+    return;
+  }
+  visualsWanted = false;
+  visualsNote = undefined;
+  clearTimeout(takeOverTimer);
+  // Already drawing here: bring the panel's controls back instead of rebuilding it.
+  if (visualLauncher.drawing) { visualLauncher.update(); visualLauncher.reveal(); render('calm'); return; }
   clearVisualsOpenTimer();
   visualsOpenTimedOut = false;
   visualsOpening = !visualPresence.connected();
@@ -473,6 +506,14 @@ function renderOnboarding(): void {
   $('paired-summary').hidden = !paired;
   $('simple-visuals').hidden = !paired || visualLauncher.opened;
   $('simple-stop').hidden = !paired;
+  // A standby tab says so in one line, with the fix; the only (leader) tab shows nothing here.
+  const note = visualsNote ?? (!replaying && identity && executor.standby && !visualLauncher.opened
+    ? { text: visualPresence.connected() ? 'Visuals are open in another Chrome tab.' : 'Another Chrome tab runs the visuals and devices.', takeOver: true }
+    : undefined);
+  const noteText = note?.text ?? '';
+  if ($('simple-note-text').textContent !== noteText) $('simple-note-text').textContent = noteText;
+  $('simple-note').hidden = !note;
+  $('simple-note-action').hidden = !note?.takeOver;
   $('paired-next').textContent = ['paired', 'connecting', 'headset'].includes(view.stage) ? view.next : 'Keep this page open; your headset uses it to reach your devices.';
   $('onboarding').dataset.state = replaying ? 'demo' : view.stage;
   $('onboarding-title').textContent = replaying ? 'Recorded setup demo' : view.title;
@@ -1405,11 +1446,24 @@ function setupExecutors(): void {
     render('evidence');
     if (!tabChosenByUser && mainTab === 'code' && executor.tape.length && armedOnce) setTab('tape');
   };
-  executor.onLeader = (leader) => {
+  executor.onLeader = (leader, takenOver) => {
+    if (leader) clearTimeout(takeOverTimer);
+    else {
+      // Only the executor tab draws and advertises the visuals; hand the serial port and mic to the new one.
+      visualsWanted = false;
+      clearVisualsOpenTimer(); visualsOpening = false;
+      visualLauncher.close();
+      if (takenOver) {
+        visualsNote = undefined;
+        if (link.hasPort) void link.close();
+        if (oracle.state === 'on') oracle.stop();
+      }
+    }
     visualLauncher.update();
-    autoOpenVisuals();
+    if (leader && visualsWanted) openVisuals();
+    else autoOpenVisuals();
     conn?.resendHello();
-    log('info', leader ? 'this tab is the executor' : 'standby');
+    log('info', leader ? 'this tab is the executor' : takenOver ? 'standby: another tab took over' : 'standby');
     renderAll();
     if (leader && !replaying) {
       link.listenForPlug();
@@ -1450,7 +1504,10 @@ let armedOnce = false;
 async function takeDevices(): Promise<void> {
   if (replaying || !executor.leader) return;
   if (MidiBridge.supported && !midi.enabled && (await MidiBridge.alreadyGranted())) await enableMidi(true);
-  if (CardputerLink.supported && !link.hasPort) await link.reconnect();
+  // After a takeover the previous tab may still be closing the port: try once more shortly.
+  if (CardputerLink.supported && !link.hasPort && !(await link.reconnect().catch(() => false))) {
+    setTimeout(() => { if (executor.leader && !link.hasPort) void link.reconnect().catch(() => false); }, 1200);
+  }
   if (AudioOracle.supported && oracle.state === 'off') {
     try {
       const s = await navigator.permissions.query({ name: 'microphone' as PermissionName });
@@ -1644,8 +1701,14 @@ function connect(): void {
     ['calm', 'links'].forEach(render);
   });
   c.on('visual.open', (m) => {
-    if (m.from !== 'server' || replaying || !executor.leader || !identity || m.to !== identity.deviceId || visualPresence.connected()) return;
-    openVisuals();
+    if (m.from !== 'server' || replaying || !identity || m.to !== identity.deviceId || visualPresence.connected()) return;
+    if (executor.leader) { openVisuals(); return; }
+    // The executor tab may be hidden (a stale tab behind this one): if no visible screen shows up
+    // shortly, the visible tab takes over so the pinch still opens visuals where the user can see them.
+    if (document.visibilityState !== 'visible') return;
+    setTimeout(() => {
+      if (!executor.leader && identity && document.visibilityState === 'visible' && !visualPresence.connected()) useThisTab();
+    }, 1500);
   });
   c.on('pair.pending', (m) => {
     if (settledPairings.has(m.payload.pairingId)) return;
@@ -1870,7 +1933,8 @@ export async function bootWorkbench(): Promise<void> {
   $('headset-qr').setAttribute('aria-label', `Open ${PRODUCT_NAME} in Quest Browser`);
   document.body.classList.toggle('stage', stage);
   $('workbench').classList.toggle('simple', simple);
-  $('simple-visuals').addEventListener('click', () => { if (!visualLauncher.opened) openVisuals(); });
+  $('simple-visuals').addEventListener('click', openVisuals);
+  $('simple-note-action').addEventListener('click', useThisTab);
   $('simple-details').addEventListener('click', () => { simple = false; $('workbench').classList.remove('simple'); renderAll(); });
   // Back from the full workbench to the one calm screen (button or Esc when no sheet is open).
   const backToSimple = (): void => { if (simple) return; simple = true; showView('home', false); $('workbench').classList.add('simple'); renderAll(); };
