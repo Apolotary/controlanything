@@ -64,7 +64,7 @@ export interface LoopDeps {
 }
 
 /** The visual synth's live driver call gets this long before the curated template stands in. */
-const VISUAL_DRIVE_BUDGET_MS = Number(process.env.CE_DRIVE_TIMEOUT_MS) > 0 ? Number(process.env.CE_DRIVE_TIMEOUT_MS) : 20_000;
+const VISUAL_DRIVE_BUDGET_MS = Number(process.env.CE_DRIVE_TIMEOUT_MS) > 0 ? Number(process.env.CE_DRIVE_TIMEOUT_MS) : 45_000;
 /** Effort for the visual synth's driver and hack set. Measured live: minimal was no faster (~1.3 k output tokens either way) and its driver was rejected once; low stays valid. */
 const VISUAL_EFFORT = (['minimal', 'low', 'medium'] as const).find((e) => e === process.env.CE_VISUAL_EFFORT) ?? 'low';
 /** CE_DEMO=1: the one-shot demo. The silent visual synth arms itself after verification (no Enable modal). */
