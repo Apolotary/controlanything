@@ -29,6 +29,9 @@ export class VisualSynthLauncher {
   private ready = false;
   private idleTimer?: ReturnType<typeof setTimeout>;
   private chromeTimer?: ReturnType<typeof setTimeout>;
+  /** Keeps the Mac's display awake while the visuals show (the user is looking through the headset). */
+  private wakeLock?: WakeLockSentinel;
+  private wakeLockPending = false;
   private readonly visibility = () => this.update();
   private readonly resize = () => {
     if (!this.canvas) return;
@@ -133,19 +136,34 @@ export class VisualSynthLauncher {
   update(): void {
     if (!this.panel) return;
     if (this.ownerId !== this.options.owner()) { this.close(); return; }
-    if (this.ready && !document.hidden) this.renderer?.start();
+    if (this.ready && !document.hidden) { this.renderer?.start(); this.keepAwake(); }
     else this.renderer?.stop();
     const available = this.available;
     this.live?.classList.toggle('on', available);
     if (this.output && this.ready) {
-      this.output.textContent = available ? '' : document.hidden ? 'Paused while this companion tab is hidden' : 'Paused · Reconnecting to your room';
-      this.output.hidden = available;
+      const text = available ? '' : document.hidden ? 'Paused while this companion tab is hidden' : 'Paused · Reconnecting to your room';
+      if (this.output.textContent !== text) this.output.textContent = text;
+      if (this.output.hidden !== available) this.output.hidden = available;
     }
     this.presence?.update();
   }
 
+  /** Screen Wake Lock (Chrome, secure context): the browser drops it when the page hides; update() asks again. */
+  private keepAwake(): void {
+    const wakeLock = (navigator as Navigator & { wakeLock?: WakeLock }).wakeLock;
+    if (!wakeLock || this.wakeLock || this.wakeLockPending) return;
+    this.wakeLockPending = true;
+    wakeLock.request('screen').then((sentinel) => {
+      this.wakeLockPending = false;
+      if (!this.panel) { void sentinel.release().catch(() => {}); return; }
+      this.wakeLock = sentinel;
+      sentinel.addEventListener('release', () => { if (this.wakeLock === sentinel) this.wakeLock = undefined; });
+    }, () => { this.wakeLockPending = false; });
+  }
+
   close(): void {
     const hadPanel = !!this.panel;
+    void this.wakeLock?.release().catch(() => {}); this.wakeLock = undefined;
     this.ready = false; this.presence?.dispose(); this.presence = undefined;
     this.relay?.dispose(); this.relay = undefined;
     this.renderer?.dispose(); this.renderer = undefined;
