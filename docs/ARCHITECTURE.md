@@ -5,8 +5,7 @@ How a thing the headset looked at becomes verified, generated controls. Companio
 ## 1. Two modes, one golden path
 
 **Annotate** (entering AR). The headset shows what it can control:
-- on-device YOLOX-Nano boxes appear at once;
-- SAM 3.1 outlines and labels come back from the server;
+- SAM 3.1 outlines, boxes and labels come back from the server (a scan as Annotate starts and whenever the head settles; the only detector, so every runtime AI model is a Meta model);
 - the wrist palette's *Electronics · Objects · All* switch filters what is shown.
 
 People are never boxed (the COCO person class is dropped in the detector worker; server prompts and labels exclude people). Pinching a box tags it (`tag.add`), and Muse Spark names it without starting setup.
@@ -46,7 +45,6 @@ One camera miss on the visual synth hands the rest of that run to the renderer r
 ```
   Quest 3 (WebXR, apps/quest)              Mac: server (apps/server)                          Executors / sensors
   ───────────────────────────              ─────────────────────────────────────────          ───────────────────────────
-  YOLOX boxes (local worker, ~15 ms)
   passthrough frame + pose ──scan.frame──▶ SCAN     sam-3.1 outlines; jsQR reads pairing codes
   outlines + pills ◀─────────scan.result─
   pinch the Mac's screen ─target.select──▶ LINK     the paired Mac advertising ce-visual-synth
@@ -59,7 +57,7 @@ One camera miss on the visual synth hands the rest of that run to the renderer r
   arc dials + card ◀──────────ui.spec───── ARM      auto for verified silent targets (CE_DEMO), else Enable controls
   dial drag / Perform hands ─control.event▶ CONTROL action → op → exec.command (no model) ──▶ visuals change
   palette Buddy: crop ───/api/buddy──────▶ muse-spark-1.3 reaction · muse-image-1.0 sticker
-  palette Use an object: YOLOX-tracked mug/bottle ─control.event─▶ same CONTROL path
+  palette Use an object: hand-held mug/bottle (follows the holding hand) ─control.event─▶ same CONTROL path
   Ask Muse PCM (lab) ───────voice.audio──▶ muse-voice-transcribe-1.0
                                            other executors: OP-1 Field via Web MIDI · Cardputer IR · DJI Osmo (BLE /
                                            Web Bluetooth / mock) · iPhone · DevTerm · Sim room (all of them, virtual)
@@ -70,7 +68,7 @@ One camera miss on the visual synth hands the rest of that run to the renderer r
 | Protocol | `packages/protocol` | zod schemas + TS types for every WebSocket message, the Driver, the HackSet, pairing helpers; zod → JSON Schema (`json-schema/*.json`) for the Python and Swift clients and as the Muse `json_schema` response formats. |
 | gen3d | `packages/gen3d` | The `ce.gen3d/1` spec (semantic controls + 3D presentation), archetype expansion, validator/repair, patches, theme. |
 | Server | `apps/server` | One Node process on the Mac: HTTPS/WSS `:8443` + HTTP/WS `:8787`, the hub at `/ws`, pairing, the Meta model adapters (`src/muse/`), the brain (`src/agent/`), the oracles (`src/oracle/`), SCAN (`src/scan/`), the forge (`src/gen3d/`), voice relay (`src/voice/`), curated device data (`data/devices/`), static hosting of `/quest/`, `/companion/`, `/sim/`. |
-| Quest app | `apps/quest` | WebXR app: camera capture with pose history, on-device YOLOX worker, SAM outlines in Annotate, the wrist palette, the setup ring, arc dials on the selected screen and a Horizon-style device card (`@pmndrs/uikit-horizon`). Pointing, poke and pinch through Meta's `@iwsdk/xr-input`. IWER provides desktop emulation; record/replay is available. Lab features (Canvas, Ask Muse, the old menu) stay behind `?lab=1`. |
+| Quest app | `apps/quest` | WebXR app: camera capture with pose history, SAM 3.1 boxes and outlines in Annotate, the wrist palette, the setup ring, arc dials on the selected screen and a Horizon-style device card (`@pmndrs/uikit-horizon`). Pointing, poke and pinch through Meta's `@iwsdk/xr-input`. IWER provides desktop emulation; record/replay is available. Lab features (Canvas, Ask Muse, the old menu) stay behind `?lab=1`. |
 | Mac companion | `apps/companion` | One status card with a pairing QR (read by the headset camera) and the full-screen visual synth that opens by itself on a pinch; Motion lab at `/companion/tracking/`; owner/approver UI; executors for MIDI (Web MIDI) and the Cardputer (Web Serial JSON lines); the audio oracle (synth USB audio or mic); the agent view (steps with model ids, driver, evidence, links, daemons). One tab executes (Web Locks), others stand by. |
 | Cardputer firmware | `firmware/cardputer` | IR node: raw / NEC / AEHA transmit at ≤ 4 frames/s, IR learning through a Grove IR receiver, pairing screen, hack menu on physical keys, serial protocol v1. |
 | iPhone | `apps/iphone` | SwiftUI client: pairing, 2D controls and hack lists, handheld scanner / second verification camera, local executor (torch, haptics, screen, say, beep). |
@@ -78,7 +76,7 @@ One camera miss on the visual synth hands the rest of that run to the renderer r
 | Sim room | `apps/sim` | Virtual laptop (running the visual synth), ceiling light + IR remote and synth; pairs as the Mac's renderer, IR/MIDI executor and camera/audio sensor; renders frames from Blender-rendered light layers with the Quest 3 camera intrinsics; `npm run demo:sim` judge path; take replay. |
 | Visual synth | `packages/vsynth` | The silent WebGL2 instrument the Mac shows (Warp, Ripples, Flow/Rings/Prism) and its capability manifest (CCs, programs, effects, rejects) that Muse writes the driver from; renderer receipts report what was applied. |
 | Buddy | `apps/quest/src/buddy`, `apps/server/src/buddy` | Desk mascot: quests, Muse Spark reactions to shown objects, Muse Image stickers. |
-| Tangible | `apps/quest/src/tangible` | Any tracked mug/bottle/book becomes a controller (YOLOX + One Euro); emits ordinary `control.event`s. |
+| Tangible | `apps/quest/src/tangible` | A mug/bottle/book SAM 3.1 found becomes a controller once picked up: it follows the hand holding it (WebXR joints + One Euro); emits ordinary `control.event`s. |
 | DJI Osmo | `apps/server/src/devices/osmo` | DUML over BLE (bleak helper), Web Bluetooth or a mock; safety envelope; `CE_OSMO=ble|web|mock`. |
 
 ## 3. Protocol
@@ -198,11 +196,10 @@ The schema and lower-level gen3d renderer are broader than the current main Ques
 |---|---|
 | Fixture | 1.3 s |
 | Live, cold | 29.0 s: Spark identify 8.2 s, driver 7.1 s, forge 7.8 s plus one forge repair 13.2 s. An earlier probe took 41.9 s. |
-| Live, with the driver/controls prefetch (~40 s after the Mac companion connects) | Builder measurements after the verification pass, all from one pinch:<br>• ~1.2 s for a YOLO *laptop* box with the prefetch finished;<br>• ~23 s for a generic SAM *electronic device* box with the prefetch finished (mostly Muse identify);<br>• ~32 s while the prefetch is still running (no duplicate calls). |
+| Live, with the driver/controls prefetch (~40 s after the Mac companion connects) | Builder measurements after the verification pass, all from one pinch:<br>• ~1.2 s for the MacBook's *laptop* box with the prefetch finished (measured with the earlier on-device detector, since removed);<br>• ~23 s for a generic SAM *electronic device* box with the prefetch finished (mostly Muse identify);<br>• ~32 s while the prefetch is still running (no duplicate calls). |
 
 Other numbers from that pass:
 - 24 SAM 3.1 calls in one live run.
-- YOLOX-Nano at 12–13 fps, 15–19 ms per inference on WebGPU.
 - QR pairing by looking: 1.6 s after Enter AR.
 - Emulator draw calls 32–80 per state.
 

@@ -189,7 +189,7 @@ try {
   const questContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   questContext.setDefaultTimeout(30_000); await installEvidence(questContext);
   quest = await questContext.newPage(); watch(quest, 'QUEST');
-  await quest.goto(`${BASE}/quest/?emulate=1&camera=sim&mute=1&mic=0&hud=v2&yolo=0`);
+  await quest.goto(`${BASE}/quest/?emulate=1&camera=sim&mute=1&mic=0&hud=v2`);
   await quest.waitForFunction(() => window.__ce?.welcome && window.__ce.ws.open);
   await quest.locator('#btn-enter').click();
   await quest.waitForFunction(() => window.__ce.renderer.xr.isPresenting);

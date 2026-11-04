@@ -1,6 +1,6 @@
 import type { Det } from '../io/v1';
 import { isGenericLabel } from './targets';
-import { containment, iou } from './yolo/post';
+import { containment, iou } from './box-math';
 
 /** Suppress redundant boxes within one capture, before uncertain depth estimates can separate them. */
 export function deduplicateDetections(detections: readonly Det[]): { kept: Det[]; suppressed: Det[] } {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { annotationFadeMs, annotationRange, annotationVisible, inAnnotationRange, matchesAnnotationFilter } from './policy';
-import { allowedClasses, CATEGORIES } from './yolo/classes';
+import { CATEGORIES } from './categories';
 
 const head = { x: 0, y: 1.6, z: 0 };
 const target = { label: 'Ceiling light', score: 0.9, position: { x: 0, y: 1.6, z: -2 }, lastSeenAt: 1000 };
@@ -24,14 +24,11 @@ describe('annotation policy', () => {
     }
     expect(matchesAnnotationFilter('microwave', 'electronics')).toBe(false);
     expect(matchesAnnotationFilter('microwave', 'lights')).toBe(false);
-    expect(allowedClasses('electronics').has(68)).toBe(false);
-    expect(allowedClasses('everything').has(68)).toBe(true);
   });
 
   it('excludes people, body parts, and scenery from every filter', () => {
     for (const category of CATEGORIES) for (const label of ['person', 'person holding a phone', 'hand', 'wall', 'chair']) {
       expect(matchesAnnotationFilter(label, category.id)).toBe(false);
-      expect(allowedClasses(category.id).has(0)).toBe(false);
     }
   });
 
@@ -40,10 +37,8 @@ describe('annotation policy', () => {
       expect(matchesAnnotationFilter(label, 'everything')).toBe(true);
       expect(matchesAnnotationFilter(label, 'electronics')).toBe(false);
     }
-    for (const id of [32, 39, 41, 73]) {
-      expect(allowedClasses('everything').has(id)).toBe(true);
-      expect(allowedClasses('electronics').has(id)).toBe(false);
-    }
+    for (const label of ['coffee cup', 'water bottle', 'book']) expect(matchesAnnotationFilter(label, 'objects')).toBe(true);
+    for (const label of ['laptop', 'ceiling light', 'electronic device']) expect(matchesAnnotationFilter(label, 'objects')).toBe(false);
     expect(matchesAnnotationFilter('person holding a book')).toBe(false);
   });
 

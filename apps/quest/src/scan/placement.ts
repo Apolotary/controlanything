@@ -7,7 +7,7 @@ import { Vector3 } from 'three';
 import type { Det } from '../io/v1';
 import type { FrameRecord } from './capture';
 import { depthFromSize, pixelToRay, planeBasis, rayPlane, type WorldRay, worldToPixel } from './projection';
-import { overlapsHand } from './yolo/quality';
+import { overlapsHand } from './box-math';
 
 export interface DepthHit {
   point: Vector3;

@@ -24,28 +24,43 @@ One MacBook and one Quest 3. The Mac is both the bridge and the device being pla
 
 That is three deliberate actions: Enter AR, pinch, Perform. To open the **wrist palette**, turn your left palm toward your face. It holds *Electronics · Objects · All* (what to track; in Annotate only), *Visual synth*, *Buddy*, *Use an object*, *Stop* and *Exit*.
 
-## How Meta's models are used
+## Meta model calls vs. OS and browser features
 
-Every server model call goes to Meta's Model API. The table lists only what the code calls at runtime.
+**Every AI model this project calls at runtime is a Meta model**, called through Meta's Model API. No other AI model runs anywhere in the system: not on the headset, the Mac, the phone or the server.
 
-| Model | What it does here |
+| Meta model | What it does here |
 |---|---|
-| **SAM 3.1** (`sam-3.1`) | Segments devices in passthrough frames (outlines and boxes). During verification it finds the same outline again on the before/after frames. One live golden-path run made 24 calls. |
-| **Muse Spark** (`muse-spark-1.3`) | Identifies the pinched device from a crop and the whole frame. Writes the driver from the device's capability manifest or MIDI chart. Forges the controls: a hack set compiled to 3D controls, with a repair round when checks fail. Also voices the Muse buddy: a reaction to each object you show it, and a judgement on whether the object meets the quest. |
-| **Muse Image** (`muse-image-1.0`) | Paints the buddy's stickers. Optionally paints a device-inspired panel texture that never delays the controls (`GEN3D_SKIN=0` turns it off). |
+| **SAM 3.1** (`sam-3.1`) | Finds and outlines the devices and objects in passthrough frames: every box you see comes from it. During verification it finds the same outline again on the before and after frames. |
+| **Muse Spark** (`muse-spark-1.3`) | Identifies the pinched device from a crop and the whole frame. Writes the driver from the device's capability manifest or MIDI chart. Forges the controls, with a repair round when checks fail. Also voices the Muse buddy: it reacts to each object you show it and judges whether the object meets the quest. |
+| **Muse Wonder** (`muse-wonder-1.0`) | Guarded fallback for driver writing when Muse Spark fails. |
+| **Muse Image** (`muse-image-1.0`) | Paints the buddy's stickers. Optionally paints a device-inspired panel texture, which never delays the controls. |
 | **Muse Voice Transcribe** (`muse-voice-transcribe-1.0`) | Transcribes *Ask Muse* push-to-talk (a lab feature) and spoken verification clips. |
+
+These parts are OS or browser features, or plain code. None of them is an AI model call:
+
+| Part | What it actually is |
+|---|---|
+| Hand and head tracking | Quest OS hand tracking, read through the WebXR Hand Input API. We read the joint poses and run no hand model of our own. |
+| Gestures (pinch, palm menu, hand control, pattern tap) | Deterministic geometry on those joint poses, smoothed with a One Euro filter. |
+| An object you hold as a controller | Follows the hand that holds it (WebXR joints). SAM 3.1 finds it first. |
+| Camera verification (*seen ✓*) | Deterministic before/after frame comparison inside the SAM 3.1 outline. |
+| Passthrough frames | Quest Browser camera access (`getUserMedia`). |
+| The Mac visual synth | A WebGL shader in Chrome. |
+| Mac speech and music actions | macOS `say` and AppleScript (Music), which are OS features. They're off in the demo (`CE_MAC_SILENT=1`). |
+| iPhone spoken replies | The iOS system voice (`AVSpeechSynthesizer`). |
+| Device links | Web MIDI, Web Serial and Web Bluetooth (browser), bleak (Bluetooth LE), stored IR codes. |
+| QR pairing | jsQR decoding (not a model). |
 
 **Measured** (from the independent verification pass, `CE_DEMO=1`, desktop emulator):
 
 | Mode | Pinch → controls armed |
 |---|---|
 | Live, cold | **29.0 s**: identify 8.2 s, driver 7.1 s, forge 7.8 s plus one forge repair 13.2 s. An earlier live probe took 41.9 s. |
-| Live, with the prefetch | With `CE_DEMO=1`, the server asks Muse for the driver and controls as soon as a Mac advertises the renderer; the prefetch takes about 40 s, and the pinch re-validates its result. The builder measured these times after the verification pass:<br>• **~1.2 s** for a YOLO *laptop* box once the prefetch has finished;<br>• **~23 s** for a generic SAM *electronic device* box once the prefetch has finished (mostly the Muse identify);<br>• **~32 s** while the prefetch is still running (no duplicate calls). |
+| Live, with the prefetch | With `CE_DEMO=1`, the server asks Muse for the driver and controls as soon as a Mac advertises the renderer; the prefetch takes about 40 s, and the pinch re-validates its result. The builder measured these times after the verification pass:<br>• **~1.2 s** for the MacBook's *laptop* box once the prefetch has finished;<br>• **~23 s** for a generic SAM *electronic device* box once the prefetch has finished (mostly the Muse identify);<br>• **~32 s** while the prefetch is still running (no duplicate calls). |
 | Fixture replay | **1.3 s**. |
 
 After setup, moving a control makes **no model call**. A control event resolves to a validated driver action, then to a MIDI, IR or Bluetooth op, rate-limited, in under 1 ms on the server.
 
-**YOLOX-Nano is the one non-Meta model.** It runs on the headset for instant boxes before SAM answers, at 12–13 fps and 15–19 ms per inference (WebGPU, measured in the emulator). The person class is dropped before boxes leave its worker.
 
 ## What Muse writes, and what the server checks
 
@@ -73,7 +88,7 @@ In emulator runs, the camera at about 1 m usually does **not** see the Mac's scr
 ## More than one synth
 
 - **Muse buddy.** *Wrist palette → Buddy.* A small desk mascot gives you quests (*"Show me something green!"*). Hold up a real object and Muse Spark reacts to it. Muse Image paints a sticker for its shelf.
-- **Physical objects as controllers.** Once a device is armed, choose *Use an object* and pick a mug or bottle. YOLOX tracks it, filtered with a One Euro filter. Lifting it drives the first control and sliding it drives the second. This is the same deterministic control path, with no model in the loop.
+- **Physical objects as controllers.** Once a device is armed, choose *Use an object* and pick a mug or bottle. SAM 3.1 finds it; once you pick it up it follows the hand that holds it (WebXR joints, One Euro filter). Lifting it drives the first control and sliding it drives the second. This is the same deterministic control path, with no model in the loop.
 - **DJI Osmo gimbal.** A Bluetooth adapter for the Osmo Mobile: DUML framing, a safety envelope (≤ 90°/s, pan ±120°, tilt ±45°) and three links (`CE_OSMO=ble` via a small bleak helper, `web` via Chrome Web Bluetooth, `mock`). It is wired into identify, link, driver and controls. Status: verified against the mock. A physical move test is `npx tsx apps/server/scripts/osmo.ts test --move`.
 - **Hand and head pose recording.** Record a take from the headset: passthrough video plus head and 25-joint hand poses at up to 30 Hz. On the Quest it is under `?lab=1`; in the emulator it is in the side panel. Review it in **Motion lab** (`/companion/tracking/`): video and 3D hands on one timeline, tracking gaps, *Export dataset* for physical-AI training data. See [tracking review](docs/TRACKING-REVIEW.md).
 - **Other bridges.** These paths exist but are off the critical path, and physical acceptance is still pending:
@@ -106,7 +121,7 @@ PORT=8796 npm run e2e:judge      # Enter AR → pinch the screen → setup ring 
 PORT=8798 npm run e2e:vsynth     # the explicit path: Set up → Enable controls → pixel change → Stop resets
 ```
 
-These checks disable YOLOX and use server fixture detections. They do not measure detector accuracy, headset frame rate or the real Mac display.
+These checks use server fixture detections. They do not measure detector accuracy, headset frame rate or the real Mac display.
 
 ## Run it with hardware
 
@@ -139,8 +154,7 @@ The application code, clients, firmware, prompts, device data and simulated room
 
 Repository code: **MIT** ([LICENSE](LICENSE)). Versions and transitive dependencies are listed in `package-lock.json`.
 
-- **Meta:** the Quest 3 and its passthrough camera. SAM 3.1 and the Muse models via the Meta Model API. **@iwsdk/xr-input** (Immersive Web SDK input; owns all pointing, poke and pinch): MIT, © Meta Platforms, Inc. and affiliates. **@meta-sam/parser**: Meta's package licence.
-- **YOLOX-Nano**, Megvii: **Apache-2.0**. It is the one non-Meta model, used for on-device boxes only. [Model notice](apps/quest/public/models/LICENSE-yolox.txt). Runs on **onnxruntime-web** (MIT).
+- **Meta:** the Quest 3 and its passthrough camera. SAM 3.1 and the Muse models via the Meta Model API. **@iwsdk/xr-input** (Immersive Web SDK input; owns all pointing, poke and pinch): MIT, © Meta Platforms, Inc. and affiliates. Hand and controller meshes from **@webxr-input-profiles/assets** (MIT, © Amazon; [notice](apps/quest/public/xr-profiles/LICENSE.md)). **@meta-sam/parser**: Meta's package licence.
 - **In-headset UI:** **@pmndrs/uikit**, **@pmndrs/uikit-horizon** (pmndrs' Horizon kit, after Meta's Reality Labs design system), **@pmndrs/uikit-lucide** and **@pmndrs/pointer-events**: MIT, © Bela Bohlender / pmndrs. **Lucide** icons: ISC.
 - **Ideas, no code copied:**
   - Google **XR Blocks** ([google/xrblocks](https://github.com/google/xrblocks), Apache-2.0; Li et al., arXiv:2509.25504): glass panel colours, lazy-follow and appear timings, touch rules.

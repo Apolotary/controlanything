@@ -1530,9 +1530,11 @@ export class LeanHud implements Hud {
     const hit = new Mesh(this.hitGeometry, this.hitMaterial);
     hit.name = 'ui-hit';
     const palette = this.isPaletteWidget(widget);
-    // Segments of one row sit 4 mm apart: their hit planes keep their exact widths so neighbours never overlap.
-    const w = widget.group.userData.segmentKey ? widget.w : Math.max(THEME.control.minHitSize, widget.w) + THEME.control.hitPadding * 2;
-    const h = Math.max(THEME.control.minHitSize, widget.h) + THEME.control.hitPadding * 2;
+    // Segments of one row sit 4 mm apart and rows 10 mm apart: a segment's hit plane fills half of each gap (2 mm
+    // sideways, 5 mm up/down), so a press in a gap always lands on the nearer segment and planes never overlap.
+    const segment = !!widget.group.userData.segmentKey;
+    const w = segment ? widget.w + 0.004 : Math.max(THEME.control.minHitSize, widget.w) + THEME.control.hitPadding * 2;
+    const h = segment ? widget.h + 0.01 : Math.max(THEME.control.minHitSize, widget.h) + THEME.control.hitPadding * 2;
     hit.position.set(widget.group.userData.hitOffsetX ?? 0, 0, THEME.panel.depth * 2);
     hit.scale.set(w, h, 1);
     // Higher order wins over nearer surfaces: the palette, then buttons/controls/handles, then passive plates.

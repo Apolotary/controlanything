@@ -1,6 +1,7 @@
 /**
- * SCAN mode: one frame per second at most (SAM 3.1 takes 1–3.5 s per frame, so at most two batches are in
- * flight), only while the head is fairly still, each frame stamped with its capture pose. Results come back as
+ * SCAN mode (SAM 3.1 is the only detector): a frame as soon as Annotate starts, then whenever the head settles,
+ * at least 1.2 s apart with one frame in flight (SAM 3.1 takes 1–3.5 s), each frame stamped with its capture pose
+ * and carrying the annotation filter (the server picks the SAM text prompts from it). Results come back as
  * scan.result and are lifted to 3D with THAT frame's pose, guarded (no people, no hands, no walls), merged into
  * world-anchored targets and handed to the HUD.
  */
@@ -16,7 +17,7 @@ import type { PoseRing } from './poses';
 import type { VirtualRoom } from './synthetic';
 import { type Target, type TargetStore, toHudTarget } from './targets';
 import { ANNOTATION_MAX_BOXES, ANNOTATION_MIN_SCORE, ANNOTATION_RANGE_M, inAnnotationRange, matchesAnnotationFilter } from './policy';
-import type { Category } from './yolo/classes';
+import { type Category, scanFilter } from './categories';
 import { deduplicateDetections } from './detections';
 import type { ScanRegion } from './region';
 
@@ -59,8 +60,8 @@ export class Scanner extends Emitter<ScannerEvents> {
   purpose: 'scan' | 'pair' = 'scan';
   category: Category = 'everything';
   rangeM = ANNOTATION_RANGE_M;
-  periodMs = 1000;
-  maxInFlight = 2;
+  periodMs = 1200;
+  maxInFlight = 1;
   /** frames taken while the head turns faster than this are blurry and badly stamped (research/04 §3) */
   maxSpeedDeg = 15;
   timeoutMs = 12_000;
@@ -90,7 +91,7 @@ export class Scanner extends Emitter<ScannerEvents> {
     this.latestCapture = -Infinity;
     this.purpose = purpose;
     this.startedAt = Date.now();
-    this.lastSentAt = 0;
+    this.lastSentAt = -Infinity;
     this.d.hud().setScanning(true, { startedAt: this.startedAt, pending: this.inFlight.size, modelId: 'sam-3.1' });
     this.emit('state', { on: true });
   }
@@ -113,6 +114,18 @@ export class Scanner extends Emitter<ScannerEvents> {
 
   setCategory(category: Category): void {
     this.category = category;
+  }
+
+  /** Take the next frame as soon as nothing is in flight (a new filter, or a fresh start). */
+  scanSoon(): void {
+    this.lastSentAt = -Infinity;
+  }
+
+  /** When the oldest in-flight frame was sent (performance.now()), or 0. */
+  inFlightSince(): number {
+    let oldest = 0;
+    for (const at of this.inFlight.values()) if (!oldest || at < oldest) oldest = at;
+    return oldest;
   }
 
   /** One deliberate cropped scan. No background whole-view scans resume afterward. */
@@ -161,7 +174,7 @@ export class Scanner extends Emitter<ScannerEvents> {
       // desktop fixture: recorded SAM boxes re-projected into this synthetic frame, delivered after a real-ish delay
       // Register the exact fixture IDs and crops before exposing selectable outlines.
       const dets = projectFixture(fx.fix, fx.room, r.record);
-      const frame = { ...r.payload, fixtureDetections: dets.map((d) => ({ detId: d.detId, label: d.label, prompt: d.prompt ?? d.label, score: d.score, box: d.box })) };
+      const frame = { ...r.payload, filter: scanFilter(this.category), fixtureDetections: dets.map((d) => ({ detId: d.detId, label: d.label, prompt: d.prompt ?? d.label, score: d.score, box: d.box })) };
       if (!this.d.ws.send('scan.frame', frame, { to: 'server', droppable: true })) return;
       this.fixtureFrames.add(r.payload.frameId);
       if (this.fixtureFrames.size > 64) this.fixtureFrames.delete(this.fixtureFrames.values().next().value!);
@@ -183,7 +196,7 @@ export class Scanner extends Emitter<ScannerEvents> {
         void this.onResult(result, true);
       }, latency);
     } else {
-      const id = this.d.ws.send('scan.frame', r.payload, { to: 'server', droppable: true });
+      const id = this.d.ws.send('scan.frame', this.purpose === 'scan' ? { ...r.payload, filter: scanFilter(this.category) } : r.payload, { to: 'server', droppable: true });
       if (!id) {
         this.d.log('scan frame not sent: not connected', 'warn');
         return;

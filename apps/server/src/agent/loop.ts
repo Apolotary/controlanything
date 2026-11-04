@@ -64,7 +64,7 @@ export interface LoopDeps {
 }
 
 /** The visual synth's live driver call gets this long before the curated template stands in. */
-const VISUAL_DRIVE_BUDGET_MS = Number(process.env.CE_DRIVE_TIMEOUT_MS) > 0 ? Number(process.env.CE_DRIVE_TIMEOUT_MS) : 20_000;
+const VISUAL_DRIVE_BUDGET_MS = Number(process.env.CE_DRIVE_TIMEOUT_MS) > 0 ? Number(process.env.CE_DRIVE_TIMEOUT_MS) : 45_000;
 /** Effort for the visual synth's driver and hack set. Measured live: minimal was no faster (~1.3 k output tokens either way) and its driver was rejected once; low stays valid. */
 const VISUAL_EFFORT = (['minimal', 'low', 'medium'] as const).find((e) => e === process.env.CE_VISUAL_EFFORT) ?? 'low';
 /** CE_DEMO=1: the one-shot demo. The silent visual synth arms itself after verification (no Enable modal). */
@@ -137,7 +137,9 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
   const signal = abort.signal;
   const base = { cardId: t.cardId, runId: t.runId };
   let visualRestore: { deviceId: string; port?: string; driverId: string } | undefined;
-  const flow = new FlowRun(abort, { ...d.phaseTimeoutMs, ...(d.companionWaitMs !== undefined ? { link: d.companionWaitMs } : {}) });
+  // One concise line per finished step, with its time and its deadline.
+  const flow = new FlowRun(abort, { ...d.phaseTimeoutMs, ...(d.companionWaitMs !== undefined ? { link: d.companionWaitMs } : {}) },
+    (phase, ms, limitMs) => log(`[setup] ${t.cardId} ${phase} ${(ms / 1000).toFixed(1)} s (limit ${limitMs / 1000} s)`));
   const retryNotice = () => {
     const guidance: AgentGuidance = { sentence: 'That did not work; trying once more…', hint: 'You can cancel or choose another device', action: 'cancel' };
     d.targets.setState(t, t.state, 'retrying the model call once', guidance);
@@ -264,13 +266,24 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       // Muse may already have written this Mac's visual synth driver (and its controls) when the companion appeared
       // (CE_DEMO prefetch): the same calls and prompts, re-validated here against this run's executor and allowlist.
       const visualDrive = !!virtualScreenExecutor(card);
+      const driveStarted = Date.now();
+      // The visual synth's driver gets one budget in all (waiting for the prefetch included); then the curated template.
+      const budgetLeft = () => Math.max(0, VISUAL_DRIVE_BUDGET_MS - (Date.now() - driveStarted));
       const inflight = visualDrive && pass === 1 ? takeVisualDraft(executor.deviceId) : undefined;
       // Still being written: show that call as this setup's "writing the driver" phase instead of starting another.
       const waiting = inflight && !inflight.done
         ? d.steps.begin('drive', `Muse is writing the driver (started when the Mac appeared, ${Math.round((Date.now() - inflight.at) / 1000)} s ago)`, { ...base, kind: 'opinion', model: d.spark.model, sentence: 'Muse is writing the driver…' })
         : undefined;
-      const prefetched = inflight ? await flow.wait(inflight.result) : undefined;
-      if (waiting) { if (prefetched) waiting.ok(`driver ready (${prefetched.result.model})`, { model: prefetched.result.model }); else waiting.fail('the early driver call did not finish; writing it now'); }
+      let prefetchLate = false;
+      const prefetched = inflight ? await flow.wait(new Promise<Awaited<typeof inflight.result>>((resolve) => {
+        const timer = setTimeout(() => { prefetchLate = true; resolve(undefined); }, budgetLeft());
+        void inflight.result.then((r) => { clearTimeout(timer); resolve(r); });
+        signal.addEventListener('abort', () => clearTimeout(timer), { once: true });
+      })) : undefined;
+      if (waiting) {
+        if (prefetched) waiting.ok(`driver ready (${prefetched.result.model})`, { model: prefetched.result.model });
+        else waiting.fail(prefetchLate ? `Muse is still writing after ${VISUAL_DRIVE_BUDGET_MS / 1000} s; using the curated template` : 'the early driver call did not finish; writing it now');
+      }
       driverId = prefetched?.result.validation.driver.driverId ?? newId('drv');
       const ids = { driverId, executor: { deviceId: executor.deviceId, port: executor.port?.id }, executorKind: executor.kind };
       const reviewed = research.profile?.reviewedChart;
@@ -280,11 +293,15 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
       const dstep = d.steps.begin('drive', 'writing the driver', { ...base, kind: 'opinion', model: d.spark.model });
       // The visual synth's live driver call is bounded: a slow Muse answer falls back to the curated template below.
       const driveBudget = new AbortController();
-      const driveTimer = visualDrive ? setTimeout(() => driveBudget.abort(), VISUAL_DRIVE_BUDGET_MS) : undefined;
+      const driveTimer = visualDrive ? setTimeout(() => driveBudget.abort(), budgetLeft()) : undefined;
       let result: Awaited<ReturnType<typeof drive>>;
       const revalidated = prefetched ? validateDriver(prefetched.result.draft, ids, vctx) : undefined;
       const usedPrefetch = !!(prefetched && revalidated?.ok);
-      if (prefetched && revalidated?.ok) {
+      if (prefetchLate || (visualDrive && budgetLeft() < 1000 && !(prefetched && revalidated?.ok))) {
+        // A slow Muse never stalls the golden path: the curated template stands in, labelled as such.
+        d.steps.note('drive', `no driver from ${d.spark.model} within ${VISUAL_DRIVE_BUDGET_MS / 1000} s; using the curated template`, { ...base, kind: 'proof', status: 'fail', model: d.spark.model });
+        result = undefined;
+      } else if (prefetched && revalidated?.ok) {
         result = { ...prefetched.result, validation: revalidated };
         d.steps.note('drive', `driver written by ${prefetched.result.model} when the Mac appeared (${(prefetched.result.latencyMs / 1000).toFixed(1)} s, ${Math.round((Date.now() - prefetched.at) / 1000)} s ago)`, { ...base, kind: 'opinion', status: 'ok', model: prefetched.result.model, effort: prefetched.result.effort, latencyMs: prefetched.result.latencyMs, source: prefetched.result.source, evidence: 'prefetched driver' });
       } else try {
@@ -323,7 +340,7 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
           return;
         }
         driver = { ...v.driver, provenance, modelId: 'template', source: 'fixture' };
-        dstep.ok('model draft rejected; curated template used (no Meta model wrote this driver)', { model: result?.model ?? 'template', latencyMs: result?.latencyMs, evidence: 'template driver', sentence: 'Using saved device commands after the model failed' });
+        dstep.ok(`${result ? 'model draft rejected' : 'no model driver in time'}; curated template used (no Meta model wrote this driver)`, { model: result?.model ?? 'template', latencyMs: result?.latencyMs, evidence: 'template driver', sentence: 'Using saved device commands after the model failed' });
       }
       const unresolved = dryResolve(driver);
       if (unresolved.length) log(`[drive] unresolved actions: ${unresolved.join('; ')}`);
@@ -498,6 +515,8 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
     d.targets.setState(t, 'failed', detail.slice(0, 300), guidance);
   } finally {
     flow.clear();
+    const owned = t.runId === base.runId;
+    log(`[setup] ${t.cardId} ${owned ? (t.armed ? 'armed' : t.state) : 'replaced by a newer run'} after ${((Date.now() - flow.startedAt) / 1000).toFixed(1)} s${flow.timings.length ? ` · ${flow.timings.map((x) => `${x.phase} ${(x.ms / 1000).toFixed(1)}`).join(' · ')}` : ''}${t.driver?.modelId ? ` · driver ${t.driver.modelId}` : ''}`);
     // Verification freezes the silent screen to distinguish MIDI changes from animation.
     // Restore after a miss/cancellation too; never queue cleanup behind a replacement run.
     if (visualRestore && t.abort === abort && t.runId === base.runId) {
