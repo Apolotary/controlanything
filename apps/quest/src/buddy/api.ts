@@ -29,7 +29,7 @@ export interface StickerResult {
 }
 
 /** how the crop was taken: the show-me frame / a raised hand ('hand'), the centre of the view ('gaze'), a test photo */
-export type ShowVia = 'hand' | 'gaze' | 'photo';
+export type ShowVia = 'hand' | 'gaze' | 'photo' | 'virtual';
 
 async function post<T>(path: string, body: unknown, token: string | undefined, timeoutMs: number, signal?: AbortSignal): Promise<T> {
   const ctl = new AbortController();

@@ -23,7 +23,7 @@ const ReactBody = z.object({
   jpeg: z.string().min(100).max(MAX_JPEG_B64),
   quest: z.string().max(120).optional(),
   seen: z.array(z.string().max(60)).max(16).optional(),
-  via: z.enum(['hand', 'gaze', 'photo']).optional(),
+  via: z.enum(['hand', 'gaze', 'photo', 'virtual']).optional(),
 });
 const StickerBody = z.object({ jpeg: z.string().min(100).max(MAX_JPEG_B64), object: z.string().max(60).optional() });
 

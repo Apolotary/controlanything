@@ -111,17 +111,13 @@ export class SpeechBubble extends Group {
   }
 }
 
-export interface CardHandlers { show(): void; skip(): void; close(): void }
-
+export interface CardHandlers { show(): void; retake(): void; wave(): void; virtual(): void; close(): void }
 export interface CardView {
-  /** "QUEST 1 OF 3" / "ALL 3 DONE · FREE PLAY" */
   kicker: string;
-  /** "Show me something green" / "You found all 3!" */
   title: string;
-  /** "1 found · 2 on the shelf", or what is happening ("muse-spark-1.3 is looking…") */
   status: string;
-  /** the round is over: the skip button becomes "Again" */
-  finished: boolean;
+  preview: boolean;
+  busy: boolean;
 }
 
 export class BuddyCard extends Group {
@@ -130,8 +126,8 @@ export class BuddyCard extends Group {
   private readonly kicker?: Text;
   private readonly title?: Text;
   private readonly subtitle?: Text;
-  private readonly skip?: Container;
-  private readonly again?: Container;
+  private readonly capture?: Container;
+  private readonly retake?: Container;
 
   constructor(shelfTexture: Texture | null, handlers: CardHandlers) {
     super();
@@ -140,23 +136,26 @@ export class BuddyCard extends Group {
     // one row: quest + buttons on the left, the 3×2 collection shelf on the right (wide and short = less neck tilt)
     this.root = glassPanel({ width: this.widthM, renderOrder: RENDER.card, padding: 14, gap: 12, flexDirection: 'row', alignItems: 'center', anchorX: 'right', anchorY: 'center' } as never);
     const left = new Container({ flexDirection: 'column', gap: 8, flexGrow: 1, flexShrink: 1, flexBasis: 0 });
-    this.kicker = new Text({ text: 'QUEST', fontSize: 10, fontWeight: 'semi-bold', color: LOOK.text.secondary, letterSpacing: 0.8 } as never);
+    this.kicker = new Text({ text: 'MUSE BUDDY', fontSize: 10, fontWeight: 'semi-bold', color: LOOK.text.secondary, letterSpacing: 0.8 } as never);
     this.title = new Text({ text: '', fontSize: 16, fontWeight: 'semi-bold', color: LOOK.text.primary, wordBreak: 'break-word' } as never);
     this.subtitle = new Text({ text: '', fontSize: 11, fontWeight: 'medium', color: LOOK.text.secondary } as never);
     const row = new Container({ flexDirection: 'row', gap: 6, marginTop: 2 });
-    const show = horizonButton('Show', { icon: 'eye', variant: 'primary', size: 'sm', onClick: () => handlers.show() } as never);
-    show.name = 'buddy-show';
-    this.skip = horizonButton('', { icon: 'retry', size: 'sm', width: 40, paddingX: 0, justifyContent: 'center', onClick: () => handlers.skip() } as never);
-    this.skip.name = 'buddy-skip';
-    this.again = horizonButton('Again', { icon: 'retry', size: 'sm', display: 'none', onClick: () => handlers.skip() } as never);
-    this.again.name = 'buddy-again';
-    const close = horizonButton('', { icon: 'cancel', size: 'sm', width: 40, paddingX: 0, justifyContent: 'center', onClick: () => handlers.close() } as never);
-    close.name = 'buddy-close';
-    row.add(show, this.skip, this.again, close);
-    left.add(this.kicker, this.title, this.subtitle, row);
+    this.capture = horizonButton('Capture', { icon: 'eye', variant: 'primary', size: 'sm', onClick: () => handlers.show() } as never);
+    this.capture.name = 'buddy-show';
+    this.retake = horizonButton('Retake', { size: 'sm', display: 'none', onClick: () => handlers.retake() } as never);
+    this.retake.name = 'buddy-retake';
+    const virtual = horizonButton('Virtual', { size: 'sm', onClick: () => handlers.virtual() } as never);
+    virtual.name = 'buddy-virtual';
+    row.add(this.capture, this.retake, virtual);
+    const social = new Container({ flexDirection: 'row', gap: 6 });
+    const wave = horizonButton('Wave hello', { size: 'sm', onClick: () => handlers.wave() } as never);
+    wave.name = 'buddy-wave';
+    const close = horizonButton('Close', { size: 'sm', onClick: () => handlers.close() } as never);
+    close.name = 'buddy-close'; social.add(wave, close);
+    left.add(this.kicker, this.title, this.subtitle, row, social);
     this.root.add(left);
     if (shelfTexture) {
-      const shelf = new Image({ src: shelfTexture, width: 141, height: 94, flexShrink: 0, objectFit: 'fill', keepAspectRatio: false } as never);
+      const shelf = new Image({ src: shelfTexture, width: 104, height: 70, flexShrink: 0, objectFit: 'fill', keepAspectRatio: false } as never);
       shelf.name = 'buddy-shelf';
       this.root.add(shelf);
     }
@@ -171,9 +170,12 @@ export class BuddyCard extends Group {
     if (prev?.kicker !== view.kicker) this.kicker?.setProperties({ text: view.kicker });
     if (prev?.title !== view.title) this.title?.setProperties({ text: view.title });
     if (prev?.status !== view.status) this.subtitle?.setProperties({ text: view.status });
-    if (prev?.finished !== view.finished) {
-      this.skip?.setProperties({ display: view.finished ? 'none' : 'flex' } as never);
-      this.again?.setProperties({ display: view.finished ? 'flex' : 'none' } as never);
+    if (prev?.preview !== view.preview || prev?.busy !== view.busy) {
+      // horizonButton owns its text child; update that label without rebuilding the panel.
+      let label: Text | undefined; this.capture?.traverse(child => { if (!label && child instanceof Text) label = child as Text; });
+      label?.setProperties({ text: view.preview ? 'Show Buddy' : view.busy ? 'Looking…' : 'Capture' });
+      this.capture?.setProperties({ pointerEvents: view.busy ? 'none' : 'auto', opacity: view.busy ? .55 : 1 } as never);
+      this.retake?.setProperties({ display: view.preview ? 'flex' : 'none' } as never);
     }
   }
 

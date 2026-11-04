@@ -5,7 +5,7 @@
  */
 import { CanvasTexture, Mesh, MeshBasicMaterial, PlaneGeometry, SRGBColorSpace, Vector3 } from 'three';
 
-const PX = 160;
+const PX = 384;
 const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
 type Leg = { from: Vector3; to: Vector3; s0: number; s1: number; dur: number; arc: number; t: number; fade: boolean; done?: () => void };
@@ -46,12 +46,14 @@ export class Polaroid extends Mesh<PlaneGeometry, MeshBasicMaterial> {
     g.roundRect(0, 0, c.width, c.height, 14);
     g.fill();
     const m = 10, side = c.width - m * 2;
-    const s = Math.min(photo.width, photo.height);
+    const scale = side / Math.max(photo.width, photo.height);
+    const w = photo.width * scale, h = photo.height * scale;
     g.save();
     g.beginPath();
     g.roundRect(m, m, side, side, 8);
     g.clip();
-    g.drawImage(photo, (photo.width - s) / 2, (photo.height - s) / 2, s, s, m, m, side, side);
+    g.fillStyle = '#1e2730'; g.fillRect(m, m, side, side);
+    g.drawImage(photo, m + (side - w) / 2, m + (side - h) / 2, w, h);
     g.restore();
     this.tex!.needsUpdate = true;
   }

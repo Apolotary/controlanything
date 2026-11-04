@@ -1,21 +1,7 @@
 /**
- * MUSE BUDDY: a small AR mascot at desk height you show real objects to.
- *
- *   Wrist menu → "Buddy". It pops in beside you, waves, and says what to do in one line ("Hi! Show me something
- *   green. Hold it up in the frame!") while it looks at its SHOW-ME FRAME: a soft rounded viewfinder ~42 cm in
- *   front of your eyes, just above its quest card, labelled "Hold it here" (viewfinder.ts).
- *   Put a hand (with the thing in it) inside the frame: the frame lights up, says "Hold still…" and a gold ring
- *   fills for 1 s. Then it snaps exactly the frame's region of the passthrough camera (frame-crop.ts) — the photo
- *   pops out as a little polaroid the buddy holds while it thinks ("Looking… / asking muse-spark-1.3", then
- *   "Thinking…" after 700 ms with the seconds ticking, and a slow head-tilt sway) — Muse Spark (vision,
- *   json_schema, low effort) answers in character, the buddy plays it, and the polaroid flies onto its shelf,
- *   where Muse Image later repaints it as a sticker. Nothing seen → one concrete tip ("Bring it closer, inside the
- *   frame!") and the frame pulses once.
- *   Three quests per round ("Quest 1 of 3"), then a celebration and free play ("Again" starts three more).
- *   Close: wrist menu → Buddy again, the card's ×, or Stop.
- *
- * Cost when closed: one early-return frame hook. Open: ~10 mascot draw calls + 3 uikit roots + frame + polaroid,
- * no per-frame allocations; capture, encode and inference all happen off the render path (async).
+ * Muse Buddy: a companion for sharing objects and expressive gestures, without quests or scores.
+ * Capture freezes a preview first; Show sends exactly that photo. Retake discards it locally.
+ * Hands only draw Buddy's attention; they never trigger a camera upload.
  */
 import { CanvasTexture, Group, Matrix4, Mesh, MeshBasicMaterial, type Object3D, PlaneGeometry, type Quaternion, SRGBColorSpace, Vector3, type Scene } from 'three';
 import type { ShellFrame } from '../app/hud-contract';
@@ -24,12 +10,12 @@ import type { CameraSource } from '../scan/camera';
 import type { JpegEncoder } from '../scan/encode';
 import type { PoseRing } from '../scan/poses';
 import { buddyApi, type ReactResult, type ShowVia } from './api';
-import { cropPresented, gazePresenter, type Presenter } from './crop';
 import { cropFrame, type FrameCrop, type FramePresence, handInFrame } from './frame-crop';
 import { Mascot } from './mascot';
 import { BuddyPlacer, type CardSide, frameAnchor, MOVE_DEG } from './placement';
 import { Polaroid } from './polaroid';
-import { pick, POKE_LINES, QuestLog, ROUND } from './quests';
+import { pick, POKE_LINES } from './quests';
+import { drawVirtualObject, VIRTUAL_OBJECTS } from './objects';
 import { loadSticker, Shelf, type ShelfItem } from './shelf';
 import { BuddyCard, SpeechBubble } from './ui';
 import { FRAME_DIST, FRAME_SIZE, Viewfinder } from './viewfinder';
@@ -54,7 +40,7 @@ export interface BuddyHost {
   page: { log(msg: string, level?: 'info' | 'ok' | 'warn' | 'error'): void };
 }
 
-export type BuddyPhase = 'closed' | 'idle' | 'holding' | 'countdown' | 'capturing' | 'thinking' | 'reacting';
+export type BuddyPhase = 'closed' | 'idle' | 'capturing' | 'preview' | 'thinking' | 'reacting';
 
 export interface BuddyState {
   asleep: boolean;
@@ -75,11 +61,14 @@ export interface BuddyState {
 export interface BuddyFeature {
   readonly root: Object3D;
   open(): void;
-  close(): void;
+  close(silent?: boolean): void;
   toggle(): void;
   isOpen(): boolean;
-  /** Show button: a short countdown, then capture what is in the frame. */
+  /** Capture a preview, then Show the reviewed image on a second press. */
   show(): void;
+  retake(): void;
+  wave(): void;
+  showVirtual(): void;
   /** Dev/e2e: react to a static photo as if it were held up (no camera). */
   showImage(url: string): Promise<void>;
   /** Dev/e2e (emulator): hold a picture up inside the frame, as a hand would; the synthetic camera sees it. */
@@ -89,11 +78,6 @@ export interface BuddyFeature {
   state(): BuddyState;
 }
 
-/** hold still this long inside the frame to snap */
-const HOLD_S = 1.0;
-/** a hand that leaves the frame for less than this keeps the ring */
-const GRACE_S = 0.3;
-const COOLDOWN_S = 1.2;
 /** "Thinking…" appears after this (NVIDIA xr-ai pattern: no spinner for fast answers) */
 const THINKING_AFTER_S = 0.7;
 
@@ -145,15 +129,7 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
   let openedAt = 0;
   let closingAt = -1;
   let yaw = 0;
-  let hold = 0;
-  let lostFor = 0;
-  let rearmed = true;
-  let emptyFor = 0;
-  let cooldownUntil = 0;
-  let countdown = 0;
-  let countdownShown = -1;
   let reactingUntil = 0;
-  let nextAskAt = Infinity;
   let lookAtFrameUntil = 0;
   let thinkingSince = 0;
   let thinkingShown = false;
@@ -165,7 +141,11 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
   let lastReaction: ReactResult | undefined;
   let lastCrop: FrameCrop | undefined;
   let lastF: ShellFrame | undefined;
-  const quests = new QuestLog();
+  let pendingPhoto: { jpeg: string; photo: ImageBitmap | HTMLCanvasElement; via: ShowVia } | undefined;
+  let interactionEpoch = 0;
+  let virtualIndex = 0;
+  let gestureUntil = 0;
+  let palmWasUp = false;
   const seen: string[] = [];
 
   // world-locked: it stays where it spawned, and only glides away when the selected device's card/dials get close
@@ -182,15 +162,9 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
   let frameSnap = true;
   const corners: Vector3[] = [new Vector3(), new Vector3(), new Vector3(), new Vector3()];
   const presence: FramePresence = { inside: 0, point: new Vector3() };
-  const lastPoint = new Vector3();
-  let hasLastPoint = false;
-  let speed = 0;
   const lookTarget = new Vector3();
   const holdPoint = new Vector3();
   const shelfPoint = new Vector3();
-  const gazeBuf: Presenter = { kind: 'gaze', point: new Vector3(), distance: 0, score: 0 };
-  const jointPool: Vector3[] = Array.from({ length: 26 }, () => new Vector3());
-  const joints: Vector3[] = [];
   const frameMatrix = new Matrix4();
   // dev/e2e: a picture held up in the frame (emulator), seen by the synthetic camera's room scene too
   let sim: { mesh: Mesh; roomMesh?: Mesh; roomScene?: Scene } | null = null;
@@ -226,26 +200,23 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
   const wake = (now = time) => { awakeUntil = now + AWAKE_S; };
   const say = (text: string, meta = '', holdS = 6) => {
     built?.bubble.say(text, meta, holdS);
-    // Short model reactions and quest instructions get a voice; progress is a soft cue.
+    // Short reactions get a voice; progress is a soft cue.
     if (!/^(?:Looking|Thinking)….*/.test(text)) app.demoAudio?.speak(text);
   };
 
   const refreshCard = (status = '') => {
     if (!built) return;
-    const collected = built.shelf?.items.length ?? seen.length;
-    const q = quests.current;
     built.card.set({
-      kicker: quests.kicker,
-      title: q ? `Show me ${q}` : `You did all ${ROUND} quests!`,
-      status: status || (q ? `Hold it up in the frame · ${collected} on the shelf` : `${quests.met} of ${ROUND} found · ${collected} on the shelf`),
-      finished: quests.finished,
+      kicker: 'MUSE BUDDY',
+      title: phase === 'preview' ? 'Is this the object?' : 'Show me your world',
+      status: status || (phase === 'preview' ? 'Only this photo is sent when you press Show.' : 'Capture an object, share a virtual one, or wave hello.'),
+      preview: phase === 'preview',
+      busy: phase === 'thinking' || phase === 'capturing',
     });
   };
 
-  /** Ask for the current quest, looking at the frame so the eyes point the way. */
-  let askKind: 'first' | 'next' | 'retry' = 'next';
-  const ask = (kind: 'first' | 'next' | 'retry' = 'next') => {
-    say(quests.ask(kind), '', 9);
+  const ask = (_kind?: string) => {
+    say('Show me anything you like. Capture first, then Show.', '', 8);
     lookAtFrameUntil = time + 3;
     refreshCard();
   };
@@ -259,7 +230,7 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     } catch {
       shelf = null;
     }
-    const card = new BuddyCard(shelf?.texture ?? null, { show: () => feature.show(), skip: () => skipQuest(), close: () => feature.close() });
+    const card = new BuddyCard(shelf?.texture ?? null, { show: () => feature.show(), retake: () => feature.retake(), wave: () => feature.wave(), virtual: () => feature.showVirtual(), close: () => feature.close() });
     const viewfinder = new Viewfinder();
     const polaroid = new Polaroid();
     stage.add(mascot, bubble, card);
@@ -271,7 +242,7 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     return b;
   }
 
-  /** Quest card (and bubble) on the given side of the mascot, or tucked away while a device is being played. */
+  /** Companion card (and bubble) on the given side of the mascot, or tucked away while a device is being played. */
   function setSide(side: CardSide): void {
     cardSide = side;
     stage.userData.cardSide = side;
@@ -291,13 +262,13 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
 
   /**
    * World-locked, except: when the selected device's card/dials come within 3° of it in your view, it glides to the
-   * best free spot (≥ 8° of empty view around them, quest card on the far side, or tucked away while you play).
+   * best free spot (≥ 8° of empty view around them, companion card on the far side, or tucked away while you play).
    */
   function keepClear(f: ShellFrame, force: boolean): void {
     placer.collect(app.scene, time);
     const q = f.head.quaternion as Quaternion;
     if (!force && !placer.count && cardSide === 'tucked') {
-      // the device UI is gone: bring the quest card back on the side facing the middle of the view, in place
+      // the device UI is gone: bring the companion card back on the side facing the middle of the view, in place
       tmpFwd.set(0, 0, -1).applyQuaternion(q);
       // (stage - head) · head-right, where right = (-fwd.z, 0, fwd.x)
       const lateral = -(stage.position.x - f.head.position.x) * tmpFwd.z + (stage.position.z - f.head.position.z) * tmpFwd.x;
@@ -337,15 +308,6 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     }
   }
 
-  function skipQuest(): void {
-    wake();
-    asleep = false;
-    const wasFinished = quests.finished;
-    quests.skip();
-    built?.mascot.play(wasFinished ? 'hop' : 'nod');
-    ask(wasFinished ? 'first' : 'next');
-  }
-
   function poke(): void {
     if (!built || phase === 'closed' || phase === 'thinking' || phase === 'capturing') return;
     wake();
@@ -353,7 +315,7 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
       asleep = false;
       built.mascot.play('hop');
       built.mascot.setMood('surprised', 1.5);
-      say(`Huh? I'm awake! ${quests.ask()}`, '', 6);
+      say("I'm here! What would you like to show me?", '', 6);
       lookAtFrameUntil = time + 3;
       return;
     }
@@ -377,9 +339,9 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
 
   function backToIdle(): void {
     setPhase('idle');
-    hold = 0;
     if (built) built.viewfinder.progress = 0;
-    setFrame('idle', 'Hold it here');
+    setFrame('idle', 'Aim, then Capture');
+    frameSnap = true;
   }
 
   /** The photo pops out of the frame and floats next to the buddy, where it "holds" it while thinking. */
@@ -395,7 +357,8 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
 
   async function react(jpeg: string, photo: ImageBitmap | HTMLCanvasElement | undefined, via: ShowVia): Promise<void> {
     if (!built) return;
-    const b = built;
+    const b = built, epoch = interactionEpoch;
+    const current = () => interactionEpoch === epoch && phase !== 'closed';
     setPhase('thinking');
     thinkingSince = time;
     thinkingShown = false;
@@ -407,7 +370,7 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     refreshCard(`${models.react} is looking…`);
     setFrame('busy', '');
     holdPhoto(photo);
-    const quest = quests.current;
+    const quest = undefined;
     reactAbort?.abort();
     const ctl = new AbortController();
     reactAbort = ctl;
@@ -415,7 +378,7 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     try {
       r = await buddyApi.react(jpeg, quest, seen, via, token(), ctl.signal);
     } catch (e) {
-      if (phase === 'closed' || ctl.signal.aborted) return;
+      if (!current() || ctl.signal.aborted) { if (photo instanceof ImageBitmap) photo.close(); return; }
       b.mascot.setMood('confused', 3);
       b.mascot.play('shiver');
       say('My brain hiccuped. Try again?', String((e as Error).message).slice(0, 60), 5);
@@ -425,22 +388,20 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
       b.polaroid.state = 'fading';
       refreshCard();
       backToIdle();
-      rearmed = true;
-      cooldownUntil = time + 1.5;
+      if (photo instanceof ImageBitmap) photo.close();
       return;
     } finally {
       if (reactAbort === ctl) reactAbort = null;
     }
-    if (phase === 'closed') return;
+    if (!current() || ctl.signal.aborted) { if (photo instanceof ImageBitmap) photo.close(); return; }
     lastReaction = r;
     stage.userData.lastReaction = r;
     const x = r.reaction;
-    app.demoAudio?.play(x.questMet ? 'celebrate' : x.emotion === 'love' || x.emotion === 'delighted' ? 'giggle' : 'curious');
+    app.demoAudio?.play(x.emotion === 'love' || x.emotion === 'delighted' ? 'giggle' : 'curious');
     app.page.log(`[buddy] ${x.object} → ${x.emotion}/${x.action}${x.questMet ? ' · quest met' : ''} · ${metaLine(r)}`, 'ok');
     setPhase('reacting');
     reactingUntil = time + 2.5;
-    cooldownUntil = time + COOLDOWN_S;
-    setFrame('idle', 'Hold it here');
+    setFrame('idle', 'Aim, then Capture');
     b.viewfinder.progress = 0;
 
     if (x.object === 'nothing') {
@@ -457,60 +418,33 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
       b.polaroid.shrug();
       b.polaroid.go(b.polaroid.position, 0.02, 0.9, { fade: true });
       b.polaroid.state = 'fading';
-      // a hand still up can try again right away (it is probably moving closer)
-      rearmed = true;
       refreshCard();
+      if (photo instanceof ImageBitmap) photo.close();
       return;
     }
     nothingStreak = 0;
     b.mascot.setMood(x.emotion, 4.5);
     b.mascot.play(x.action);
     say(x.quip, metaLine(r), 6);
-    let roundOver = false;
-    if (quest && x.questMet) {
-      roundOver = quests.complete();
-      b.mascot.celebrate(true);
-      askKind = 'next';
-      nextAskAt = roundOver ? Infinity : time + 4.2;
-    } else if (quest) {
-      const m = quests.miss();
-      roundOver = m.roundOver;
-      askKind = m.movedOn ? 'next' : 'retry';
-      nextAskAt = roundOver ? Infinity : time + (m.movedOn ? 4.2 : 7);
-      if (x.emotion === 'love' || x.emotion === 'delighted') b.mascot.celebrate(false);
-    } else if (x.emotion === 'love' || x.emotion === 'delighted') {
-      b.mascot.celebrate(false);
-    }
-    if (roundOver) {
-      // after the quip, the big finish
-      setTimeout(() => {
-        if (phase === 'closed' || !built) return;
-        built.mascot.play('dance');
-        built.mascot.setMood('delighted', 4);
-        built.mascot.celebrate(true);
-        app.demoAudio?.play('celebrate');
-        say(`You did all ${ROUND} quests! You're a treasure hunter!`, 'Show me anything, or press Again', 9);
-        refreshCard();
-      }, 3800);
-    }
+    if (x.emotion === 'love' || x.emotion === 'delighted') b.mascot.celebrate(false);
     refreshCard();
 
     // the polaroid flies onto the shelf; Muse Image repaints it as a sticker there (never blocking)
     seen.push(x.object);
-    const item: ShelfItem = { name: x.object, questMet: x.questMet, painting: Boolean(b.shelf) };
+    const item: ShelfItem = { name: x.object, questMet: false, painting: Boolean(b.shelf) };
     if (photo instanceof ImageBitmap) item.photo = photo;
     else if (photo) item.photo = await createImageBitmap(photo).catch(() => undefined);
-    const landed = () => {
-      if (!b.shelf || phase === 'closed') return;
-      b.shelf.add(item);
-      refreshCard(item.painting ? `${models.sticker} is painting a sticker…` : '');
-    };
+    if (!current()) { item.photo?.close(); return; }
+    // The shelf owns this bitmap immediately; later photo animations may be
+    // replaced by a new capture without orphaning the old image.
+    b.shelf?.add(item);
+    const landed = () => { if (current()) refreshCard(item.painting ? `${models.sticker} is painting a sticker…` : ''); };
     if (b.shelf && cardSide !== 'tucked') {
       stageToWorld(b.card.position.x + b.card.shelfLocal(cardSide === 'right' ? 'right' : 'left'), b.card.position.y, 0.01, shelfPoint);
       b.polaroid.state = 'flying';
       setTimeout(() => {
-        if (phase === 'closed' || !built) return;
-        b.polaroid.go(shelfPoint, 0.035, 0.8, { arc: 0.05, done: () => { b.polaroid.hide(); landed(); } });
+        if (!current() || !built) return;
+        b.polaroid.go(shelfPoint, 0.035, 0.8, { arc: 0.05, done: () => { if (current()) { b.polaroid.hide(); landed(); } } });
       }, 1200);
     } else {
       b.polaroid.go(b.polaroid.position, 0.02, 0.8, { fade: true });
@@ -520,24 +454,25 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     if (!b.shelf) return;
     void buddyApi.sticker(jpeg, x.object, token())
       .then(async (s) => {
+        if (!current()) return;
         if (!s.ok || !s.url) throw new Error(s.error ?? 'no sticker');
-        item.sticker = await loadSticker(s.url);
+        const sticker = await loadSticker(s.url);
+        if (!current()) return;
+        item.sticker = sticker;
         app.page.log(`[buddy] sticker for ${x.object} · ${metaLine(s)}`, 'ok');
       })
       .catch((e) => app.page.log(`[buddy] sticker: ${(e as Error).message}`, 'warn'))
       .finally(() => {
         item.painting = false;
-        b.shelf?.redraw();
-        if (phase !== 'closed' && phase !== 'thinking') refreshCard();
+        if (current()) { b.shelf?.redraw(); if (phase !== 'thinking') refreshCard(); }
       });
   }
 
   async function capture(): Promise<void> {
     if (!built) return;
-    const b = built;
+    const b = built, epoch = ++interactionEpoch;
+    const current = () => interactionEpoch === epoch && phase !== 'closed';
     setPhase('capturing');
-    rearmed = false;
-    emptyFor = 0;
     b.viewfinder.progress = 1;
     b.viewfinder.flash();
     setFrame('lit', 'Got it!');
@@ -545,46 +480,39 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     if (app.cameraState !== 'on') {
       try { await app.startCamera(); } catch { /* reported below */ }
     }
+    if (!current()) return;
     b.viewfinder.corners(corners, 1);
     let crop: FrameCrop | null = null;
-    let fallback: { jpeg: string; via: ShowVia } | null = null;
     try {
-      crop = await cropFrame({ camera: app.camera, poses: app.poses, encoder: app.encoder }, corners, joints);
-      if (!crop && lastF) {
-        // the frame is off the camera image (should not happen at 42 cm): the view's centre instead
-        const c = await cropPresented({ camera: app.camera, poses: app.poses, encoder: app.encoder }, gazePresenter(lastF, gazeBuf), [], 384);
-        if (c) fallback = { jpeg: c.jpeg, via: 'gaze' };
-      }
+      crop = await cropFrame({ camera: app.camera, poses: app.poses, encoder: app.encoder }, corners, []);
     } catch (e) {
       app.page.log(`[buddy] crop failed: ${(e as Error).message}`, 'warn');
     }
-    if (phase === 'closed') return;
-    if (!crop && !fallback) {
+    if (!current()) return;
+    if (!crop) {
       b.mascot.setMood('confused', 3);
-      say("I can't see a thing! Is the camera on?", 'Camera + mic, then try again', 5);
+      say("The frame is outside the camera view. Try again.", 'Move it toward the centre, then Capture', 5);
       backToIdle();
-      rearmed = true;
-      cooldownUntil = time + 2;
       return;
     }
     if (crop) {
       lastCrop = crop;
       app.page.log(`[buddy] crop ${crop.width}×${crop.height} of the frame [${crop.box.join(',')}] in ${crop.image.join('×')}${crop.grewForHand ? ' (+hand)' : ''}`);
     }
-    const jpeg = crop?.jpeg ?? fallback!.jpeg;
+    const jpeg = crop!.jpeg;
     const photo = await createImageBitmap(b64ToBlob(jpeg)).catch(() => undefined);
-    await react(jpeg, photo, crop ? 'hand' : fallback!.via);
-  }
-
-  function snapshotJoints(f: ShellFrame, hand?: 'left' | 'right'): void {
-    joints.length = 0;
-    const h = hand ? f.hands[hand] : undefined;
-    if (!h) return;
-    let i = 0;
-    for (const name in h.joints) {
-      const j = h.joints[name as XRHandJoint];
-      if (j && i < jointPool.length) joints.push(jointPool[i++].copy(j.position));
-    }
+    if (!current()) { photo?.close(); return; }
+    if (!photo) { backToIdle(); refreshCard('Could not prepare a preview. Capture again.'); return; }
+    pendingPhoto?.photo instanceof ImageBitmap && pendingPhoto.photo.close();
+    pendingPhoto = { jpeg, photo, via: 'photo' };
+    setPhase('preview');
+    holdPhoto(photo);
+    b.viewfinder.position.copy(frameTarget); b.viewfinder.position.y += .045;
+    b.polaroid.go(b.viewfinder.position, FRAME_SIZE * 1.05, 0.3);
+    setFrame('busy', 'Review your photo');
+    b.mascot.play('tilt');
+    say('Is that the one? Show it to me, or Retake.', '', 5);
+    refreshCard();
   }
 
   function frame(f: ShellFrame, dtSec: number): void {
@@ -605,7 +533,7 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     }
 
     // --- placement: world-locked; steps aside (glides) only when the selected device's card/dials come close ---
-    const steady = phase === 'holding' || phase === 'countdown' || phase === 'capturing';
+    const steady = phase === 'capturing' || phase === 'preview';
     placeT += dt;
     if (placeT >= 0.4 && !steady && closingAt < 0) {
       placeT = 0;
@@ -643,64 +571,29 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
         p = presence;
       }
     }
-    if (p && hasLastPoint) speed += (p.point.distanceTo(lastPoint) / Math.max(dt, 1e-3) - speed) * (1 - Math.exp(-10 * dt));
-    if (p) { lastPoint.copy(p.point); hasLastPoint = true; } else { hasLastPoint = false; speed = 0; }
-    emptyFor = p ? 0 : emptyFor + dt;
-    if (!rearmed && emptyFor > 0.3) rearmed = true;
     stage.userData.inFrame = Boolean(p);
 
     if (phase === 'idle' || phase === 'reacting') {
-      if (phase === 'reacting' && time > reactingUntil) {
-        setPhase('idle');
-        refreshCard();
+      if (phase === 'reacting' && time > reactingUntil) { setPhase('idle'); refreshCard(); }
+      b.viewfinder.mode = p ? 'lit' : 'idle';
+      b.viewfinder.setLabel(time < frameHintUntil ? frameHint : p ? 'Ready when you are' : 'Aim, then Capture');
+      // Natural social feedback never takes a picture. Wave with an open palm;
+      // touch the head or meet the raised hand to pet/high-five Buddy.
+      const palmUp = !!f.hands.left?.palmUp || !!f.hands.right?.palmUp;
+      if (palmUp && !palmWasUp && time > gestureUntil && !wristMenuOpen()) {
+        feature.wave(); gestureUntil = time + 3;
       }
-      // the line under the frame: the tip after "nothing", "lower it" while the shown thing is still up, else the how-to
-      b.viewfinder.setLabel(time < frameHintUntil ? frameHint : p && !rearmed ? 'Lower it, then the next' : phase === 'reacting' ? '' : 'Hold it here');
-      if (p && rearmed && time > cooldownUntil && phase === 'idle') {
-        wake();
-        if (asleep) {
-          asleep = false;
-          b.mascot.play('hop');
+      palmWasUp = palmUp;
+      for (const side of ['left', 'right'] as const) {
+        const tip = f.hands[side]?.joints['index-finger-tip']?.position;
+        if (!tip || time < gestureUntil) continue;
+        stageToWorld(0, 0.055, 0.02, holdPoint);
+        if (tip.distanceToSquared(holdPoint) < 0.05 * 0.05) { poke(); gestureUntil = time + 2; break; }
+        stageToWorld(0.081, 0.02, 0.04, holdPoint);
+        if (tip.distanceToSquared(holdPoint) < 0.05 * 0.05) {
+          b.mascot.play('clap'); b.mascot.setMood('delighted', 2.5); b.mascot.celebrate(false);
+          app.demoAudio?.play('giggle'); say('High five!', '', 3); gestureUntil = time + 2; break;
         }
-        setPhase('holding');
-        hold = 0;
-        lostFor = 0;
-        nextAskAt = Infinity;
-        setFrame('lit', 'Hold still…');
-        b.mascot.setMood('noticing', Infinity);
-        say('Ooh, what is that? Hold still…', '', Infinity);
-      }
-    } else if (phase === 'holding') {
-      if (!p) {
-        lostFor += dt;
-        hold = Math.max(0, hold - dt * 2);
-        if (lostFor > GRACE_S) {
-          backToIdle();
-          b.mascot.setMood('neutral', Infinity);
-          ask();
-        }
-      } else {
-        lostFor = 0;
-        // the ring only fills while the hand is still (it drains while you wave it about)
-        hold = speed < 0.3 ? hold + dt : Math.max(0, hold - dt);
-        b.viewfinder.setLabel(speed < 0.3 ? 'Hold still…' : 'Hold it still');
-      }
-      b.viewfinder.progress = Math.min(1, hold / HOLD_S);
-      if (hold >= HOLD_S && p) {
-        snapshotJoints(f, p.hand);
-        void capture();
-      }
-    } else if (phase === 'countdown') {
-      countdown -= dt;
-      b.viewfinder.progress = 1 - Math.max(0, countdown) / 1.5;
-      const n = Math.ceil(countdown / 0.5);
-      if (n !== countdownShown && n > 0) {
-        countdownShown = n;
-        b.viewfinder.setLabel(`Snap in ${n}…`);
-      }
-      if (countdown <= 0) {
-        snapshotJoints(f, p?.hand);
-        void capture();
       }
     } else if (phase === 'thinking') {
       const el = time - thinkingSince;
@@ -718,18 +611,14 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
       asleep = true;
       b.mascot.setMood('sleepy', Infinity);
       b.bubble.hide();
-      refreshCard('Dozing… hold something in the frame');
-    }
-    if (phase === 'idle' && time > nextAskAt && !asleep) {
-      nextAskAt = Infinity;
-      b.mascot.play('hop');
-      ask(askKind);
-      askKind = 'next';
+      refreshCard('Dozing… wave hello, or tap Buddy.');
     }
 
+
     // --- gaze: the frame while showing (and while it asks: the eyes point the way), the photo while thinking ---
-    if (phase === 'thinking') lookTarget.copy(b.polaroid.visible ? b.polaroid.position : b.viewfinder.position);
-    else if (phase === 'holding' || phase === 'countdown' || phase === 'capturing') lookTarget.copy(p ? p.point : b.viewfinder.position);
+    if (phase === 'thinking' || phase === 'preview') lookTarget.copy(b.polaroid.visible ? b.polaroid.position : b.viewfinder.position);
+    else if (phase === 'capturing') lookTarget.copy(p ? p.point : b.viewfinder.position);
+    else if (p && phase === 'idle') lookTarget.copy(p.point);
     else if (time < lookAtFrameUntil) lookTarget.copy(b.viewfinder.position);
     else lookTarget.copy(f.head.position);
     b.mascot.update(dt, lookTarget);
@@ -752,6 +641,7 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     open() {
       if (phase !== 'closed' && closingAt < 0) return;
       const b = built ?? build();
+      interactionEpoch++;
       closingAt = -1;
       backToIdle();
       openedAt = time;
@@ -767,32 +657,30 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
       b.viewfinder.wanted = true;
       b.mascot.setMood('delighted', 2.5);
       b.mascot.play('wave');
-      if (quests.finished) quests.restart();
       ask('first');
-      cooldownUntil = time + 0.8;
-      rearmed = true;
       nothingStreak = 0;
       wake();
       asleep = false;
       loadModels();
       if (app.cameraState !== 'on' && app.cameraState !== 'starting') void app.startCamera().catch(() => undefined);
-      app.page.log('[buddy] open: hold something up in the frame');
+      app.page.log('[buddy] open: Capture previews the object; Show shares the reviewed image');
     },
-    close() {
-      if (phase === 'closed' || !built) return;
+    close(silent = false) {
+      if ((phase === 'closed' && !silent) || !built) return;
+      interactionEpoch++;
       reactAbort?.abort();
       reactAbort = null;
-      built.mascot.play('wave');
-      built.mascot.setMood('delighted', 1);
-      say('Bye! Bring me treasures later.', '', 1.5);
+      if (!silent) { built.mascot.play('wave'); built.mascot.setMood('delighted', 1); say('See you soon!', '', 1.5); }
+      else { built.bubble.hide(); stage.visible = false; built.viewfinder.visible = false; }
+      pendingPhoto?.photo instanceof ImageBitmap && pendingPhoto.photo.close();
+      pendingPhoto = undefined;
       built.card.setVisible(false);
       built.viewfinder.wanted = false;
       built.viewfinder.progress = 0;
       built.polaroid.hide();
       removeSim();
-      nextAskAt = Infinity;
       setPhase('closed');
-      closingAt = time + 0.45;
+      closingAt = silent ? -1 : time + 0.45;
       app.page.log('[buddy] closed');
     },
     toggle() {
@@ -801,23 +689,54 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     },
     isOpen: () => phase !== 'closed',
     show() {
-      if (!built || (phase !== 'idle' && phase !== 'reacting' && phase !== 'holding')) return;
-      wake();
-      asleep = false;
-      setPhase('countdown');
-      countdown = 1.5;
-      countdownShown = -1;
-      setFrame('lit', 'Snap in 3…');
-      built.mascot.setMood('noticing', Infinity);
-      say('Hold it in the frame…', '', 3);
+      if (!built) return;
+      wake(); asleep = false;
+      if (phase === 'preview' && pendingPhoto) {
+        const captured = pendingPhoto; pendingPhoto = undefined;
+        void react(captured.jpeg, captured.photo, captured.via); return;
+      }
+      if (phase !== 'idle' && phase !== 'reacting') return;
+      void capture();
+    },
+    retake() {
+      if (!built || phase !== 'preview') return;
+      interactionEpoch++;
+      pendingPhoto?.photo instanceof ImageBitmap && pendingPhoto.photo.close(); pendingPhoto = undefined;
+      built.polaroid.hide(); backToIdle(); refreshCard('Aim the frame, then Capture again.');
+    },
+    wave() {
+      if (!built || phase === 'closed' || phase === 'thinking' || phase === 'capturing') return;
+      wake(); asleep = false; built.mascot.setMood('delighted', 3); built.mascot.play('wave');
+      app.demoAudio?.play('curious'); say('Hi! Come say hello, or show me something.', '', 4);
+    },
+    showVirtual() {
+      if (!built || phase === 'thinking' || phase === 'capturing') return;
+      interactionEpoch++;
+      const object = VIRTUAL_OBJECTS[virtualIndex++ % VIRTUAL_OBJECTS.length]!;
+      const photo = drawVirtualObject(object);
+      const jpeg = photo.toDataURL('image/jpeg', .85).split(',')[1]!;
+      pendingPhoto?.photo instanceof ImageBitmap && pendingPhoto.photo.close();
+      pendingPhoto = { jpeg, photo, via: 'virtual' };
+      setPhase('preview'); holdPhoto(photo);
+      built.viewfinder.position.copy(frameTarget); built.viewfinder.position.y += .045;
+      built.polaroid.go(built.viewfinder.position, FRAME_SIZE * 1.05, .3);
+      setFrame('busy', 'Virtual object'); built.mascot.play('tilt');
+      refreshCard(`Virtual ${object}. Press Show, or choose Virtual for another.`);
     },
     async showImage(url: string) {
       if (phase === 'closed') feature.open();
       if (!built || phase === 'thinking' || phase === 'capturing') return;
-      const blob = await (await fetch(url)).blob();
-      built.viewfinder.flash();
+      const epoch = ++interactionEpoch;
+      const current = () => interactionEpoch === epoch && phase !== 'closed';
+      const response = await fetch(url);
+      if (!current()) return;
+      const blob = await response.blob();
+      if (!current()) return;
       const photo = await createImageBitmap(blob).catch(() => undefined);
-      await react(await blobToB64(blob), photo, 'photo');
+      if (!current()) { photo?.close(); return; }
+      const jpeg = await blobToB64(blob);
+      if (!current()) { photo?.close(); return; }
+      built.viewfinder.flash(); await react(jpeg, photo, 'photo');
     },
     async holdUp(url?: string) {
       if (phase === 'closed') feature.open();
@@ -860,10 +779,10 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     state: () => ({
       asleep,
       phase,
-      quest: quests.current ?? '',
-      kicker: quests.kicker,
-      done: quests.done,
-      met: quests.met,
+      quest: '',
+      kicker: 'MUSE BUDDY',
+      done: 0,
+      met: 0,
       collected: [...seen],
       lastReaction,
       bubble: String(built?.bubble.userData.text ?? ''),

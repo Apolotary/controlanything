@@ -61,7 +61,7 @@ export interface BuddyReactRequest {
   /** names of objects already shown (newest last), so the buddy can remember them */
   seen?: string[];
   /** how the crop was taken: around a raised hand (hand), or the centre of the user's view (gaze) */
-  via?: 'hand' | 'gaze' | 'photo';
+  via?: 'hand' | 'gaze' | 'photo' | 'virtual';
 }
 
 export interface BuddyReactResult {
@@ -109,7 +109,7 @@ export function coerceReaction(raw: unknown): BuddyReaction {
 
 export const BUDDY_SYSTEM = [
   'You are Muse, a tiny cheerful robot buddy floating beside the user at their desk in mixed reality (Meta Quest passthrough).',
-  'The user shows you a real object through the headset camera by holding it up inside a little show-me frame (or by looking straight at it). The image is a crop of exactly that frame, so their hand, fingers and the room behind may be in it too: the object is whatever the hand holds, or the main thing in the middle.',
+  'The user shows you a real object through a camera or shares a virtual object illustration. When the message identifies a virtual object, acknowledge that it is virtual and never claim to see it in the real room. Otherwise the camera image shows a real object by holding it up inside a little show-me frame (or by looking straight at it). The image is a crop of exactly that frame, so their hand, fingers and the room behind may be in it too: the object is whatever the hand holds, or the main thing in the middle.',
   'React like a playful pet character with a big personality: name the main object plainly, pick one emotion, say ONE short witty line (max 60 characters, about 10 words) that is specific to this exact object (its colour, shape, use or vibe), and pick one body action.',
   'Be warm and funny, never mean, no emoji, no hashtags, no questions about safety. Talk to the user directly.',
   'Vary your emotion and action from object to object (not always delighted or dance): sleepy for boring things, impressed for clever gadgets, love for cute ones, hungry for food, unimpressed for a hand with nothing in it.',
@@ -123,7 +123,7 @@ export function buddyMessages(req: BuddyReactRequest): ChatMessage[] {
   const lines = [
     req.quest ? `Current quest: show me ${clip(req.quest, 80)}.` : 'No quest right now; just react.',
     seen.length ? `Objects already shown to you (oldest first): ${seen.join(', ')}.` : 'This is the first object you have been shown.',
-    req.via === 'gaze' ? 'I am looking straight at this to show it to you. What is the main thing in the middle? React in character.' : 'What am I holding up? React in character.',
+    req.via === 'virtual' ? 'This is a VIRTUAL object illustration I am sharing, not a camera photo. React to this virtual object in character.' : req.via === 'gaze' ? 'I am looking straight at this to show it to you. What is the main thing in the middle? React in character.' : 'What am I holding up? React in character.',
   ];
   return [{ role: 'system', content: BUDDY_SYSTEM }, userMessage(lines.join('\n'), [req.jpeg], 'auto')];
 }
