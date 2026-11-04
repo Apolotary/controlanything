@@ -180,7 +180,7 @@ export class HandDockAnchor {
   private readonly headForward = new Vector3();
   private readonly side = new Vector3();
   private readonly reachPoint = new Vector3();
-  private readonly offset: { lateral: number; up: number; toward: number };
+  private readonly offset: { lateral: number; up: number; toward: number; clearance?: number };
   /** The other hand's index is near the open menu (the menu holds still and stays open). */
   reaching = false;
   /** Set by the HUD while a control is in use (or was just used): a closed menu must not open then. */
@@ -191,7 +191,8 @@ export class HandDockAnchor {
   private lostSince: number | null = null;
 
   /** `offset` (metres, head frame) moves the dock beside the hand so the other index can poke it. */
-  constructor(readonly nonDominant: 'left' | 'right' = 'left', offset: Partial<{ lateral: number; up: number; toward: number }> = {}) {
+  /** `clearance` (m), when set, keeps the dock's near edge that far beyond the knuckles, whatever its width. */
+  constructor(readonly nonDominant: 'left' | 'right' = 'left', offset: Partial<{ lateral: number; up: number; toward: number; clearance: number }> = {}) {
     this.offset = { lateral: 0, up: 0, toward: 0.06, ...offset };
   }
 
@@ -250,7 +251,7 @@ export class HandDockAnchor {
     const firstPose = !this.attached;
     if (firstPose) this.closeImmediately();
     this.attached = true;
-    this.place(frame, hand, dock, wrist, firstPose);
+    this.place(frame, hand, dock, wrist, firstPose, _width);
 
     const held = this.open && (this.reaching || this.fingerNear(other, hand));
     const palmReady = !this.blockOpen && hand.palmUp && (hand.palmUpMs ?? 0) >= OPEN_DWELL_MS
@@ -363,7 +364,7 @@ export class HandDockAnchor {
       && this.reachPoint.z > -0.06 && this.reachPoint.z < 0.15;
   }
 
-  private place(frame: HudFrame, hand: HandState, dock: Object3D, wrist: Object3D, first: boolean): void {
+  private place(frame: HudFrame, hand: HandState, dock: Object3D, wrist: Object3D, first: boolean, width: number): void {
     const joint = hand.joints.wrist!;
     this.destination.set(0, 0, 0);
     let count = 0;
@@ -377,7 +378,9 @@ export class HandDockAnchor {
     this.destination.addScaledVector(this.direction, this.offset.toward);
     // Beside the hand (toward the body centre) and slightly up, in the head's frame.
     this.side.set(1, 0, 0).applyQuaternion(frame.head.quaternion).setY(0).normalize();
-    this.destination.addScaledVector(this.side, this.offset.lateral);
+    const lateral = this.offset.clearance === undefined ? this.offset.lateral
+      : Math.sign(this.offset.lateral || 1) * (width / 2 + this.offset.clearance);
+    this.destination.addScaledVector(this.side, lateral);
     this.destination.y += this.offset.up;
     // A fixed up axis keeps the menu content level as the wrist rolls.
     this.matrix.lookAt(frame.head.position, this.destination, UP);
