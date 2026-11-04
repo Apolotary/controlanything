@@ -19,6 +19,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type AnyMessage, makeMessage, type MessageType, parseMessage, type PayloadOf } from '@ce/protocol';
 import WebSocket from 'ws';
+import { buildTraces } from '../src/agent/wire-check';
 import { applyVisualSynthMidi, createVisualSynthState, VISUAL_SYNTH_IDENTITY_REPLY, VISUAL_SYNTH_PORT, VISUAL_SYNTH_PORT_ID } from '../../../packages/vsynth/src/state';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../../..');
@@ -203,6 +204,37 @@ async function main(): Promise<void> {
   quest.send('control.event', { widgetId: `wire:${first.actionId}`, value: 20, ts: Date.now(), phase: 'move' });
   await sleep(300);
   check(execs.slice(b5).some((e) => e.op.number === ccOf(first.actionId) && e.op.value === 20), 'an event without specId resolves to the single active wiring');
+
+  // --- 4b. run the program the way the headset does, on a recorded touch-drag, and watch the Mac's water --------------
+  if (ready.payload.actions.some((a) => a.actionId === 'cc24')) {
+    console.log('4b. the program on a touch-drag trace (what the headset runtime would send)');
+    check(['cc22', 'cc23', 'cc24'].every((id) => ready.payload.actions.some((a) => a.actionId === id)), 'Touch the water uses Touch X / Y / pressure (cc22, cc23, cc24)', ready.payload.actions.map((a) => a.actionId));
+    const verifyOps = execs.filter((e) => e.at >= t0 && e.op.number === 24).map((e) => Number(e.op.value));
+    check(verifyOps.length > 0 && Math.max(...verifyOps) <= 20, 'verifying the touch actions only hovered (cc24 <= 20): no splash, nothing confusing', verifyOps);
+    const frames = [...buildTraces().find((t) => t.name === 'touch-drag')!.frames, ...Array.from({ length: 6 }, (_, i) => ({ t: 2 + i / 60, dt: 1 / 60, right: null, left: null, screen: null }))];
+    // eslint-disable-next-line no-new-func
+    const program = new Function('s', 'out', 'mem', ready.payload.code) as (s: unknown, out: { set(id: string, v: number): void; trigger(id: string): void }, mem: object) => void;
+    const mem = {};
+    const seen = { x: [] as number[], pressure: [] as number[] };
+    const startState = execs.length;
+    for (const frame of frames) {
+      const sets: [string, number][] = [];
+      program(frame, { set: (id, v) => sets.push([id, v]), trigger: () => undefined }, mem);
+      for (const [id, value] of sets) quest.send('control.event', { widgetId: `wire:${id}`, value, ts: Date.now(), phase: 'move', specId });
+      await sleep(16);
+    }
+    await sleep(400);
+    for (const e of execs.slice(startState)) {
+      if (e.op.msg !== 'cc') continue;
+      if (e.op.number === 22) seen.x.push(Number(e.op.value));
+      if (e.op.number === 24) seen.pressure.push(Number(e.op.value));
+    }
+    const downAt = seen.pressure.findIndex((v) => v > 20);
+    console.log(`   Mac got ${seen.x.length} X, ${seen.pressure.length} pressure CCs; X ${Math.min(...seen.x)}..${Math.max(...seen.x)}; pressure max ${Math.max(...seen.pressure)}, last ${seen.pressure.at(-1)}`);
+    check(seen.x.length >= 20 && Math.min(...seen.x) < 45 && Math.max(...seen.x) > 85, 'X follows the finger across the screen (30 Hz at most)', [Math.min(...seen.x), Math.max(...seen.x), seen.x.length]);
+    check(seen.pressure.some((v) => v >= 1 && v <= 20) && downAt >= 0, 'pressure hovers (1-20) on approach and touches (>20) on contact', seen.pressure.slice(0, 12));
+    check(seen.pressure.at(-1) === 0, 'pressure 0 is the last thing sent when the hand is lost (a lift)', seen.pressure.slice(-4));
+  }
 
   // --- 5. a second request replaces the wiring --------------------------------------------------------------------
   console.log('5. wire.request "Hands as knobs"');

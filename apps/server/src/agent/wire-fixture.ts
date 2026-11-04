@@ -29,20 +29,34 @@ export function pickTouch(actions: ActionBrief[], controls = touchControls()): {
   return x && y && pressure ? { x, y, pressure } : undefined;
 }
 
-function touchCode(x: ActionBrief, y: ActionBrief, p: ActionBrief): string {
+function touchCode(x: ActionBrief, y: ActionBrief, p: ActionBrief, real: boolean): string {
+  // `real`: the device's own touch inputs (X, Y, pressure: 0 lifted, 1-20 hover, above 20 touching). Otherwise the fingertip
+  // drives three ordinary controls and the pressure is just scaled into that control's range.
+  const pressure = real
+    ? [
+      '  // Pressure: 0 = lifted, 1-20 = hovering (a soft glow), above 20 = touching (a splash).',
+      '  let press = 0;',
+      '  if (t.touching) press = 100;',
+      '  else if (t.hover > 0.02) press = 1 + t.hover * 19;',
+      `  out.set(${q(p.actionId)}, press);`,
+    ]
+    : [
+      '  // Pressure: a soft glow while the finger hovers, a full splash on contact.',
+      '  const press = t.touching ? 1 : t.hover * 0.25;',
+      `  out.set(${q(p.actionId)}, ${lerp(p, 'press')});`,
+    ];
   return [
     '// Touch the water: your fingertip on the screen becomes a ripple.',
     '// Where the finger is on the screen (0..1 across and down) -> the touch position.',
     'const t = s.screen;',
     'if (t && t.inside) {',
+    '  // Position first, then pressure, so the splash lands under the finger.',
     `  out.set(${q(x.actionId)}, ${lerp(x, 't.u')});`,
     `  out.set(${q(y.actionId)}, ${lerp(y, 't.v')});`,
-    '  // Pressure: a soft glow while the finger hovers, a full splash on contact.',
-    '  const press = t.touching ? 1 : t.hover * 0.25;',
-    `  out.set(${q(p.actionId)}, ${lerp(p, 'press')});`,
+    ...pressure,
     '  mem.lit = true;',
     '} else if (mem.lit) {',
-    '  // The finger left the screen: lift the touch once.',
+    '  // The finger left the screen or the hand was lost: lift the touch once.',
     `  out.set(${q(p.actionId)}, ${num(p.min ?? 0)});`,
     '  mem.lit = false;',
     '}',
@@ -79,7 +93,7 @@ export function buildWiring(actions: ActionBrief[], request: string, prefix: 'FI
     return {
       title: `${prefix}: Touch the water`,
       explanation: `${note} ${touch ? 'Touch the screen with your fingertip and ripples follow your finger.' : `This device has no touch input, so your fingertip moves ${t.x.label} and ${t.y.label}.`}`.slice(0, 200),
-      code: touchCode(t.x, t.y, t.pressure), needs: ['screen'],
+      code: touchCode(t.x, t.y, t.pressure, !!touch), needs: ['screen'],
     };
   }
   // Hands as knobs: the first controls the device has (right hand height / push, left hand height, pinch); the

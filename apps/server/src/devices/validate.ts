@@ -6,7 +6,7 @@
  */
 import { type ActionEncode, type Driver, type DriverAction, type DriverDraft, type IrCapture, type IrOp, RATE_LIMITS, VALUE_PLACEHOLDER } from '@ce/protocol';
 import { VISUAL_SYNTH_MANIFEST } from '@ce/vsynth/manifest';
-import { isVisualSynthPort, misnamedVisual, VISUAL_SYNTH_NAME } from './visualSynth';
+import { isVisualSynthPort, misnamedVisual, touchRoleOfCc, VISUAL_SYNTH_NAME } from './visualSynth';
 import { fillRaw, sameCode } from './ir';
 import { OSMO_LIMITS } from './osmo/om';
 import type { IrLibrary } from './profiles';
@@ -133,7 +133,9 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
     } else if (hasPlaceholder(e)) err('unexpected_placeholder', `${path}.encode`, `"${a.kind}" action ${a.actionId} cannot use "${VALUE_PLACEHOLDER}"`);
     if (visual) {
       // The renderer's published manifest is the allowlist; Muse chooses among it (labels, ranges, curves, patterns).
-      if (a.expect?.sense !== 'camera') err('physical_oracle_required', `${path}.expect`, 'Visual synth actions require camera evidence');
+      // Touch X / Touch Y draw nothing while the finger is lifted: the renderer's receipt (ack) is their evidence.
+      const fingerAxis = e.kind === 'midi' && e.msg === 'cc' && ['x', 'y'].includes(touchRoleOfCc(e.number) ?? '');
+      if (a.expect?.sense !== 'camera' && !(fingerAxis && a.expect?.sense === 'ack')) err('physical_oracle_required', `${path}.expect`, fingerAxis ? 'Touch X and Y are checked by the renderer receipt: expect {"sense":"ack","effect":"any"}' : 'Visual synth actions require camera evidence');
       if (a.expect?.effect !== 'any') err('visual_effect', `${path}.expect.effect`, 'Visual synth actions verify a visible change with effect any');
       if (e.kind !== 'midi' || e.channel !== 1) err('visual_action', `${path}.encode`, 'The visual synth accepts MIDI on channel 1 only');
       else if (e.msg === 'cc') {

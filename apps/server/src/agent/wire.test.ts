@@ -2,7 +2,10 @@ import type { ChatMessage, MuseChat } from '../muse/adapter';
 import { ModelCallError } from '../muse/adapter';
 import type { Driver, DriverAction, PayloadOf } from '@ce/protocol';
 import { describe, expect, it, vi } from 'vitest';
-import { extendWithTouch, touchActions, touchControls } from '../devices/visualSynth';
+import { extendWithTouch, touchActions, touchControls, touchRoleOfCc, visualExpect } from '../devices/visualSynth';
+import { validateDriver } from '../devices/validate';
+import { verifyDriver } from './verify';
+import { applyVisualSynthMidi, createVisualSynthState } from '../../../../packages/vsynth/src/state';
 import { Dispatcher } from './dispatch';
 import { ControlRouter } from './control';
 import { StepLog } from './steps';
@@ -24,6 +27,7 @@ const MANIFEST = {
     { cc: 24, parameter: 'touchPressure', label: 'Touch pressure', effect: '0 = lifted, above 0 = touching; also a soft hover glow', rendererRange: [0, 1] as [number, number], curve: 'linear' as const },
   ],
   programs: [{ program: 0, name: 'Flow', effect: 'flowing field' }],
+  touch: 'Touch the water: CC22 X and CC23 Y place the fingertip, CC24 is its pressure (0 lifted, 1-20 hover, 21-127 touching). Send X and Y before pressure.',
   resets: '', rejects: [], receipt: '',
 };
 const base: Driver = {
@@ -72,6 +76,11 @@ describe('prompt', () => {
     expect(hints).toContain('cc22 "Touch X" [touch input]: x of the fingertip on the water');
     expect(hints).toContain('cc24 "Touch pressure" [touch input]: 0 = lifted');
     expect(hints).toMatch(/calibrate/);
+    expect(hints).toContain('How the touch controls work together (from the manifest): Touch the water: CC22 X and CC23 Y');
+    expect(hints).toMatch(/BEFORE pressure/);
+    expect(hints).toMatch(/at 20-60 Hz/);
+    expect(hints).toMatch(/hovering = 1-20 from s\.screen\.hover/);
+    expect(hints).toMatch(/Send pressure 0 once when the finger lifts away, the hand is lost or s\.screen is null/);
     // a manifest with no touch controls says nothing about touch
     expect(deviceHints(base, { ...MANIFEST, controls: MANIFEST.controls.slice(0, 2) }).join('\n')).not.toMatch(/touch/i);
     // a physical device gets no visual synth hints
@@ -93,6 +102,63 @@ describe('the manifest touch inputs', () => {
     expect(r.added).toEqual(['cc22', 'cc23', 'cc24']);
     expect(extendWithTouch(r.driver, MANIFEST.controls).added).toEqual([]);
     expect(extendWithTouch({ ...base, executor: { deviceId: 'x', port: 'OP-1' } }, MANIFEST.controls).added).toEqual([]);
+  });
+
+  it('Touch X / Y are ack-checked (nothing is drawn while lifted), pressure is camera/renderer checked', () => {
+    const byId = Object.fromEntries(extended.actions.map((a) => [a.actionId, a.expect]));
+    expect(byId.cc22).toEqual({ sense: 'ack', effect: 'any' });
+    expect(byId.cc23).toEqual({ sense: 'ack', effect: 'any' });
+    expect(byId.cc24).toEqual({ sense: 'camera', effect: 'any' });
+    expect(byId.cc71).toEqual({ sense: 'camera', effect: 'any' });
+    // against the live manifest too (CC22-24 are in it now)
+    expect(touchRoleOfCc(22)).toBe('x');
+    expect(touchRoleOfCc(23)).toBe('y');
+    expect(touchRoleOfCc(24)).toBe('pressure');
+    expect(touchRoleOfCc(71)).toBeUndefined();
+    expect(visualExpect(23)).toEqual({ sense: 'ack', effect: 'any' });
+    expect(visualExpect(21)).toEqual({ sense: 'camera', effect: 'any' });
+  });
+
+  it('the driver validator accepts ack for Touch X / Y only, and the extended visual driver as a whole', () => {
+    const ids = { driverId: base.driverId, executor: base.executor };
+    const ctx = { expectedTransport: 'midi' as const, allowedCcs: new Set([71, 21, 22, 23, 24]), visualMaxSets: 12 };
+    const live = extendWithTouch(base).driver;
+    const ok = validateDriver(live, ids, ctx);
+    expect(ok.issues.filter((i) => i.severity === 'error')).toEqual([]);
+    const badPressure = { ...live, actions: live.actions.map((a) => (a.actionId === 'cc24' ? { ...a, expect: { sense: 'ack' as const, effect: 'any' as const } } : a)) };
+    expect(validateDriver(badPressure, ids, ctx).issues.map((i) => i.code)).toContain('physical_oracle_required');
+    const badWarp = { ...live, actions: live.actions.map((a) => (a.actionId === 'cc71' ? { ...a, expect: { sense: 'ack' as const, effect: 'any' as const } } : a)) };
+    expect(validateDriver(badWarp, ids, ctx).issues.map((i) => i.code)).toContain('physical_oracle_required');
+    // a setup driver may still carry camera on Touch X (the old rule), and the default cap of four continuous controls stands
+    const cameraX = { ...live, actions: live.actions.map((a) => (a.actionId === 'cc22' ? { ...a, expect: { sense: 'camera' as const, effect: 'any' as const } } : a)) };
+    expect(validateDriver(cameraX, ids, ctx).issues.filter((i) => i.severity === 'error')).toEqual([]);
+    expect(validateDriver(live, ids, { ...ctx, visualMaxSets: undefined }).issues.map((i) => i.code)).toContain('visual_controls');
+  });
+
+  it('verifying them never touches down: X/Y at the middle, pressure only as a hover, strict renderer check', async () => {
+    const live = extendWithTouch(base).driver;
+    let state = createVisualSynthState();
+    const ops: { actionId?: string; op: Record<string, unknown> }[] = [];
+    const exec = vi.fn(async (deviceId: string, op: Record<string, unknown>, opts: { actionId?: string }) => {
+      ops.push({ op, actionId: opts.actionId });
+      const bytes = op.msg === 'cc' ? [0xb0, Number(op.number), Number(op.value)] : op.msg === 'pc' ? [0xc0, Number(op.number)] : [];
+      const change = bytes.length ? applyVisualSynthMidi(state, bytes) : null;
+      if (change) state = change.parameters;
+      return { execId: 'e', ok: true, sentAt: Date.now(), applied: change ? { source: 'renderer' as const, params: { ...state }, visible: true } : undefined };
+    });
+    const target = { cardId: 'visual-synth-mac', verification: {}, evidence: [], runId: 'r' } as never;
+    const summary = await verifyDriver({ dispatcher: { exec } as never, sam: {} as never, settleMs: () => 0 }, target, live, { actionIds: ['cc22', 'cc23', 'cc24'] });
+    expect(summary.verification).toMatchObject({ cc22: 'pass', cc23: 'pass', cc24: 'pass' });
+    const pressure = ops.filter((o) => o.op.number === 24).map((o) => o.op.value as number);
+    expect(pressure.length).toBeGreaterThan(0);
+    expect(Math.max(...pressure)).toBeLessThanOrEqual(20);
+    expect(ops.find((o) => o.actionId === 'cc22')!.op.value).toBe(64);
+    expect(ops.find((o) => o.actionId === 'cc23')!.op.value).toBe(64);
+    expect(ops.find((o) => o.actionId === 'cc24')!.op.value).toBe(10);
+    // X and Y are checked by the renderer receipt, with no freeze and no baseline
+    expect(ops.filter((o) => o.actionId?.startsWith('cc22:') || o.actionId?.startsWith('cc23:'))).toEqual([]);
+    expect(summary.evidence.find((e) => e.actionId === 'cc22')!.note).toMatch(/verified by renderer: touchX 0\.50/);
+    expect(summary.evidence.find((e) => e.actionId === 'cc24')!.note).toMatch(/touchPressure/);
   });
 });
 

@@ -8,7 +8,8 @@
 import type { Driver, DriverAction, Effect, Evidence, ExecAckPayload, ExecOp, Polygon, ScanFramePayload, SenseResultPayload, VerifyState } from '@ce/protocol';
 import { newId } from '@ce/protocol';
 import { cancellableDelay as sleep, throwIfCancelled } from '../muse/cancellation';
-import { isVisualSynthPort } from '../devices/visualSynth';
+import { VISUAL_SYNTH_MANIFEST } from '@ce/vsynth/manifest';
+import { isVisualSynthPort, TOUCH_VERIFY_CENTER, TOUCH_VERIFY_HOVER, touchRoleOfCc } from '../devices/visualSynth';
 import { resolveOp } from '../devices/encode';
 import type { IrCandidate } from '../devices/profiles';
 import { audioEvidence, audioMatches, observeAudio } from '../oracle/audio';
@@ -123,13 +124,32 @@ async function audioWindow(d: Dispatcher, micDeviceId: string, cardId: string, o
   return r.audio;
 }
 
-/** The op to send for one verification of an action: set actions go to their max (then min on the second pass), or to `value`. */
-function opFor(a: DriverAction, pass: number, value?: number): ExecOp {
+/**
+ * The op to send for one verification of an action: set actions go to their max (then min on the second pass), or to `value`.
+ * The visual synth's fingertip inputs are verified gently: X and Y at the middle of the canvas, pressure as a soft hover
+ * (1..20), never a touch-down splash.
+ */
+function opFor(a: DriverAction, pass: number, value?: number, visual = false): ExecOp {
   if (a.kind === 'set' && a.encode.kind !== 'step') {
     if (value !== undefined) return resolveOp(a, value);
+    const role = visual && a.encode.kind === 'midi' && a.encode.msg === 'cc' ? touchRoleOfCc(a.encode.number) : undefined;
+    if (role) return resolveOp(a, role === 'pressure' ? TOUCH_VERIFY_HOVER : TOUCH_VERIFY_CENTER);
     if (a.range) return resolveOp(a, pass % 2 === 0 ? a.range.max : a.range.min);
   }
   return resolveOp(a);
+}
+
+/** A repeatable baseline away from the commanded value (a program change goes to another pattern). Touch pressure's baseline is never a touch-down. */
+function visualBaseline(op: ExecOp): ExecOp | undefined {
+  if (op.kind !== 'midi') return undefined;
+  if (op.msg === 'pc' && op.number !== undefined) return { ...op, number: (op.number + 1) % 3 };
+  if (op.msg === 'cc' && typeof op.value === 'number') {
+    const role = touchRoleOfCc(op.number);
+    if (role === 'pressure') return { ...op, value: op.value > 0 ? 0 : TOUCH_VERIFY_HOVER };
+    if (role) return { ...op, value: op.value < 64 ? 100 : 28 };
+    return { ...op, value: op.value < 64 ? 127 : 0 };
+  }
+  return undefined;
 }
 
 /** The text a local "say" op speaks, if it is one. */
@@ -144,8 +164,8 @@ export function spokenLine(op: ExecOp): string | undefined {
 export const VISUAL_VERIFY_BUDGET_MS = 10_000;
 /** One camera frame for the visual synth may take this long before the renderer report decides instead. */
 const VISUAL_FRAME_TIMEOUT_MS = 2500;
-/** The visual synth's CC → parameter table (packages/vsynth VISUAL_SYNTH_CONTROLS); symmetry is stepped 1..8. */
-const VISUAL_CC_PARAM: Record<number, string> = { 7: 'brightness', 10: 'hue', 11: 'saturation', 1: 'speed', 74: 'zoom', 71: 'warp', 21: 'ripple', 20: 'symmetry' };
+/** The visual synth's CC → parameter table, read from its manifest (touchX / touchY / touchPressure on CC22-24 included); symmetry is stepped 1..8. */
+const VISUAL_CC_PARAM: Record<number, string> = Object.fromEntries(VISUAL_SYNTH_MANIFEST.controls.map((c) => [c.cc, c.parameter]));
 
 /**
  * The visual synth's renderer self-report (exec.ack.applied) as evidence: the commanded value must be the
@@ -216,7 +236,7 @@ async function observeOnce(deps: VerifyDeps, t: Target, driver: Driver, a: Drive
   const expected = effectFor(a);
   const sense = a.expect?.sense ?? 'none';
   const exec = driver.executor;
-  const op = opFor(a, attempt, o.value);
+  const op = opFor(a, attempt, o.value, isVisualSynthPort(exec.port));
   const base = { evidenceId: newId('ev'), cardId: t.cardId, driverId: driver.driverId, actionId: a.actionId, attempt, expected: { sense, effect: expected } } as const;
   const lightCap = driver.transport === 'ir';
 
@@ -295,10 +315,7 @@ async function observeOnce(deps: VerifyDeps, t: Target, driver: Driver, a: Drive
       // instrument before taking its baseline; the loop restores defaults after verification.
       await d.exec(exec.deviceId, { kind: 'midi', msg: 'cc', channel: 1, number: 1, value: 0 },
         { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: `${a.actionId}:freeze-animation`, waitForSlot: true, signal: o.signal });
-      const baseline: ExecOp | undefined = op.msg === 'pc' && op.number !== undefined
-        ? { ...op, number: (op.number + 1) % 3 }
-        : op.msg === 'cc' && typeof op.value === 'number'
-          ? { ...op, value: op.value < 64 ? 127 : 0 } : undefined;
+      const baseline = visualBaseline(op);
       if (baseline) {
         await d.exec(exec.deviceId, baseline, { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: `${a.actionId}:baseline`, waitForSlot: true, signal: o.signal });
         await sleep(350, o.signal);
@@ -356,6 +373,11 @@ async function observeOnce(deps: VerifyDeps, t: Target, driver: Driver, a: Drive
   // ack (or none): the executor's acknowledgement is the evidence
   try {
     const ack = await d.exec(exec.deviceId, op, { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: a.actionId, lightCap, waitForSlot: true, signal: o.signal, timeoutMs: 4000 });
+    if (isVisualSynthPort(exec.port) && op.kind === 'midi') {
+      // Touch X / Y draw nothing while the finger is lifted: the renderer's report of the applied parameter is the evidence.
+      const r = rendererEvidence(op, ack);
+      return { evidence: { ...base, execId: ack.execId, sent: { op, at: ack.sentAt }, observed: { ...r.observed, sensorDeviceId: exec.deviceId }, pass: r.pass, note: r.note } };
+    }
     const evidence: Evidence = { ...base, execId: ack.execId, sent: { op, at: ack.sentAt }, observed: { sense: 'ack', metric: 'ack', before: 0, after: 1, delta: 1, threshold: 1, sensorDeviceId: exec.deviceId, note: ack.detail?.slice(0, 200) }, pass: true, note: 'executor acknowledged' };
     return { evidence };
   } catch (e) {
@@ -385,8 +407,7 @@ async function observeVisual(deps: VerifyDeps, t: Target, driver: Driver, a: Dri
   let cameraNote: string | undefined = o.cameraDeviceId ? (useCamera ? undefined : o.cameraSkip ?? 'skipped (time budget)') : 'no headset camera';
   // Continuous animation is not evidence: freeze, then a baseline away from the commanded value.
   await run({ kind: 'midi', msg: 'cc', channel: 1, number: 1, value: 0 }, `${a.actionId}:freeze-animation`);
-  const baseline: ExecOp | undefined = op.msg === 'pc' && op.number !== undefined ? { ...op, number: (op.number + 1) % 3 }
-    : op.msg === 'cc' && typeof op.value === 'number' ? { ...op, value: op.value < 64 ? 127 : 0 } : undefined;
+  const baseline = visualBaseline(op);
   if (baseline) await run(baseline, `${a.actionId}:baseline`);
   if (useCamera) {
     try {

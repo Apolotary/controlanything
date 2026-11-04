@@ -108,7 +108,15 @@ export function deviceHints(driver: Pick<Driver, 'actions' | 'executor'>, manife
     `Device hints from its capability manifest ("${manifest.name}", a silent visual instrument on the Mac screen; CC values 0-127 on channel 1):`,
     ...manifest.controls.filter((c) => driver.actions.some((a) => a.encode.kind === 'midi' && a.encode.msg === 'cc' && a.encode.number === c.cc)).map((c) => `- cc${c.cc} "${c.label}"${touch.includes(c) ? ' [touch input]' : ''}: ${c.effect}`),
   ];
-  if (touch.length) lines.push('A touch input follows the wearer\'s fingertip on the Mac screen (screen.u / screen.v / screen.touching / screen.hover): the screen signal needs the wearer to calibrate the screen first, so list "screen" in needs when you read it.');
+  if (touch.length) {
+    if (manifest.touch) lines.push(`How the touch controls work together (from the manifest): ${manifest.touch}`);
+    lines.push(
+      'Touch recipe: the touch controls follow the wearer\'s fingertip on the Mac screen (s.screen.u / v / touching / hover). The screen signal needs the wearer to calibrate the screen first, so list "screen" in needs when you read it.',
+      '- While s.screen is inside: every frame send X and Y (u and v scaled to 0-127) BEFORE pressure; while touching, send X and Y at 20-60 Hz (every frame is fine, the server limits the rate).',
+      '- Pressure: 0 = lifted; hovering = 1-20 from s.screen.hover (for example 1 + hover * 19); touching = above 20 (for example 60-127: harder = stronger splash).',
+      '- Send pressure 0 once when the finger lifts away, the hand is lost or s.screen is null (use mem to send it only on that edge).',
+    );
+  }
   return lines;
 }
 

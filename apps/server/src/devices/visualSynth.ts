@@ -33,8 +33,10 @@ const VISUAL_WORDS: Record<string, RegExp> = {
   brightness: /\bbright/i, hue: /\b(hue|colou?r)\b/i, saturation: /\bsatur/i, speed: /\b(speed|tempo)\b/i, zoom: /\bzoom/i,
   warp: /\bwarp/i, ripple: /\b(ripple|water)/i, symmetry: /\b(symmetr|kaleido|mirror)/i,
   flow: /\bflow/i, rings: /\brings?\b/i, prism: /\bprism/i,
+  // the fingertip inputs (CC22 X, CC23 Y, CC24 pressure) share one vocabulary
+  touchX: /\b(touch|finger)/i, touchY: /\b(touch|finger)/i, touchPressure: /\b(touch|finger)/i,
 };
-const CC_PARAMETER: Record<number, string> = { 7: 'brightness', 10: 'hue', 11: 'saturation', 1: 'speed', 74: 'zoom', 71: 'warp', 21: 'ripple', 20: 'symmetry' };
+const CC_PARAMETER: Record<number, string> = { 7: 'brightness', 10: 'hue', 11: 'saturation', 1: 'speed', 74: 'zoom', 71: 'warp', 21: 'ripple', 20: 'symmetry', 22: 'touchX', 23: 'touchY', 24: 'touchPressure' };
 const PROGRAM_KEY = ['flow', 'rings', 'prism', 'ripple'];
 
 /** The manifest key a visual synth action drives, from its wire message (or its canonical id cc<n>/pattern<n>). */
@@ -64,13 +66,45 @@ export function touchControls(controls: readonly ManifestControlLike[] = VISUAL_
   return controls.filter((c) => /touch/i.test(`${c.parameter} ${c.label}`));
 }
 
+export type TouchRole = 'x' | 'y' | 'pressure';
+
+/** Which fingertip input a manifest control is (by its parameter name or label), if any. */
+export function touchRoleOf(control: Pick<ManifestControlLike, 'parameter' | 'label'>): TouchRole | undefined {
+  if (!/touch/i.test(`${control.parameter} ${control.label}`)) return undefined;
+  const p = control.parameter;
+  if (/press|force|contact/i.test(`${p} ${control.label}`)) return 'pressure';
+  if (/x$/i.test(p) || /\bx\b/i.test(control.label)) return 'x';
+  if (/y$/i.test(p) || /\by\b/i.test(control.label)) return 'y';
+  return undefined;
+}
+
+/** The fingertip input a CC is, from the renderer's manifest (undefined for every other control). */
+export function touchRoleOfCc(cc: number | undefined, controls: readonly ManifestControlLike[] = VISUAL_SYNTH_MANIFEST.controls): TouchRole | undefined {
+  const c = cc === undefined ? undefined : controls.find((k) => k.cc === cc);
+  return c ? touchRoleOf(c) : undefined;
+}
+
+/**
+ * Touch X and Y draw nothing while the finger is lifted, so their evidence is the renderer's receipt (`ack`, checked
+ * against the applied parameter); touch pressure and every other visual synth control are camera/renderer checked.
+ */
+export function visualExpect(cc: number | undefined, controls?: readonly ManifestControlLike[]): { sense: 'ack' | 'camera'; effect: 'any' } {
+  const role = touchRoleOfCc(cc, controls);
+  return { sense: role === 'x' || role === 'y' ? 'ack' : 'camera', effect: 'any' };
+}
+
+/** Pressure 1..20 is a hovering finger (a soft glow), above 20 a touch-down splash: verification only ever hovers. */
+export const TOUCH_VERIFY_HOVER = 10;
+/** Where verification puts a lifted finger: the middle of the canvas. */
+export const TOUCH_VERIFY_CENTER = 64;
+
 /** The driver actions for those controls (same shape and ids as every other visual synth CC action: cc<number>). */
 export function touchActions(controls: readonly ManifestControlLike[] = touchControls()): DriverDraft['actions'] {
   return controls.map((c) => ({
     actionId: `cc${c.cc}`, label: c.label.slice(0, 40), kind: 'set' as const, description: c.effect.slice(0, 300),
     range: { min: 0, max: 127, step: 1 }, curve: 'linear' as const,
     encode: { kind: 'midi' as const, msg: 'cc' as const, channel: 1, number: c.cc, value: '$value' },
-    expect: { sense: 'camera' as const, effect: 'any' as const },
+    expect: visualExpect(c.cc, controls),
   }));
 }
 

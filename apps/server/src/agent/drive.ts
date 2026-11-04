@@ -6,7 +6,7 @@
  * resort so the loop keeps going (clearly labelled: no Meta model wrote it). Nothing executes until VERIFY.
  */
 import { type Driver, DriverDraft, newId } from '@ce/protocol';
-import { isVisualSynthPort, visualSynthDraft, VISUAL_SYNTH_ID } from '../devices/visualSynth';
+import { isVisualSynthPort, visualExpect, visualSynthDraft, VISUAL_SYNTH_ID } from '../devices/visualSynth';
 import { VISUAL_SYNTH_MANIFEST } from '@ce/vsynth/manifest';
 import { osmoDraft, templateBleDraft } from '../devices/osmo/driver';
 import { resolveOp } from '../devices/encode';
@@ -53,7 +53,7 @@ export function driveMessages(card: DeviceCardPayload, research: Research, trans
       'You are writing the controller the wearer will play hands-free in AR, seen on a screen about two metres away. The wearer asked for two continuous hand controls (hand height, and forward/back push-pull, which they want to make water ripples) plus a few one-tap pattern buttons. Design it:',
       '- 2 to 4 "set" actions on manifest CCs: msg "cc", channel 1, value "$value", a range of wire values inside 0-127 (narrow it when the extremes look bad), step 1, curve linear or s-curve, and a short label in the wearer\'s words. Pick the parameters that change the picture most visibly.',
       '- up to 3 "trigger" actions on manifest programs: msg "pc", channel 1, number = program, labelled with what appears; inverseActionId may name the trigger that restores the default look.',
-      '- actionId is cc<number> for a CC and pattern<program> for a program change. expect is {"sense":"camera","effect":"any"} for every action. No notes, no other channels, no CCs or programs outside the manifest.',
+      '- actionId is cc<number> for a CC and pattern<program> for a program change. expect is {"sense":"camera","effect":"any"} for every action, except the manifest\'s Touch X and Touch Y (nothing is drawn while the finger is lifted): those take {"sense":"ack","effect":"any"} (the server also sets this). The touch controls are not needed in this driver (a later step adds them when the wearer asks to touch the water). No notes, no other channels, no CCs or programs outside the manifest.',
     ].join('\n') : transport === 'ble'
     ? [
       'This is a DJI Osmo Mobile gimbal behind the server\'s Osmo bridge. Keep these five actions and their actionIds, kinds, encodes and ranges; you may only improve labels and descriptions. Ranges are degrees inside the brief\'s safe range; never add speed or roll actions.',
@@ -179,7 +179,7 @@ export function visualPostProcess(draft: DriverDraft): DriverDraft {
     const e = a.encode;
     const id = e.kind === 'midi' && e.number !== undefined ? (e.msg === 'cc' ? `cc${e.number}` : e.msg === 'pc' ? `pattern${e.number}` : a.actionId) : a.actionId;
     rename.set(a.actionId, id);
-    return { ...a, actionId: id, expect: { sense: 'camera' as const, effect: 'any' as const } };
+    return { ...a, actionId: id, expect: e.kind === 'midi' && e.msg === 'cc' ? visualExpect(e.number) : { sense: 'camera' as const, effect: 'any' as const } };
   });
   return { ...draft, actions: actions.map((a) => (a.inverseActionId ? { ...a, inverseActionId: rename.get(a.inverseActionId) ?? a.inverseActionId } : a)) };
 }
