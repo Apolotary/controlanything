@@ -1,5 +1,13 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { LiveCamera } from './camera';
+import { CameraError, isCameraBusy, LiveCamera } from './camera';
+
+it('treats a camera held by another tab as busy (retry), not as a missing camera', () => {
+  expect(isCameraBusy(Object.assign(new Error('Could not start video source'), { name: 'NotReadableError' }))).toBe(true);
+  expect(isCameraBusy({ name: 'AbortError', message: 'Starting videoinput failed' })).toBe(true);
+  expect(isCameraBusy(new CameraError('Camera is busy', 'hint', undefined, 'busy'))).toBe(true);
+  expect(isCameraBusy(new CameraError('Camera permission denied', 'hint', undefined, 'denied'))).toBe(false);
+  expect(isCameraBusy({ name: 'NotAllowedError', message: 'Permission denied' })).toBe(false);
+});
 
 afterEach(() => vi.unstubAllGlobals());
 
