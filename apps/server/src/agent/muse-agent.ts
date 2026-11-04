@@ -250,6 +250,7 @@ export class MuseAgent {
     const lines = [
       `Wearer request: "${request}"`,
       '',
+      ...(c.app?.startsWith('reviewer-software@') ? ['Reviewer phone/webcam client: no native hand tracking, no hand signals and no Worker runtime. Return touchable finish.ui or controls; omit hand_program. Use only the listed virtual outputs.'] : []),
       `Selected object: ${ctx.deviceName}${card ? ` · ${[card.maker, card.model].filter(Boolean).join(' ')} · category ${card.category}${card.protocols?.length ? ` · protocols ${card.protocols.join(', ')}` : ''}${card.requires?.length ? ` · needs ${card.requires.join(', ')}` : ''}` : ''}`,
       ...(card?.visibleText?.length ? [`Text seen on it: ${card.visibleText.slice(0, 6).join(' | ')}`] : []),
       ...(card?.notes ? [`Identification notes: ${card.notes.slice(0, 400)}`] : []),
@@ -490,6 +491,7 @@ export class MuseAgent {
                 }
                 let code = (f.hand_program ?? '').trim();
                 code = code.replace(/^```[a-z]*\n?|```$/g, '').trim();
+                if (code && ctx.companion.app?.startsWith('reviewer-software@')) issues.push('The reviewer client has no hand signals or Worker. Omit hand_program and provide touchable ui or controls.');
                 let needs: WireNeed[] = [];
                 const driverLike = { actions: actions.map((x) => ({ actionId: x.id, label: x.label, kind: x.kind, ...(x.kind === 'set' ? { range: { min: x.min ?? 0, max: x.max ?? 1 } } : {}), encode: { kind: 'midi', msg: 'cc', channel: 1 } })) } as never;
                 if (code) {
@@ -594,7 +596,7 @@ export function fixtureScript(ctx: AgentContext, request: string): FixtureStep[]
     '',
   ].join('\n');
   const briefs = actions.map((x) => ({ actionId: x.id, label: x.label, kind: x.kind as 'set', min: x.min, max: x.max }));
-  const wantsHands = /touch|water|hand|gesture|play|move|surprise|theremin/i.test(request) && !/keys|keyboard|pads/i.test(request);
+  const wantsHands = !ctx.companion.app?.startsWith('reviewer-software@') && /touch|water|hand|gesture|play|move|surprise|theremin/i.test(request) && !/keys|keyboard|pads/i.test(request);
   const wantsKnobs = /knob|dial|slider|control|button|surprise/i.test(request) || !wantsHands;
   const hand = wantsHands ? buildWiring(briefs, request, 'FIXTURE', 'Scripted fixture; no Meta model called.') : undefined;
   const controls = wantsKnobs ? actions.filter((x) => !/^cc2[234]$/.test(x.id) && x.id !== 'note').slice(0, wantsVisual ? 3 : 4).map((x) => ({ action: x.id, label: x.label, kind: 'knob', value: 40 })) : [];

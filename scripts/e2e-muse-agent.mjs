@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,10 +23,11 @@ let server, browser, log = '';
 const until = async (what, probe, ms = 30_000) => { const end = Date.now() + ms; for (;;) { const r = await probe(); if (r) return r; if (Date.now() > end) throw new Error(`timeout: ${what}`); await delay(200); } };
 
 try {
+  await mkdir(SCREENS, { recursive: true });
   const dataDir = await mkdtemp(join(tmpdir(), 'ce-e2e-agent-'));
   server = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], { cwd: join(ROOT, 'apps/server'), stdio: ['ignore', 'pipe', 'pipe'], env: {
-    ...process.env, HTTP_PORT: String(PORT), HTTPS_PORT: '0', HTTP_HOST: '127.0.0.1', PUBLIC_HOST: '127.0.0.1', CE_DATA_DIR: dataDir, MODEL_MODE: 'fixture', MODEL_API_KEY: '',
-    CE_DEMO: '1', CE_MAC_SILENT: '1', CE_MAC_LOCAL: '0', CE_REMO: '0', REMO_HOST: '', CE_TRUST_FIRST_DEVICE: '1', CE_TRUST_LOOPBACK: '1', CE_CONSOLE_APPROVE: '0', MUSE_REPLAY: '1', GEN3D_SKIN: '0', VITEST: '' } });
+    ...process.env, HTTP_PORT: String(PORT), HTTPS_PORT: '0', HTTP_HOST: '127.0.0.1', PUBLIC_HOST: '127.0.0.1', CE_DATA_DIR: dataDir, CE_AGENT_WORKSPACE: join(dataDir, 'muse-agent'), MODEL_MODE: 'fixture', MODEL_API_KEY: '',
+    CE_OSMO: 'mock', REMO_SEND: '0', CE_DEMO: '1', CE_MAC_SILENT: '1', CE_MAC_LOCAL: '0', CE_REMO: '0', REMO_HOST: '', CE_TRUST_FIRST_DEVICE: '1', CE_TRUST_LOOPBACK: '1', CE_CONSOLE_APPROVE: '0', MUSE_REPLAY: '1', GEN3D_SKIN: '0', VITEST: '' } });
   for (const s of [server.stdout, server.stderr]) s.on('data', (c) => { log = (log + c).slice(-200_000); });
   await until('server', () => log.includes('ControlAnything server '));
   browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--mute-audio'] });
@@ -74,17 +75,18 @@ try {
   const phase = await quest.evaluate(() => window.__ce.hud.root.userData.wire.phase);
   assert.notEqual(phase, 'failed', 'agent failed');
   console.log('PASS agent finished ->', phase);
-  const knobs = await quest.evaluate(() => window.__ce.hud.root.userData.knobs);
+  const rich = await quest.evaluate(() => !!window.__ce.hud.root.userData.instrument);
+  const knobs = await quest.evaluate(() => { const ce = window.__ce, panel = ce.hud.root.getObjectByName('muse-instrument'), obj = panel?.children.find(x => x.name.startsWith('spec:')); return obj && panel.visible ? [...obj.controls.values()].filter(c => c.control.kind === 'continuous').map(c => ({ id: c.control.id, label: c.control.label, fraction: c.t })) : ce.hud.root.userData.knobs; });
   assert.ok(knobs?.length, 'no knobs');
   console.log('PASS knobs:', knobs.map((k) => k.label).join(', '));
   await shot('04-knobs');
   // Drag the first knob up with the emulated pinch (mouse), through the real pointer-events path.
-  const pt = await quest.evaluate((name) => { const ce = window.__ce; let n; ce.scene.traverse((o) => { if (!n && o.name === name) n = o; }); const p = n.getWorldPosition(ce.desktopCam.position.clone()).project(ce.renderer.xr.getCamera().cameras[0] ?? ce.desktopCam); const r = ce.renderer.domElement.getBoundingClientRect(); return { x: r.left + (p.x + 1) * r.width / 2, y: r.top + (1 - p.y) * r.height / 2 }; }, `knob-hit-${knobs[0].id}`);
+  const pt = await quest.evaluate((name) => { const ce = window.__ce; let n; ce.scene.traverse((o) => { if (!n && o.name === name) n = o; }); const p = n.getWorldPosition(ce.desktopCam.position.clone()).project(ce.renderer.xr.getCamera().cameras[0] ?? ce.desktopCam); const r = ce.renderer.domElement.getBoundingClientRect(); return { x: r.left + (p.x + 1) * r.width / 2, y: r.top + (1 - p.y) * r.height / 2 }; }, rich ? `part_${knobs[0].id}.cap` : `knob-hit-${knobs[0].id}`);
   const before = knobs[0].fraction;
   await quest.mouse.move(pt.x, pt.y); await delay(200); await quest.mouse.down(); await delay(150);
   for (let i = 1; i <= 10; i++) { await quest.mouse.move(pt.x, pt.y - i * 9); await delay(60); }
   await quest.mouse.up(); await delay(800);
-  const after = (await quest.evaluate(() => window.__ce.hud.root.userData.knobs))[0].fraction;
+  const after = await quest.evaluate(({rich,id}) => { const ce = window.__ce, panel = ce.hud.root.getObjectByName('muse-instrument'), obj = panel?.children.find(x => x.name.startsWith('spec:')); return rich ? obj.controls.get(id).t : ce.hud.root.userData.knobs[0].fraction; }, { rich, id: knobs[0].id });
   console.log(`knob ${knobs[0].label}: ${before} -> ${after}`);
   const conn = await (await fetch(`${BASE}/api/agent/connectors`)).json();
   const logs = conn.connectors.flatMap((c) => c.logs);

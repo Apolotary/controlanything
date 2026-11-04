@@ -27,7 +27,9 @@ class InstrumentTrace extends Group {
   private readonly lastPoint = new Map<string, number>();
   private eventCount = 0;
   private cursor = 0;
-  private lastContinuousAt = -Infinity;
+  private readonly lastContinuousAt = new Map<string, number>();
+  private sampleGapMs = 40;
+  private actionEvents: Record<string, number> = Object.create(null);
   private seq = 0;
   private readonly point = new Vector3();
   private readonly values = new Map<string, number>();
@@ -46,16 +48,24 @@ class InstrumentTrace extends Group {
   }
   configure(spec: Gen3dSpec, visualizer?: WireReadyPayload['visualizer']): void {
     this.spec = spec; this.kind = visualizer?.kind ?? 'pulse'; this.allowed = visualizer ? new Set(visualizer.actions) : undefined;
-    this.seq = 0; this.eventCount = 0; this.cursor = 0; this.times.fill(-Infinity); this.values.clear(); this.lastPoint.clear(); this.lastContinuousAt = -Infinity;
+    this.seq = 0; this.eventCount = 0; this.cursor = 0; this.times.fill(-Infinity); this.values.clear(); this.lastPoint.clear(); this.lastContinuousAt.clear();
+    const actions = new Set(visualizer?.actions ?? spec.controls.flatMap(c => c.yBinding ? [c.binding.action, c.yBinding.action] : [c.binding.action]));
+    this.actionEvents = Object.create(null);
+    for (const action of actions) { this.lastContinuousAt.set(action, -Infinity); this.actionEvents[action] = 0; }
+    // Reserve 64 particles for notes; the remaining slots cover about four seconds per action.
+    this.sampleGapMs = Math.max(40, Math.ceil(4000 * Math.max(1, actions.size) / (CAPACITY - 64)));
+    this.userData.actionEvents = this.actionEvents;
   }
   private receive(action: string, value: number | boolean, at: number, visibleAt: number): void {
     if (this.allowed && !this.allowed.has(action)) return;
     this.values.set(action, Number(value));
-    const c = this.spec?.controls.find(c => c.binding.action === action || c.yBinding?.action === action);
+    const c = this.spec?.controls.find(c => c.binding.action === action || c.yBinding?.action === action)
+      ?? (this.kind === 'ripple' ? this.spec?.controls.find(c => c.kind === 'xy') : undefined);
     const p = c && this.spec?.parts.find(p => p.controlId === c.id);
     this.eventCount++;
-    if (c?.kind !== 'stepped' && at - this.lastContinuousAt < 40) return;
-    if (c?.kind !== 'stepped') this.lastContinuousAt = at;
+    if (c?.kind !== 'stepped' && at - (this.lastContinuousAt.get(action) ?? -Infinity) < this.sampleGapMs) return;
+    if (c?.kind !== 'stepped') this.lastContinuousAt.set(action, at);
+    this.actionEvents[action] = (this.actionEvents[action] ?? 0) + 1;
     const base = p?.transform?.position;
     let x = base?.[0] ?? 0, y = base?.[1] ?? .08;
     if (c?.kind === 'xy') {
@@ -140,7 +150,7 @@ export class InstrumentPanel extends Group {
     this.object = new SpecObject(spec, { compact: true, clock: this.clock, audio: this.audio, sink: { control: e => this.control(e) } });
     this.object.emitter.on('consumed', e => this.onConsumed?.(e.hand));
     this.add(this.object); this.trace.configure(spec, visualizer);
-    this.debugSnapshot = { controls: spec.controls.map(c => ({ id: c.id, actionId: c.binding.action, kind: c.kind, label: c.label })), visualizerEvents: 0, activeEffects: 0, drawCalls: 3 };
+    this.debugSnapshot = { controls: spec.controls.map(c => ({ id: c.id, actionId: c.binding.action, kind: c.kind, label: c.label })), visualizerEvents: 0, visualizerActions: this.trace.userData.actionEvents, activeEffects: 0, drawCalls: 3 };
     this.trace.renderOrder = 90;
   }
   private control(e: ControlEvent): void {
@@ -180,12 +190,21 @@ export class InstrumentPanel extends Group {
     }
     // Touch an XY surface directly; pinching and dragging is optional.
     if (cursor.canPoke) for (const c of this.object.spec.controls) {
-      if (c.kind !== 'xy') continue;
       const p = this.object.spec.parts.find(p => p.controlId === c.id);
+      if (c.kind !== 'xy' && p?.archetype !== 'fader') continue;
       if (!p) continue;
       this.local.copy(cursor.tip); this.worldToLocal(this.local);
       const pos = p.transform?.position;
       const x = this.local.x - (pos?.[0] ?? 0), y = this.local.y - (pos?.[1] ?? 0);
+      if (p.archetype === 'fader') {
+        const length = p.params?.length ?? p.params?.size ?? .16;
+        if (Math.abs(x) < .04 && Math.abs(y) < length / 2 + .01 && this.local.z >= -.02 && this.local.z <= .05) {
+          const range = c.range ?? { min: 0, max: 1 };
+          this.object.setValue(c.id, range.min + Math.max(0, Math.min(1, y / length + .5)) * (range.max - range.min), { phase: 'move' });
+          this.directTouch = true; this.onConsumed?.(cursor.hand);
+        }
+        continue;
+      }
       if (Math.abs(x) > .09 || Math.abs(y) > .09 || this.local.z < -.03 || this.local.z > .04) continue;
       const xr = c.range ?? { min: 0, max: 1 }, yr = c.yRange ?? { min: 0, max: 1 };
       this.object.setValue(c.id, { x: xr.min + Math.max(0, Math.min(1, x / .156 + .5)) * (xr.max - xr.min), y: yr.min + Math.max(0, Math.min(1, y / .156 + .5)) * (yr.max - yr.min) }, { phase: 'move' });
