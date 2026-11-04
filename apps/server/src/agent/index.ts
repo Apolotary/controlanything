@@ -9,6 +9,7 @@
 import { dirname, join } from 'node:path';
 import { type DeviceCardPayload, type DeviceInfo, type Driver, type Vec3, EXPERIMENTAL_TYPE, newId, type TargetCancelPayload, type TargetRetryPayload, type Hack, type MessageType, type PayloadOf, type TargetSelectPayload, type UiSpecPayload, type Mode, type TagAddPayload, type TagsStatePayload, type LibraryStatePayload, type RoomPlacement } from '@ce/protocol';
 import type { ServerContext } from '../context';
+import { REPO_ROOT } from '../config';
 import { loadProfiles, type Profiles } from '../devices/profiles';
 import { MidiChartStore } from '../devices/midi-charts';
 import { getForge } from '../gen3d';
@@ -44,6 +45,8 @@ import { verifyDriver } from './verify';
 import { releaseWireOutputs } from './wire-stop';
 import { libraryDriverNote, WireService } from './wire';
 import { MuseBridgeHarness } from './muse-harness';
+import { CodingAgentService } from './coding-agent';
+import { cancellableDelay, RequestCancelledError } from '../muse/cancellation';
 import { fixtureWireDraft } from './wire-fixture';
 import { CANCELLED_GUIDANCE, type TimedPhase } from './guidance';
 import { subscribeForge } from './forgeBridge';
@@ -67,6 +70,7 @@ import type { WireReadyPayload } from '@ce/protocol';
 type AgentMessage = { [K in MessageType]: { type: K; payload: PayloadOf<K> } }[MessageType];
 
 export interface Agent {
+  coding: CodingAgentService;
   harness: MuseBridgeHarness;
   wireReady(cardId: string): WireReadyPayload | undefined;
   targets: TargetStore;
@@ -1282,6 +1286,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const harness = new MuseBridgeHarness({ model: muse.model, mode: muse.mode, callLog: ctx.calls, log,
     ...(streamClient ? { stream: { model: muse.model, stream: streamClient.stream.bind(streamClient) } } : {}),
   });
+  const coding = new CodingAgentService({ root: REPO_ROOT, dataDir: ctx.config.dataDir,
+    apiKey: ctx.config.muse.apiKey, baseUrl: ctx.config.muse.baseUrl, log, callLog: ctx.calls });
   const wireService = new WireService({
     hub, targets, spark: muse, wonder, log, callLog: ctx.calls, harness,
     ...(streamClient ? { stream: { model: muse.model, stream: streamClient.stream.bind(streamClient) } } : {}),
@@ -1298,6 +1304,21 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         .finally(() => { if (wireReleasing.get(target.cardId) === release) wireReleasing.delete(target.cardId); });
     },
     cardOfSpec: (specId) => specs.get(specId)?.cardId,
+    developConnector: async (task, onProgress, signal) => {
+      if (signal.aborted) throw new RequestCancelledError();
+      const job = await coding.start({ task });
+      const cancel = () => { void coding.cancel(job.jobId); };
+      signal.addEventListener('abort', cancel, { once: true });
+      try {
+        for (;;) {
+          if (signal.aborted) { await coding.cancel(job.jobId); throw new RequestCancelledError(); }
+          const current = coding.get(job.jobId)!;
+          if (['completed_unverified', 'failed', 'cancelled'].includes(current.state)) return current;
+          onProgress(`Muse Code: ${current.state}. Review progress in the Mac Connector Workshop; changes are not applied.`);
+          await cancellableDelay(1000, signal);
+        }
+      } finally { signal.removeEventListener('abort', cancel); }
+    },
   });
   let lastWireLog = 0;
 
@@ -1438,6 +1459,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const unsubscribe = hub.onMessage(onMessage);
 
   return {
+    coding,
     harness,
     wireReady: (cardId: string) => wireService.readyFor(cardId),
     targets,
@@ -1485,6 +1507,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     setup,
     panic,
     close: () => {
+      void coding.close();
       clearTimeout(graceTimer);
       clearTimeout(publishTimer);
       clearVisualIntent();

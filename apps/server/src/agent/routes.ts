@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { ArmConfirmPayload, PanicPayload, TargetSelectPayload } from '@ce/protocol';
 import express, { type Request } from 'express';
 import type { ServerContext } from '../context';
+import { sameHostOrigin } from '../origin';
 import { DATA_DIR } from '../devices/profiles';
 import { MidiChartConflict, MidiChartRequest } from '../devices/midi-charts';
 import { getAgent } from './index';
@@ -61,6 +62,37 @@ export function agentRouter(ctx: ServerContext): express.Router {
     const run = agent.harness.get(String(req.params.runId));
     if (!run) { res.status(404).json({ error: 'not_found', message: 'No agent receipt with that run ID.' }); return; }
     res.json({ ...run, currentlyAuthorized: agent.wireReady(run.cardId)?.wiringId === run.runId });
+  });
+  r.get('/coding', (req, res) => {
+    if (!harnessAccess(req, res)) return;
+    res.json({ status: agent.coding.status(), jobs: agent.coding.list() });
+  });
+  r.post('/coding/tasks', async (req, res) => {
+    if (!harnessAccess(req, res)) return;
+    if (req.headers.origin && !sameHostOrigin(req.headers)) { res.status(403).json({ error: 'forbidden', message: 'Start coding from this bridge origin.' }); return; }
+    const task = typeof req.body?.task === 'string' ? req.body.task.trim() : '';
+    if (!task || task.length > 8000) { res.status(400).json({ error: 'bad_request', message: 'Describe the coding task in 1–8000 characters.' }); return; }
+    try { res.status(202).json(await agent.coding.start({ task })); }
+    catch (error) { res.status(409).json({ error: 'coding_unavailable', message: (error as Error).message }); }
+  });
+  r.get('/coding/tasks/:jobId', (req, res) => {
+    if (!harnessAccess(req, res)) return;
+    const job = agent.coding.get(String(req.params.jobId));
+    if (!job) { res.status(404).json({ error: 'not_found', message: 'No coding task with this ID.' }); return; }
+    res.json(job);
+  });
+  r.get('/coding/tasks/:jobId/patch', async (req, res) => {
+    if (!harnessAccess(req, res)) return;
+    if (!agent.coding.get(String(req.params.jobId))) { res.status(404).json({ error: 'not_found', message: 'No coding task with this ID.' }); return; }
+    try { res.type('text/plain').send(await agent.coding.patch(String(req.params.jobId))); }
+    catch { res.status(409).json({ error: 'patch_unavailable', message: 'The agent has not saved a patch yet.' }); }
+  });
+  r.post('/coding/tasks/:jobId/cancel', async (req, res) => {
+    if (!harnessAccess(req, res)) return;
+    if (req.headers.origin && !sameHostOrigin(req.headers)) { res.status(403).json({ error: 'forbidden', message: 'Cancel coding from this bridge origin.' }); return; }
+    if (!agent.coding.get(String(req.params.jobId))) { res.status(404).json({ error: 'not_found', message: 'No coding task with this ID.' }); return; }
+    await agent.coding.cancel(String(req.params.jobId));
+    res.json(agent.coding.get(String(req.params.jobId)));
   });
 
   r.get('/targets', (_req, res) => {

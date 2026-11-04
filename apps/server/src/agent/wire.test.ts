@@ -10,7 +10,7 @@ import { Dispatcher } from './dispatch';
 import { ControlRouter } from './control';
 import { StepLog } from './steps';
 import { TargetStore } from './targets';
-import { chunkCode, libraryDriverNote, deviceHints, extractCodeSoFar, SIGNALS_API, WireService, wireHack, wireMessages, wireRateHz, writeWiring, type WireDeps, type WireServiceDeps, type WireEmit } from './wire';
+import { chunkCode, isConnectorDevelopmentRequest, libraryDriverNote, deviceHints, extractCodeSoFar, SIGNALS_API, WireService, wireHack, wireMessages, wireRateHz, writeWiring, type WireDeps, type WireServiceDeps, type WireEmit } from './wire';
 import { buildWiring, fixtureWireDraft, parseBriefs, templateWiring, type WireDraftData } from './wire-fixture';
 import { isDifferentConnectedOp1ControlRequest } from './connected-peripheral';
 import { dryRun, validateWiring } from './wire-check';
@@ -352,7 +352,7 @@ describe('rates and hacks', () => {
 });
 
 // --- the service: request -> progress -> ready -> control events -> exec ---------------------------------------------------------
-function service(over: { spark?: MuseChat; verifyFails?: string[]; driver?: Driver; ensure?: 'ok' | 'fail'; stopOutputs?: WireServiceDeps['stopOutputs'] } = {}) {
+function service(over: { spark?: MuseChat; verifyFails?: string[]; driver?: Driver; ensure?: 'ok' | 'fail'; stopOutputs?: WireServiceDeps['stopOutputs']; developConnector?: WireServiceDeps['developConnector'] } = {}) {
   const sent: { type: string; payload: Record<string, unknown> }[] = [];
   const hub = { broadcast: vi.fn((type: string, payload: Record<string, unknown>) => { sent.push({ type, payload }); return 1; }), sendToDevice: vi.fn((_device: string, _type: string, _payload: Record<string, unknown>) => 1) };
   const targets = new TargetStore(hub as never);
@@ -363,13 +363,25 @@ function service(over: { spark?: MuseChat; verifyFails?: string[]; driver?: Driv
     hub: hub as never, targets, spark: over.spark ?? fakeChat([draft(TOUCH)]), chunkDelayMs: 0, log: () => {},
     ensureDriver: async () => (over.ensure === 'fail' ? { ok: false, reason: 'Pinch the device first.' } : { ok: true, note: 'driver from your library, written by muse-spark-1.3' }),
     prepareDriver: (target) => { const e = extendWithTouch(target.driver!, MANIFEST.controls); target.driver = e.driver; return e.driver; },
-    verifyActions: verify as never, stopOutputs: over.stopOutputs, cardOfSpec: (id) => (id === 'spec-1' ? 'visual-synth-mac' : undefined),
+    verifyActions: verify as never, stopOutputs: over.stopOutputs, cardOfSpec: (id) => (id === 'spec-1' ? 'visual-synth-mac' : undefined), developConnector: over.developConnector,
   });
   const done = async (type: string, timeout = 3000) => { const end = Date.now() + timeout; while (Date.now() < end) { const m = sent.find((x) => x.type === type); if (m) return m; await new Promise((r) => setTimeout(r, 5)); } throw new Error(`no ${type}; got ${sent.map((s) => s.type + ':' + s.payload.phase).join(',')}`); };
   return { svc, sent, hub, targets, t, verify, done };
 }
 
 describe('WireService', () => {
+  it('routes an explicit USB-MIDI bridge coding request without installing a gesture program', async () => {
+    expect(isConnectorDevelopmentRequest('Debug and develop the USB MIDI bridge for OP-1 Field.')).toBe(true);
+    for (const text of ['Write gesture controls for the OP-1.', 'Touch the water', 'How does the MIDI bridge work?']) expect(isConnectorDevelopmentRequest(text)).toBe(false);
+    const developConnector = vi.fn(async (_task, progress) => { progress('Muse Code running.'); return { jobId: 'code-task', state: 'completed_unverified' }; });
+    const spark = fakeChat([]), f = service({ spark, developConnector });
+    f.svc.request({ cardId: f.t.cardId, text: 'Debug the USB MIDI bridge for OP-1 Field.', source: 'voice', requestId: 'code-ask' }, { deviceId: 'quest' });
+    await vi.waitFor(() => expect(f.sent.some(m => m.payload.title === 'Connector patch awaits review')).toBe(true));
+    expect(developConnector).toHaveBeenCalledOnce(); expect(spark.chatJson).not.toHaveBeenCalled();
+    expect(f.sent.some(m => m.type === 'wire.ready')).toBe(false); expect(f.svc.activeCards()).toEqual([]);
+    f.svc.clear();
+  });
+
   it('declines a connected physical OP-1 request on the visual card before any model, template or action verification', async () => {
     const spark = fakeChat([]); const { svc, sent, verify, t } = service({ spark });
     svc.request({ cardId: t.cardId, requestId: 'op1-wrong-target', text: 'I have an OP-1 Field connected to this laptop. Can you create gesture control for it?', source: 'voice' }, { deviceId: 'quest' });

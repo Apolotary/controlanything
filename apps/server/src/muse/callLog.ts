@@ -11,6 +11,10 @@ export interface CallUsage {
 }
 
 export interface CallRecord {
+  /** Native agent usage may report an aggregate rather than individual calls. */
+  callCount?: number;
+  /** Exact failed-call count when a native aggregate reports it. */
+  failureCount?: number;
   at: number;
   /** what the call was for, e.g. "identify", "device_card", "transcribe" */
   label: string;
@@ -51,8 +55,9 @@ export class CallLog {
   add(r: CallRecord): void {
     this.items.push(r);
     if (this.items.length > this.max) this.items.shift();
-    this.sums.calls++;
-    if (!r.ok) this.sums.failures++;
+    const count = r.callCount ?? 1;
+    this.sums.calls += count;
+    this.sums.failures += r.failureCount ?? (r.ok ? 0 : count);
     if (r.usage) {
       this.sums.promptTokens += r.usage.promptTokens;
       this.sums.completionTokens += r.usage.completionTokens;
@@ -73,6 +78,7 @@ export class CallLog {
 
 export function formatCall(r: CallRecord): string {
   const parts = [`[muse] ${r.label}`, `model=${r.model}`];
+  if (r.callCount !== undefined) parts.push(`native_aggregate_calls=${r.callCount}`);
   if (r.source === 'fixture') parts.push(r.recordedFrom ? `FIXTURE(recorded from ${r.recordedFrom})` : 'FIXTURE');
   if (r.format) parts.push(`format=${r.format}`);
   if (r.effort) parts.push(`effort=${r.effort}`);

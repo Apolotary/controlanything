@@ -30,6 +30,13 @@ import { templateWiring, type ActionBrief, type WireDraftData } from './wire-fix
 import { dryRun, issueLines, resolveNeeds, validateWiring, WIRE_MAX_BYTES, type DryRunResult, type WireCheck, type WireIssue, type WireNeed } from './wire-check';
 
 export const WIRE_EFFORT = 'low' as const;
+/** Explicit connector-development work, rather than an ordinary gesture request. */
+export function isConnectorDevelopmentRequest(text: string): boolean {
+  return /\b(?:debug|develop|implement|fix|repair|build|create|write)\b/i.test(text)
+    && /\b(?:bridge|connector|driver)\b/i.test(text)
+    && /\b(?:usb|midi|op[- ]?1)\b/i.test(text)
+    && !/\b(?:explain|what is|how does)\b/i.test(text);
+}
 /** The whole WIRE model phase (all attempts) is bounded: past this the labelled template stands in. */
 export const WIRE_BUDGET_MS = Number(process.env.CE_WIRE_TIMEOUT_MS) > 0 ? Number(process.env.CE_WIRE_TIMEOUT_MS) : 90_000;
 const SPARK_TIMEOUT_MS = 50_000;
@@ -449,6 +456,7 @@ export interface WireServiceDeps extends WireDeps {
   /** Cancel queued commands and release known held outputs without revoking the verified connection. */
   stopOutputs?(target: Target, reason: string): Promise<{ released: boolean; reason?: string }>;
   cardOfSpec(specId: string): string | undefined;
+  developConnector?(task: string, onProgress: (note: string) => void, signal: AbortSignal): Promise<{ jobId: string; state: string; reason?: string }>;
 }
 
 export class WireService {
@@ -521,6 +529,17 @@ export class WireService {
       // Retiring authority must not strand a held note/pressure while the next model call runs.
       if (replacing && target0) await this.d.stopOutputs?.(target0, 'A new wiring was requested');
       if (abort.signal.aborted) return;
+      if (target0 && this.d.developConnector && isConnectorDevelopmentRequest(p.text)) {
+        send('writing', { title: 'Muse Code · connector development', note: 'Starting a project coding task on the Mac. No hand wiring is being installed.' });
+        const job = await this.d.developConnector(p.text, note => send('writing', { title: 'Muse Code · connector development', note }), abort.signal);
+        if (abort.signal.aborted) return;
+        // A project patch is not a runnable hand program. Keep WIRE closed and
+        // direct the wearer to the actual coding receipt/patch on the Mac.
+        send('failed', { title: job.state === 'completed_unverified' ? 'Connector patch awaits review' : 'Connector coding stopped',
+          note: job.reason ?? 'Open Connector Workshop on the Mac for the patch and checks. No connector changes were applied.',
+          explanation: `Coding task ${job.jobId}. No new hand wiring was installed.` });
+        return;
+      }
       if (target0?.card && isDifferentConnectedOp1ControlRequest(p.text, { name: target0.card.name, category: target0.card.category, port: target0.driver?.executor.port })) {
         const hint = 'Select the OP-1 in Annotate. Use Correct device if its label is wrong, then set it up.';
         this.log(`[wire] ${cardId}: connected OP-1 request belongs to a different target; no model called`);
