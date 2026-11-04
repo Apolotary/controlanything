@@ -3,7 +3,7 @@
  * executor rate limits (MIDI <= 200/s, IR <= 4 Hz, visible light <= 3 Hz) and the in-process Mac executor.
  * Also sense.request / sense.result pairing for the oracles and IR learning.
  */
-import { type ExecAckPayload, type ExecOp, newId, RATE_LIMITS, type SenseKind, type SenseRequestPayload, type SenseResultPayload } from '@ce/protocol';
+import { type ExecAckPayload, type ExecCommandPayload, type ExecOp, newId, RATE_LIMITS, type SenseKind, type SenseRequestPayload, type SenseResultPayload } from '@ce/protocol';
 import type { Hub } from '../hub';
 import { isMusicalSynthPort } from '../devices/musicalSynth';
 import { isVisualSynthPort, touchRoleOfCc } from '../devices/visualSynth';
@@ -79,7 +79,11 @@ export interface DispatcherOptions {
   now?: () => number;
   /** Rechecked at the send boundary, including rate-limited and trailing operations. */
   canExec?: (request: ExecRequest) => boolean;
+  /** Execute the active generated connector only at the final authorized send boundary. */
+  prepareMidi?: (request: ExecRequest) => GeneratedMidi | undefined;
 }
+
+export type GeneratedMidi = NonNullable<ExecCommandPayload['generatedMidi']>;
 
 export interface ExecRequest {
   executorDeviceId: string;
@@ -167,6 +171,7 @@ export class Dispatcher {
     this.checkSignal(opts.signal);
     checkCurrent();
     this.checkExec({ ...opts, executorDeviceId, op });
+    const generatedMidi = this.prepareMidi({ ...opts, executorDeviceId, op });
     const execId = newId('x');
     const at = Date.now();
     const record = { execId, executorDeviceId, op, at } as (typeof this.sent)[number];
@@ -183,7 +188,7 @@ export class Dispatcher {
       return ack;
     }
 
-    const payload = { execId, executorDeviceId, op, port: opts.port, dryRun: opts.dryRun, cardId: opts.cardId, driverId: opts.driverId, actionId: opts.actionId };
+    const payload = { execId, executorDeviceId, op, port: generatedMidi?.portId ?? opts.port, dryRun: opts.dryRun, cardId: opts.cardId, driverId: opts.driverId, actionId: opts.actionId, ...(generatedMidi ? { generatedMidi } : {}) };
     const ack = await new Promise<ExecAckPayload>((resolve, reject) => {
       const cleanup = () => {
         clearTimeout(timer);
@@ -218,6 +223,18 @@ export class Dispatcher {
 
   private checkExec(request: ExecRequest): void {
     if (this.o.canExec && !this.o.canExec(request)) throw new ExecError('control is not authorized for this device', 'refused');
+  }
+
+  private prepareMidi(request: ExecRequest): GeneratedMidi | undefined {
+    try {
+      const generated = this.o.prepareMidi?.(request);
+      if (generated && (request.op.kind !== 'midi' || !['cc', 'pc'].includes(request.op.msg))) {
+        throw Error('Generated MIDI is only supported for authorized CC and program commands');
+      }
+      return generated;
+    } catch (error) {
+      throw new ExecError(`Generated connector refused: ${(error as Error).message}`, 'refused');
+    }
   }
 
   private waitForSlot(ms: number, signal?: AbortSignal): Promise<void> {
@@ -268,6 +285,9 @@ export class Dispatcher {
       this.trailing.set(key, entry);
       return true;
     }
+    let generatedMidi: GeneratedMidi | undefined;
+    try { generatedMidi = this.prepareMidi({ ...opts, executorDeviceId, op }); }
+    catch (error) { opts.onResult?.(false, (error as Error).message); return false; }
     const execId = newId('x');
     const record = { execId, executorDeviceId, op, at: Date.now() } as (typeof this.sent)[number];
     this.sent.push(record);
@@ -293,7 +313,7 @@ export class Dispatcher {
       return true;
     }
     try {
-      const sent = this.o.hub.sendToDevice(executorDeviceId, 'exec.command', { execId, executorDeviceId, op, port: opts.port, cardId: opts.cardId, driverId: opts.driverId, actionId: opts.actionId }) > 0;
+      const sent = this.o.hub.sendToDevice(executorDeviceId, 'exec.command', { execId, executorDeviceId, op, port: generatedMidi?.portId ?? opts.port, cardId: opts.cardId, driverId: opts.driverId, actionId: opts.actionId, ...(generatedMidi ? { generatedMidi } : {}) }) > 0;
       if (!sent) this.acks.get(execId)?.reject(new ExecError('Executor is offline', 'offline'));
       return sent;
     } catch (error) {

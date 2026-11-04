@@ -67,6 +67,15 @@ export function agentRouter(ctx: ServerContext): express.Router {
     if (!harnessAccess(req, res)) return;
     res.json({ status: agent.coding.status(), jobs: agent.coding.list() });
   });
+  r.get('/connectors', (req, res) => {
+    if (!harnessAccess(req, res)) return;
+    res.json({ generator: agent.freshConnectors.status(), connectors: agent.connectors.list().map(receipt => ({ ...receipt,
+      currentlyAuthorized: agent.wireReady(receipt.cardId)?.wiringId === receipt.wiringId,
+      effectEvidence: 'Packet execution is distinct from an attended physical-device effect.' })),
+      generatedCodeHost: 'Mac bounded VM; hand program runs in the Quest Worker',
+      transportInfrastructure: 'macOS USB and browser WebMIDI permissions, generic raw packet send',
+      invocation: 'Ask Muse to build a MIDI connector from scratch for the selected synth, followed by the desired hand gesture.' });
+  });
   r.post('/coding/tasks', async (req, res) => {
     if (!harnessAccess(req, res)) return;
     if (req.headers.origin && !sameHostOrigin(req.headers)) { res.status(403).json({ error: 'forbidden', message: 'Start coding from this bridge origin.' }); return; }

@@ -352,7 +352,7 @@ describe('rates and hacks', () => {
 });
 
 // --- the service: request -> progress -> ready -> control events -> exec ---------------------------------------------------------
-function service(over: { spark?: MuseChat; verifyFails?: string[]; driver?: Driver; ensure?: 'ok' | 'fail'; stopOutputs?: WireServiceDeps['stopOutputs']; developConnector?: WireServiceDeps['developConnector'] } = {}) {
+function service(over: { spark?: MuseChat; verifyFails?: string[]; driver?: Driver; ensure?: 'ok' | 'fail'; stopOutputs?: WireServiceDeps['stopOutputs']; developConnector?: WireServiceDeps['developConnector']; buildConnector?: WireServiceDeps['buildConnector']; retireConnector?: WireServiceDeps['retireConnector'] } = {}) {
   const sent: { type: string; payload: Record<string, unknown> }[] = [];
   const hub = { broadcast: vi.fn((type: string, payload: Record<string, unknown>) => { sent.push({ type, payload }); return 1; }), sendToDevice: vi.fn((_device: string, _type: string, _payload: Record<string, unknown>) => 1) };
   const targets = new TargetStore(hub as never);
@@ -364,12 +364,37 @@ function service(over: { spark?: MuseChat; verifyFails?: string[]; driver?: Driv
     ensureDriver: async () => (over.ensure === 'fail' ? { ok: false, reason: 'Pinch the device first.' } : { ok: true, note: 'driver from your library, written by muse-spark-1.3' }),
     prepareDriver: (target) => { const e = extendWithTouch(target.driver!, MANIFEST.controls); target.driver = e.driver; return e.driver; },
     verifyActions: verify as never, stopOutputs: over.stopOutputs, cardOfSpec: (id) => (id === 'spec-1' ? 'visual-synth-mac' : undefined), developConnector: over.developConnector,
+    buildConnector: over.buildConnector, retireConnector: over.retireConnector,
   });
   const done = async (type: string, timeout = 3000) => { const end = Date.now() + timeout; while (Date.now() < end) { const m = sent.find((x) => x.type === type); if (m) return m; await new Promise((r) => setTimeout(r, 5)); } throw new Error(`no ${type}; got ${sent.map((s) => s.type + ':' + s.payload.phase).join(',')}`); };
   return { svc, sent, hub, targets, t, verify, done };
 }
 
 describe('WireService', () => {
+  it('fails closed instead of substituting a patch or ordinary hand program when fresh generation is unavailable', async () => {
+    const spark = fakeChat([]), developConnector = vi.fn();
+    const f = service({ spark, developConnector });
+    f.svc.request({ cardId: f.t.cardId, requestId: 'fresh-missing', text: 'Build a MIDI connector from scratch. My forward/back hand movement makes ripples.', source: 'voice' }, { deviceId: 'quest' });
+    await vi.waitFor(() => expect(f.sent.some(m => m.payload.phase === 'failed')).toBe(true));
+    expect(developConnector).not.toHaveBeenCalled(); expect(spark.chatJson).not.toHaveBeenCalled();
+    expect(f.sent.some(m => m.type === 'wire.ready')).toBe(false);
+  });
+
+  it('checks a fresh connector through device verification and retires it on Stop', async () => {
+    const code = "if (s.right) out.set('cc21', s.right.push * 127);";
+    const spark = fakeChat([]), retireConnector = vi.fn(), developConnector = vi.fn();
+    const buildConnector = vi.fn(async () => ({ ok: true, code, title: 'Forward/back ripples', explanation: 'Push your right hand to deepen the ripples.', needs: ['right'] as ('right')[],
+      model: 'fixture-native-writer', source: 'fixture' as const, latencyMs: 1, attempts: 1, used: ['cc21'], issues: [] }));
+    const f = service({ spark, buildConnector, retireConnector, developConnector });
+    f.svc.request({ cardId: f.t.cardId, requestId: 'fresh-ask', text: 'Build a MIDI connector from scratch for this visual synth. Forward/back movement makes ripples.', source: 'voice' }, { deviceId: 'quest' });
+    const ready = await f.done('wire.ready');
+    expect(buildConnector).toHaveBeenCalledOnce(); expect(developConnector).not.toHaveBeenCalled(); expect(spark.chatJson).not.toHaveBeenCalled();
+    expect(f.verify).toHaveBeenCalledWith(f.t, ['cc21'], expect.any(AbortSignal));
+    expect(f.svc.resolve({ widgetId: 'wire:cc21', requestId: 'fresh-ask', wiringId: String(ready.payload.wiringId) })).toHaveProperty('target');
+    await f.svc.stop({ cardId: f.t.cardId, requestId: 'fresh-ask', wiringId: String(ready.payload.wiringId) }, { deviceId: 'quest' });
+    expect(retireConnector).toHaveBeenLastCalledWith(f.t.cardId); expect(f.svc.activeCards()).toEqual([]);
+  });
+
   it('routes an explicit USB-MIDI bridge coding request without installing a gesture program', async () => {
     expect(isConnectorDevelopmentRequest('Debug and develop the USB MIDI bridge for OP-1 Field.')).toBe(true);
     for (const text of ['Write gesture controls for the OP-1.', 'Touch the water', 'How does the MIDI bridge work?']) expect(isConnectorDevelopmentRequest(text)).toBe(false);

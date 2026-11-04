@@ -16,6 +16,7 @@ import {
   toHex,
 } from './midiDecode';
 import { type Clock, MidiScheduler, realClock, type SendKind, type SendOutcome } from './midiScheduler';
+import { generatedMidiPacket } from './generatedMidi';
 
 export interface MidiPortLike {
   id: string;
@@ -193,6 +194,7 @@ export class MidiExecutor {
     const op: MidiOp = cmd.op;
     const bad = checkMidiOp(op);
     if (bad) return this.fail(cmd, t0, 'bad_args', bad);
+    if (cmd.generatedMidi && op.msg !== 'cc' && op.msg !== 'pc') return this.fail(cmd, t0, 'refused', 'generated connectors may send only authorized CC or program bytes');
     if (!this.io.enabled) return this.fail(cmd, t0, 'no_midi', 'Web MIDI is not enabled on the companion (press ENABLE MIDI)');
     if (op.msg === 'panic') {
       if (cmd.dryRun) return this.ack(cmd, t0, true, { detail: 'dry run: panic' });
@@ -201,6 +203,8 @@ export class MidiExecutor {
     }
     const { port, error } = resolvePort(this.io.outputs(), cmd.port);
     if (!port) return this.fail(cmd, t0, 'no_port', error ?? 'no port');
+    const generated = generatedMidiPacket(cmd, port.id);
+    if (generated && !generated.ok) return this.fail(cmd, t0, 'refused', generated.error);
     const name = portLabel(port);
 
     if (op.msg === 'sysex-identity') {
@@ -220,7 +224,11 @@ export class MidiExecutor {
     let bytes: number[];
     let kind: SendKind;
     let key: string | undefined;
-    if (op.msg === 'cc') {
+    if (generated?.ok) {
+      bytes = generated.bytes;
+      kind = op.msg === 'cc' ? 'cc' : 'pc';
+      if (kind === 'cc') key = `${port.id}|${bytes[0]}|${bytes[1]}`;
+    } else if (op.msg === 'cc') {
       bytes = controlChange(ch, op.number!, op.value as number); // checkMidiOp ruled out the placeholder
       kind = 'cc';
       key = `${port.id}|${bytes[0]}|${bytes[1]}`;
@@ -233,7 +241,7 @@ export class MidiExecutor {
     }
     const why = unsafeReason(name, bytes);
     if (why) return this.fail(cmd, t0, 'refused', why);
-    const label = `${toHex(bytes)} → ${name}`;
+    const label = `${toHex(bytes)} → ${name}${generated?.ok ? ` · ${generated.receipt}` : ''}`;
     if (cmd.dryRun) return this.ack(cmd, t0, true, { detail: `dry run: ${label}` });
 
     const out = await this.queue(port.id, bytes, kind, key);

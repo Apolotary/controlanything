@@ -163,6 +163,23 @@ describe('unsafeReason', () => {
 });
 
 describe('MidiExecutor', () => {
+  it('sends the checked Muse connector packet to its exact output and records provenance', async () => {
+    const io = new FakeMidi(), ex = new MidiExecutor(io, { clock: new FakeClock() });
+    const generatedMidi = { connectorId: 'fresh-1', hash: 'a'.repeat(64), portId: 'o1', bytes: [0xb0, 50, 42] };
+    const ack = await ex.execute(cmd({ kind: 'midi', msg: 'cc', channel: 1, number: 50, value: 42 }, { port: 'o1', generatedMidi }));
+    expect(ack).toMatchObject({ ok: true, detail: expect.stringContaining('Muse connector fresh-1 · aaaaaaaaaaaa') });
+    expect(io.sent).toEqual([{ port: 'o1', bytes: generatedMidi.bytes, ts: undefined }]);
+  });
+
+  it.each(['bytes', 'port', 'note', 'panic'] as const)('refuses an invalid generated %s without using the authored fallback', async failure => {
+    const io = new FakeMidi(), ex = new MidiExecutor(io, { clock: new FakeClock() });
+    const op = failure === 'note' ? { kind: 'midi', msg: 'note', channel: 1, number: 60 } : failure === 'panic' ? { kind: 'midi', msg: 'panic', channel: 1 } : { kind: 'midi', msg: 'cc', channel: 1, number: 50, value: 42 };
+    const generatedMidi = { connectorId: 'fresh-1', hash: 'a'.repeat(64), portId: failure === 'port' ? 'wrong-id' : 'o1', bytes: [0xb0, 50, failure === 'bytes' ? 43 : 42] };
+    const ack = await ex.execute(cmd(op, { port: 'o1', generatedMidi }));
+    expect(ack).toMatchObject({ ok: false, error: 'refused' });
+    expect(io.sent).toHaveLength(0);
+  });
+
   it('sends a CC to the named port and acks with the bytes', async () => {
     const clock = new FakeClock();
     const io = new FakeMidi([

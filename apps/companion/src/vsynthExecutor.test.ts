@@ -8,6 +8,18 @@ const port = () => ({ receiveMidi: vi.fn(), reset: vi.fn(), getState: createVisu
 const command = (op: MidiOp, dryRun = false): ExecCommandPayload => ({ execId: 'exec', executorDeviceId: 'companion', port: visualSynthPort.id, op, dryRun });
 
 describe('silent virtual output', () => {
+  it('applies the actual generated packet to the software port and refuses mismatched bytes', async () => {
+    const p = createVisualSynthPort(), executor = new VisualSynthExecutor(p);
+    const cmd = { ...command({ kind: 'midi', msg: 'cc', channel: 1, number: 22, value: 32 }),
+      generatedMidi: { connectorId: 'fresh-visual', hash: 'b'.repeat(64), portId: visualSynthPort.id, bytes: [0xb0, 22, 32] } };
+    const ack = await executor.execute(cmd);
+    expect(ack).toMatchObject({ ok: true, detail: expect.stringContaining('Muse connector fresh-visual'), applied: { params: { touchX: 32 / 127 } } });
+    const bad = await executor.execute({ ...cmd, generatedMidi: { ...cmd.generatedMidi, bytes: [0xb0, 22, 96] } });
+    expect(bad).toMatchObject({ ok: false, error: 'refused' });
+    expect(p.getState().touchX).toBe(32 / 127);
+    p.dispose();
+  });
+
   it('refuses output with no recent visible screen while still allowing Stop to reset saved state', async () => {
     const p = port();
     const executor = new VisualSynthExecutor(p, () => false);

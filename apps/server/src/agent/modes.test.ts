@@ -12,6 +12,7 @@ import { tryLink } from './link';
 import { TagStore } from './tags';
 import type { TargetDetection } from './types';
 import type { Forge } from '../gen3d/forge';
+import type { WireWritten } from './wire';
 
 vi.mock('./link', async (original) => ({ ...await original<typeof import('./link')>(), tryLink: vi.fn() }));
 
@@ -261,6 +262,43 @@ describe('annotation and control mode boundary', () => {
     s.changePresence([mac], 'update', mac.deviceId);
     expect(s.of('tags.state').at(-1)?.tags[0].connection).toBe('offline');
     expect(tryLink).not.toHaveBeenCalled();
+    expect(s.dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each(['ready', 'writing'] as const)('retires %s wiring when its executor actually disconnects, without resuming on reconnect', async phase => {
+    const s = setup({ devices: [remo] });
+    const target = s.addKnown();
+    Object.assign(target, { driver: lightDriver, specId: 'light-spec', verification: { off: 'pass' }, armed: true, state: 'armed' });
+    s.specs.set('light-spec', { specId: 'light-spec', cardId: target.cardId, driverId: lightDriver.driverId, title: 'Light controls', widgets });
+    s.agent.setMode('control');
+    const written: WireWritten = { ok: true, title: 'Test gesture', explanation: 'Explicit test double.', code: "if(s.right && s.right.pinchTap) out.trigger('off');",
+      needs: ['right'], model: 'fixture-test-double', source: 'fixture', latencyMs: 0, attempts: 1, used: ['off'], issues: [] };
+    let finish: ((result: WireWritten) => void) | undefined;
+    let writerSignal: AbortSignal | undefined;
+    const write = vi.spyOn(s.agent.harness, 'write').mockImplementation(async (_input, _emit, options) => {
+      writerSignal = options?.signal;
+      if (phase === 'ready') return written;
+      return new Promise<WireWritten>(resolve => { finish = resolve; });
+    });
+    const retire = vi.spyOn(s.agent.connectors, 'clear');
+    s.emit('wire.request', { cardId: target.cardId, requestId: 'disconnect-check', text: 'Pinch to switch it off', source: 'voice' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(write).toHaveBeenCalledOnce();
+    if (phase === 'ready') expect(s.agent.wireReady(target.cardId)).toBeDefined();
+    s.changePresence([], 'leave', remo.deviceId);
+    expect(writerSignal?.aborted).toBe(phase === 'writing');
+    expect(s.agent.wireReady(target.cardId)).toBeUndefined();
+    expect(retire).toHaveBeenCalledWith(target.cardId);
+    expect(s.sent.mock.calls.some(([id, type, payload]) => id === owner.deviceId && type === 'wire.stopped'
+      && (payload as PayloadOf<'wire.stopped'>).requestId === 'disconnect-check')).toBe(true);
+    finish?.(written);
+    await vi.advanceTimersByTimeAsync(0);
+    const readyCount = s.of('wire.ready').length;
+    s.changePresence([remo], 'join', remo.deviceId);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.agent.wireReady(target.cardId)).toBeUndefined();
+    expect(s.of('wire.ready')).toHaveLength(readyCount);
+    expect(write).toHaveBeenCalledOnce();
     expect(s.dispatch).not.toHaveBeenCalled();
   });
 

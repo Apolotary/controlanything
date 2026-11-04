@@ -37,6 +37,10 @@ export function isConnectorDevelopmentRequest(text: string): boolean {
     && /\b(?:usb|midi|op[- ]?1)\b/i.test(text)
     && !/\b(?:explain|what is|how does)\b/i.test(text);
 }
+/** New runnable glue is generated after this explicit request; repair tasks keep their review lane. */
+export function isFreshConnectorRequest(text: string): boolean {
+  return isConnectorDevelopmentRequest(text) && (/\b(?:build|create|write|implement|develop)\b/i.test(text) || /from scratch/i.test(text));
+}
 /** The whole WIRE model phase (all attempts) is bounded: past this the labelled template stands in. */
 export const WIRE_BUDGET_MS = Number(process.env.CE_WIRE_TIMEOUT_MS) > 0 ? Number(process.env.CE_WIRE_TIMEOUT_MS) : 90_000;
 const SPARK_TIMEOUT_MS = 50_000;
@@ -457,6 +461,9 @@ export interface WireServiceDeps extends WireDeps {
   stopOutputs?(target: Target, reason: string): Promise<{ released: boolean; reason?: string }>;
   cardOfSpec(specId: string): string | undefined;
   developConnector?(task: string, onProgress: (note: string) => void, signal: AbortSignal): Promise<{ jobId: string; state: string; reason?: string }>;
+  buildConnector?(input: WireInput, emit: WireEmit, opts: { signal: AbortSignal; wiringId: string }): Promise<WireWritten>;
+  retireConnector?(cardId?: string): void;
+  useAuthoredTransport?(cardId: string): void;
 }
 
 export class WireService {
@@ -495,6 +502,7 @@ export class WireService {
     // Asking again withdraws the previous program immediately. A failed new
     // request must not leave the old hand mapping authorized on the server.
     this.active.delete(cardId);
+    this.d.retireConnector?.(cardId);
     const abort = new AbortController();
     this.jobs.set(cardId, abort);
     this.owners.set(cardId, from.deviceId);
@@ -529,7 +537,9 @@ export class WireService {
       // Retiring authority must not strand a held note/pressure while the next model call runs.
       if (replacing && target0) await this.d.stopOutputs?.(target0, 'A new wiring was requested');
       if (abort.signal.aborted) return;
-      if (target0 && this.d.developConnector && isConnectorDevelopmentRequest(p.text)) {
+      const freshConnector = isFreshConnectorRequest(p.text);
+      if (freshConnector && !this.d.buildConnector) return fail('Live connector generation is unavailable. No template or old connector was installed.');
+      if (target0 && this.d.developConnector && isConnectorDevelopmentRequest(p.text) && !freshConnector) {
         send('writing', { title: 'Muse Code · connector development', note: 'Starting a project coding task on the Mac. No hand wiring is being installed.' });
         const job = await this.d.developConnector(p.text, note => send('writing', { title: 'Muse Code · connector development', note }), abort.signal);
         if (abort.signal.aborted) return;
@@ -559,16 +569,20 @@ export class WireService {
       const driver = this.d.prepareDriver(target);
 
       const detection = target.detection;
-      const written = await writeWiring(this.d, { cardId, deviceName: target.card?.name ?? cardId, request: p.text, driver,
+      const input: WireInput = { cardId, deviceName: target.card?.name ?? cardId, request: p.text, driver,
         ...(detection ? { observation: { jpeg: detection.jpeg, capturedAt: detection.capturedAt, width: detection.width,
           height: detection.height, label: detection.label } } : {}),
-      }, send, { signal: abort.signal, wiringTag: wiringId });
+      };
+      if (!freshConnector) this.d.useAuthoredTransport?.(cardId);
+      const written = freshConnector
+        ? await this.d.buildConnector!(input, send, { signal: abort.signal, wiringId })
+        : await writeWiring(this.d, input, send, { signal: abort.signal, wiringTag: wiringId });
       if (abort.signal.aborted) return;
       if (!written.ok) return fail('Muse could not write a working wiring this time. Ask again, in other words.', written.issues);
 
       // the actions this program drives must have passed verification on the device
       const used = written.used.map((id) => driver.actions.find((a) => a.actionId === id)).filter((a): a is DriverAction => !!a).slice(0, 16);
-      const pending = used.filter((a) => target.verification[a.actionId] !== 'pass').map((a) => a.actionId);
+      const pending = used.filter((a) => freshConnector || target.verification[a.actionId] !== 'pass').map((a) => a.actionId);
       if (pending.length) {
         const tv = Date.now();
         send('verifying', { code: written.code, model: written.model, source: written.source, note: `checking ${pending.map((id) => used.find((a) => a.actionId === id)?.label ?? id).join(', ')} on the device…` });
@@ -594,7 +608,7 @@ export class WireService {
     } finally {
       if (this.jobs.get(cardId) === abort) {
         this.jobs.delete(cardId);
-        if (!this.active.has(cardId)) { this.owners.delete(cardId); this.epochs.delete(cardId); }
+        if (!this.active.has(cardId)) { this.owners.delete(cardId); this.epochs.delete(cardId); this.d.retireConnector?.(cardId); }
       }
     }
   }
@@ -646,8 +660,23 @@ export class WireService {
     return cards;
   }
 
+  /** An executor reconnect never revives a ready or half-written program. Notify its exact requester. */
+  disconnectExecutor(executorDeviceId: string): string[] {
+    const cards = [...this.epochs.keys()].filter(cardId => this.d.targets.get(cardId)?.driver?.executor.deviceId === executorDeviceId);
+    for (const cardId of cards) {
+      const epoch = this.epochs.get(cardId), owner = this.owners.get(cardId);
+      this.clear(cardId);
+      if (owner && epoch?.requestId) this.d.hub.sendToDevice(owner, 'wire.stopped', {
+        cardId, requestId: epoch.requestId, wiringId: epoch.wiringId, ok: true, releaseConfirmed: false,
+        reason: 'The Mac disconnected. Wiring stopped; reconnect it and ask Muse again.',
+      } satisfies WireStoppedPayload);
+    }
+    return cards;
+  }
+
   /** Stop, panic, untag, mode change: the program must be asked for again. */
   clear(cardId?: string): void {
+    this.d.retireConnector?.(cardId);
     // A first request is not active yet. Include pending jobs so Stop while
     // Muse is writing cannot publish a late ready and restart the interaction.
     for (const id of cardId ? [cardId] : new Set([...this.active.keys(), ...this.jobs.keys()])) {
@@ -665,6 +694,7 @@ export class WireService {
   }
 
   close(): void {
+    this.d.retireConnector?.();
     for (const j of this.jobs.values()) j.abort();
     this.jobs.clear();
     this.active.clear();

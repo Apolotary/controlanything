@@ -46,6 +46,9 @@ import { releaseWireOutputs } from './wire-stop';
 import { libraryDriverNote, WireService } from './wire';
 import { MuseBridgeHarness } from './muse-harness';
 import { CodingAgentService } from './coding-agent';
+import { FreshConnectorGenerator } from './fresh-connector';
+import { GeneratedConnectorRegistry } from './connector-runtime';
+import { freshConnectorWriter } from './connector-wire';
 import { cancellableDelay, RequestCancelledError } from '../muse/cancellation';
 import { fixtureWireDraft } from './wire-fixture';
 import { CANCELLED_GUIDANCE, type TimedPhase } from './guidance';
@@ -71,6 +74,8 @@ type AgentMessage = { [K in MessageType]: { type: K; payload: PayloadOf<K> } }[M
 
 export interface Agent {
   coding: CodingAgentService;
+  freshConnectors: FreshConnectorGenerator;
+  connectors: GeneratedConnectorRegistry;
   harness: MuseBridgeHarness;
   wireReady(cardId: string): WireReadyPayload | undefined;
   targets: TargetStore;
@@ -245,7 +250,10 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   // Actions being verified for a wiring program while the card is armed (the setup-time gate below would refuse them).
   const wireVerifying = new Map<string, Set<string>>();
   const wireReleasing = new Map<string, symbol>();
-  const dispatcher = new Dispatcher({ hub, macLocal, log, canExec: (request) => {
+  const connectorPorts = (executorId: string) => hub.devices().filter(d => d.deviceId === executorId && d.online && d.app?.includes('+generated-midi-v1'))
+    .flatMap(d => (d.ports ?? []).filter(p => p.kind === 'midi-out'));
+  const connectors = new GeneratedConnectorRegistry(connectorPorts);
+  const dispatcher = new Dispatcher({ hub, macLocal, log, prepareMidi: request => connectors.encode(request), canExec: (request) => {
     const t = request.cardId ? targets.get(request.cardId) : undefined;
     const verifying = request.cardId ? wireVerifying.get(request.cardId) : undefined;
     if (t && wireReleasing.has(t.cardId) && request.priorityRelease && isNeutralSoftwareRelease(request)) {
@@ -804,6 +812,11 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     tags.beginCandidate(cardId);
     arm.cancel(t, 'retrying');
     control.cancel(t);
+    // This explicit setup validates the transport/capability catalog, not a hand
+    // program. A retired generated connector must not prevent a new handshake.
+    // WIRE stays closed until the subsequent request produces checked new glue.
+    if (wireService.readyFor(cardId)) wireService.clear(cardId);
+    connectors.useAuthored(cardId);
     steps.failRun(t.runId, CANCELLED_GUIDANCE);
     t.runId = newId('run-');
     setups.add(t.cardId);
@@ -1165,6 +1178,17 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       graceTimer.unref?.();
     }
     if (presence.deviceId && !hub.devices().some((device) => device.deviceId === presence.deviceId && device.online)) {
+      // A real executor disconnect retires its current programs, including pending
+      // native connector writers. A later reconnect must not resume old gestures.
+      // Renderer visibility updates still use the existing transient-screen grace.
+      for (const cardId of wireService.disconnectExecutor(presence.deviceId)) {
+        wireVerifying.delete(cardId);
+        const target = targets.get(cardId);
+        if (!target) continue;
+        control.cancel(target, { preserveArmed: true });
+        hub.broadcast('target.status', { ...targets.status(target), sentence: 'Mac disconnected',
+          hint: 'Reconnect the Mac, then ask Muse for new controls.', action: 'open-companion' });
+      }
       for (const cardId of wireService.disconnectOwner(presence.deviceId)) {
         const target = targets.get(cardId);
         if (!target) continue;
@@ -1288,6 +1312,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   });
   const coding = new CodingAgentService({ root: REPO_ROOT, dataDir: ctx.config.dataDir,
     apiKey: ctx.config.muse.apiKey, baseUrl: ctx.config.muse.baseUrl, log, callLog: ctx.calls });
+  const freshConnectors = new FreshConnectorGenerator({ dataDir: ctx.config.dataDir,
+    apiKey: ctx.config.muse.apiKey, baseUrl: ctx.config.muse.baseUrl, log, callLog: ctx.calls });
   const wireService = new WireService({
     hub, targets, spark: muse, wonder, log, callLog: ctx.calls, harness,
     ...(streamClient ? { stream: { model: muse.model, stream: streamClient.stream.bind(streamClient) } } : {}),
@@ -1304,6 +1330,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         .finally(() => { if (wireReleasing.get(target.cardId) === release) wireReleasing.delete(target.cardId); });
     },
     cardOfSpec: (specId) => specs.get(specId)?.cardId,
+    ...(muse.mode === 'live' ? { buildConnector: freshConnectorWriter({ generator: freshConnectors, registry: connectors, ports: connectorPorts }) } : {}),
+    retireConnector: cardId => connectors.clear(cardId),
+    useAuthoredTransport: cardId => connectors.useAuthored(cardId),
     developConnector: async (task, onProgress, signal) => {
       if (signal.aborted) throw new RequestCancelledError();
       const job = await coding.start({ task });
@@ -1460,6 +1489,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
 
   return {
     coding,
+    freshConnectors,
+    connectors,
     harness,
     wireReady: (cardId: string) => wireService.readyFor(cardId),
     targets,
@@ -1508,6 +1539,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     panic,
     close: () => {
       void coding.close();
+      void freshConnectors.close();
       clearTimeout(graceTimer);
       clearTimeout(publishTimer);
       clearVisualIntent();

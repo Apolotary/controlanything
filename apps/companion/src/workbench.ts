@@ -60,7 +60,7 @@ import { replayArmResult, runReplay } from './replay';
 import { deviceLabel, overlayHeading, WiringState, wiringActive, wiringLine } from './ui/wiring';
 import { WiringCard, WiringPanel } from './ui/wiring-view';
 
-const APP = 'companion@0.2.0';
+const APP = 'companion@0.2.0+generated-midi-v1';
 const params = new URLSearchParams(location.search);
 const pairNow = params.get('pair') === '1';
 

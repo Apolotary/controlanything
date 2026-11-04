@@ -827,6 +827,13 @@ export const ExecCommandPayload = z.object({
   cardId: Id.optional(),
   driverId: Id.optional(),
   actionId: Id.optional(),
+  /** Bytes produced by the current Muse-written connector. The semantic op remains the allowlist. */
+  generatedMidi: z.object({
+    connectorId: z.string().min(1).max(80),
+    hash: z.string().regex(/^[a-f0-9]{64}$/i),
+    portId: z.string().min(1).max(256),
+    bytes: z.array(z.number().int().min(0).max(255)).min(2).max(3),
+  }).optional(),
 });
 export type ExecCommandPayload = z.infer<typeof ExecCommandPayload>;
 

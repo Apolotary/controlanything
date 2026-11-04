@@ -2,6 +2,7 @@ import type { ExecAckPayload, ExecCommandPayload, Port } from '@ce/protocol';
 import { MusicalSynth } from '@ce/vsynth/musical';
 import { MUSICAL_SCALE, MUSICAL_SYNTH_NAME, MUSICAL_SYNTH_PORT_ID } from '@ce/vsynth/musical-manifest';
 import { checkMidiOp } from './contracts';
+import { generatedMidiPacket } from './generatedMidi';
 import { showCode } from './ui/wiring-view';
 import type { WiringOverlayView } from './visualLauncher';
 import type { WiringPhase } from './ui/wiring';
@@ -136,17 +137,19 @@ export class MusicalSynthPanel {
     if (cmd.op.kind !== 'midi' || !isMusicalPort(cmd.port)) return ack(false, { error: 'no_port' });
     const op = cmd.op, error = checkMidiOp(op);
     if (error || op.channel !== 1) return ack(false, { error: 'bad_args', detail: error ?? 'Musical synth listens on channel 1' });
+    const generated = generatedMidiPacket(cmd, MUSICAL_SYNTH_PORT_ID);
+    if (generated && !generated.ok) return ack(false, { error: 'refused', detail: generated.error });
     if (cmd.dryRun) return ack(true, { detail: 'dry run; no sound or state change' });
     if (op.msg === 'panic') { this.panic(); return ack(true); }
     if (!this.available) return ack(false, { error: 'no_port', detail: 'Open Musical synth and choose Sound on in this paired Mac companion.' });
     if (op.msg === 'sysex-identity') return ack(true, { reply: [0xf0, 0x7e, 0, 6, 2, 0x7d, 0, 2, 0, 0, 1, 0, 0, 0, 0xf7] });
     if (op.msg !== 'cc' && op.msg !== 'pc') return ack(false, { error: 'unsupported', detail: 'Use the declared scale-note and gate CC actions.' });
-    const bytes = op.msg === 'cc' ? [0xb0, op.number!, op.value as number] : [0xc0, op.number!];
+    const bytes = generated?.ok ? generated.bytes : op.msg === 'cc' ? [0xb0, op.number!, op.value as number] : [0xc0, op.number!];
     if (!this.synth.receiveMidi(bytes)) return ack(false, { error: 'bad_args', detail: 'Unknown musical parameter or value' });
     // Initial attack/pitch changes need an actual audio quantum before a receipt.
-    if (op.msg === 'cc' && [16, 17].includes(op.number!)) await new Promise(resolve => setTimeout(resolve, 70));
+    if (bytes[0] === 0xb0 && [16, 17].includes(bytes[1]!)) await new Promise(resolve => setTimeout(resolve, 70));
     const receipt = this.synth.receipt();
-    return ack(true, { detail: 'Applied by browser software instrument; analyser measures the graph before output mute',
+    return ack(true, { detail: 'Applied by browser software instrument; analyser measures the graph before output mute' + (generated?.ok ? ` · ${generated.receipt}` : ''),
       applied: { source: 'musical-synth', params: receipt.params, audio: receipt.audio, visible: !document.hidden, frame: receipt.frame, at: receipt.at } });
   }
 }
