@@ -2,8 +2,9 @@
  * What is in the show-me frame, and a JPEG crop of exactly that region of the passthrough camera.
  *
  * Presence (per frame, allocation-free): a tracked hand with at least two of its fingertips / palm joints inside
- * the frame's box (its square grown by 3 cm, from 14 cm behind to 15 cm in front of it). The palm turned to the
- * face is the wrist menu, never a show. Controllers have no object in hand.
+ * the frame's box (its square grown by 3 cm, from 14 cm behind to 15 cm in front of it). While the wrist menu is
+ * open, a palm turned to the face is the menu hand, never a show; otherwise it is allowed, because showing an
+ * object resting against the palm (a card, a phone) is exactly that pose. Controllers have no object in hand.
  *
  * Crop (once per capture, off the render path): grab the newest camera frame, project the frame's four world
  * corners with the head pose AT GRAB TIME through the left passthrough camera (scan/projection: head ∘ 6.3 cm
@@ -37,14 +38,17 @@ export interface FramePresence {
 const inv = new Matrix4();
 const local = new Vector3();
 
-/** The hand held inside the frame (most joints inside), or null. `frameWorld` is the frame group's matrixWorld. */
-export function handInFrame(f: ShellFrame, frameWorld: Matrix4, out: FramePresence): FramePresence | null {
+/**
+ * The hand held inside the frame (most joints inside), or null. `frameWorld` is the frame group's matrixWorld;
+ * `menuOpen` says the wrist menu is showing (its palm-to-face hand is not a show).
+ */
+export function handInFrame(f: ShellFrame, frameWorld: Matrix4, out: FramePresence, menuOpen = false): FramePresence | null {
   inv.copy(frameWorld).invert();
   const half = FRAME_SIZE / 2 + MARGIN;
   let best = 0;
   for (const side of SIDES) {
     const h: ShellHand | undefined = f.hands[side];
-    if (!h || h.controller || h.palmUp) continue;
+    if (!h || h.controller || (menuOpen && h.palmUp)) continue;
     let n = 0;
     let sx = 0, sy = 0, sz = 0;
     for (const name of PRESENCE_JOINTS) {

@@ -8,7 +8,7 @@
  *   attention one slow pulse (the buddy asks you to bring it closer)
  *
  * One shader plane (one draw call, a dark halo under the line so it reads on bright walls) plus one small uikit
- * pill for the label. Drawn over the passthrough (depthTest off). The flash is a single 0.35 s fade, never a strobe.
+ * pill for the label (above the frame, clear of the quest card). Drawn over the passthrough (depthTest off). The flash is a single 0.35 s fade, never a strobe.
  */
 import { Group, Mesh, PlaneGeometry, ShaderMaterial, Vector3 } from 'three';
 import { Text } from '@pmndrs/uikit';
@@ -97,10 +97,11 @@ export class Viewfinder extends Group {
     this.frame.frustumCulled = false;
     this.add(this.frame);
     if (isBrowser) {
-      this.label = glassPanel({ width: 0.15, renderOrder: 35, padding: 8, gap: 0, anchorY: 'top', alignItems: 'center', borderRadius: 1000 } as never);
+      this.label = glassPanel({ width: 0.15, renderOrder: 35, padding: 8, gap: 0, anchorY: 'bottom', alignItems: 'center', borderRadius: 1000 } as never);
       this.labelText = new Text({ text: '', fontSize: 14, fontWeight: 'semi-bold', color: LOOK.text.primary, whiteSpace: 'nowrap' } as never);
       this.label.add(this.labelText);
-      this.label.position.set(0, -FRAME_SIZE / 2 - 0.012, 0);
+      // above the frame: below it, the label would sit on the buddy's quest card and the shelf the sticker lands on
+      this.label.position.set(0, FRAME_SIZE / 2 + 0.014, 0);
       this.label.name = 'buddy-frame-label';
       this.add(this.label);
     }

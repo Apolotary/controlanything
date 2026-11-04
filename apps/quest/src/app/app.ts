@@ -1950,7 +1950,11 @@ export class QuestApp {
   // --- HUD events ----------------------------------------------------------------------------------
 
   onDeck(key: string, phase: 'press' | 'release'): void {
-    if (key === 'panic' && phase === 'press') { this.tangible?.release('stop'); this.cancelManualRegion(); this.projects?.pauseForNavigation(); }
+    if (key === 'panic' && phase === 'press') {
+      this.tangible?.release('stop'); this.cancelManualRegion(); this.projects?.pauseForNavigation();
+      // Stop (wrist menu, home bar, X key) stops the Buddy too
+      (this as unknown as { buddy?: { close(): void } }).buddy?.close();
+    }
     if (key === 'mic' && phase === 'press' && this.lockedId) {
       this.clearHandControl();
       void this.assistant?.toggle(this.lockedId);
@@ -2365,7 +2369,7 @@ export class QuestApp {
     }
     if (!this.onboarding?.visible) this.scanner.tick(time);
     this.scanIndicator?.update(f, time, this.session !== undefined && this.modes.mode === 'annotate' && this.scanner.active && this.scanner.stats.inFlight > 0
-      && !this.onboarding?.visible, this.scanner.inFlightSince());
+      && !this.onboarding?.visible && !(this as unknown as { buddy?: { isOpen(): boolean } }).buddy?.isOpen(), this.scanner.inFlightSince());
     this.renderer.render(this.scene, this.desktopCam);
     if (time - this.lastStatusAt > 300) {
       this.lastStatusAt = time;

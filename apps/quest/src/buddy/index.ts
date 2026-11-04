@@ -46,7 +46,7 @@ export interface BuddyHost {
   /** an everyday object bound as a controller and tracked right now (tangible lane); a crop hint, else null */
   tangible?: { heldObject(): { position: Vector3; sizeM: [number, number, number]; label: string } | null };
   /** the HUD's events: the wrist menu's Stop also closes the buddy */
-  hud?: { on(k: 'deck', fn: (e: { key: string; phase: 'press' | 'release' }) => void): () => void };
+  hud?: { root?: Object3D; on(k: 'deck', fn: (e: { key: string; phase: 'press' | 'release' }) => void): () => void };
   registerPaletteItem(item: PaletteItem): () => void;
   addFrameHook(hook: (f: ShellFrame, dtSec: number, timeMs: number, xrFrame?: XRFrame) => void): () => void;
   page: { log(msg: string, level?: 'info' | 'ok' | 'warn' | 'error'): void };
@@ -192,6 +192,17 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
   const frameMatrix = new Matrix4();
   // dev/e2e: a picture held up in the frame (emulator), seen by the synthetic camera's room scene too
   let sim: { mesh: Mesh; roomMesh?: Mesh; roomScene?: Scene } | null = null;
+
+  // the wrist menu showing = its hand is busy with the menu, not showing anything (cached lookup, retried every 2 s)
+  let menuObj: Object3D | null = null;
+  let menuLookAt = -Infinity;
+  const wristMenuOpen = (): boolean => {
+    if (!menuObj && time - menuLookAt > 2) {
+      menuLookAt = time;
+      menuObj = app.hud?.root?.getObjectByName('wrist-palette') ?? null;
+    }
+    return Boolean(menuObj?.visible);
+  };
 
   const token = () => app.identity?.deviceToken;
   // the Meta model ids shown on screen while they work (from GET /api/buddy/status; FIXTURE says so)
@@ -614,7 +625,7 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     if (phase !== 'closed') {
       b.viewfinder.updateWorldMatrix(true, false);
       frameMatrix.copy(b.viewfinder.matrixWorld);
-      p = handInFrame(f, frameMatrix, presence);
+      p = handInFrame(f, frameMatrix, presence, wristMenuOpen());
       if (!p && sim) {
         presence.hand = undefined;
         presence.inside = 7;
@@ -862,7 +873,10 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
   app.addFrameHook((f, dt) => frame(f, dt));
   // track the head even while closed, so the first open spawns in front of you (cheap: one reference)
   app.addFrameHook((f) => { lastF = f; });
-  app.registerPaletteItem({ key: 'buddy', label: 'Buddy', order: 10, onSelect: () => feature.toggle() });
+  // wrist menu → Buddy toggles it: a glass button while it is closed, the same slot as a white "on" pill while it is open
+  // (white = on, as in the rest of the wrist menu), so the way out is the same button you came in with
+  app.registerPaletteItem({ key: 'buddy', label: 'Buddy', order: 10, visible: () => phase === 'closed', onSelect: () => feature.toggle() });
+  app.registerPaletteItem({ key: 'buddy:on', label: 'Buddy', order: 10, primary: true, visible: () => phase !== 'closed', onSelect: () => feature.toggle() });
   // the wrist menu's Stop stops the buddy too
   try {
     app.hud?.on('deck', (e) => { if (e.key === 'panic' && e.phase === 'press' && phase !== 'closed') feature.close(); });
