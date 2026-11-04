@@ -6,7 +6,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./manifest": "./src/manifest.ts"
+    "./manifest": "./src/manifest.ts",
+    "./musical-manifest": "./src/musical-manifest.ts",
+    "./musical": "./src/musical.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

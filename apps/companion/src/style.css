@@ -411,7 +411,7 @@ body.stage .passcode { font-size: 32px; }
 .simple .onboarding.has-paired .paired-title { font-size: 20px; font-weight: 600; }
 .simple .onboarding.has-paired .paired-summary .onboarding-next { font-size: 14px; max-width: 360px; }
 .simple .setup-activity { order: 1; width: min(440px, 100%); border-radius: 20px; }
-.simple .simple-bar { display: flex; justify-content: center; gap: 8px; padding: 0 24px 32px; }
+.simple .simple-bar { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; padding: 0 24px 32px; }
 .simple .simple-bar button { border-radius: 20px; padding: 8px 16px; }
 .simple .simple-bar .simple-stop { color: var(--status-danger); }
 /* Why Open visuals could not open in this tab, with one fix (Use this tab). */

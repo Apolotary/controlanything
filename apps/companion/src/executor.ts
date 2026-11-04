@@ -12,6 +12,7 @@ import { toHex } from './midiDecode';
 import { isVisualPort, type VisualSynthExecutor } from './vsynthExecutor';
 import type { MidiExecutor } from './midiExec';
 import type { CardputerBridge } from './serial/bridge';
+import { isMusicalPort, type MusicalSynthPanel } from './musicalSynth';
 
 export interface TapeRow {
   execId: string;
@@ -71,6 +72,7 @@ export class Executor {
     private readonly bridge: CardputerBridge,
     private readonly oracle: AudioOracle,
     private readonly visual?: VisualSynthExecutor,
+    private readonly musical?: MusicalSynthPanel,
   ) {}
 
   /** Take the executor role (or wait for it while another tab holds it). */
@@ -159,7 +161,9 @@ export class Executor {
   async exec(cmd: ExecCommandPayload): Promise<ExecAckPayload> {
     const row = this.record(cmd);
     let ack: ExecAckPayload;
-    if (cmd.op.kind === 'midi') ack = this.visual && isVisualPort(cmd.port) ? await this.visual.execute(cmd) : await this.midi.execute(cmd);
+    if (cmd.op.kind === 'midi') ack = isMusicalPort(cmd.port)
+      ? this.musical ? await this.musical.execute(cmd) : { execId: cmd.execId, ok: false, sentAt: Date.now(), error: 'no_port', detail: 'The browser musical instrument is not open.' }
+      : this.visual && isVisualPort(cmd.port) ? await this.visual.execute(cmd) : await this.midi.execute(cmd);
     else if (cmd.op.kind === 'ir') {
       ack = this.bridge.online
         ? await this.bridge.exec(cmd)
@@ -186,6 +190,7 @@ export class Executor {
   /** Stop sound and IR right here, now (the Stop all button and the server's panic fan-out). */
   async panicLocal(from: 'button' | 'server'): Promise<number> {
     this.visual?.panic();
+    this.musical?.panic();
     const n = this.midi.panic();
     await this.bridge.panic();
     this.log('warn', `Stop all (${from}): ${n} MIDI messages, IR stopped`);

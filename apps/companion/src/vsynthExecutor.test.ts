@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { VisualSynthExecutor, visualSynthPort } from './vsynthExecutor';
 import { createVisualSynthPort, createVisualSynthState, VISUAL_SYNTH_IDENTITY_REPLY } from '@ce/vsynth';
 import type { ExecCommandPayload, MidiOp } from '@ce/protocol';
+import { MusicalSynthPanel } from './musicalSynth';
 
 const port = () => ({ receiveMidi: vi.fn(), reset: vi.fn(), getState: createVisualSynthState, setState: vi.fn(), dispose: vi.fn() });
 const command = (op: MidiOp, dryRun = false): ExecCommandPayload => ({ execId: 'exec', executorDeviceId: 'companion', port: visualSynthPort.id, op, dryRun });
@@ -54,5 +55,36 @@ describe('silent virtual output', () => {
     const p = { ...port(), receiveMidiConfirmed: vi.fn().mockResolvedValue({ ok: true, receipt: { id: 'x', renderer: 'r', params, visible: true, frame: 42, at: Date.now() } }) };
     const ack = await new VisualSynthExecutor(p).execute(command({ kind: 'midi', msg: 'cc', channel: 1, number: 71, value: 127 }));
     expect(ack).toMatchObject({ ok: true, applied: { source: 'renderer', visible: true, frame: 42, params: expect.objectContaining({ warp: 1 }) } });
+  });
+});
+
+describe('musical sound permission lifecycle', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it.each(['hidden', 'disconnected'])('invalidates pending audio resume when %s, even if it recovers before resume resolves', async boundary => {
+    const param = () => ({ value: 0, setValueAtTime(value: number) { this.value = value; }, setTargetAtTime: vi.fn(),
+      cancelScheduledValues: vi.fn(), linearRampToValueAtTime: vi.fn() });
+    const node = () => ({ connect: vi.fn(), start: vi.fn(), stop: vi.fn(), gain: param(), frequency: param(), Q: param(), delayTime: param(), fftSize: 2048 });
+    let finishResume!: () => void;
+    const ctx = { state: 'suspended', currentTime: 0, sampleRate: 48000, destination: node(),
+      createOscillator: node, createBiquadFilter: node, createGain: node, createDelay: node, createAnalyser: node,
+      resume: () => new Promise<void>(resolve => { finishResume = () => { if (ctx.state !== 'closed') ctx.state = 'running'; resolve(); }; }),
+      close: vi.fn(async () => { ctx.state = 'closed'; }),
+    };
+    vi.stubGlobal('AudioContext', class { constructor() { return ctx; } });
+    const visibility = { hidden: false }; vi.stubGlobal('document', visibility);
+    let connected = true;
+    const panel = new MusicalSynthPanel({ connected: () => connected, changed: vi.fn(), muted: true });
+    // Exercise the actual permission/engine lifecycle without constructing unrelated DOM.
+    const lifecycle = panel as unknown as { panel: HTMLElement; unlock(): Promise<void> };
+    lifecycle.panel = {} as HTMLElement;
+    const pending = lifecycle.unlock();
+    expect(panel.snapshot().enabled).toBe(false);
+    if (boundary === 'hidden') visibility.hidden = true; else connected = false;
+    panel.update();
+    expect(ctx.close).toHaveBeenCalledOnce();
+    visibility.hidden = false; connected = true; panel.update();
+    finishResume(); await pending;
+    expect(panel.snapshot()).toMatchObject({ enabled: false, available: false, masterGain: 0 });
+    expect(panel.snapshot().state.gate).toBe(0);
   });
 });

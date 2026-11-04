@@ -690,14 +690,14 @@ describe('Calm companion behavior', () => {
     expect(mocks.send).not.toHaveBeenCalled();
   });
 
-  it('keeps Open visuals discoverable after selection and explains explicit headset setup and Perform', async () => {
+  it('keeps Open visuals discoverable after selection and explains explicit Muse wiring', async () => {
     const opened = vi.fn().mockReturnValue(null); vi.stubGlobal('window', { open: opened });
     const app = await live();
     await app.emit('device.card', { cardId: 'visuals', name: 'ControlAnything Visual Synth', maker: 'ControlAnything', model: 'Visual Synth', protocols: ['midi'], category: 'synthesizer' });
     expect(byId('home-devices').querySelectorAll('button').filter((button) => button.textContent === 'Open visuals')).toHaveLength(1);
     await app.emit('link.result', { cardId: 'visuals', verdict: 'consistent', channel: 'midi', executorDeviceId: 'mac-1', port: { id: 'ce-visual-synth', name: 'ControlAnything Visual Synth' }, evidence: [] });
     const home = byId('home-devices');
-    expect(home.textContent).toContain('Try visual synth'); expect(home.textContent).toContain('Perform'); expect(home.textContent).toContain('left fist');
+    expect(home.textContent).toContain('Try visual synth'); expect(home.textContent).toContain('Muse writes the wiring before interaction starts');
     const open = home.querySelectorAll('button').find((button) => button.textContent === 'Open visuals')!;
     expect(open).toBeDefined(); await open.click();
     expect(opened).not.toHaveBeenCalled();
@@ -899,11 +899,14 @@ describe('Calm companion behavior', () => {
     mocks.serialReady = true;
     const { Connection } = await import('./connection');
     const connection = (Connection as unknown as { instances: { hello(): { capabilities: string[]; ports: unknown[]; executor: boolean } }[] }).instances.at(-1)!;
-    expect(connection.hello()).toMatchObject({ executor: true, ports: [{ id: 'ce-visual-synth', kind: 'midi-out', name: 'ControlAnything Visual Synth' }] });
+    expect(connection.hello()).toMatchObject({ executor: true, ports: [
+      { id: 'ce-visual-synth', kind: 'midi-out', name: 'ControlAnything Visual Synth' },
+      { id: 'ce-musical-synth', kind: 'midi-out', name: 'ControlAnything Synth', state: 'disconnected' },
+    ] });
     expect(connection.hello().capabilities).not.toContain('ir');
     mocks.bridgeOnline = true;
     expect(connection.hello().capabilities).toContain('ir');
-    expect(connection.hello().ports).toHaveLength(2);
+    expect(connection.hello().ports).toHaveLength(3);
     expect(connection.hello().ports).toContainEqual(expect.objectContaining({ kind: 'serial' }));
     mocks.bridgeOnline = false;
     expect(connection.hello().capabilities).not.toContain('ir');

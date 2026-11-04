@@ -45,6 +45,15 @@ function setup(leader = true) {
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 describe('Executor', () => {
+  it('never routes a missing browser musical instrument to physical MIDI', async () => {
+    const { ex } = setup();
+    const execute = vi.spyOn((ex as unknown as { midi: MidiExecutor }).midi, 'execute');
+    for (const port of ['ce-musical-synth', 'ControlAnything Synth']) {
+      const ack = await ex.exec({ execId: port, executorDeviceId: 'mac-1', port, op: { kind: 'midi', msg: 'cc', channel: 1, number: 17, value: 127 } });
+      expect(ack).toMatchObject({ ok: false, error: 'no_port' });
+    }
+    expect(execute).not.toHaveBeenCalled();
+  });
   it('does not route IR through an attached but unapproved Cardputer', async () => {
     const bridge = { link: { ready: true }, online: false, exec: vi.fn() } as unknown as CardputerBridge;
     const ex = new Executor(new MidiExecutor(io, { clock: new FakeClock() }), bridge, new AudioOracle());

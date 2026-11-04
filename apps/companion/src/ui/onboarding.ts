@@ -40,7 +40,7 @@ export interface CompanionView {
 /** A standby tab reads its own Mac's presence, never a different computer's USB ports. */
 export function companionPorts(deviceId: string | undefined, devices: DeviceInfo[], local: Port[], leader: boolean): Port[] {
   const ports = leader ? local : devices.find((d) => d.deviceId === deviceId && d.online)?.ports ?? [];
-  return ports.filter((p) => p.kind === 'midi-out' && p.state === 'connected' && p.id !== 'ce-visual-synth');
+  return ports.filter((p) => p.kind === 'midi-out' && p.state === 'connected' && !['ce-visual-synth', 'ce-musical-synth'].includes(p.id));
 }
 
 /** Pairing ends at the headset. Device-specific help starts only after a setup request. */

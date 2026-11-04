@@ -39,6 +39,8 @@ import { describeMidi, isRealtimeNoise, toHex } from './midiDecode';
 import { VisualSynthExecutor, visualSynthPort } from './vsynthExecutor';
 import { VisualSynthPresence } from './visualPresence';
 import { VisualSynthLauncher } from './visualLauncher';
+import { MusicalSynthPanel } from './musicalSynth';
+import { MUSICAL_SYNTH_PORT_ID } from '@ce/vsynth/musical-manifest';
 import { MidiExecutor } from './midiExec';
 import { clearPendingPairing, loadPendingPairing, savePendingPairing } from './pairing';
 import { CardputerBridge } from './serial/bridge';
@@ -181,7 +183,12 @@ const visualPresence = new VisualSynthPresence(() => identity?.deviceId, () => {
   ['calm', 'device', 'links'].forEach(render);
 });
 // Commands keep applying through a short visibility blip (VISUAL_GRACE_MS); the advertised port stays honest.
-const executor = new Executor(midiExec, bridge, oracle, new VisualSynthExecutor(undefined, () => visualPresence.recent()));
+const musicalPanel = new MusicalSynthPanel({
+  connected: () => !replaying && executor.leader && !!conn?.open && !serverDown,
+  muted: params.get('mute') === '1',
+  changed: () => { conn?.resendHello(); ['calm', 'device', 'links'].forEach(render); },
+});
+const executor = new Executor(midiExec, bridge, oracle, new VisualSynthExecutor(undefined, () => visualPresence.recent()), musicalPanel);
 const currentVisualPort = (): Port => ({ ...visualSynthPort, state: visualPresence.connected() ? 'connected' : 'disconnected' });
 const visualLauncher = new VisualSynthLauncher({
   owner: () => identity?.deviceId,
@@ -192,11 +199,13 @@ const visualLauncher = new VisualSynthLauncher({
 let visualsNote: { text: string; takeOver?: boolean } | undefined;
 /** Open the visuals as soon as this tab holds the executor role (after Use this tab). */
 let visualsWanted = false;
+let musicalWanted = false;
 let takeOverTimer: ReturnType<typeof setTimeout> | undefined;
 const showVisualsNote = (text: string, takeOver = false): void => { visualsNote = { text, takeOver }; render('calm'); };
 /** The visible tab takes the executor role (the lock is stolen; the old tab goes to standby) and opens visuals. */
 const useThisTab = (): void => {
   if (replaying || !identity) return;
+  musicalWanted = false;
   visualsWanted = true;
   if (executor.leader) { openVisuals(); return; }
   showVisualsNote('Moving visuals to this tab…');
@@ -219,6 +228,8 @@ const openVisuals = (): void => {
     return;
   }
   visualsWanted = false;
+  musicalWanted = false;
+  musicalPanel.close();
   visualsNote = undefined;
   clearTimeout(takeOverTimer);
   // Already drawing here: bring the panel's controls back instead of rebuilding it.
@@ -236,9 +247,34 @@ const openVisuals = (): void => {
   if (!visualLauncher.open()) { visualsOpening = false; visualsOpenTimedOut = true; clearVisualsOpenTimer(); }
   render('calm');
 };
+/** This can show the instrument, but only its Mac Sound on button may unlock audio. */
+const openMusical = (): void => {
+  if (replaying) { showVisualsNote('Musical synth is off in this display-only demo.'); return; }
+  if (!identity) { showVisualsNote('Not paired yet. Pair this Mac with your Quest first.'); return; }
+  if (document.hidden) return;
+  visualsWanted = false;
+  if (!executor.leader) {
+    musicalWanted = true;
+    showVisualsNote('Moving Musical synth to this tab…');
+    executor.takeOver();
+    clearTimeout(takeOverTimer);
+    takeOverTimer = setTimeout(() => {
+      if (executor.leader) return;
+      musicalWanted = false;
+      showVisualsNote('This tab could not take over. Close the other companion tab, then choose Musical synth.');
+    }, 3000);
+    return;
+  }
+  musicalWanted = false;
+  visualsNote = undefined;
+  clearTimeout(takeOverTimer); clearVisualsOpenTimer(); visualsOpening = false;
+  visualLauncher.close();
+  musicalPanel.open();
+  renderWiring(); render('calm');
+};
 /** ?visuals=1 keeps the visual synth up whenever this tab is the paired executor on a live connection. */
 const autoOpenVisuals = (): void => {
-  if (dedicatedVisuals && identity && executor.leader && conn?.open && !serverDown && !visualLauncher.opened) openVisuals();
+  if (dedicatedVisuals && identity && executor.leader && conn?.open && !serverDown && !visualLauncher.opened && !musicalPanel.opened && !musicalWanted) openVisuals();
 };
 
 function visualScreenStatus(): { state: string; hint: string; tone: string } {
@@ -523,7 +559,7 @@ function renderOnboarding(): void {
     const candidate = [...linkRequests.values()].some((request) => request.cardId === target.cardId && request.needs.includes('midi') && request.candidates?.some((c) => c.deviceId === ownId));
     if (!ownId || (target.executorDeviceId ?? result?.executorDeviceId) !== ownId && !(target.state === 'linking' && candidate)) continue;
     const card = cards.get(target.cardId);
-    if (card && (!card.protocols.includes('midi') || /visual[\s-]synth/i.test(card.name))) continue;
+    if (card && (!card.protocols.includes('midi') || /visual[\s-]synth/i.test(card.name) || card.notes?.startsWith('virtual:musical-synth:'))) continue;
     const step = [...steps.values()].reverse().find((s) => s.cardId === target.cardId);
     const next = setupActivity(card?.name ?? ports[0]?.name ?? 'your synth', target, step);
     if (next) { currentSetup = next; break; }
@@ -541,6 +577,7 @@ function renderOnboarding(): void {
   $('onboarding').classList.toggle('has-paired', paired);
   $('paired-summary').hidden = !paired;
   $('simple-visuals').hidden = !paired || visualLauncher.opened;
+  $('musical-open').hidden = !paired || musicalPanel.opened;
   $('simple-stop').hidden = !paired;
   // A standby tab says so in one line, with the fix; the only (leader) tab shows nothing here.
   const note = visualsNote ?? (!replaying && identity && executor.standby && !visualLauncher.opened
@@ -584,7 +621,7 @@ function renderOnboarding(): void {
 
 function renderHomeDevices(ports: Port[]): void {
   const rows: HTMLElement[] = [];
-  const devicePorts = [currentVisualPort(), ...ports];
+  const devicePorts = [currentVisualPort(), musicalPanel.port(), ...ports.filter(p => p.id !== MUSICAL_SYNTH_PORT_ID)];
   const visualScreen = visualScreenStatus();
   const virtualCards = [...cards.values()].filter((card) => /visual[\s-]synth/i.test(card.name));
   const virtualOwner = (card: DeviceCardPayload): string | undefined => card.notes?.startsWith('virtual:visual-synth:')
@@ -609,8 +646,10 @@ function renderHomeDevices(ports: Port[]): void {
   };
   for (const card of cards.values()) {
     const virtual = virtualCards.includes(card);
+    const musical = card.notes?.startsWith('virtual:musical-synth:') || card.cardId.startsWith('musical-synth-');
     if (virtual && card !== homeVirtualCard) continue;
     if (virtual) usedPorts.add(visualSynthPort.id);
+    if (musical) usedPorts.add(MUSICAL_SYNTH_PORT_ID);
     const connection = linkResults.get(card.cardId);
     const target = targets.get(card.cardId);
     const driver = [...drivers.values()].filter((d) => d.cardId === card.cardId).at(-1);
@@ -625,24 +664,32 @@ function renderHomeDevices(ports: Port[]): void {
     const ready = count > 0 && tag?.connection !== 'offline' && (target?.state === 'armed' || target?.state === 'controlling');
     const failed = target?.state === 'failed' || connection?.verdict === 'mismatch';
     const offline = tag?.connection === 'offline' || target?.detail === 'offline' || transport === 'midi' && midi.enabled && !port
-      || virtual && !replaying && (!visualPresence.connected() || !conn?.open || serverDown);
+      || virtual && !replaying && (!visualPresence.connected() || !conn?.open || serverDown)
+      || musical && !musicalPanel.available;
     const state = failed ? 'Needs attention' : offline ? 'Unavailable' : ready ? 'Controls enabled' : 'Needs setup';
     const subtitle = virtual
-      ? `${visualScreen.hint} In Quest: Try visual synth → Set up control → Enable. Ask Muse for the gesture you want, Apply, then Perform. Hold your left fist and follow the active gesture mapping shown in Quest.`
+      ? `${visualScreen.hint} In Quest, choose Visual synth and complete setup, then ask Muse how your hands should control it. Muse writes the wiring before interaction starts.`
+      : musical ? 'Open this instrument and choose Sound on on this Mac. In Quest, choose Musical synth and ask Muse how your hands should play. No hand interaction is pre-wired.'
       : companionText(tag?.hint ?? (count ? `${count} verified controls${ready ? ' · Enabled in your headset' : ' · Waiting for headset confirmation'}`
         : target && (target.state === 'armed' || target.state === 'controlling') ? 'The displayed controls have not passed verification. Set up control again in your headset.'
         : [card.maker, card.model, connected ? 'Connected to this Mac' : 'Select the device in your headset to set up controls'].filter(Boolean).join(' · ')));
     addRow(virtual ? '▱' : transport === 'midi' ? '▥' : transport === 'local' ? '▱' : '⌁', card.name,
-      virtual ? 'Virtual screen' : transport === 'midi' ? 'USB MIDI' : transport === 'local' ? 'Mac controls' : transport === 'ir' ? 'Infrared' : 'Device',
+      virtual ? 'Virtual screen' : musical ? 'Browser instrument' : transport === 'midi' ? 'USB MIDI' : transport === 'local' ? 'Mac controls' : transport === 'ir' ? 'Infrared' : 'Device',
       state, subtitle, failed ? 'danger' : offline ? '' : ready ? 'on' : 'warn', virtual
         ? button('Open visuals', openVisuals)
+        : musical ? button('Open instrument', openMusical)
         : button('Details', () => { setFocus(card.cardId, true); showView('details'); }));
   }
   for (const port of devicePorts) {
     if (usedPorts.has(port.id)) continue;
     if (/visual[\s-]synth/i.test(port.name) || port.id === 'ce-visual-synth') {
-      addRow('▱', 'Visual synth', 'Virtual screen', visualScreen.state, `${visualScreen.hint} In your headset choose Menu → Try visual synth. Hand control starts after Set up control, Enable, and Perform.`, visualScreen.tone,
+      addRow('▱', 'Visual synth', 'Virtual screen', visualScreen.state, `${visualScreen.hint} In your headset choose Visual synth, complete setup, then ask Muse how your hands should control it.`, visualScreen.tone,
         button('Open visuals', openVisuals));
+      continue;
+    }
+    if (port.id === MUSICAL_SYNTH_PORT_ID) {
+      addRow('▥', 'ControlAnything Synth', 'Browser instrument', musicalPanel.available ? 'Sound on' : 'Sound off',
+        'Open this instrument and choose Sound on on this Mac. In Quest, choose Musical synth and ask Muse to write the hand interaction.', musicalPanel.available ? 'on' : '', button('Open instrument', openMusical));
       continue;
     }
     addRow('▥', port.name, 'USB MIDI', 'Connected', 'USB discovered · Device actions still need setup and verification in your headset.', 'on', button('Details', () => showView('details')));
@@ -872,7 +919,7 @@ function renderDevice(): void {
   midiChartPanel ??= new MidiChartPanel($('midi-chart-editor'), (path, body) => chartRequest(path, body, identity?.deviceToken));
   // The virtual instrument is defined by its built-in capability manifest, not
   // a user-entered physical MIDI chart (nor a chart endpoint in display replay).
-  const chartCards = replaying ? [] : [...cards.values()].filter(card => !card.cardId.startsWith('visual-synth-') && !card.notes?.startsWith('virtual:visual-synth:'));
+  const chartCards = replaying ? [] : [...cards.values()].filter(card => !/^(visual|musical)-synth-/.test(card.cardId) && !/^virtual:(visual|musical)-synth:/.test(card.notes ?? ''));
   midiChartPanel.update(chartCards, !replaying && Boolean(conn?.open) && (canApprove || isLocalPage()), focusCardId);
   const box = $('device-card');
   box.replaceChildren();
@@ -969,7 +1016,9 @@ function renderCode(): void {
     return;
   }
   const prov = drv.provenance.map((p) => `${p.source}: ${p.ref}`).join('\n');
-  box.append(jsonView(drv, `driver.spec · ${drv.transport.toUpperCase()} · written by ${drv.modelId ?? 'the agent'}${drv.source === 'fixture' ? ' (recorded example)' : ''}${prov ? `\n${prov}` : ''}`));
+  const source = drv.source === 'fixture' ? `FIXTURE · ${drv.modelId ?? 'example'} (no live generation in this run)`
+    : `written by ${drv.modelId ?? 'unrecorded model'}`;
+  box.append(jsonView(drv, `driver.spec · ${drv.transport.toUpperCase()} · ${source}${prov ? `\n${prov}` : ''}`));
 }
 
 /** A wiring for the Visual synth shows its code on the Mac's own full-screen visuals too. */
@@ -984,6 +1033,8 @@ function renderWiring(): void {
   wiringCard.render(w, name);
   wiringPanel.render(w, name);
   visualLauncher.setWiring(w && isVisualWiring(w.cardId)
+    ? { id: w.wiringId, heading: overlayHeading(w, deviceLabel(name)), code: w.code, phase: w.phase, endedAt: w.endedAt } : undefined);
+  musicalPanel.setWiring(w && (/^musical-synth-/.test(w.cardId) || cards.get(w.cardId)?.notes?.startsWith('virtual:musical-synth:'))
     ? { id: w.wiringId, heading: overlayHeading(w, deviceLabel(name)), code: w.code, phase: w.phase, endedAt: w.endedAt } : undefined);
 }
 
@@ -1508,8 +1559,10 @@ function setupExecutors(): void {
     else {
       // Only the executor tab draws and advertises the visuals; hand the serial port and mic to the new one.
       visualsWanted = false;
+      musicalWanted = false;
       clearVisualsOpenTimer(); visualsOpening = false;
       visualLauncher.close();
+      musicalPanel.close();
       if (takenOver) {
         visualsNote = undefined;
         if (link.hasPort) void link.close();
@@ -1517,7 +1570,9 @@ function setupExecutors(): void {
       }
     }
     visualLauncher.update();
-    if (leader && visualsWanted) openVisuals();
+    musicalPanel.update();
+    if (leader && musicalWanted) openMusical();
+    else if (leader && visualsWanted) openVisuals();
     else autoOpenVisuals();
     conn?.resendHello();
     log('info', leader ? 'this tab is the executor' : takenOver ? 'standby: another tab took over' : 'standby');
@@ -1710,7 +1765,7 @@ function hello(): PayloadOf<'hello'> {
     if (bridge.online) caps.push('ir');
     if (AudioOracle.supported) caps.push('mic');
     p.capabilities = caps;
-    const ports: Port[] = [currentVisualPort(), ...(midi.enabled ? midi.ports() : [])];
+    const ports: Port[] = [currentVisualPort(), musicalPanel.port(), ...(midi.enabled ? midi.ports() : [])];
     if (bridge.online) ports.push({ id: `serial:${link.info?.chip ?? 'cardputer'}`, kind: 'serial', name: `Cardputer USB serial (${link.info?.board ?? 'cardputer'})`, state: 'connected' });
     p.ports = ports;
   }
@@ -1719,6 +1774,7 @@ function hello(): PayloadOf<'hello'> {
 
 function connect(): void {
   conn?.stop();
+  musicalPanel.update();
   clearProgress();
   objectCanvas.connection(false, false);
   const c = new Connection(Connection.sameOrigin(), hello);
@@ -1726,6 +1782,7 @@ function connect(): void {
   c.onState = (s, info) => {
     serverDown = s === 'closed';
     visualLauncher.update();
+    musicalPanel.update();
     if (s === 'closed') setupProgress.disconnect();
     if (s !== 'open') objectCanvas.connection(false, false);
     ['calm', 'top'].forEach(render);
@@ -1734,6 +1791,7 @@ function connect(): void {
       clearIdentity();
       identity = undefined;
       visualLauncher.close();
+      musicalPanel.close();
       pairedWithQuest = false;
       void pairThisBrowser();
     }
@@ -1769,6 +1827,10 @@ function connect(): void {
     setTimeout(() => {
       if (!executor.leader && identity && document.visibilityState === 'visible' && !visualPresence.connected()) useThisTab();
     }, 1500);
+  });
+  c.on('musical.open', (m) => {
+    if (m.from !== 'server' || replaying || !identity || m.to !== identity.deviceId || document.hidden) return;
+    openMusical();
   });
   c.on('pair.pending', (m) => {
     if (settledPairings.has(m.payload.pairingId)) return;
@@ -2043,6 +2105,8 @@ export async function bootWorkbench(): Promise<void> {
   document.body.classList.toggle('stage', stage);
   $('workbench').classList.toggle('simple', simple);
   $('simple-visuals').addEventListener('click', openVisuals);
+  $('musical-open').addEventListener('click', openMusical);
+  (globalThis as { __ceMusicalSnapshot?: () => ReturnType<MusicalSynthPanel['snapshot']> }).__ceMusicalSnapshot = () => musicalPanel.snapshot();
   $('simple-note-action').addEventListener('click', useThisTab);
   $('simple-details').addEventListener('click', () => {
     detailsFromSimple = true;
@@ -2064,7 +2128,7 @@ export async function bootWorkbench(): Promise<void> {
   setupCalm();
   setupForms();
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { render('calm'); render('workspace'); render('canvas'); } });
-  globalThis.addEventListener?.('pagehide', () => { clearVisualsOpenTimer(); visualsOpening = false; visualLauncher.close(); });
+  globalThis.addEventListener?.('pagehide', () => { clearVisualsOpenTimer(); visualsOpening = false; visualLauncher.close(); musicalPanel.close(); });
   setupExecutors();
   renderAll();
   requestAnimationFrame(meterLoop);
