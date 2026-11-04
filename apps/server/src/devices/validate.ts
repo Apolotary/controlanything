@@ -35,6 +35,8 @@ export interface ValidationContext {
   executorKind?: string;
   /** the device emits visible light: its rate is capped at RATE_LIMITS.lightChangesPerSec */
   emitsLight?: boolean;
+  /** visual synth: continuous controls allowed (default 4 for a fresh driver; WIRE adds the manifest's touch inputs on top) */
+  visualMaxSets?: number;
 }
 
 export interface ValidationResult {
@@ -220,7 +222,8 @@ export function validateDriver(input: DriverDraft | Driver, ids: { driverId: str
   if (visual) {
     // Muse picks the controls; the card has room for up to four continuous controls and three pattern buttons.
     const sets = actions.filter((a) => a.kind === 'set').length, triggers = actions.filter((a) => a.kind === 'trigger').length;
-    if (sets < 1 || sets > 4 || triggers > 3) err('visual_controls', 'actions', `Use 1-4 continuous CC controls and at most 3 pattern triggers (got ${sets} and ${triggers})`);
+    const maxSets = ctx.visualMaxSets ?? 4;
+    if (sets < 1 || sets > maxSets || triggers > 3) err('visual_controls', 'actions', `Use 1-${maxSets} continuous CC controls and at most 3 pattern triggers (got ${sets} and ${triggers})`);
   }
 
   // rate limits

@@ -1,4 +1,5 @@
 import type { Driver, DriverDraft, Provenance } from '@ce/protocol';
+import { VISUAL_SYNTH_MANIFEST } from '@ce/vsynth/manifest';
 
 export const VISUAL_SYNTH_NAME = 'ControlAnything Visual Synth';
 export const VISUAL_SYNTH_ID = 'controlanything-visual-synth';
@@ -49,4 +50,36 @@ export function misnamedVisual(label: string, own: string | undefined): boolean 
   if (!own) return false;
   if (VISUAL_WORDS[own]?.test(label)) return false;
   return Object.entries(VISUAL_WORDS).some(([key, words]) => key !== own && words.test(label));
+}
+
+// --- touch inputs (WIRE) --------------------------------------------------------------------------------------------
+// The renderer's manifest lists a CC for where a fingertip touches the water and how hard (Touch X / Touch Y / Touch
+// pressure). The setup driver Muse writes stays as it is; when the wearer asks for a wiring, these manifest controls are
+// offered to the wiring writer as ordinary driver actions and verified on first use. Read from the manifest, never hardcoded.
+
+type ManifestControlLike = { cc: number; parameter: string; label: string; effect: string };
+
+/** Manifest controls that take a touch input. */
+export function touchControls(controls: readonly ManifestControlLike[] = VISUAL_SYNTH_MANIFEST.controls): ManifestControlLike[] {
+  return controls.filter((c) => /touch/i.test(`${c.parameter} ${c.label}`));
+}
+
+/** The driver actions for those controls (same shape and ids as every other visual synth CC action: cc<number>). */
+export function touchActions(controls: readonly ManifestControlLike[] = touchControls()): DriverDraft['actions'] {
+  return controls.map((c) => ({
+    actionId: `cc${c.cc}`, label: c.label.slice(0, 40), kind: 'set' as const, description: c.effect.slice(0, 300),
+    range: { min: 0, max: 127, step: 1 }, curve: 'linear' as const,
+    encode: { kind: 'midi' as const, msg: 'cc' as const, channel: 1, number: c.cc, value: '$value' },
+    expect: { sense: 'camera' as const, effect: 'any' as const },
+  }));
+}
+
+/** A visual synth driver plus any manifest touch action it does not have yet (`added` lists their ids). */
+export function extendWithTouch<D extends Pick<Driver, 'executor' | 'actions'>>(driver: D, controls?: readonly ManifestControlLike[]): { driver: D; added: string[] } {
+  if (!isVisualSynthPort(driver.executor.port)) return { driver, added: [] };
+  const have = new Set(driver.actions.flatMap((a) => (a.encode.kind === 'midi' && a.encode.msg === 'cc' && a.encode.number !== undefined ? [a.encode.number] : [])));
+  const ids = new Set(driver.actions.map((a) => a.actionId));
+  const missing = touchActions(touchControls(controls)).filter((a) => a.encode.kind === 'midi' && !have.has(a.encode.number!) && !ids.has(a.actionId));
+  if (!missing.length) return { driver, added: [] };
+  return { driver: { ...driver, actions: [...driver.actions, ...(missing as Driver['actions'])] }, added: missing.map((a) => a.actionId) };
 }

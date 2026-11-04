@@ -154,6 +154,7 @@ export class Mascot extends Group {
   private readonly lastWorld = new Vector3();
   private lastVelX = 0;
   private emoteT = -1;
+  private think = 0;
 
   // confetti state (preallocated)
   private readonly cPos = new Float32Array(CONFETTI * 3);
@@ -411,6 +412,15 @@ export class Mascot extends Group {
         }
       }
       if (u >= 1) this.action = null;
+    }
+
+    // thinking: a slow head-tilt sway and a little bob, so a 7 s wait still looks alive (0.35 Hz, never a flash)
+    this.think = damp(this.think, this.mood === 'thinking' ? 1 : 0, 4, dt);
+    if (this.think > 0.01) {
+      rz += Math.sin(t * Math.PI * 2 * 0.35) * 0.16 * this.think;
+      py += Math.abs(Math.sin(t * Math.PI * 2 * 0.35)) * 0.008 * this.think;
+      lhy += Math.sin(t * Math.PI * 2 * 0.35) * 0.006 * this.think;
+      rhy += 0.018 * this.think; rhx -= 0.012 * this.think; rhz += 0.02 * this.think; // a hand to the chin
     }
 
     this.rig.position.set(px, py, pz);

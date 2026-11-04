@@ -49,7 +49,12 @@ export interface ControlDeps {
   onResult?: (result: ControlResultPayload, from: string) => void;
   /** room hacks (combos, daemons) are not fired here: the owner of the hook runs them */
   onRoomHack?: (hack: Hack, spec: UiSpecPayload, value: number | boolean, from?: string) => RouteResult;
+  /** "wire:<actionId>" events (a wiring program running in the headset): the WIRE service says which hack and driver they mean */
+  wire?: (ev: Pick<ControlEventPayload, 'widgetId' | 'specId'>) => { target: Target; hack: Hack; driver: Driver } | { reason: string };
 }
+
+/** Gesture and wiring events are live performance: a missed send is dropped, never queued. */
+const isLiveHack = (hack: Hack): boolean => hack.id.startsWith('gesture:') || hack.id.startsWith('wire:');
 
 export interface RouteResult {
   ok: boolean;
@@ -110,7 +115,8 @@ export class ControlRouter {
   }
 
   /** Find the target + spec + hack a control event refers to. */
-  resolve(ev: Pick<ControlEventPayload, 'widgetId' | 'specId'>): { target: Target; spec: UiSpecPayload; hack: Hack; driver: Driver } | { reason: string } {
+  resolve(ev: Pick<ControlEventPayload, 'widgetId' | 'specId'>): { target: Target; spec?: UiSpecPayload; hack: Hack; driver: Driver } | { reason: string } {
+    if (ev.widgetId.startsWith('wire:')) return this.d.wire ? this.d.wire(ev) : { reason: 'wiring programs are not enabled' };
     if (ev.widgetId.startsWith('gesture:') && !ev.specId) return { reason: 'gesture control requires a target spec' };
     const specs = ev.specId ? [this.d.specs.get(ev.specId)].filter(Boolean) : this.d.specs.list();
     for (const spec of specs as UiSpecPayload[]) {
@@ -148,6 +154,8 @@ export class ControlRouter {
   }
 
   private report(ev: ControlEventPayload, from: string | undefined, ok: boolean, detail?: string, specId = ev.specId): void {
+    // A wiring program streams up to 30 events a second per action: only real failures are answered, never acks or coalescing.
+    if (ev.widgetId.startsWith('wire:') && (ok || /Superseded|rate limited/i.test(detail ?? ''))) return;
     if (from && specId) this.d.onResult?.({ specId, widgetId: ev.widgetId, ts: ev.ts, ok, detail: detail?.slice(0, 512) }, from);
   }
 
@@ -160,7 +168,7 @@ export class ControlRouter {
     if (paused) return { ok: false, reason: 'paused', detail: paused, cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
     if (!this.allowed(target)) return { ok: false, reason: 'control is not authorized for this device', cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
     // combos and daemons: handed to their runner (they ask for their own tap)
-    if (hack.kind === 'daemon' || hack.commands.some((c) => c.cardId && c.cardId !== target.cardId)) {
+    if (spec && (hack.kind === 'daemon' || hack.commands.some((c) => c.cardId && c.cardId !== target.cardId))) {
       if (!this.d.onRoomHack) return { ok: false, reason: 'no room hack runner', cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
       if (ev.phase === 'start' || ev.phase === 'move') return { ok: true, cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
       const v = typeof ev.value === 'number' || typeof ev.value === 'boolean' ? ev.value : (ev.value as { x: number }).x;
@@ -213,7 +221,7 @@ export class ControlRouter {
     this.trailingControls.delete(key);
 
     const value = typeof ev.value === 'number' ? ev.value : ev.value === true ? 1 : ev.value === false ? 0 : (ev.value as { x: number }).x;
-    const stepper = spec.gen3d?.controls.find((c) => c.id === ev.widgetId)?.binding.args?.drive === 'stepper';
+    const stepper = spec?.gen3d?.controls.find((c) => c.id === ev.widgetId)?.binding.args?.drive === 'stepper';
     let fired = 0;
     const param = hack.params?.find((p) => p.id === hack.control?.param) ?? hack.params?.[0];
     const prev = param ? target.paramValues[param.id] : undefined;
@@ -228,7 +236,7 @@ export class ControlRouter {
           this.d.targets.changed(target, 'value');
         }
       }
-      this.report(ev, from, ok, detail, spec.specId);
+      this.report(ev, from, ok, detail, spec?.specId ?? ev.specId);
     });
     if (stepper && param && hack.commands.length >= 2) {
       fired += this.fireStepper(target, driver, hack, param.id, prev, value, batch.next());
@@ -281,10 +289,10 @@ export class ControlRouter {
     })() : cmd.value;
     const send = () => {
       if (!target.armed || target.runId !== runId || !target0.armed || target0.runId !== sourceRunId || !this.allowed(target) || !this.allowed(target0) || target.verification[a.actionId] !== 'pass') { onResult?.(false, 'Command cancelled'); return 0; }
-      if (a.encode.kind === 'step') return this.fireSteps(target, driver, a, v ?? 0, onResult, hack.id.startsWith('gesture:'));
+      if (a.encode.kind === 'step') return this.fireSteps(target, driver, a, v ?? 0, onResult, isLiveHack(hack));
       try {
         const op = resolveOp(a, a.kind === 'set' ? (v ?? 0) : undefined);
-        return this.d.dispatcher.fire(driver.executor.deviceId, op, { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: a.actionId, lightCap: driver.transport === 'ir', onResult, dropIfLimited: hack.id.startsWith('gesture:') }) ? 1 : 0;
+        return this.d.dispatcher.fire(driver.executor.deviceId, op, { port: driver.executor.port, cardId: target.cardId, driverId: driver.driverId, actionId: a.actionId, lightCap: driver.transport === 'ir', onResult, dropIfLimited: isLiveHack(hack) }) ? 1 : 0;
       } catch (e) {
         this.log(`[control] ${a.actionId}: ${(e as Error).message}`);
         onResult?.(false, (e as Error).message);
