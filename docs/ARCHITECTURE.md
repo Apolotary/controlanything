@@ -132,3 +132,8 @@ Historical evidence remains scoped:
 The main HUD is a bounded Horizon-style shell with authored layout, generated descriptions and generated wiring. It does not promise arbitrary generated 3D meshes, universal device control or calibration-free touch. The normal route has large request buttons and no side dials or manual Perform button. Dials and legacy Perform are available only when deliberately enabled with `?perform=1`. Sustained request reading uses a separate flat panel, placed once about1m ahead and below eye level; the normal workspace clears while it is open. That reader remains inside the immersive session.
 
 Canvas, older assistant/gesture-map experiments and other lab UI remain off the primary path behind `?lab=1`. Buddy and Motion lab have their own evidence boundaries. Submission claims should describe only the paths actually demonstrated.
+
+
+## Object-first presentation
+
+The default device invitation prioritizes hold-to-talk, with one silent example; Ideas and Details are local presentation states. The quick wrist menu exposes Find objects/contextual Ask Muse plus More and persistent Stop all/Exit. Utilities remain one level away. Writing/checks and the initial generated explanation appear automatically. When the wiring controller collapses the code view, the HUD clears duplicate forms into one noninteractive cue that retains the actual generated explanation and source. Its pointer events and hand-UI capture are disabled. On-demand code inspection never changes server authorization. This presentation layer does not add gesture mappings, generation or execution authority.

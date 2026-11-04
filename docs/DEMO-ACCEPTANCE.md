@@ -17,9 +17,9 @@ Hardware: **Meta Quest 3 + MacBook**, with the paired companion showing the sile
 | Step | Wearer action | Required observation | Current run |
 |---|---|---|---|
 | W1 | Enter AR; look at the Mac | Camera and hands work; SAM 3.1 outline appears. No competing camera tab. Annotate frame rate is measured again after the SAM-only change. | Pending |
-| W2 | Raise a deliberate flat left palm | Wrist menu is easy to target; Annotate / Control and filters are clear. It closes after selection and stays away from active control. | Pending |
+| W2 | Raise a deliberate flat left palm | Quick actions are easy to target; More/Back reaches instruments, Tutorial, layers and filters without changing the device or running anything. It closes after selection and stays away from active control. | Pending |
 | W3 | Pinch the MacBook box once | Same selected object continues through setup. Mac visuals open/recover; progress and source are visible. A generic electronic-device box may need identification, but should not silently require a second pinch. | Pending |
-| W4 | Wait for setup | Card asks **What should your hands do?**, with large request buttons. No side dials or parameter handles appear in the default flow; hands do not drive the device yet. Driver verification is labelled camera / renderer / acknowledgement honestly. | Pending |
+| W4 | Wait for setup | A compact device invitation makes voice primary and offers one example; Ideas reveals the other suggestions. No side dials or parameter handles appear in the default flow; hands do not drive the device yet. Driver verification is labelled camera / renderer / acknowledgement honestly. | Pending |
 | W5 | Choose **Touch the water**, or hold-to-talk and ask for it | Exact request stays on the selected device. JavaScript streams into the AR code card and Mac code view; a live take is labelled Live with the actual model, not FIXTURE or Template. | Pending |
 | W6 | Watch checking finish | Validating → dry-run → action verification → ready. Failed generation never appears as successful live generation. Retain source, model, code and relevant call/step/exec records. | Pending |
 | W7 | Hold the fingertip still at highlighted top-left, then bottom-right corner | Each corner visibly progresses. Resting hands do not capture a corner by accident. No device touch output runs before calibration succeeds. Saved valid calibration may skip this step; capture one fresh calibration in the proof take. | Pending |
@@ -50,7 +50,7 @@ ControlAnything Synth is a browser instrument, not the physical OP-1 Field. Its 
 
 | Step | Action and required observation | Current run |
 |---|---|---|
-| M1 | Choose Musical synth in Quest. Its Mac panel opens automatically, sound remains locked and no verification note or hand interaction starts. | Pending |
+| M1 | Choose More → Music in Quest. Its Mac panel opens automatically, sound remains locked and no verification note or hand interaction starts. | Pending |
 | M2 | The present user explicitly chooses Sound on on the Mac. The port becomes available; complete setup and confirm controls in Quest. In automation, master gain must remain zero. | Pending |
 | M3 | Ask Muse how the hands should play. Watch exact request, streamed source, checks and honest Live/FIXTURE/Template label. Setup alone must not install a hand mapping. | Pending |
 | M4 | Use the generated gesture. Verify scale-note and gate changes, analyser pitch/level, release and tracking-loss behavior. Hand-only wiring needs no screen calibration. Audible behavior is an additional attended check only with the user's explicit permission. | Pending |
@@ -74,7 +74,7 @@ A separate single-call live `muse-spark-1.3` probe generated a program that pass
 - **Touching does nothing:** inspect current wiring/source, selected target, calibration and actual permitted actions. A dial or the old Perform demo is not a substitute for this acceptance step.
 - **Camera failed:** check single-session ownership and existing permission/retry state. Keep one Quest tab; reload only outside AR.
 - **Failed or cancelled wiring:** keep the error and source label visible. A labelled template can be demonstrated as a fallback, not represented as live Muse-written code.
-- **Long request:** after stopping, choose Read request and page through the full accepted transcript in the larger front-facing panel. Other controls must clear, text must fit without shrinking/clipping, and head movement/page presses must not reposition it. Close must restore the stopped workspace without restarting a program or making a model call. An over-500-character request must explain the limit without replacing the active wiring.
+- **Long request:** after stopping, choose Details → Read request and page through the full accepted transcript in the larger front-facing panel. Other controls must clear, text must fit without shrinking/clipping, and head movement/page presses must not reposition it. Close must restore the stopped workspace without restarting a program or making a model call. An over-500-character request must explain the limit without replacing the active wiring.
 - **Physical OP-1 requested from a software card:** explain the wrong target and point to Annotate → select OP-1 → Correct device if needed. Do not create a visual substitute, switch targets silently or send hardware commands.
 
 ## Evidence boundary and next footage
@@ -118,3 +118,8 @@ Measure with `node scripts/quest-cdp.mjs --fps 450` (≈5 s at 90 Hz) in each st
 | Run | Time | Build | Result | Notes / clip |
 |---|---|---|---|---|
 | 1 | Nov 4 10:54:45–10:57 | HEAD after f3861cc (tab reloaded 10:54:39) | Pinch → armed in 3 s; Perform drives Warp, Ripples and Hue on the Mac; armed/perform 81 fps at p95; Annotate 52 fps at p95 | Stop (G10) and Exit (G11) not observed: at 10:57:34 the XR session went hidden (headset off or Home) while still armed, with no panic/Stop sent. Earlier attempt 10:29 failed: a stale Quest tab held the camera |
+
+
+### Object-first acceptance additions
+
+The main water path must require no wrist/mode/settings visit. With mic disabled, the one contextual example must still generate wiring only when pressed. Ideas/Details/More/Back must not ask Muse, record speech, change the target or resume controls. During play the device form clears, but Muse’s generated gesture/clutch instruction and Live/FIXTURE/Template source remain in one passive cue. Streaming code and checks must still appear automatically after asking. Stop all and held Exit remain reachable on both quick-menu pages; Tutorial is under More. Real permission/PTT quality and wearer comfort remain separate acceptance.

@@ -264,7 +264,8 @@ async function run() {
       return { visible: !!p?.visible, keys: p ? p.buttons.map((b) => b.name) : [] };
     });
     assert(palette.visible, 'The wrist palette docks in view in the desktop emulator');
-    for (const key of ['visual-synth', 'deck:panic', 'exit-ar']) assert(palette.keys.includes(key), `Palette offers ${key} (has ${palette.keys})`);
+    for (const key of ['find-objects', 'palette-more', 'deck:panic', 'exit-ar']) assert(palette.keys.includes(key), `Quick actions offer ${key} (has ${palette.keys})`);
+    assert(!palette.keys.includes('visual-synth')&&!palette.keys.includes('layer:annotate'),'Primary wrist actions do not expose the instrument/settings dashboard');
     console.log(`  box: "${screen.label}"; palette: ${palette.keys.join(' · ')}`);
   });
 
@@ -341,6 +342,15 @@ async function run() {
     assert.equal(ask.prompt, 'What should your hands do?');
     assert.deepEqual(ask.chips, ['Touch the water', 'Hands as knobs', 'Surprise me']);
     await hands({ left, right: { offset: [0.2, -0.7, -0.15], pose: 'default' } });
+    const invitation=await quest.evaluate(()=>window.__ce.scene.getObjectByName('device-card-v3').userData.view);
+    assert.equal(invitation.presentation,'invitation');
+    assert.equal(invitation.ask.mic,'off','This run exercises the silent fallback');
+    assert.deepEqual(invitation.ask.chips.map(c=>c.label),['Touch the water']);
+    const requests=await quest.evaluate(()=>window.__judge.requests.filter(r=>r.type==='wire.request').length);
+    await click({name:'wire-more-ideas'});
+    assert.equal(await quest.evaluate(()=>window.__ce.scene.getObjectByName('device-card-v3').userData.view.ask.chips.length),3);
+    await click({name:'wire-back'});
+    assert.equal(await quest.evaluate(()=>window.__judge.requests.filter(r=>r.type==='wire.request').length),requests,'Ideas and Back never ask or run anything');
   });
 
   let geometry;
@@ -381,6 +391,10 @@ async function run() {
     console.log(`  ${touch.length} touch ops reached the sim Mac (CC ${[...new Set(touch.map((e) => e.op.number))].join('/')})`);
     const busy = await quest.evaluate(() => { const p = window.__ce.hud.root.getObjectByName('wrist-palette'); return p?.anchor.blockOpen; });
     assert.equal(busy, true, 'The wrist menu stays shut while the finger works the screen');
+    await waitQuest(()=>window.__ce.scene.getObjectByName('device-card-v3').userData.view.presentation==='cue');
+    const cue=await quest.evaluate(()=>window.__ce.scene.getObjectByName('device-card-v3').userData.view);
+    assert.equal(cue.ask,null); assert.deepEqual(cue.actions,[]);
+    assert(cue.subtitle.length>0,'Quiet play retains Muse’s generated gesture instructions');
   });
 
   await phase('10-both-palms-stop', async () => {
@@ -400,6 +414,7 @@ async function run() {
     const before = await target();
     const old = await quest.evaluate(() => window.__judge.events.findLast(r => r.type === 'wire.ready').payload);
     await hands({ left: { offset: [-.25,-.7,-.15], pose: 'default' }, right: { offset: [.2,-.7,-.15], pose: 'default' } }, 10);
+    await click({name:'wire-more-ideas'});
     await pressChip('Hands as knobs');
     await until('new requested wiring runs', () => quest.evaluate(() => window.__ce.wiring.running), PIPELINE_TIMEOUT);
     const next = await quest.evaluate(() => window.__judge.events.findLast(r => r.type === 'wire.ready').payload);
@@ -421,6 +436,7 @@ async function run() {
     await hands({ left: { offset: [-.25,-.7,-.15], pose: 'default' }, right: { offset: [.3,-.7,-.2], pose: 'default' } }, 12);
     await hands({ left: { offset: [-.18, -.12, -.32], pose: 'open', palm: 'toward' }, right: { offset: [.3, -.7, -.2], pose: 'default' } }, 50);
     await waitQuest(() => { const p=window.__ce.hud.root.getObjectByName('wrist-palette'); return p?.visible && p.anchor.open; });
+    await click({name:'palette-more'});
     await click({ name: 'tutorial' });
     await waitQuest(() => window.__ce.tutorial?.snapshot().visible);
     await screenshot('11a-tutorial-replayed');

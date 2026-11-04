@@ -12,6 +12,14 @@ const wait = (fn, arg, timeout = 45000) => quest.waitForFunction(fn, arg, { time
 async function frames(n = 3) {
   for (let i=0; i<n; i++) { const t=await quest.evaluate(() => window.__ce.lastFrame.time); await wait(t => window.__ce.lastFrame.time > t, t); }
 }
+async function face(name) {
+  await quest.evaluate(name=>{
+    const a=window.__ce,n=a.scene.getObjectByName(name);
+    if(!n)throw Error(`Missing ${name}`);
+    a.emulator.lookAt(n.getWorldPosition(a.desktopCam.position.clone()));
+  },name);
+  await frames(8);
+}
 async function click(name) {
   await quest.evaluate(name => {
     const a=window.__ce, node=a.scene.getObjectByName(name);
@@ -59,14 +67,14 @@ try {
   process.env.CE_DEMO='1';
   fixture=await startFixtureServer(Number(process.env.PORT||8795),'musical-e2e');
   const identity=await pairMac(fixture,'Muted musical test Mac');
-  browser=await chromium.launch({channel:'chrome',headless:true,args:['--mute-audio']});
+  browser=await chromium.launch({channel:'chrome',headless:true,args:['--mute-audio','--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']});
   const mc=await browser.newContext({viewport:{width:1440,height:1000}});
   await mc.addInitScript(id=>localStorage.setItem('ce.device',JSON.stringify(id)),identity);
   mac=await mc.newPage(); mac.on('pageerror',e=>errors.push(`Mac: ${e.message}`));
   await mac.goto(`${fixture.base}/companion/?mute=1`);
-  const qc=await browser.newContext({viewport:{width:1440,height:1000}});
+  const qc=await browser.newContext({viewport:{width:1440,height:1000},permissions:['microphone']});
   quest=await qc.newPage(); quest.on('pageerror',e=>errors.push(`Quest: ${e.message}`));
-  await quest.goto(`${fixture.base}/quest/?emulate=1&camera=photo&mute=1&mic=0`);
+  await quest.goto(`${fixture.base}/quest/?emulate=1&camera=photo&mute=1&mic=1`);
   await wait(()=>window.__ce?.welcome && window.__ce.ws.open);
   await quest.evaluate(()=>{
     window.__musicOut=[]; window.__musicIn=[];
@@ -74,10 +82,19 @@ try {
     window.__ce.ws.tap('in',m=>{if(['wire.ready','wire.progress','wire.stopped','arm.request','arm.result'].includes(m.type))window.__musicIn.push(m);});
   });
   await quest.locator('#btn-enter').click(); await wait(()=>window.__ce.renderer.xr.isPresenting);
+  await wait(()=>window.__ce.mic.ready);
+  evidence.microphone={source:'Chromium synthetic capture device',realMicrophone:false,pushToTalkExercised:false};
 
   phase='actual-menu-and-sound-lock';
   await hand('left',-.12);
   await wait(()=>{const p=window.__ce.hud.root.getObjectByName('wrist-palette');return p?.visible&&p.anchor.open;});
+  await shot('00-quick-actions');
+  await click('palette-more');
+  await shot('00b-utilities');
+  await click('palette-back');
+  assert.equal(await quest.evaluate(()=>window.__ce.hud.root.getObjectByName('wrist-palette').userData.page),'primary');
+  assert.equal(await quest.evaluate(()=>window.__musicOut.some(m=>m.type==='wire.request')),false,'More and Back do not start interaction');
+  await click('palette-more');
   await click('musical-synth');
   await mac.locator('#musical-launcher').waitFor({state:'visible'});
   const locked=await snapshot(); assert.equal(locked.enabled,false); assert.equal(locked.masterGain,0);
@@ -104,6 +121,13 @@ try {
   await hand('left',-.7,0,false);
   assert.equal(await quest.evaluate(()=>window.__ce.wiring.running),false,'Setup alone must not install a hand interaction');
   evidence.setup=await target();
+  await wait(()=>window.__ce.scene.getObjectByName('device-card-v3').userData.view.presentation==='invitation');
+  const invitation=await quest.evaluate(()=>window.__ce.scene.getObjectByName('device-card-v3').userData.view);
+  assert.equal(invitation.ask.mic,'idle');
+  assert.deepEqual(invitation.ask.chips.map(c=>c.label),['Play like a theremin']);
+  await click('tutorial-skip'); // Capture ordinary use after the explicit one-time coach is dismissed.
+  await face('device-card-v3');
+  await shot('01c-object-invitation');
 
   phase='ask-muse-worker';
   await wait(()=>window.__ce.hud.root.userData.wire?.chips?.includes('Play like a theremin'));
@@ -140,6 +164,14 @@ try {
   await hand('right',-.2,0,false);
   await mac.waitForFunction(()=>window.__ceMusicalSnapshot().state.gate===0);
   evidence.performance={low,high,released:await snapshot()};
+  await wait(()=>window.__ce.scene.getObjectByName('device-card-v3').userData.view.presentation==='cue'&&!window.__ce.scene.getObjectByName('wire-code-card').visible);
+  const cue=await quest.evaluate(()=>{
+    const n=window.__ce.scene.getObjectByName('device-card-v3');return {interactive:n.interactive,view:n.userData.view};
+  });
+  assert.equal(cue.interactive,false); assert.equal(cue.view.ask,null); assert.deepEqual(cue.view.actions,[]);
+  assert.match(cue.view.footer,/FIXTURE/); assert(cue.view.subtitle.length>0);
+  await face('device-card-v3');
+  await shot('03a-quiet-play');
 
   phase='palms-stop-and-ask-again';
   const beforeStop=await target();
@@ -177,6 +209,7 @@ try {
   await hand('left',-.12,0,true,true); await hand('right',-.12,0,true,true); await frames(20);
   await wait(()=>window.__ce.wiring.phase==='stopped');
   await hand('left',-.7,0,false); await hand('right',-.7,0);
+  await click('wire-details');
   await click('wire-read-request');
   const reading=()=>quest.evaluate(()=>window.__ce.hud.root.getObjectByName('wire-request-reader').userData.reading);
   await wait(()=>window.__ce.hud.root.getObjectByName('wire-request-reader').visible);
