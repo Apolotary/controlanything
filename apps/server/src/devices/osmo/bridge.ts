@@ -7,9 +7,8 @@
  * pan ±120°, tilt ±45°, roll ±30°, slew ≤ 90°/s, ≤ 10 commands/s with latest-wins coalescing (hand control streams
  * pan and tilt as separate actions; the bridge merges them into one aim). Stop/panic holds the current aim.
  *
- * The ack is sent when the move should have finished (≤ 2 s). It carries the gimbal's own attitude report when the
- * model pushes one (`applied.source: "port"`): reached the target within OSMO_REACHED_DEG -> ok; reported but
- * nowhere near -> ok:false device_error (an honest miss); no report -> ok, "sent; no angle report".
+ * The ack distinguishes delivery, a correlated rotate answer, and a reliable angle measurement. The OM 4's
+ * attitude layout is unconfirmed: its raw bytes must never be presented to Muse as measured angles.
  *
  * Start: CE_OSMO=mock (in-process twin, no Bluetooth) | ble (CoreBluetooth via the bleak helper) | web (Chrome Web
  * Bluetooth page on http://localhost:8799). Absent = off. OSMO_ADDRESS / OSMO_NAME pick one gimbal.
@@ -47,6 +46,8 @@ export interface OsmoState {
   lastError?: string;
 }
 
+interface SentMove { sentAt: number; durationMs: number; seq?: number; superseded: boolean }
+
 /**
  * The gimbal side: link + framing + clamps + coalescing. Usable without the hub (the CLI test drives it directly).
  */
@@ -57,7 +58,8 @@ export class OsmoController {
   private lastSendAt = 0;
   /** the move in flight, for estimating where the gimbal is when it does not report */
   private move = { from: { yaw: 0, pitch: 0, roll: 0 } as Attitude, to: { yaw: 0, pitch: 0, roll: 0 } as Attitude, t0: 0, t1: 0 };
-  private pending?: { timer: ReturnType<typeof setTimeout>; wishMs?: number; waiters: ((r: { sentAt: number; durationMs: number; superseded: boolean }) => void)[] };
+  private pending?: { timer: ReturnType<typeof setTimeout>; wishMs?: number; waiters: ((r: SentMove) => void)[] };
+  private readonly replies = new Map<number, { code: number; at: number }>();
   private readonly log: (l: string) => void;
   /** every packet written (the CLI prints them) */
   readonly tx: { at: number; hex: string }[] = [];
@@ -94,11 +96,21 @@ export class OsmoController {
       if (this.rx.length < 400) this.rx.push({ at: Date.now(), set: p.cmdSet, id: p.cmdId, hex: toHex(p.payload) });
       // Learn what this gimbal says: the first packet of each kind, and every answer to a rotate command.
       if (this.state.pushes[key] === 1) this.log(`[osmo] first ${key} packet from the gimbal (type ${p.cmdType.toString(16)}): ${toHex(p.payload).slice(0, 60)}`);
-      if (p.cmdSet === 0x04 && (p.cmdId === 0x14 || p.cmdId === 0x0c) && (p.cmdType & 0x80)) this.log(`[osmo] gimbal answered the rotate: ${toHex(p.payload).slice(0, 40)}${p.payload[0] === 0 ? ' (ok)' : ' (refused?)'}`);
+      if (p.cmdSet === 0x04 && (p.cmdId === 0x14 || p.cmdId === 0x0c) && (p.cmdType & 0x80) && p.payload.length) {
+        this.replies.set(p.seq, { code: p.payload[0], at: Date.now() });
+        if (this.replies.size > 64) this.replies.delete(this.replies.keys().next().value!);
+        this.log(`[osmo] gimbal answered the rotate: ${toHex(p.payload).slice(0, 40)}${p.payload[0] === 0 ? ' (ok)' : ' (refused?)'}`);
+      }
       const r = decodeReport(p);
-      if (r?.kind === 'attitude') this.state.reported = { ...r.attitude, at: Date.now() };
+      if (r?.kind === 'attitude' && this.reliableAngles) this.state.reported = { ...r.attitude, at: Date.now() };
       else if (r?.kind === 'battery') this.state.battery = { percent: r.percent, charging: r.charging, at: Date.now() };
     }
+  }
+
+  get reliableAngles(): boolean { return this.link.kind === 'mock' || ATTITUDE_LAYOUT_CONFIRMED; }
+
+  rotateReply(seq: number | undefined): { code: number; at: number } | undefined {
+    return seq === undefined ? undefined : this.replies.get(seq);
   }
 
   freshReport(now = Date.now()): (Attitude & { at: number }) | undefined {
@@ -145,7 +157,7 @@ export class OsmoController {
    * Aim at `target`. Sends at most OSMO_LIMITS.maxRateHz; a newer aim inside the window replaces the queued one
    * (its waiters resolve as superseded). Resolves when the packet left.
    */
-  aim(target: Attitude, wishMs?: number): Promise<{ sentAt: number; durationMs: number; superseded: boolean }> {
+  aim(target: Attitude, wishMs?: number): Promise<SentMove> {
     if (!this.state.connected) return Promise.reject(new Error(this.state.lastError ? `gimbal not connected: ${this.state.lastError}` : 'gimbal not connected'));
     this.state.target = clampAttitude(target);
     const gap = 1000 / OSMO_LIMITS.maxRateHz;
@@ -168,23 +180,25 @@ export class OsmoController {
     });
   }
 
-  private async sendNow(wishMs?: number): Promise<{ sentAt: number; durationMs: number }> {
+  private async sendNow(wishMs?: number): Promise<{ sentAt: number; durationMs: number; seq: number }> {
     const now = Date.now();
     const from = this.estimate(now);
     const to = this.state.target;
     const durationMs = moveDurationMs(from, to, wishMs);
-    const pkt = rotatePacket(to, 'absolute', durationMs, this.seq);
+    const seq = this.seq;
+    this.replies.delete(seq);
+    const pkt = rotatePacket(to, 'absolute', durationMs, seq);
     this.seq = (this.seq + 1) & 0xffff || 1;
     await this.link.write(pkt);
     this.lastSendAt = Date.now();
     this.move = { from, to: { ...to }, t0: this.lastSendAt, t1: this.lastSendAt + durationMs };
     this.state.sends++;
     if (this.tx.length < 400) this.tx.push({ at: this.lastSendAt, hex: toHex(pkt) });
-    return { sentAt: this.lastSendAt, durationMs };
+    return { sentAt: this.lastSendAt, durationMs, seq };
   }
 
   /** Hold where it is now (Stop / panic). */
-  async hold(): Promise<void> {
+  async hold(): Promise<SentMove | undefined> {
     if (this.pending) {
       clearTimeout(this.pending.timer);
       for (const w of this.pending.waiters) w({ sentAt: Date.now(), durationMs: 0, superseded: true });
@@ -192,7 +206,10 @@ export class OsmoController {
     }
     if (!this.state.connected) return;
     this.state.target = clampAttitude(this.estimate());
-    await this.sendNow(OSMO_LIMITS.minDurationMs).catch((e) => this.log(`[osmo] hold failed: ${(e as Error).message}`));
+    return this.sendNow(OSMO_LIMITS.minDurationMs).then((r) => ({ ...r, superseded: false })).catch((e) => {
+      this.log(`[osmo] hold failed: ${(e as Error).message}`);
+      return undefined;
+    });
   }
 
   async close(): Promise<void> {
@@ -352,9 +369,11 @@ export class OsmoBridge {
     if (p.dryRun) return ack({ ok: true, detail: `dry run: would aim ${describe(plan.target)}, not sent` });
     if (!c.state.connected) return ack({ error: 'refused', detail: c.state.lastError ? `the gimbal is not connected (${c.state.lastError})` : 'the gimbal is not connected yet' });
     const t0 = Date.now();
-    let sent: { sentAt: number; durationMs: number; superseded: boolean };
+    let sent: SentMove;
     try {
-      sent = op.op === 'stop' ? await c.hold().then(() => ({ sentAt: Date.now(), durationMs: OSMO_LIMITS.minDurationMs, superseded: false })) : await c.aim(plan.target, plan.wishMs);
+      const result = op.op === 'stop' ? await c.hold() : await c.aim(plan.target, plan.wishMs);
+      if (!result) throw new Error('the hold command could not be sent');
+      sent = result;
     } catch (e) {
       return ack({ error: 'device_error', detail: (e as Error).message.slice(0, 300) });
     }
@@ -365,18 +384,25 @@ export class OsmoBridge {
     const target = plan.target;
     const params: Record<string, number> = { targetYaw: r1(target.yaw), targetPitch: r1(target.pitch), moveMs: sent.durationMs };
     if (c.state.battery) params.battery = c.state.battery.percent;
+    const reply = c.rotateReply(sent.seq);
+    if (reply && reply.code !== 0) return ack({ ok: false, error: 'device_error', sentAt: sent.sentAt, latencyMs: Date.now() - t0,
+      detail: `gimbal refused the command (code ${reply.code}); no reliable angle measurement` });
     if (!rep) {
-      return ack({ ok: true, sentAt: sent.sentAt, latencyMs: Date.now() - t0, detail: `aimed ${describe(target)} over ${(sent.durationMs / 1000).toFixed(1)} s · the gimbal sent no angle report (watch it move)`, applied: { source: 'port', params, at: Date.now() } });
+      params.commandConfirmed = reply?.code === 0 ? 1 : 0;
+      return ack({ ok: true, sentAt: sent.sentAt, latencyMs: Date.now() - t0,
+        detail: reply?.code === 0 ? 'sent; gimbal confirmed the command (no reliable angle measurement)'
+          : 'sent to the gimbal link; no command confirmation or reliable angle measurement (watch it move)',
+        applied: { source: 'port', params, at: Date.now() } });
     }
     Object.assign(params, { yaw: r1(rep.yaw), pitch: r1(rep.pitch), roll: r1(rep.roll), reported: 1 });
     const off = Math.max(Math.abs(rep.yaw - target.yaw), Math.abs(rep.pitch - target.pitch));
     const reached = off <= OSMO_REACHED_DEG;
     params.offDeg = r1(off);
     // an unconfirmed report layout can disagree because we read it wrong, not because the gimbal missed
-    const miss = !reached && ATTITUDE_LAYOUT_CONFIRMED;
+    const miss = !reached && c.reliableAngles;
     return ack({
       ok: !miss, ...(miss ? { error: 'device_error' as const } : {}), sentAt: sent.sentAt, latencyMs: Date.now() - t0,
-      detail: reached ? `gimbal reports ${describe(rep)} (asked ${describe(target)}) ✓`
+      detail: reached ? `${c.link.kind === 'mock' ? 'mock ' : ''}gimbal reports ${describe(rep)} (asked ${describe(target)}) ✓`
         : `gimbal reports ${describe(rep)}, ${r1(off)}° from the target ${describe(target)}${miss ? '' : ' (report layout unconfirmed: sent, not proven)'}`,
       applied: { source: 'port', params, at: rep.at },
     });
