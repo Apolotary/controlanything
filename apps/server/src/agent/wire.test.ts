@@ -84,7 +84,7 @@ describe('prompt', () => {
     const hints = deviceHints(extended, MANIFEST).join('\n');
     expect(hints).toContain('cc22 "Touch X" [touch input]: x of the fingertip on the water');
     expect(hints).toContain('cc24 "Touch pressure" [touch input]: 0 = lifted');
-    expect(hints).toMatch(/calibrate/);
+    expect(hints).toMatch(/first touch finds the screen/);
     expect(hints).toContain('How the touch controls work together (from the manifest): Touch the water: CC22 X and CC23 Y');
     expect(hints).toMatch(/BEFORE pressure/);
     expect(hints).toMatch(/at 20-60 Hz/);

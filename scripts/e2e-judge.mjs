@@ -3,7 +3,8 @@
  *
  *   Enter AR in Annotate → pinch/tag the MacBook without opening a demo → More → Visual synth → setup ring → Ask Muse.
  *   The software demo is an explicit choice. No side dials or hand interaction before the request:
- *   Touch the water → code → calibration → touch → palms Stop → Ask again without setup → wrist Stop all.
+ *   Touch the water → code → runs at once (no setup step: the first touch on the screen finds it) → touch → palms Stop
+ *   → Ask again without setup → wrist Stop all.
  *
  * Runs its own muted FIXTURE server (CE_DEMO=1, CE_MAC_SILENT=1, fresh data dir) on PORT (default 8796,
  * HTTPS off), the sim room as the paired Mac (its laptop screen runs the visual synth) and the desktop Quest
@@ -207,6 +208,22 @@ const hands = (poses, wait = 20) => quest.evaluate(async ({ poses, wait }) => {
   await new Promise((r) => { let k = 0; const f = () => (++k >= wait ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
 }, { poses, wait });
 
+/** Move the right index fingertip from `from` to `to` (world) in `steps` frames, a new pose every frame: never at rest. */
+const sweep = (points, steps) => quest.evaluate(async ({ points, steps }) => {
+  const app = window.__ce, remote = app.emulator.device.remote, head = app.emulator.head(), V = head.position.constructor;
+  const forward = new V(0, 0, -1).applyQuaternion(head.quaternion).setY(0).normalize(), down = new V(0, -1, 0);
+  const offset = window.__tipOffset?.['right:point'], xyz = (v) => ({ x: v.x, y: v.y, z: v.z });
+  if (!offset) throw new Error('sweep: place the pointing hand once with hands() first');
+  const touching = [];
+  for (let k = 1; k < points.length; k++) for (let i = k === 1 ? 0 : 1; i <= steps; i++) {
+    const tip = new V().fromArray(points[k - 1]).lerp(new V().fromArray(points[k]), i / steps);
+    await remote.dispatch('set_transform', { device: 'hand-right', anchor: 'wrist', position: xyz(tip.sub(offset)), orientation: { fingers: xyz(forward), palm: xyz(down) } });
+    await new Promise((r) => requestAnimationFrame(r));
+    touching.push(app.wiring.snapshot().touching);
+  }
+  return touching;
+}, { points, steps });
+
 const visualState = () => sim.evaluate(() => JSON.stringify(window.ceSimDebug.visualSynth.getState()));
 
 async function run() {
@@ -239,13 +256,17 @@ async function run() {
     assert.equal(await quest.evaluate(() => window.__ce.modes.mode), 'annotate', 'A ready companion must not choose Control on startup');
     assert.equal(await quest.evaluate(() => !!window.__ce.virtualSelection || !!window.__ce.visualSynthIntent), false, 'Startup must not choose a software instrument');
     await quest.evaluate(() => {
-      window.__judge = { events: [], requests: [], ringSeen: false };
+      window.__judge = { events: [], requests: [], ringSeen: false, toasts: [], wirePhases: [] };
+      const toast = window.__ce.hud.toast.bind(window.__ce.hud);
+      window.__ce.hud.toast = (text, level) => { window.__judge.toasts.push(text); return toast(text, level); };
       const types = new Set(['tags.state', 'device.card', 'agent.step', 'verify.result', 'ui.spec', 'arm.request', 'arm.result', 'wire.ready', 'wire.stopped', 'panic']);
       window.__ce.ws.tap('in', ({ type, payload }) => { if (types.has(type)) window.__judge.events.push({ type, payload }); });
       window.__ce.ws.tap('out', ({ type, payload }) => { if (type !== 'scan.frame') window.__judge.requests.push({ type, payload }); });
       const watch = () => {
         let ring = null; window.__ce.scene.traverse((o) => { if (o.name === 'setup-ring') ring = o; });
         if (ring) { let shown = true; for (let p = ring; p; p = p.parent) if (!p.visible) shown = false; if (shown) window.__judge.ringSeen = true; }
+        const phase = window.__ce.wiring?.phase;
+        if (phase && window.__judge.wirePhases.at(-1) !== phase) window.__judge.wirePhases.push(phase);
         requestAnimationFrame(watch);
       };
       requestAnimationFrame(watch);
@@ -443,17 +464,18 @@ async function run() {
   });
 
   let geometry;
-  await phase('08-ask-muse-then-calibrate', async () => {
+  await phase('08-ask-muse-no-setup', async () => {
     // The wearer taps the "Touch the water" chip; Muse (fixture here) writes the wiring and the code card shows it.
     await pressChip('Touch the water');
     await waitQuest(() => window.__judge.requests.some((r) => r.type === 'wire.request'));
     const request = await quest.evaluate(() => window.__judge.requests.find((r) => r.type === 'wire.request').payload);
     assert.equal(typeof request.requestId, 'string', 'Every new ask has a client epoch');
     assert.deepEqual(request, { cardId: request.cardId, text: 'Touch the water', source: 'chip', requestId: request.requestId });
-    await until('Muse wrote the wiring and it needs the screen calibrated', () => quest.evaluate(() => window.__ce.wiring.phase === 'calibrating'), PIPELINE_TIMEOUT);
+    await until('Muse wrote the wiring and it runs at once, with no setup step', () => quest.evaluate(() => window.__ce.wiring.phase === 'running'), PIPELINE_TIMEOUT);
     const card = await quest.evaluate(() => window.__ce.hud.root.userData.wire.card);
     assert(/Touch the water/.test(card.header) && card.badge === 'FIXTURE', `the code card names the request and its source (${card.header} / ${card.badge})`);
     const ready = await quest.evaluate(() => window.__judge.events.findLast(e => e.type === 'wire.ready').payload);
+    assert(ready.needs.includes('screen'), 'The touch program reads the screen');
     const harness = await json('/api/agent/harness');
     assert.equal(harness.backend, 'muse-bridge');
     harnessProof = harness.runs.find(run => run.runId === ready.wiringId);
@@ -465,31 +487,70 @@ async function run() {
     }
     assert(harnessProof.artifact.hash && harnessProof.artifact.dryRunFrames > 0);
     await writeFile(join(SCREENS, 'harness-receipt.json'), JSON.stringify(harnessProof, null, 2));
+    await frames(4);
+    // No setup step: never 'calibrating'; the plane is guessed from the tagged Mac and the wearer is told to touch the water.
+    const seen = await quest.evaluate(() => ({ phases: window.__judge.wirePhases, toasts: window.__judge.toasts, snap: window.__ce.wiring.snapshot(),
+      next: window.__ce.hud.root.getObjectByName('wrist-palette').dashboardView().next,
+      copy: JSON.stringify([window.__ce.hud.root.userData.wire, window.__ce.scene.getObjectByName('device-card-v3')?.userData.view, window.__judge.toasts]) }));
+    assert(!seen.phases.includes('calibrating'), `No calibration phase in the default path (${seen.phases})`);
+    assert.equal(seen.snap.screen, 'guessed', 'The screen plane is guessed from the tagged Mac, waiting for the first touch');
+    assert(seen.toasts.includes('Touch the water on your screen'), `The wearer is told what to do (${seen.toasts.slice(-4)})`);
+    assert.equal(seen.next, 'Touch the water on your screen.', 'The wrist dashboard says the next step');
+    assert(!/corner|calibrat/i.test(JSON.stringify(JSON.parse(seen.copy), (k, v) => typeof v === 'object' && v && !Array.isArray(v) ? Object.values(v) : v)), 'No corners or calibration in what the wearer sees');
     await screenshot('08-code-card');
-    geometry = await quest.evaluate((c) => {
-      const app = window.__ce, p = app.desktopCam.position.clone().fromArray(c), head = app.emulator.head();
-      const f = p.clone().sub(head.position).setY(0).normalize(), right = f.clone().cross(head.position.clone().set(0, 1, 0));
-      const at = (u, v) => p.clone().addScaledVector(right, (u - 0.5) * 0.5).add(head.position.clone().set(0, 0.16 - v * 0.3, 0));
-      return { tl: at(0, 0).toArray(), br: at(1, 1).toArray(), mid: at(0.5, 0.5).toArray(), toward: f.clone().negate().toArray(), right: right.toArray() };
-    }, screen.position);
-    const pt = (a, d = 0) => a.map((n, i) => n + geometry.toward[i] * d);
-    const left = { offset: [-0.25, -0.7, -0.15], pose: 'default' };
-    await hands({ left, right: { tip: pt(geometry.mid.map((n, k) => n - geometry.right[k] * 0.3 + (k === 1 ? -0.3 : 0)), 0.2), pose: 'point' } }, 8);
-    await hands({ left, right: { tip: pt(geometry.tl), pose: 'point' } }, 40);
-    await until('top-left corner taken', () => quest.evaluate(() => window.__ce.wiring.calibrator.step === 'bottom-right'), 10_000);
-    await hands({ left, right: { tip: pt(geometry.br), pose: 'point' } }, 40);
-    await until('the wiring runs', () => quest.evaluate(() => window.__ce.wiring.phase === 'running'), 10_000);
+    // The sim laptop's live screen, as it lies on the emulator's room (the "glass" a real fingertip would stop on).
+    geometry = await quest.evaluate(() => {
+      const app = window.__ce, room = app.room, V = app.desktopCam.position.constructor;
+      const meta = document.querySelector('iframe[src*="embed=room"]').contentWindow.ceSimDebug.room.meta;
+      const quad = meta.views[room.sim.view].screens['laptop-screen'];
+      const [bl, br, tr, tl] = quad.map(([x, y]) => room.imageToWorld(x * room.imageWidth / meta.width, y * room.imageHeight / meta.height));
+      const mid = new V().add(bl).add(br).add(tr).add(tl).multiplyScalar(0.25);
+      const right = br.clone().sub(bl).normalize(), down = bl.clone().sub(tl).normalize(), toward = new V(0, 0, 1).applyQuaternion(room.quaternion);
+      // Where the guessed plane's centre is seen (its line of sight onto the room) and how far its depth is off.
+      const plane = app.wiring.snapshot().plane, head = app.emulator.head().position;
+      const c = new V(...plane.origin).addScaledVector(new V(...plane.right), plane.width / 2).addScaledVector(new V(...plane.down), plane.height / 2);
+      const hit = room.raycast({ origin: head.clone(), dir: c.clone().sub(head).normalize() });
+      return { mid: mid.toArray(), right: right.toArray(), down: down.toArray(), toward: toward.toArray(), width: br.distanceTo(bl), height: bl.distanceTo(tl),
+        guess: { width: plane.width, height: plane.height, sightError: hit ? hit.point.distanceTo(mid) : null, depthError: hit ? hit.point.distanceTo(head) - c.distanceTo(head) : null } };
+    });
+    console.log(`  sim laptop screen ${geometry.width.toFixed(2)} x ${geometry.height.toFixed(2)} m; guessed plane ${geometry.guess.width.toFixed(2)} x ${geometry.guess.height.toFixed(2)} m, its centre seen ${(geometry.guess.sightError * 100).toFixed(1)} cm from the screen's centre, depth off by ${(geometry.guess.depthError * 100).toFixed(1)} cm`);
   });
 
   await phase('09-touch-the-water', async () => {
     const pt = (a, d = 0) => a.map((n, i) => n + geometry.toward[i] * d), left = { offset: [-0.25, -0.7, -0.15], pose: 'default' };
-    const since = Date.now(), before = await visualState();
+    const along = (a, k, du, dv = 0) => a.map((n, i) => n + geometry.right[i] * du + geometry.down[i] * dv);
+    // The hand comes in from below and the side (a hand already resting somewhere is not a touch).
+    await hands({ left, right: { tip: pt(along(geometry.mid, 0, -0.3, 0.3), 0.2), pose: 'point' } }, 8);
+    // Waving through the air ~10 cm in front of the screen, before it is found: not a touch.
+    let since = Date.now();
+    const wave = await sweep([pt(along(geometry.mid, 0, -0.12), 0.1), pt(along(geometry.mid, 0, 0.12), 0.1), pt(along(geometry.mid, 0, -0.12, 0.05), 0.1), pt(along(geometry.mid, 0, 0.1, 0.3), 0.3)], 12);
+    assert(!wave.some(Boolean), 'Waving is never a touch');
+    let snap = await quest.evaluate(() => window.__ce.wiring.snapshot());
+    assert.equal(snap.screen, 'guessed', 'A finger moving through the air does not find the screen');
+    assert.equal(snap.touching, false);
+    assert.deepEqual((await exec(since)).filter((e) => [22, 23, 24].includes(e.op?.number)), [], 'No touch reaches the Mac before the screen is found');
+    // The first rest on the sim laptop's screen finds the screen and counts as a touch.
+    since = Date.now();
+    const before = await visualState();
+    await hands({ left, right: { tip: pt(geometry.mid, 0), pose: 'point' } }, 30);
+    await until('the first touch found the screen', () => quest.evaluate(() => window.__ce.wiring.snapshot().screen === 'found'), 10_000);
+    snap = await quest.evaluate(() => window.__ce.wiring.snapshot());
+    const first = await until('the first touch splashed (touch CCs 22-24)', async () => (await exec(since)).filter((e) => [22, 23, 24].includes(e.op?.number)), 10_000);
+    console.log(`  first touch found the screen: plane ${snap.plane.width.toFixed(2)} x ${snap.plane.height.toFixed(2)} m; ${first.length} touch ops on that touch`);
+    await screenshot('09a-screen-found');
+    await sim.waitForFunction((s) => JSON.stringify(window.ceSimDebug.visualSynth.getState()) !== s, before);
+    // The following touches move the water: hover, touch, drag right.
+    since = Date.now();
     await hands({ left, right: { tip: pt(geometry.mid, 0.06), pose: 'point' } }, 20);
     await hands({ left, right: { tip: pt(geometry.mid, 0.003), pose: 'point' } }, 25);
-    for (let i = 1; i <= 8; i++) await hands({ left, right: { tip: pt(geometry.mid.map((n, k) => n + geometry.right[k] * i * 0.02), 0.003), pose: 'point' } }, 3);
-    const touch = await until('the fingertip reached the driver (touch CCs 22-24)', async () => (await exec(since)).filter((e) => [22, 23, 24].includes(e.op?.number)), 10_000);
-    await sim.waitForFunction((s) => JSON.stringify(window.ceSimDebug.visualSynth.getState()) !== s, before);
-    console.log(`  ${touch.length} touch ops reached the sim Mac (CC ${[...new Set(touch.map((e) => e.op.number))].join('/')})`);
+    const step = Math.min(0.02, geometry.guess.width * 0.4 / 8);
+    for (let i = 1; i <= 8; i++) await hands({ left, right: { tip: pt(along(geometry.mid, 0, i * step), 0.003), pose: 'point' } }, 3);
+    const touch = await until('X, Y and pressure acknowledged by the sim Mac (touch CCs 22-24)', async () => {
+      const ops = (await exec(since)).filter((e) => [22, 23, 24].includes(e.op?.number) && e.ack?.ok);
+      return new Set(ops.map((e) => e.op.number)).size === 3 ? ops : null;
+    }, 10_000);
+    const ccs = [...new Set(touch.map((e) => e.op.number))].sort();
+    console.log(`  ${touch.length} touch ops acknowledged by the sim Mac (CC ${ccs.join('/')})`);
     const busy = await quest.evaluate(() => { const p = window.__ce.hud.root.getObjectByName('wrist-palette'); return p?.anchor.blockOpen; });
     assert.equal(busy, true, 'The wrist menu stays shut while the finger works the screen');
     await waitQuest(()=>window.__ce.scene.getObjectByName('device-card-v3').userData.view.presentation==='cue');

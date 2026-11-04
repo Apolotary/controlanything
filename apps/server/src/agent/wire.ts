@@ -62,7 +62,7 @@ export const SIGNALS_API = `interface Signals {
   t: number;                 // seconds since armed
   dt: number;
   right: HandSignals | null; left: HandSignals | null;   // null while not tracked
-  screen: ScreenSignals | null;                          // null unless a calibrated screen device is selected
+  screen: ScreenSignals | null;                          // null until the wearer's first touch finds the selected screen
 }
 interface HandSignals {
   height: number;            // 0..1, palm height in the comfortable play zone (chest→above the head)
@@ -73,7 +73,7 @@ interface HandSignals {
   fist: boolean; open: boolean; palmOut: boolean;
   speed: number;             // m/s of the palm
 }
-interface ScreenSignals {     // the index fingertip nearest the calibrated screen of the selected device
+interface ScreenSignals {     // the index fingertip nearest the screen of the selected device
   u: number; v: number;      // 0..1 on the screen (0,0 = top-left); clamped, valid when inside
   inside: boolean;
   distance: number;          // metres from the screen plane (≥0 in front)
@@ -146,7 +146,7 @@ export function deviceHints(driver: Pick<Driver, 'actions' | 'executor'>, manife
   if (touch.length) {
     if (manifest.touch) lines.push(`How the touch controls work together (from the manifest): ${manifest.touch}`);
     lines.push(
-      'Touch recipe: the touch controls follow the wearer\'s fingertip on the Mac screen (s.screen.u / v / touching / hover). The screen signal needs the wearer to calibrate the screen first, so list "screen" in needs when you read it.',
+      'Touch recipe: the touch controls follow the wearer\'s fingertip on the Mac screen (s.screen.u / v / touching / hover). The screen signal is null until the wearer\'s first touch finds the screen (no setup step), so list "screen" in needs when you read it.',
       '- While s.screen is inside: every frame send X and Y (u and v scaled to 0-127) BEFORE pressure; while touching, send X and Y at 20-60 Hz (every frame is fine, the server limits the rate).',
       '- Pressure: 0 = lifted; hovering = 1-20 from s.screen.hover (for example 1 + hover * 19); touching = above 20 (for example 60-127: harder = stronger splash).',
       '- Send pressure 0 once when the finger lifts away, the hand is lost or s.screen is null (use mem to send it only on that edge).',

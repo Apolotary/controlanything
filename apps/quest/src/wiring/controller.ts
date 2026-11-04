@@ -2,7 +2,11 @@
  * "Muse writes the glue", headset half. Owns the whole flow for the selected device:
  *
  *   ask (chip / voice) -> wire.request -> wire.progress (code streams into the code card) -> wire.ready
- *   -> [calibrate the screen once, if the program needs it] -> run the program in the sandbox -> stop
+ *   -> run the program in the sandbox -> stop
+ *
+ * A program that reads the screen starts at once too: the plane is guessed from the detected screen and the wearer's
+ * first touch on the glass fixes it (gestures/screen-auto.ts). The two-corner calibration is only a manual fallback
+ * behind the card's "Recalibrate screen".
  *
  * Until a wire.ready has arrived and is running, the hands do nothing to the device: this class is the only thing that
  * turns signals into control events, and only through the sandbox (wiring/runtime.ts).
@@ -14,6 +18,7 @@ import type { WireCalibrationView, WireCodeView, WirePhase, WireView, WireOutput
 import { SignalTracker, SIGNAL_RANGE } from '../gestures/signals';
 import { ScreenCalibrator } from '../gestures/screen-calibration';
 import { clearPlane, loadPlane, planePoint, savePlane, type ScreenPlane } from '../gestures/screen-plane';
+import { ScreenTouchFinder, autoScreenPlane, confirmPlane, planeAtTouch, planeCentre, type ScreenGuess } from '../gestures/screen-auto';
 import { WiringRuntime, type StopKind, type WireEmit, type WiringProgram } from './runtime';
 import { SceneRuntime, SceneSignalBuilder } from './scene-runtime';
 
@@ -41,6 +46,9 @@ export interface WiringHost {
   /** The selected, set-up device the wiring applies to; undefined when none (or not in Control). */
   selected(): { cardId: string; targetId: string; anchor: Vector3; label: string; instrument?: 'visual-synth' | 'musical-synth' } | undefined;
   canControl(cardId: string): boolean;
+  /** The physical screen a screen program is touched on: the detected laptop/monitor (SAM direction, guessed depth).
+   *  Undefined when none was detected (the first touch then places the plane by itself). */
+  screen?(): ScreenGuess | undefined;
   /** Send a client message to the server. */
   send(type: 'wire.request', payload: { cardId: string; text: string; source: 'chip' | 'voice' | 'text'; requestId: string }): boolean;
   /** One program output as control.event on the card. */
@@ -96,10 +104,14 @@ interface Wiring {
 }
 
 const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
+/** Saved screen planes from an earlier page load belong to another XR reference space: the first touch finds it again. */
+const PAGE_LOADED = Date.now();
 
 export class WiringController {
   readonly tracker = new SignalTracker();
   readonly calibrator = new ScreenCalibrator();
+  /** The resting fingertip that fixes an automatic screen plane. */
+  readonly finder = new ScreenTouchFinder();
   readonly runtime: WiringRuntime;
   /** Muse's XR scene sandbox and the hand/head signals it reads, in the scene's own frame. */
   readonly scene: SceneRuntime;
@@ -122,6 +134,12 @@ export class WiringController {
     this.values[actionId] = typeof value === 'boolean' ? (value ? 1 : 0) : value;
   }
   private plane: ScreenPlane | null = null;
+  /** A screen program runs, but its screen is not found yet: the program sees no screen until the first touch. */
+  private screenPending = false;
+  private screenGuess: ScreenGuess | null = null;
+  /** The guessed, unconfirmed plane (never given to the program). */
+  private autoPlane: ScreenPlane | null = null;
+  private outlineMessage = 'Screen calibrated';
   private mic: 'idle' | 'listening' | 'busy' = 'idle';
   private micStartedAt = 0;
   private micTimer?: ReturnType<typeof setTimeout>;
@@ -160,6 +178,8 @@ export class WiringController {
     const w = this.w;
     return { phase: this.phase, request: w?.request, requestId: w?.requestId, wiringId: w?.wiringId, title: w?.title, model: w?.model, source: w?.wireSource, codeChars: w?.code.length,
       running: this.running, calibrated: !!this.plane, needsScreen: w?.needsScreen ?? false,
+      screen: !w?.needsScreen ? 'none' : this.screenPending ? (this.autoPlane ? 'guessed' : 'waiting') : this.plane ? (this.plane.auto ? 'found' : 'calibrated') : 'none',
+      plane: (this.screenPending ? this.autoPlane : this.plane) ?? undefined,
       touching: this.running && this.screenTouching, mic: this.mic, stats: { ...this.runtime.stats, sent: (this.runtime.stats.sent ?? 0) + this.controlSends }, step: this.calibrator.step,
       controls: w?.controls?.length ?? 0, instrument: w?.ui?.controls.length ?? 0, visualizerEvents: this.outgoing.seq,
       scene: w?.scene ? { title: w.scene.title, running: this.scene.running, ...this.scene.stats, counts: { ...this.scene.view.counts }, placed: this.scene.view.placed } : undefined };
@@ -184,6 +204,7 @@ export class WiringController {
     if (this.runtime.running) this.runtime.stop('asking Muse for something new', 'external', true);
     if (this.scene.running) this.scene.stop('asking Muse for something new', 'external');
     this.calibrator.reset(); this.corners[0] = this.corners[1] = null; this.calibrationOutline = undefined;
+    this.clearScreenSearch();
     const requestId = newId('wire-request');
     if (!this.host.send('wire.request', { cardId: sel.cardId, text: request, source, requestId })) {
       this.host.toast('Not connected to the server. Try again in a moment.', 'warn');
@@ -262,11 +283,29 @@ export class WiringController {
       this.changed();
       return;
     }
+    this.clearScreenSearch();
     if (w.needsScreen) {
-      this.plane = loadPlane(w.cardId, sel.anchor);
-      if (!this.plane) { this.beginCalibration(); this.changed(); return; }
+      // No setup step: a saved plane, else a guess from the detected screen that the first touch fixes.
+      const guess = this.screenGuess = this.guessScreen(sel);
+      this.plane = loadPlane(w.cardId, guess.position, undefined, PAGE_LOADED);
+      if (!this.plane) { this.screenPending = true; this.finder.reset(); }
     }
     this.start();
+  }
+
+  private guessScreen(sel: NonNullable<ReturnType<WiringHost['selected']>>): ScreenGuess {
+    return this.host.screen?.() ?? { position: sel.anchor.clone(), label: sel.label, measured: false };
+  }
+
+  private clearScreenSearch(): void {
+    this.screenPending = false; this.autoPlane = null; this.finder.reset();
+  }
+
+  /** What the wearer is asked to do while the screen is not found yet. */
+  private touchHint(): string {
+    const w = this.w;
+    return this.host.selected()?.instrument === 'visual-synth' || /water|ripple|splash/i.test(w?.request ?? '') || /water/i.test(w?.title ?? '')
+      ? 'Touch the water on your screen' : 'Touch your screen';
   }
 
   // --- running ------------------------------------------------------------------------------------------------------
@@ -282,7 +321,7 @@ export class WiringController {
     this.tracker.reset(this.now());
     this.collapsed = false;
     w.phase = 'running'; w.runStartedAt = this.now(); w.stopped = false;
-    this.host.toast(`${w.title || 'Wiring'} is running`, 'ok');
+    this.host.toast(this.screenPending ? this.touchHint() : `${w.title || 'Wiring'} is running`, 'ok');
     this.changed();
   }
 
@@ -341,6 +380,7 @@ export class WiringController {
     if (this.runtime.running) this.runtime.stop(reason, 'external', false);
     if (this.scene.running) this.scene.stop(reason, 'external');
     this.cancelCalibration();
+    this.clearScreenSearch();
     this.w = null; this.host.setHandsBusy(false); this.lastBusy = false;
     this.changed();
   }
@@ -406,12 +446,14 @@ export class WiringController {
     this.calibrator.reset(); this.corners[0] = this.corners[1] = null;
   }
 
-  /** "Recalibrate screen" in the card menu. */
+  /** "Recalibrate screen" in the card menu: the manual two-corner fallback. It never starts by itself. */
   recalibrate(): void {
     const w = this.w, sel = this.host.selected();
     if (!w || !sel || !w.program) return;
     clearPlane(w.cardId);
     this.plane = null;
+    this.clearScreenSearch();
+    this.screenGuess = this.guessScreen(sel);
     if (this.runtime.running) this.runtime.stop('recalibrating', 'external', true);
     this.beginCalibration();
     this.changed();
@@ -458,9 +500,10 @@ export class WiringController {
     const cur = this.w;
     if (cur) {
       if (cur.phase === 'asked' && this.now() - cur.askedAt > WIRE_TIMING.silenceMs) { cur.phase = 'failed'; cur.phaseLine = 'Muse did not answer'; this.host.feedback?.('idle'); this.host.toast('Muse did not answer in time. Try again.', 'warn'); this.changed(); }
-      if (cur.phase === 'calibrating') this.calibrateFrame(frame, timeMs, sel.anchor);
+      if (cur.phase === 'calibrating') this.calibrateFrame(frame, timeMs, this.screenGuess?.position ?? sel.anchor);
       else if (cur.phase === 'running') {
-        const sf = this.tracker.update(frame, timeMs, { plane: this.plane, tapBlocked: (hand) => this.host.tapBlocked(hand) });
+        if (cur.needsScreen && this.runtime.running) this.findScreen(frame, timeMs);
+        const sf = this.tracker.update(frame, timeMs, { plane: this.screenPending ? null : this.plane, tapBlocked: (hand) => this.host.tapBlocked(hand) });
         this.screenTouching = !!sf.signals.screen?.touching;
         // Both palms out stops, but not while the hands are playing AR controls (two flat hands on a pad look alike).
         // A scene invites pushing with open palms, so while one runs the palms must also be held still for a moment.
@@ -484,7 +527,7 @@ export class WiringController {
             this.scene.tick(this.sceneSignals.build(frame, sf.signals, this.values, sel.anchor, timeMs));
           }
         }
-        this.setBusy(this.runtime.running && (sf.rightInZone || sf.hovering));
+        this.setBusy(this.runtime.running && (sf.rightInZone || sf.hovering || this.finder.near));
         if (cur.runStartedAt !== undefined && this.now() - cur.runStartedAt >= WIRE_TIMING.explainMs && !this.collapsed) { this.collapsed = true; this.changed(); }
       } else this.setBusy(false);
     } else this.setBusy(false);
@@ -493,6 +536,42 @@ export class WiringController {
   }
 
   private collapsed = false;
+
+  /**
+   * Before the first touch: a fingertip resting near the guessed plane (or, with no detected screen, anywhere within
+   * reach ahead) was stopped by the glass, so the screen is there. Afterwards: a fingertip resting clearly behind an
+   * automatic plane means the glass is farther, so the plane moves back to it.
+   */
+  private findScreen(frame: ShellFrame, timeMs: number): void {
+    const w = this.w!, head = frame.head.position;
+    if (this.screenPending) {
+      const guess = this.screenGuess;
+      if (!guess) { this.screenPending = false; return; }
+      if (guess.measured && !this.autoPlane) this.autoPlane = autoScreenPlane(guess, head);
+      const tip = this.finder.update(frame, timeMs, guess.measured ? this.autoPlane : null, 'first');
+      if (!tip) return;
+      const before = this.autoPlane ? planeCentre(this.autoPlane) : undefined;
+      const plane = this.autoPlane ? confirmPlane(this.autoPlane, tip, head) : planeAtTouch(tip, head, guess.label, guess.position);
+      this.useFoundPlane(w, plane, before ? `moved ${Math.round(planeCentre(plane).distanceTo(before) * 100)} cm from the guess` : 'placed at the touch');
+    } else if (this.plane?.auto) {
+      const tip = this.finder.update(frame, timeMs, this.plane, 'deeper');
+      if (!tip) return;
+      const before = planeCentre(this.plane);
+      this.plane = confirmPlane(this.plane, tip, head);
+      savePlane(w.cardId, this.plane);
+      this.host.log(`screen plane moved back ${Math.round(planeCentre(this.plane).distanceTo(before) * 100)} cm: the fingertip rested behind it`, 'info');
+    }
+  }
+
+  private useFoundPlane(w: Wiring, plane: ScreenPlane, how: string): void {
+    this.plane = plane; this.autoPlane = null; this.screenPending = false; this.finder.reset();
+    savePlane(w.cardId, plane);
+    const at = (u: number, v: number) => { const p = planePoint(plane, u, v); return [p.x, p.y, p.z] as [number, number, number]; };
+    this.calibrationOutline = [at(0, 0), at(1, 0), at(1, 1), at(0, 1)];
+    this.outlineUntil = this.now() + 3000; this.outlineMessage = 'Found your screen';
+    this.host.log(`screen found by the first touch (${how})`, 'ok');
+    this.changed();
+  }
 
   private calibrateFrame(frame: ShellFrame, timeMs: number, anchor: Vector3): void {
     const w = this.w!;
@@ -526,7 +605,7 @@ export class WiringController {
       this.corners[1] = this.calibrator.tip.clone();
       const at = (u: number, v: number) => { const p = planePoint(update.plane, u, v); return [p.x, p.y, p.z] as [number, number, number]; };
       this.calibrationOutline = [at(0, 0), at(1, 0), at(1, 1), at(0, 1)];
-      this.outlineUntil = this.now() + 3000;
+      this.outlineUntil = this.now() + 3000; this.outlineMessage = 'Screen calibrated';
       this.host.toast('Screen calibrated', 'ok');
       this.calibrator.reset();
       this.start();
@@ -648,7 +727,8 @@ export class WiringController {
       targetId: sel.targetId, phase, prompt, chips: chips as string[], ...(w?.request && !busy && w.source === 'chip' ? { activeChip: w.request } : {}),
       mic: this.host.voice.available() ? this.mic : 'off',
       ...(code ? { code } : {}),
-      ...(calibration ? { calibration } : outline ? { calibration: { step: 'bottom-right' as const, progress: 1, message: 'Screen calibrated', corners: [], outline } } : {}),
+      ...(calibration ? { calibration } : outline ? { calibration: { step: 'bottom-right' as const, progress: 1, message: this.outlineMessage, corners: [], outline } } : {}),
+      ...(phase === 'running' && this.screenPending ? { touchHint: this.touchHint() } : {}),
       canRecalibrate: !!w?.needsScreen && !!w.program && (phase === 'running' || phase === 'stopped' || phase === 'ready'),
       ...(w?.controls && phase === 'running' ? { controls: w.controls } : {}),
       ...(w?.ui && phase === 'running' ? { ui: w.ui, visualizer: w.visualizer, outgoing: this.outgoing } : {}),

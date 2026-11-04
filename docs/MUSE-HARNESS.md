@@ -33,7 +33,7 @@ out: midi / gimbal / mac / log / ready
 
 MIDI uses the paired Chrome companion's actual output names, including the explicit virtual instruments. Gimbal output uses the Osmo bridge. Stop/replacement retires the service. Local files and learned notes persist; do not delete them as routine recovery.
 
-Optional hand code runs on the **Quest Worker**, not in the companion or the connector host. It can call only the declared action interface after validation/dry-run. Touch code waits for screen calibration. Generated controls use validated declarative gen3d widgets, with the ordinary control row as fallback. Value visualization describes outgoing activity, not independent acoustic/angle measurement.
+Optional hand code runs on the **Quest Worker**, not in the companion or the connector host. It can call only the declared action interface after validation/dry-run. Touch code sees the screen after the wearer's first touch finds it (no setup step). Generated controls use validated declarative gen3d widgets, with the ordinary control row as fallback. Value visualization describes outgoing activity, not independent acoustic/angle measurement.
 
 ## Inspect and Stop
 

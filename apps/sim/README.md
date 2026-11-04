@@ -22,7 +22,7 @@ After `npm run demo:sim`:
 1. Open `http://localhost:8787/sim/` first. It pairs automatically on localhost and acts as your Mac.
 2. Open `http://localhost:8787/quest/?emulate=1&camera=sim&mic=0` (the desktop Quest emulator) and choose **Enter AR**. Click = pinch, right-drag = look.
 3. Tag the laptop's box in Annotate, then deliberately choose **Control** (`M`) and choose **Give me knobs for this**. Watch the connector/code stream, then use the generated controls. The **Swipe my hand to scroll Instagram Reels** suggestion is not simulated: it opens Instagram in Google Chrome and presses keys on the Mac that runs the server.
-4. Choose **Stop** or press `X` to retire the connector. If a requested hand program needs screen calibration, follow its two-corner guidance; the emulator does not substitute mouse clicks for real screen contact.
+4. Choose **Stop** or press `X` to retire the connector. A requested hand program that reads the screen needs no setup: the first fingertip touch on the screen finds it. The emulator does not substitute mouse clicks for real screen contact.
 
 For a simpler touch/webcam route without emulated hands, open `/quest/reviewer.html` ([reviewer guide](../../docs/REVIEWER-DEMO.md)). Its instruments use the same Muse agent path. No-key runs are visibly **FIXTURE**, not live recognition/generation.
 

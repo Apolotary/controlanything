@@ -105,10 +105,11 @@ export class TutorialSteps {
       case 'wiring': return s.wire.phase === 'failed' || s.wire.phase === 'stopped'
         ? { title: 'Try your request again', detail: 'Choose a suggestion on the device card.' }
         : { title: 'Watch Muse write the connection', detail: 'Muse writes, runs and tests a connector on your Mac. The code card shows each step.' };
-      case 'calibrate': return { title: 'Calibrate your screen', detail: 'Move your fingertip to the named corner, then hold still.' };
+      // Only after "Recalibrate screen" (the manual fallback): a screen program normally starts at once.
+      case 'calibrate': return { title: 'Recalibrate your screen', detail: 'Move your fingertip to the named corner, then hold still.' };
       case 'touch': return s.wire.phase !== 'running'
         ? { title: 'Ask Muse to start again', detail: 'Your wiring is paused. Choose a suggestion to continue.' }
-        : this.needsScreen ? { title: 'Touch the water', detail: 'Bring one fingertip to your Mac screen, then move it.' }
+        : this.needsScreen ? { title: 'Touch the water', detail: 'Touch the water on your screen, then slide your fingertip.' }
           : { title: 'Try your new controls', detail: 'Pinch a knob and twist it, or follow Muse’s explanation.' };
       case 'menu': return !this.sawStop
         ? now - (this.playAt ?? now) < 5000 ? undefined

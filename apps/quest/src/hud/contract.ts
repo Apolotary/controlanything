@@ -85,6 +85,8 @@ export interface WireView {
   calibration?: WireCalibrationView;
   /** "Recalibrate screen" offered (a screen wiring is calibrated or running) */
   canRecalibrate?: boolean;
+  /** A screen program runs but waits for the first touch on the glass: what to do, e.g. "Touch the water on your screen". */
+  touchHint?: string;
   /** AR knobs/buttons Muse generated, shown beside the device while the wiring runs. */
   controls?: import('@ce/protocol').WireControl[];
   ui?: import('@ce/protocol').WireReadyPayload['ui'];

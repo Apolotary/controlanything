@@ -23,6 +23,12 @@ export interface ScreenPlane {
   /** the selected device's anchor when calibrated: a saved plane is dropped when the anchor moved. */
   anchor?: [number, number, number];
   savedAt: number;
+  /** Built from the detected device (gestures/screen-auto.ts), not from touched corners. */
+  auto?: boolean;
+  /** An auto plane whose depth a fingertip resting on the glass has fixed. Only confirmed planes are saved. */
+  confirmed?: boolean;
+  /** An auto plane sized from the detected box at its guessed depth: its size follows the depth the touch finds. */
+  boxSized?: boolean;
 }
 export type PlaneResult = { plane: ScreenPlane } | { error: string };
 
@@ -103,12 +109,13 @@ export function isScreenPlane(o: unknown): o is ScreenPlane {
   return !!p && validTuple(p.origin) && validTuple(p.right) && validTuple(p.down) && validTuple(p.normal)
     && typeof p.width === 'number' && p.width > 0 && typeof p.height === 'number' && p.height > 0 && typeof p.savedAt === 'number';
 }
-export function loadPlane(cardId: string, anchor?: Vector3 | null, storage: Pick<Storage, 'getItem'> | undefined = safeStorage()): ScreenPlane | null {
+/** `notBefore`: ignore a plane saved earlier (an older page load had another XR reference space). */
+export function loadPlane(cardId: string, anchor?: Vector3 | null, storage: Pick<Storage, 'getItem'> | undefined = safeStorage(), notBefore = 0): ScreenPlane | null {
   try {
     const raw = storage?.getItem(KEY(cardId));
     if (!raw) return null;
     const plane = JSON.parse(raw) as unknown;
-    if (!isScreenPlane(plane)) return null;
+    if (!isScreenPlane(plane) || plane.auto && !plane.confirmed || plane.savedAt < notBefore) return null;
     if (anchor && plane.anchor && vec(plane.anchor).distanceTo(anchor) > SCREEN_LIMITS.anchorDrift) return null;
     return plane;
   } catch { return null; }

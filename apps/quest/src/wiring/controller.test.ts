@@ -6,11 +6,16 @@ import { makeGestureFrame, moveHand } from '../gestures/fixtures.test-support';
 import { fakeWorkerFactory } from './fake-worker.test-support';
 import { WiringController, WIRE_CHIPS, MUSICAL_WIRE_CHIPS, PHYSICAL_WIRE_CHIPS, SCENE_CHIP, VISUAL_SCENE_CHIP, type WiringHost } from './controller';
 import { WiringRuntime, type WireEmit } from './runtime';
+import { projectOnPlane, type ScreenPlane } from '../gestures/screen-plane';
+import type { ScreenGuess } from '../gestures/screen-auto';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const anchor = new Vector3(0, 1.45, -0.6);
 
-function setup(options: { micError?: string; instrument?: 'visual-synth' | 'musical-synth' | null } = {}) {
+/** The detected laptop: SAM's direction to the real screen (centre ~ (0, 1.47, -0.6)) but a depth 12 cm too short. */
+const laptopGuess = (): ScreenGuess => ({ position: new Vector3(0, 1.43, -0.6).sub(new Vector3(0, 1.6, 0)).multiplyScalar(0.8).add(new Vector3(0, 1.6, 0)), label: 'Laptop', measured: true });
+
+function setup(options: { micError?: string; instrument?: 'visual-synth' | 'musical-synth' | null; screen?: (() => ScreenGuess | undefined) | null } = {}) {
   const sent: { type: string; payload: unknown }[] = [], controls: WireEmit[] = [], toasts: string[] = [], views: (WireView | null)[] = [];
   const instrument = options.instrument === null ? undefined : options.instrument ?? 'visual-synth';
   let busy = false, canControl = true, selected: ReturnType<WiringHost['selected']> = {
@@ -28,6 +33,7 @@ function setup(options: { micError?: string; instrument?: 'visual-synth' | 'musi
   const feedback = vi.fn();
   const host: WiringHost = {
     selected: () => selected, canControl: () => canControl,
+    ...(options.screen === null ? {} : { screen: options.screen ?? laptopGuess }),
     send: (type, payload) => { sent.push({ type, payload }); return true; },
     sendControl: (_card, event) => { controls.push(event); return true; },
     render: (view) => { views.push(view); }, setHandsBusy: (b) => { busy = b; }, userStopped, feedback,
@@ -143,22 +149,36 @@ describe('the wiring flow', () => {
     expect(t.view()!.code!.phaseLine).toContain('dry-run');
     t.receiveProgress(progress({ phase: 'ready' }));
     t.receiveReady(ready());
-    expect(t.controller.phase).toBe('calibrating');
-    expect(t.runtime.running).toBe(false);
-    // touch the two corners of a screen at z = -0.6 (the hand comes in from the side, it is not resting there)
-    await hold(t.controller, new Vector3(-0.6, 1.5, -0.35), 100);
-    await hold(t.controller, new Vector3(-0.25, 1.62, -0.6), 600);
-    expect(t.controller.calibrator.step).toBe('bottom-right');
-    expect(t.view()!.calibration).toMatchObject({ step: 'bottom-right' });
-    await hold(t.controller, new Vector3(0.25, 1.32, -0.6), 600);
+    // No setup step: the program runs at once and the wearer is told to touch the water.
     expect(t.controller.phase).toBe('running');
+    expect(t.runtime.running).toBe(true);
+    expect(t.toasts.at(-1)).toBe('Touch the water on your screen');
+    expect(t.toasts.some((m) => /corner|calibrat/i.test(m))).toBe(false);
+    t.controller.frame(finger(new Vector3(-0.6, 1.5, -0.35)), clock += 16);
+    expect(t.view()).toMatchObject({ phase: 'running', touchHint: 'Touch the water on your screen' });
+    expect(t.view()!.calibration).toBeUndefined();
+    expect(t.controller.snapshot()).toMatchObject({ screen: 'guessed', calibrated: false });
+    // A finger sweeping through the air 10 cm in front of the screen is not a touch before the screen is found.
+    for (let i = 0; i <= 20; i++) { t.controller.frame(finger(new Vector3(-0.2 + i * 0.02, 1.47, -0.5)), clock += 16); await wait(1); }
+    expect(t.controls.some((e) => e.widgetId === 'wire:p' && e.value !== 0)).toBe(false);
+    expect(t.controller.snapshot()).toMatchObject({ screen: 'guessed', touching: false });
+    // The fingertip comes to rest on the glass (12 cm behind the guess): that finds the screen and counts as a touch.
+    const glass = new Vector3(0, 1.47, -0.6);
+    await hold(t.controller, glass, 400);
+    expect(t.controller.snapshot()).toMatchObject({ screen: 'found', calibrated: true });
+    const found = t.controller.snapshot().plane as ScreenPlane;
+    expect(found).toMatchObject({ auto: true, confirmed: true });
+    expect(Math.abs(projectOnPlane(found, glass).distance)).toBeLessThan(0.01);
+    expect(projectOnPlane(found, glass).inside).toBe(true);
+    expect(t.view()!.calibration).toMatchObject({ message: 'Found your screen' });
+    expect(t.view()!.touchHint).toBeUndefined();
     await wait(10);
     // fingertip on the glass in the middle: pressure goes out, within the action's range
     await hold(t.controller, new Vector3(0, 1.47, -0.597), 400);
     const p = t.controls.filter((e) => e.widgetId === 'wire:p').map((e) => e.value);
     expect(p[p.length - 1]).toBe(127);
     const x = t.controls.filter((e) => e.widgetId === 'wire:x').map((e) => e.value as number);
-    expect(x[x.length - 1]).toBeGreaterThan(55); expect(x[x.length - 1]).toBeLessThan(72);
+    expect(x[x.length - 1]).toBeGreaterThan(50); expect(x[x.length - 1]).toBeLessThan(77);
     expect(t.controls.every((e) => /^wire:(x|p)$/.test(e.widgetId))).toBe(true);
     // hand away: lifts
     await hold(t.controller, new Vector3(0, 1.47, -0.1), 200);
@@ -194,8 +214,47 @@ describe('the wiring flow', () => {
     expect(t.runtime.running).toBe(false);
   });
 
-  it('blocks wrist recall during calibration fingertip work and allows recovery after the hand withdraws', () => {
+  it('a fingertip resting behind a found plane pushes it back; with no detected screen the first rest places it', async () => {
     const t = setup(); t.controller.ask('Touch the water', 'chip'); t.receiveReady(ready());
+    await hold(t.controller, new Vector3(-0.6, 1.5, -0.35), 100);
+    // Paused in the air 15 cm before the glass: taken for the screen...
+    await hold(t.controller, new Vector3(0, 1.47, -0.45), 400);
+    expect(t.controller.snapshot().screen).toBe('found');
+    // ...until the finger rests on the real glass behind it.
+    const glass = new Vector3(0, 1.47, -0.6);
+    await hold(t.controller, glass, 400);
+    expect(Math.abs(projectOnPlane(t.controller.snapshot().plane as ScreenPlane, glass).distance)).toBeLessThan(0.01);
+    t.controller.reset();
+
+    const weak = setup({ screen: null }); weak.controller.ask('Touch the water', 'chip'); weak.receiveReady(ready());
+    expect(weak.controller.snapshot().screen).toBe('waiting');
+    await hold(weak.controller, new Vector3(-0.2, 1.3, -0.25), 100);
+    const tip = new Vector3(0.05, 1.42, -0.55);
+    await hold(weak.controller, tip, 600);
+    const plane = weak.controller.snapshot().plane as ScreenPlane;
+    expect(weak.controller.snapshot().screen).toBe('found');
+    const at = projectOnPlane(plane, tip);
+    expect(at.u).toBeCloseTo(0.5, 2); expect(at.v).toBeCloseTo(0.5, 2); expect(Math.abs(at.distance)).toBeLessThan(0.001);
+    weak.controller.reset();
+  });
+
+  it('only "Recalibrate screen" starts the two-corner calibration', async () => {
+    const t = setup(); t.controller.ask('Touch the water', 'chip'); t.receiveReady(ready());
+    expect(t.controller.phase).toBe('running');
+    t.controller.recalibrate();
+    expect(t.controller.phase).toBe('calibrating');
+    await hold(t.controller, new Vector3(-0.6, 1.5, -0.35), 100);
+    await hold(t.controller, new Vector3(-0.15, 1.57, -0.6), 600);
+    expect(t.controller.calibrator.step).toBe('bottom-right');
+    expect(t.view()!.calibration).toMatchObject({ step: 'bottom-right' });
+    await hold(t.controller, new Vector3(0.15, 1.38, -0.6), 600);
+    expect(t.controller.phase).toBe('running');
+    expect(t.controller.snapshot()).toMatchObject({ screen: 'calibrated', calibrated: true });
+    t.controller.reset();
+  });
+
+  it('blocks wrist recall during calibration fingertip work and allows recovery after the hand withdraws', () => {
+    const t = setup(); t.controller.ask('Touch the water', 'chip'); t.receiveReady(ready()); t.controller.recalibrate();
     const start = finger(new Vector3(-.6, 1.5, -.35)); t.controller.frame(start, clock += 16);
     const corner = finger(new Vector3(-.25, 1.62, -.6)); t.controller.frame(corner, clock += 16);
     expect(t.controller.calibrator.hasTip).toBe(true); expect(t.busy()).toBe(true);
@@ -210,7 +269,7 @@ describe('the wiring flow', () => {
   });
 
   it('keeps recall blocked while a fingertip stays at the captured top-left corner during the bottom-right prompt', async () => {
-    const t = setup(); t.controller.ask('Touch the water', 'chip'); t.receiveReady(ready());
+    const t = setup(); t.controller.ask('Touch the water', 'chip'); t.receiveReady(ready()); t.controller.recalibrate();
     await hold(t.controller, new Vector3(-.6, 1.5, -.35), 100);
     const topLeft = new Vector3(-.25, 1.62, -.6);
     await hold(t.controller, topLeft, 600);

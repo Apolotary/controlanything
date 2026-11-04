@@ -34,7 +34,7 @@ Do not combine unrelated probe times, screenshots or fixture receipts into one c
 | A5 | During generation, choose Stop Muse once | Generation cancels; no late connector or readiness survives. Ask again deliberately. |
 | A6 | Watch deploy, test and finish | Startup/errors and actual acknowledgements are inspected. Generated controls bind only declared actions; bad output is rejected rather than called success. |
 | A7 | Play the generated instrument | OP-1 keys/pads produce bounded notes; encoders have reachable targets. XY water interaction produces visible outgoing feedback. Poke/press works; pinch-drag is optional. Code card does not cover controls. |
-| A8 | If hand code needs a screen, capture top-left/bottom-right calibration | Deliberate corner progress; no screen output before calibration. Touch splash corresponds to real finger location and pressure releases on lift/loss. |
+| A8 | If hand code needs a screen, the first touch finds it (no setup step) | "Touch the water on your screen"; no screen output before the first fingertip rest on the glass. Touch splash corresponds to real finger location and pressure releases on lift/loss. |
 | A9 | Turn head and briefly lose tracking | Workspace is stable; no accidental wrist menu or target switch. Loss/return does not replay old notes or restart a retired program. |
 | A10 | Both palms Stop, then ask again | Current program/connector/queued output retires. The selected device remains available. Another ask creates another interaction. |
 | A11 | Raise flat left palm deliberately, or palm + pinch | Menu opens intentionally, stays closed while a control owns the hand, and closes after selection. Wrist Stop all and Exit remain reachable. |
@@ -77,7 +77,7 @@ Record actual result and screenshot paths in the task's completion receipt. A sc
 - No Mac/port: follow Connect Mac / exact port guidance; never claim delivery while offline.
 - Failed/cancelled generation: keep actual error/source. Retry explicitly; do not auto-install a template.
 - Wrong target: Stop and select/correct the intended object. A physical request must not redirect to a software instrument.
-- Screen moved: Stop, recalibrate and explicitly ask/restart. SAM does not provide the calibrated plane.
+- Screen moved: Stop and ask again; the first touch finds the screen again (Details → Recalibrate screen is the manual two-corner fallback). SAM's depth alone does not place the plane.
 - No visible/audible response: inspect current connector logs, executor ack and real device. No reliable angle or no analyser receipt is not proof that the hardware failed.
 - Set up / Enable instructions apply only when deliberately testing `CE_AGENT=0`; they are not prerequisites for the current Muse-agent route.
 

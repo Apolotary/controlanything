@@ -2,8 +2,9 @@
  * "Muse writes the glue", headset half, in the Quest emulator (system Chrome; nothing is sent to a Meta model):
  *
  *   Mac armed -> the card asks "What should your hands do?" (hands do nothing yet) -> a chip -> wire.request ->
- *   the code card types the program -> validating / dry-run / ready -> calibrate the screen (two corners) ->
- *   the program runs in the sandbox -> a fingertip on the screen sends the touch X / Y / pressure actions -> both palms out stops it.
+ *   the code card types the program -> validating / dry-run / ready -> the program runs in the sandbox at once (no setup:
+ *   the first fingertip rest on the screen finds it) -> a fingertip on the screen sends the touch X / Y / pressure actions ->
+ *   both palms out stops it.
  *
  * The fixture server's WIRE step answers (recorded "Touch the water" program, labelled FIXTURE); no Muse credits are used.
  *
@@ -281,7 +282,7 @@ async function run() {
     await delay(250);
   });
   await screenshot('05b-code-streaming');
-  await until('the program is ready and the screen needs calibrating', () => quest.evaluate(() => window.__ce.wiring.phase === 'calibrating'), 20_000);
+  await until('the program is ready and runs at once (no setup step)', () => quest.evaluate(() => window.__ce.wiring.phase === 'running'), 20_000);
   const card = await quest.evaluate(() => window.__ce.hud.root.userData.wire.card);
   assert(/Touch the water/.test(card.header), `header names the request (${card.header})`);
   assert.equal(card.badge, 'FIXTURE', 'the source is labelled honestly');
@@ -293,9 +294,9 @@ async function run() {
   assert(idX && idY && idP, `the program writes X, Y and pressure (${idX} ${idY} ${idP})`);
   console.log(`  actions: ${ready.actions.map((a) => `${a.actionId}=${a.label}`).join(', ')}`);
   console.log(`  header: ${card.header} · badge ${card.badge} · phase "${card.phase}"`);
-  await screenshot('06-calibrate-top-left');
+  await screenshot('06-touch-the-water-prompt');
 
-  // --- calibrate: touch the top-left, then the bottom-right corner of the sim Mac's screen -------------------------
+  // --- the first fingertip rest on the sim Mac's screen finds it ----------------------------------------------------
   const geometry = await quest.evaluate((c) => {
     const app = window.__ce, p = app.desktopCam.position.clone().fromArray(c), head = app.emulator.head();
     const f = p.clone().sub(head.position).setY(0).normalize(), right = f.clone().cross(head.position.clone().set(0, 1, 0));
@@ -303,19 +304,17 @@ async function run() {
     return { tl: at(0, 0, 0.0).toArray(), br: at(1, 1, 0.0).toArray(), mid: at(0.5, 0.5, 0.0).toArray(), toward: f.clone().negate().toArray(), right: right.toArray(), anchor: c };
   }, screen.position);
   const pt = (a, d = 0) => a.map((n, i) => n + geometry.toward[i] * d);
-  await phase('06b-touch-corners', async () => {
+  await phase('06b-first-touch-finds-the-screen', async () => {
     const left = { offset: [-0.25, -0.7, -0.15], pose: 'default' };
-    // the hand comes in from below and the side (a hand resting near the screen is not a touch), then touches the corners
+    // the hand comes in from below and the side (a hand resting near the screen is not a touch), then rests on the screen
     await hands({ left, right: { tip: pt(geometry.mid.map((n, k) => n - geometry.right[k] * 0.3 + (k === 1 ? -0.3 : 0)), 0.2), pose: 'point' } }, 8);
-    await hands({ left, right: { tip: pt(geometry.tl), pose: 'point' } }, 40);
-    await until('top-left captured', () => quest.evaluate(() => window.__ce.wiring.calibrator.step === 'bottom-right'), 10_000);
-    await screenshot('06c-top-left-taken');
-    await hands({ left, right: { tip: pt(geometry.br), pose: 'point' } }, 40);
-    await until('the program is running', () => quest.evaluate(() => window.__ce.wiring.phase === 'running'), 10_000);
+    await hands({ left, right: { tip: pt(geometry.mid), pose: 'point' } }, 40);
+    await until('the first touch found the screen', () => quest.evaluate(() => window.__ce.wiring.snapshot().screen === 'found'), 10_000);
+    await screenshot('06c-screen-found');
     const stored = await quest.evaluate((id) => localStorage.getItem(`ce.screen-plane.v1.${id}`), cardId);
-    assert(stored, 'The calibrated plane is stored per card in localStorage');
+    assert(stored, 'The found plane is stored per card in localStorage');
     const plane = JSON.parse(stored);
-    assert(Math.abs(plane.width - 0.5) < 0.03 && Math.abs(plane.height - 0.3) < 0.03, `the plane is the screen that was touched (${plane.width.toFixed(2)} x ${plane.height.toFixed(2)} m, expected 0.50 x 0.30)`);
+    assert(plane.auto && plane.confirmed, 'The stored plane is the automatic one, confirmed by the touch');
     console.log(`  plane ${plane.width.toFixed(2)} x ${plane.height.toFixed(2)} m`);
   });
 

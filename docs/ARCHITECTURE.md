@@ -33,7 +33,7 @@ Stop → revoke wiring + queued outputs + retire connector
 |---|---|
 | `packages/protocol` | Zod message schemas, including correlated wiring epochs, connector actions and generated controls. |
 | `apps/server` | HTTP :8787 / HTTPS :8443, pairing, Meta adapters, agent tools, connector lifecycle, action dispatch and static apps. Model API keys remain on the Mac. |
-| `apps/quest` | Camera, WebXR hands/head pose, Horizon UI, generated spatial controls, screen calibration and optional generated-program Worker. |
+| `apps/quest` | Camera, WebXR hands/head pose, Horizon UI, generated spatial controls, the automatic screen plane (fixed by the first touch) and optional generated-program Worker. |
 | `agent/connector-host.ts` | Starts the generated Node service; sends `set`, `trigger`, `stop`; accepts `midi`, `gimbal`, `log`, `ready` JSON lines. MIDI and gimbal operations pass through the bridge/executor route. |
 | `apps/companion` | Chrome pairing, single-executor Web Locks, Web MIDI/Serial and the visual/musical instruments. Details shows running Muse connectors, entry files, actions, recent logs and Stop. |
 | `packages/gen3d` | Bounded declarative spatial controls and compiler; no arbitrary generated scene JavaScript is evaluated in the XR renderer. |
@@ -48,7 +48,7 @@ The **connector** is a Node service on the Mac, with local runtime permissions. 
 
 The optional **hand program** is the body of `wire(s, out, mem)` and runs in a restricted Quest Web Worker. It reads `s.left`, `s.right`, `s.screen`, `s.t`, `s.dt`, keeps bounded state in `mem` and calls `out.set` / `out.trigger`. Server validation and synthetic dry-run check source, signals and declared actions before `wire.ready`. On-headset output gates and the server route check current wiring IDs, allowlists, ranges and rates. There is no model call per hand frame. The Mac companion receives device commands; it does not run the hand program.
 
-A screen-touch program requests top-left/bottom-right calibration before running. This is wearer calibration, not SAM depth. Recalibrate after moving a display or resetting the room reference. A hand-only instrument needs no screen calibration. Dials are optional: useful actions must also support natural pressing, poking or hand gestures.
+A screen-touch program runs at once, with no setup step: the screen plane is guessed from the detected laptop or monitor (SAM gives the direction; its depth is a size-prior guess), and the wearer's first fingertip rest on the glass fixes the depth. Until then the program sees no screen. Two-corner calibration remains a manual fallback (card Details → Recalibrate screen). A hand-only instrument needs no screen. Dials are optional: useful actions must also support natural pressing, poking or hand gestures.
 
 ## Stop, sound and evidence
 

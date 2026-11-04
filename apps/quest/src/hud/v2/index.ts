@@ -542,6 +542,7 @@ export class LeanHud implements Hud {
           : state?.connection === 'offline' && !sys?.mac?.online ? 'Open ControlAnything on the Mac and pair it (Connect Mac on the card).'
             : busy ? 'Watch Muse write and test the code. Stop Muse on the card anytime.'
               : phase === 'calibrating' ? 'Touch the top-left, then the bottom-right screen corner.'
+                : phase === 'running' && wire?.touchHint ? `${wire.touchHint}.`
                 : phase === 'running' || phase === 'ready' ? 'Use the controls. Both palms out to stop.'
                   : phase === 'failed' || phase === 'stopped' ? 'Ask Muse again, in other words if needed.'
                     : 'Ask Muse on the device card: tap an idea or hold the mic.';

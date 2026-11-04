@@ -172,7 +172,7 @@ export const WireReadyPayload = z.object({
   source: z.enum(['live', 'fixture', 'template']),
   /** Empty only for a pure XR visualization (`scene` without a connector). */
   actions: z.array(WireAction).max(16),
-  /** Signals the program reads (e.g. ["screen", "right"]); "screen" means the wearer must calibrate the screen first. */
+  /** Signals the program reads (e.g. ["screen", "right"]); "screen" means the fingertip on the screen (found by the wearer's first touch). */
   needs: z.array(z.enum(['right', 'left', 'screen'])).max(3),
   /** Generated AR controls (Muse agent); absent on older hand-program-only wirings. */
   controls: z.array(WireControl).max(8).optional(),

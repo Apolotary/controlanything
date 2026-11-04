@@ -65,6 +65,7 @@ import { cameraPoseFromHead, questIntrinsics, worldToPixel } from '../scan/proje
 import { Scanner } from '../scan/scanner';
 import { SyntheticCamera, VirtualRoom } from '../scan/synthetic';
 import { type Target, TargetStore, toHudTarget } from '../scan/targets';
+import type { ScreenGuess } from '../gestures/screen-auto';
 import { CATEGORIES, type Category } from '../scan/categories';
 import { Mic } from '../voice/mic';
 import { pairingApi } from '../io/api';
@@ -670,6 +671,7 @@ export class QuestApp {
             : tag.cardId === 'visual-synth-mac' ? 'visual-synth' as const : undefined } : undefined;
       },
       canControl: (cardId) => this.canAsk(cardId),
+      screen: () => this.screenForWiring(),
       send: (type, payload) => !!this.ws.send(type, payload, { to: 'server' }),
       sendControl: (cardId, event) => {
         if (!this.canAsk(cardId)) return false;
@@ -1252,6 +1254,32 @@ export class QuestApp {
     if (this.lockedId === targetId) this.release();
     this.observed.delete(targetId); this.hud.removeTarget(targetId);
     this.refreshHome();
+  }
+
+  /**
+   * The detected physical screen a screen program is touched on, for the automatic plane (wiring/controller.ts): the
+   * selected device when it is a screen, else a tagged laptop/monitor, else one in view. A software instrument's own
+   * target is only a point ahead of the wearer, so it never counts. The glass the visual synth shows on is the Mac's.
+   */
+  private screenForWiring(): ScreenGuess | undefined {
+    // A Mac named after the visual synth it shows (the sim room) is still a laptop; "electronic device" is SAM's catch-all.
+    const laptopish = /\b(laptop|macbook|notebook|mac|computer|visual synth)\b/i, screenish = /\b(monitor|screen|display|tv|television|imac|electronic device)\b/i;
+    const head = this.lastFrame?.head;
+    const forward = head ? new Vector3(0, 0, -1).applyQuaternion(head.quaternion) : undefined;
+    let best: { target: Target; score: number; label: string } | undefined;
+    for (const target of this.targets.list()) {
+      const tag = this.modes.tags.get(target.id);
+      if (target.method === 'virtual-display' || [target.cardId, tag?.cardId].some((id) => !!id && this.virtualCards.has(id))) continue;
+      const label = `${tag?.name ?? ''} ${tag?.label ?? ''} ${tag?.category ?? ''} ${target.label}`.trim();
+      const kind = laptopish.test(label) ? 0 : screenish.test(label) ? 4 : -1;
+      if (kind < 0) continue;
+      const angle = head && forward ? forward.angleTo(target.position.clone().sub(head.position)) : 0;
+      const score = (target.id === this.lockedId ? 0 : 20) + (tag?.cardId ? 0 : 10) + kind + angle;
+      if (!best || score < best.score) best = { target, score, label };
+    }
+    const t = best?.target;
+    return t ? { position: t.position.clone(), label: best!.label, facing: t.facing.clone(), measured: true, sizeM: [...t.sizeM] as [number, number, number],
+      ...(t.contour?.length ? { contour: t.contour.map(([x, y]) => [x, y] as [number, number]) } : {}) } : undefined;
   }
 
   /** Choose the known virtual instrument, without identifying a laptop or enabling any controls. */
