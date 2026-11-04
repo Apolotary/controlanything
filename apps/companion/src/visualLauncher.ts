@@ -211,6 +211,11 @@ export class VisualSynthLauncher {
    * change nothing.
    */
   setWiring(view: WiringOverlayView | undefined): void {
+    if (view?.id === this.wiringView?.id && view?.phase !== this.wiringView?.phase) {
+      this.wiringDismissed = undefined;
+      if (this.wiringTimer) clearTimeout(this.wiringTimer.timer);
+      this.wiringTimer = undefined;
+    }
     this.wiringView = view;
     this.applyWiring();
   }
@@ -223,7 +228,7 @@ export class VisualSynthLauncher {
     if (this.wiringHead && this.wiringHead.textContent !== view.heading) this.wiringHead.textContent = view.heading;
     if (this.wiringPre) this.wiringShown = showCode(this.wiringPre, this.wiringShown, view.code);
     box.dataset.phase = view.phase;
-    if (view.phase !== 'ready' && view.phase !== 'failed') {
+    if (!['ready', 'failed', 'stopped'].includes(view.phase)) {
       if (this.wiringTimer) { clearTimeout(this.wiringTimer.timer); this.wiringTimer = undefined; }
       box.classList.add('show');
       return;

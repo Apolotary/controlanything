@@ -575,7 +575,8 @@ describe('Calm companion behavior', () => {
     await flush();
     expect(byId('paired-summary').hidden).toBe(false);
     expect(byId('onboarding').dataset.state).toBe('paired');
-    expect(byId('paired-next').textContent).toContain('pinch it');
+    expect(byId('paired-next').textContent).toContain('pinch this Mac');
+    expect(byId('paired-next').textContent).toContain('ask Muse');
     expect(byId('enable-midi').hidden).toBe(true);
     expect(byId('connection-steps').hidden).toBe(true);
     expect(byId('setup-activity').hidden).toBe(true);
@@ -757,10 +758,10 @@ describe('Calm companion behavior', () => {
     await app.emit('ui.spec', { specId: 'visual-ui', cardId, title: 'Visual controls', widgets: [], gen3d: { controls: [{ id: 'warp', armed: true }], parts: [] } });
     await app.emit('target.status', { cardId, executorDeviceId: 'mac-1', state: 'armed', since: 0 });
     mocks.visualConnected = true; mocks.visualChanged?.(); await flush();
-    expect(byId('home-devices').textContent).toContain('Controls enabled');
+    expect(byId('home-devices').textContent).toContain('Ask Muse in Quest');
     mocks.visualConnected = false; mocks.visualChanged?.(); await flush();
     expect(byId('home-devices').textContent).toContain('Unavailable');
-    expect(byId('home-devices').textContent).not.toContain('Controls enabled');
+    expect(byId('home-devices').textContent).not.toContain('Wiring ready');
     expect(mocks.send).not.toHaveBeenCalled();
   });
 
@@ -1488,6 +1489,25 @@ describe('Muse wiring view (wire.progress / wire.ready)', () => {
     expect(lastOverlay()).toMatchObject({ code: 'var f = s;' });
     await app.emit('wire.ready', { ...base, code: 'var f = s;\n', title: 'Touch the water', explanation: 'x', needs: [], actions: [{ actionId: 'cc24', label: 'Touch pressure', kind: 'set' }] });
     expect(lastOverlay()).toMatchObject({ phase: 'ready', heading: 'Wiring ready: Touch the water', endedAt: expect.any(Number) }); // the launcher hides it 8 s after endedAt
+  });
+
+  it('marks a matched scoped stop without clearing code history and rejects late ready or an older stop', async () => {
+    const app = await wired();
+    const accepted = { ...base, requestId: 'ask-1', code: CODE, title: 'Touch the water', explanation: 'Touch to ripple.', needs: ['screen'], actions: [{ actionId: 'cc24', label: 'Touch pressure', kind: 'set' }] };
+    await app.emit('wire.ready', accepted);
+    expect(byId('wiring-line').textContent).toContain('Wiring ready');
+    await app.emit('wire.stopped', { cardId: CARD, requestId: 'other-ask', wiringId: 'w1', ok: true });
+    expect(byId('wiring-line').textContent).toContain('Wiring ready');
+    await app.emit('wire.stopped', { cardId: CARD, requestId: 'ask-1', wiringId: 'w1', ok: true, releaseConfirmed: true });
+    expect(byId('wiring-line').textContent).toBe('Stopped. Ask Muse again in Quest.');
+    expect(byId('wiring-source').textContent).toBe(CODE);
+    expect(lastOverlay()).toMatchObject({ phase: 'stopped', heading: 'Stopped. Ask Muse again in Quest.' });
+    await app.emit('wire.ready', accepted);
+    expect(byId('wiring-line').textContent).toBe('Stopped. Ask Muse again in Quest.');
+    await app.emit('wire.progress', { ...base, wiringId: 'w2', requestId: 'ask-2', phase: 'writing' });
+    await app.emit('wire.stopped', { cardId: CARD, requestId: 'ask-1', wiringId: 'w1', ok: true });
+    expect(byId('wiring-line').textContent).toContain('is wiring your hands');
+    expect(mocks.send).not.toHaveBeenCalled();
   });
 
   it('keeps the code off the Visual synth for a wiring of any other device', async () => {

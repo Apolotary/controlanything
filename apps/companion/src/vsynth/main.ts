@@ -7,8 +7,8 @@ const change = document.querySelector<HTMLOutputElement>('#last-change')!;
 
 try {
   const synth = createVisualSynth(canvas, { onChange: (label) => {
-    change.textContent = label === 'Connected · Ready' ? 'Visuals connected · Pinch this Mac in your headset'
-      : label === 'Reset · Ready' ? 'Reset · Enable and Perform from your headset' : label;
+    change.textContent = label === 'Connected · Ready' ? 'Visuals connected · Select this Mac and ask Muse to wire your hands'
+      : label === 'Reset · Ready' ? 'Reset · Ask Muse in Quest for new hand wiring' : label;
   } });
   const relay = createVisualSynthRelay(synth, { renderer: () => ({ visible: document.visibilityState === 'visible', frame: synth.stats().frames }) });
   const presence = announceVisualRenderer(new URLSearchParams(location.search).get('owner'), () => !document.hidden);

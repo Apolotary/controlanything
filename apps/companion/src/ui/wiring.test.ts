@@ -73,6 +73,38 @@ describe('wiring state', () => {
     expect(state.ready(msg(ready()), 5000)).toBe(true);
     expect(state.current(CARD)).toMatchObject({ phase: 'ready', title: 'Touch the water', code: 'out.set("cc24", 100);' });
   });
+
+  it('stops only the exact ask epoch and never lets late ready/progress revive it or replace a new ask', () => {
+    const state = new WiringState();
+    state.ready(msg(ready({ requestId: 'ask-1' })), 1000);
+    const stop = { cardId: CARD, requestId: 'ask-1', wiringId: 'w1', ok: true, releaseConfirmed: true };
+    expect(state.stopped(msg({ ...stop, ok: false }))).toBe(false);
+    expect(state.stopped(msg({ ...stop, requestId: 'old-ask' }))).toBe(false);
+    expect(state.stopped(msg({ ...stop, wiringId: 'old-wire' }))).toBe(false);
+    expect(state.stopped(msg(stop), 2000)).toBe(true);
+    expect(state.get(CARD)).toMatchObject({ phase: 'stopped', code: ready().code });
+    expect(wiringLine(state.get(CARD)!, 'Visual synth')).toBe('Stopped. Ask Muse again in Quest.');
+    expect(state.ready(msg(ready({ requestId: 'ask-1' })))).toBe(false);
+    expect(state.progress(msg(progress({ requestId: 'ask-1', codeDelta: 'late' })))).toBe(false);
+    state.progress(msg(progress({ wiringId: 'w2', requestId: 'ask-2' })), 3000);
+    expect(state.stopped(msg(stop))).toBe(false);
+    expect(state.ready(msg(ready({ requestId: 'ask-1' })))).toBe(false);
+    expect(state.ready(msg(ready({ wiringId: 'w2', requestId: 'wrong-ask' })))).toBe(false);
+    expect(state.ready(msg(ready({ wiringId: 'w2', requestId: 'ask-2' })))).toBe(true);
+    expect(state.get(CARD)).toMatchObject({ phase: 'ready', requestId: 'ask-2', wiringId: 'w2' });
+  });
+
+  it('keeps unconfirmed release explicit and marks all old programs stopped on global panic', () => {
+    const state = new WiringState();
+    state.ready(msg(ready({ requestId: 'ask-1' })));
+    expect(state.stopped(msg({ cardId: CARD, requestId: 'ask-1', ok: true, releaseConfirmed: false }))).toBe(true);
+    expect(wiringLine(state.get(CARD)!, 'Visual synth')).toContain('release was not confirmed');
+    state.ready(msg(ready({ cardId: 'other', wiringId: 'w2', requestId: 'ask-2' })));
+    expect(state.stopAll()).toBe(true);
+    expect(state.get('other')?.phase).toBe('stopped');
+    expect(state.ready(msg(ready({ cardId: 'other', wiringId: 'w2', requestId: 'ask-2' })))).toBe(false);
+    expect(state.stopAll()).toBe(false);
+  });
 });
 
 describe('wiring words', () => {

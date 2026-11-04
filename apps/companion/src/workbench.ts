@@ -57,7 +57,7 @@ import { CompanionSetupProgress, SetupProgressPanel } from './ui/setup-progress'
 import { CompanionCanvas, CanvasPanel } from './ui/canvas';
 import { MidiChartPanel, chartRequest } from './ui/midi-chart';
 import { replayArmResult, runReplay } from './replay';
-import { deviceLabel, overlayHeading, WiringState } from './ui/wiring';
+import { deviceLabel, overlayHeading, WiringState, wiringActive, wiringLine } from './ui/wiring';
 import { WiringCard, WiringPanel } from './ui/wiring-view';
 
 const APP = 'companion@0.2.0';
@@ -486,13 +486,17 @@ function renderStatus(text: string): void {
 function renderCalm(): void {
   renderOnboarding();
   const learning = bridge.learning && bridge.learning.until > Date.now() ? bridge.learning : undefined;
+  const wiring = focusCardId ? wirings.get(focusCardId) : wirings.current();
+  const deviceReady = focusCardId && ['armed', 'controlling'].includes(targets.get(focusCardId)?.state ?? '');
+  const wiringStatus: CalmStatus | undefined = wiring ? { text: wiringLine(wiring, deviceLabel(cards.get(wiring.cardId)?.name)), working: wiringActive(wiring) }
+    : deviceReady ? { text: 'Device checks complete. Ask Muse in Quest what your hands should do.', working: false } : undefined;
   const status: CalmStatus = !replaying && serverDown
     ? { text: 'Waiting for the server to reconnect', working: false }
     : !replaying && !conn?.open
       ? { text: 'Connecting to your room', working: true }
       : learning
         ? { text: `Learning your remote: ${learning.prompt ?? 'press each button once'}`, working: true }
-        : activity;
+        : wiringStatus ?? activity;
   $('status-dot').className = `dot on${status.working ? ' working' : ''}`;
   renderStatus(status.text);
   const relevant = (target: TargetStatusPayload) => !target.executorDeviceId || target.executorDeviceId === identity?.deviceId || linkResults.get(target.cardId)?.channel === 'local';
@@ -666,7 +670,10 @@ function renderHomeDevices(ports: Port[]): void {
     const offline = tag?.connection === 'offline' || target?.detail === 'offline' || transport === 'midi' && midi.enabled && !port
       || virtual && !replaying && (!visualPresence.connected() || !conn?.open || serverDown)
       || musical && !musicalPanel.available;
-    const state = failed ? 'Needs attention' : offline ? 'Unavailable' : ready ? 'Controls enabled' : 'Needs setup';
+    const wiring = wirings.get(card.cardId);
+    const state = failed ? 'Needs attention' : offline ? 'Unavailable' : ready
+      ? wiring?.phase === 'stopped' ? 'Stopped · ask again' : wiringActive(wiring) ? 'Writing / checking wiring' : wiring?.phase === 'ready' ? 'Wiring ready' : 'Ask Muse in Quest'
+      : 'Needs setup';
     const subtitle = virtual
       ? `${visualScreen.hint} In Quest, choose Visual synth and complete setup, then ask Muse how your hands should control it. Muse writes the wiring before interaction starts.`
       : musical ? 'Open this instrument and choose Sound on on this Mac. In Quest, choose Musical synth and ask Muse how your hands should play. No hand interaction is pre-wired.'
@@ -1028,7 +1035,7 @@ const isVisualWiring = (cardId: string): boolean => /visual[\s-]synth/i.test(car
 function renderWiring(): void {
   wiringCard ??= new WiringCard();
   wiringPanel ??= new WiringPanel($('wiring'));
-  const w = wirings.current(focusCardId);
+  const w = focusCardId ? wirings.get(focusCardId) : wirings.current();
   const name = w ? cards.get(w.cardId)?.name : undefined;
   wiringCard.render(w, name);
   wiringPanel.render(w, name);
@@ -1857,7 +1864,9 @@ function connect(): void {
     const card = m.payload.cardId ? cards.get(m.payload.cardId) : undefined;
     // A failed link step also represents an explicit setup request when USB is still offline.
     if (m.payload.phase === 'link' && card?.protocols.includes('midi') && !/visual[\s-]synth/i.test(card.name)) midiSetupCardId = card.cardId;
-    setFocus(m.payload.cardId);
+    // Perception may identify another object while the wearer reads this device's code.
+    // A confirmed card/setup request can change focus; passive scan progress cannot steal it.
+    if (!focusCardId || !['capture', 'scan', 'identify'].includes(m.payload.phase)) setFocus(m.payload.cardId);
     ['agent', 'code', 'top', 'calm'].forEach(render);
   });
   c.on('device.card', (m) => {
@@ -1933,14 +1942,22 @@ function connect(): void {
     if (!wirings.progress(m)) { repeated(m); return; }
     setFocus(m.payload.cardId);
     if (first && !tabChosenByUser) setTab('wiring');
-    render('wiring');
+    ['wiring', 'calm'].forEach(render);
   });
   c.on('wire.ready', (m) => {
     if (m.from !== 'server') return;
     if (!wirings.ready(m)) { repeated(m); return; }
     setFocus(m.payload.cardId);
     log('info', `wiring ready: ${m.payload.title} · ${m.payload.model} · ${m.payload.actions.length} action(s)`);
-    render('wiring');
+    ['wiring', 'calm'].forEach(render);
+  });
+  c.on('wire.stopped', (m) => {
+    if (m.from !== 'server' || !wirings.stopped(m)) { repeated(m); return; }
+    log('info', 'Wiring stopped. Ask Muse again in Quest.');
+    ['wiring', 'calm'].forEach(render);
+  });
+  c.on('panic', (m) => {
+    if (m.from === 'server' && wirings.stopAll()) ['wiring', 'calm'].forEach(render);
   });
   c.on('driver.status', (m) => {
     if (retiredSetupMessage(m)) return;
@@ -2046,6 +2063,7 @@ function setupForms(): void {
     if (replaying) return;
     clearProgress();
     render('workspace');
+    if (wirings.stopAll()) ['wiring', 'calm'].forEach(render);
     void executor.panicLocal('button');
     conn?.send('panic', { reason: 'Stop all button on the Mac' }, { to: 'server' });
   });

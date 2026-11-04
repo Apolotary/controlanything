@@ -4,10 +4,22 @@ import { MUSICAL_SCALE, MUSICAL_SYNTH_NAME, MUSICAL_SYNTH_PORT_ID } from '@ce/vs
 import { checkMidiOp } from './contracts';
 import { showCode } from './ui/wiring-view';
 import type { WiringOverlayView } from './visualLauncher';
+import type { WiringPhase } from './ui/wiring';
 import './musicalSynth.css';
 
 export const isMusicalPort = (port?: string): boolean => port === MUSICAL_SYNTH_PORT_ID || port === MUSICAL_SYNTH_NAME;
 const noteName = (midi: number) => `${['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'][midi % 12]}${Math.floor(midi / 12) - 1}`;
+
+/** Device readiness is separate from an accepted program; no Mac signal proves the Quest Worker is running. */
+export function musicalStageText(soundOn: boolean, phase?: WiringPhase): { status: string; readout: string } {
+  if (!soundOn) return { status: 'Sound off · choose Sound on on this Mac to enable device checks. Then ask Muse in Quest.', readout: 'Sound is off' };
+  if (phase === 'writing') return { status: 'Muse is writing your requested hand wiring · wait in Quest', readout: 'Muse is writing…' };
+  if (phase && ['validating', 'dry-run', 'verifying'].includes(phase)) return { status: 'Checking the requested wiring · wait for the result in Quest', readout: 'Checking your wiring…' };
+  if (phase === 'stopped') return { status: 'Wiring stopped · ask Muse again in Quest', readout: 'Stopped · ask Muse again' };
+  if (phase === 'failed') return { status: 'Wiring did not finish · retry your request in Quest', readout: 'Try your request again' };
+  if (phase === 'ready') return { status: 'Wiring ready · follow Muse’s gesture instructions in Quest', readout: 'Follow your Quest instructions' };
+  return { status: 'Sound on · complete device checks in Quest, then ask Muse to wire your hands', readout: 'Ask Muse in Quest' };
+}
 
 /** Own browser-only virtual instrument; never forwards a command to Web MIDI. */
 export class MusicalSynthPanel {
@@ -110,11 +122,11 @@ export class MusicalSynthPanel {
     text(this.sound, this.unlocking ? 'Enabling sound…' : enabled ? 'Sound off' : 'Sound on');
     this.sound.disabled = this.unlocking || !this.options.connected();
     this.sound.setAttribute('aria-pressed', String(enabled));
-    const status = this.error || (!this.options.connected() ? 'Reconnect this paired companion before enabling sound.'
-      : enabled ? this.codeView?.phase === 'ready' ? 'Sound on · use the wiring you requested in Quest' : 'Sound on · select Musical synth in Quest, then ask Muse what your hands should do'
-        : 'Sound off · choose Sound on on this Mac to enable setup and playback');
+    const stage = musicalStageText(enabled, this.codeView?.phase);
+    const status = this.error || (!this.options.connected() ? 'Reconnect this paired companion before enabling sound.' : stage.status);
     text(this.status, status + (this.options.muted ? ' · Test output is muted' : ''));
-    text(this.note, receipt.audio.activeNote !== undefined ? `${noteName(receipt.audio.activeNote)} · ${receipt.audio.frequency.toFixed(0)} Hz` : 'Ready for your next note');
+    text(this.note, this.unlocking ? 'Starting the instrument…' : enabled && this.codeView?.phase === 'ready' && receipt.audio.activeNote !== undefined
+      ? `${noteName(receipt.audio.activeNote)} · ${receipt.audio.frequency.toFixed(0)} Hz` : stage.readout);
     if (this.level) this.level.value = Math.min(1, receipt.audio.rms * 3);
     this.keys.forEach((key, i) => key.classList.toggle('active', receipt.audio.activeNote === MUSICAL_SCALE[i]));
     this.renderCode();

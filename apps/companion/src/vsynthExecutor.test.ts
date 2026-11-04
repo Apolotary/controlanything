@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { VisualSynthExecutor, visualSynthPort } from './vsynthExecutor';
 import { createVisualSynthPort, createVisualSynthState, VISUAL_SYNTH_IDENTITY_REPLY } from '@ce/vsynth';
 import type { ExecCommandPayload, MidiOp } from '@ce/protocol';
-import { MusicalSynthPanel } from './musicalSynth';
+import { MusicalSynthPanel, musicalStageText } from './musicalSynth';
 
 const port = () => ({ receiveMidi: vi.fn(), reset: vi.fn(), getState: createVisualSynthState, setState: vi.fn(), dispose: vi.fn() });
 const command = (op: MidiOp, dryRun = false): ExecCommandPayload => ({ execId: 'exec', executorDeviceId: 'companion', port: visualSynthPort.id, op, dryRun });
@@ -60,6 +60,16 @@ describe('silent virtual output', () => {
 
 describe('musical sound permission lifecycle', () => {
   afterEach(() => vi.unstubAllGlobals());
+  it('distinguishes locked, unwired, writing, checking, ready and stopped without claiming the Quest Worker is running', () => {
+    expect(musicalStageText(false).readout).toBe('Sound is off');
+    expect(musicalStageText(false, 'ready').readout).toBe('Sound is off');
+    expect(musicalStageText(true).readout).toBe('Ask Muse in Quest');
+    expect(musicalStageText(true, 'writing').readout).toBe('Muse is writing…');
+    expect(musicalStageText(true, 'dry-run').readout).toBe('Checking your wiring…');
+    expect(musicalStageText(true, 'ready').readout).toBe('Follow your Quest instructions');
+    expect(musicalStageText(true, 'stopped').readout).toBe('Stopped · ask Muse again');
+    expect(musicalStageText(true, 'ready').status).not.toMatch(/running|playing/i);
+  });
   it.each(['hidden', 'disconnected'])('invalidates pending audio resume when %s, even if it recovers before resume resolves', async boundary => {
     const param = () => ({ value: 0, setValueAtTime(value: number) { this.value = value; }, setTargetAtTime: vi.fn(),
       cancelScheduledValues: vi.fn(), linearRampToValueAtTime: vi.fn() });

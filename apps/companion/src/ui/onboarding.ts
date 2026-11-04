@@ -55,12 +55,12 @@ export function companionView(input: CompanionInput): CompanionView {
   if (!quest) return input.headsetPaired || input.devices.some((d) => d.kind === 'quest')
     ? { ...base, stage: 'headset', title: 'Waiting for Quest 3', next: `Keep this page open and open ${PRODUCT_NAME} in your headset.` }
     : { ...base, stage: 'headset', title: 'Pair with your headset', next: `Open ${PRODUCT_NAME} in Quest Browser, then approve its code on this Mac.` };
-  if (!input.midiSetupRequested) return { ...base, stage: 'paired', title: 'Paired with Quest 3', next: 'In your headset, look at this Mac and pinch it. The visuals open here by themselves; keep this window visible.' };
+  if (!input.midiSetupRequested) return { ...base, stage: 'paired', title: 'Paired with Quest 3', next: 'In Quest, pinch this Mac and ask Muse to wire your hands. Calibrate if prompted, then play. Keep this window visible.' };
   if (!input.midiSupported && !input.ports.length) return { ...base, stage: 'midi-permission', title: 'Open this page in Chrome', next: 'Chrome or Edge can connect your synth over USB.' };
   if (!input.midiEnabled && !input.ports.length && input.leader) return { ...base, stage: 'midi-permission', title: 'Connect your synth', next: 'Allow USB MIDI access so your headset can find the synth.', enableMidi: true };
   if (!input.ports.length) return { ...base, stage: 'usb', title: 'Plug in a synth (USB)', next: input.leader ? 'Connect the synth to this Mac with a USB cable.' : 'Keep the first companion tab open; it connects your USB devices.' };
   if (input.activity?.working) return { ...base, stage: 'working', title: 'Setting up your synth', next: 'Keep your headset on and follow its instructions.' };
-  if (input.activity?.ready) return { ...base, stage: 'ready', title: 'Your controls are ready', next: 'Use the controls in your headset.' };
+  if (input.activity?.ready) return { ...base, stage: 'ready', title: 'Device checks complete', next: 'Ask Muse in Quest what your hands should do. Wait for the wiring and calibrate if prompted.' };
   return { ...base, stage: 'setup', title: 'Set it up from the headset', next: 'In Control, select the synth and choose Set up control.' };
 }
 
@@ -68,7 +68,7 @@ export function companionView(input: CompanionInput): CompanionView {
 export function setupActivity(name: string, target: TargetStatusPayload, step?: AgentStepPayload): SetupActivity | undefined {
   const base = { cardId: target.cardId, ...(target.runId ? { runId: target.runId } : {}), working: false, ready: false, canStop: false };
   const noun = name || 'your synth';
-  if (target.state === 'armed' || target.state === 'controlling') return { ...base, ready: true, canStop: true, text: `${noun} is ready for control from Quest.` };
+  if (target.state === 'armed' || target.state === 'controlling') return { ...base, ready: true, canStop: true, text: `${noun} checks complete. Ask Muse in Quest what your hands should do.` };
   if (target.state === 'forged' || target.state === 'arming') return { ...base, canStop: true, text: `Enable controls for ${noun} in your headset.` };
   if (target.state === 'failed') return { ...base, text: `Setup stopped for ${noun}. Follow the instructions in your headset.` };
   const phase = step && (!target.runId || !step.runId || step.runId === target.runId) && (step.status === 'running' || step.status === 'pending') ? step.phase : undefined;

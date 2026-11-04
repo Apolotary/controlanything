@@ -19,7 +19,8 @@ describe('companion first-run state', () => {
     for (const overrides of [{}, { midiEnabled: true }, { midiSupported: false }, { leader: false }, { ports: [usb] }, { activity: setupActivity('OP-1 Field', target('armed')) }]) {
       const view = companionView({ ...initial, ...overrides });
       expect(view).toMatchObject({ stage: 'paired', title: 'Paired with Quest 3', enableMidi: false });
-      expect(view.next).toContain('pinch it');
+      expect(view.next).toContain('pinch this Mac');
+      expect(view.next).toContain('ask Muse');
       expect(view.next).not.toMatch(/USB|MIDI/);
     }
   });
@@ -30,7 +31,7 @@ describe('companion first-run state', () => {
     expect(companionView({ ...requested, midiEnabled: true })).toMatchObject({ stage: 'usb', title: 'Plug in a synth (USB)', enableMidi: false });
     expect(companionView({ ...requested, midiEnabled: true, ports: [usb] })).toMatchObject({ stage: 'setup', title: 'Set it up from the headset', synth: 'OP-1 Field on USB' });
     expect(companionView({ ...requested, ports: [usb], activity: setupActivity('OP-1 Field', target('verifying')) })).toMatchObject({ stage: 'working', title: 'Setting up your synth' });
-    expect(companionView({ ...requested, ports: [usb], activity: setupActivity('OP-1 Field', target('armed')) })).toMatchObject({ stage: 'ready', title: 'Your controls are ready' });
+    expect(companionView({ ...requested, ports: [usb], activity: setupActivity('OP-1 Field', target('armed')) })).toMatchObject({ stage: 'ready', title: 'Device checks complete', next: expect.stringContaining('Ask Muse') });
   });
 
   it('returns to the cable step on unplug during a requested setup', () => {

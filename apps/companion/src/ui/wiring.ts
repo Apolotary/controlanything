@@ -4,9 +4,9 @@
  * in wiring-view.ts, the full-screen overlay in visualLauncher.ts. Everything here is plain data so it can be
  * tested without a browser. The code is only ever shown as text; it never runs on the Mac.
  */
-import type { WireAction, WireProgressPayload, WireReadyPayload } from '@ce/protocol';
+import type { WireAction, WireProgressPayload, WireReadyPayload, WireStoppedPayload } from '@ce/protocol';
 
-export type WiringPhase = WireProgressPayload['phase'];
+export type WiringPhase = WireProgressPayload['phase'] | 'stopped';
 export type WiringSource = WireProgressPayload['source'];
 
 export interface WiringNote { at: number; phase: WiringPhase; text: string }
@@ -14,6 +14,7 @@ export interface WiringNote { at: number; phase: WiringPhase; text: string }
 export interface Wiring {
   cardId: string;
   wiringId: string;
+  requestId?: string;
   phase: WiringPhase;
   request?: string;
   title?: string;
@@ -48,6 +49,19 @@ export const WIRING_OVERLAY_HIDE_MS = 8000;
 export class WiringState {
   private readonly byCard = new Map<string, Wiring>();
   private readonly seen = new Set<string>();
+  private readonly retiredWirings = new Set<string>();
+  private readonly retiredRequests = new Set<string>();
+
+  private remember(set: Set<string>, key: string): void {
+    set.add(key); if (set.size > 400) set.delete(set.values().next().value!);
+  }
+  private retire(w: Wiring): void {
+    this.remember(this.retiredWirings, `${w.cardId}\0${w.wiringId}`);
+    if (w.requestId) this.remember(this.retiredRequests, `${w.cardId}\0${w.requestId}`);
+  }
+  private retired(p: { cardId: string; wiringId: string; requestId?: string }): boolean {
+    return this.retiredWirings.has(`${p.cardId}\0${p.wiringId}`) || !!p.requestId && this.retiredRequests.has(`${p.cardId}\0${p.requestId}`);
+  }
 
   private first(id: string): boolean {
     if (this.seen.has(id)) return false;
@@ -56,8 +70,10 @@ export class WiringState {
     return true;
   }
 
-  private fresh(cardId: string, wiringId: string, model: string, source: WiringSource, now: number): Wiring {
-    const wiring: Wiring = { cardId, wiringId, phase: 'writing', code: '', model, source, issues: [], actions: [], needs: [], startedAt: now, updatedAt: now, notes: [], rev: 0 };
+  private fresh(cardId: string, wiringId: string, model: string, source: WiringSource, now: number, requestId?: string): Wiring {
+    const previous = this.byCard.get(cardId);
+    if (previous && previous.wiringId !== wiringId) this.retire(previous);
+    const wiring: Wiring = { cardId, wiringId, requestId, phase: 'writing', code: '', model, source, issues: [], actions: [], needs: [], startedAt: now, updatedAt: now, notes: [], rev: 0 };
     this.byCard.set(cardId, wiring);
     return wiring;
   }
@@ -66,13 +82,16 @@ export class WiringState {
   progress(message: Stamped<WireProgressPayload>, now = Date.now()): boolean {
     if (!this.first(message.id)) return false;
     const p = message.payload;
+    if (this.retired(p)) return false;
     let w = this.byCard.get(p.cardId);
+    if (w?.wiringId === p.wiringId && w.requestId && p.requestId && w.requestId !== p.requestId) return false;
     const isNew = !w || w.wiringId !== p.wiringId;
-    if (!w || isNew) w = this.fresh(p.cardId, p.wiringId, p.model, p.source, now);
+    if (!w || isNew) w = this.fresh(p.cardId, p.wiringId, p.model, p.source, now, p.requestId);
     else if (w.phase === 'ready') return false; // a late progress message never un-readies a wiring
     const before = signature(w);
     const phaseBefore = isNew ? undefined : w.phase;
     w.phase = p.phase; w.model = p.model; w.source = p.source;
+    if (p.requestId !== undefined) w.requestId = p.requestId;
     if (p.request !== undefined) w.request = p.request;
     if (p.title !== undefined) w.title = p.title;
     if (p.explanation !== undefined) w.explanation = p.explanation;
@@ -98,16 +117,40 @@ export class WiringState {
   ready(message: Stamped<WireReadyPayload>, now = Date.now()): boolean {
     if (!this.first(message.id)) return false;
     const p = message.payload;
+    if (this.retired(p)) return false;
     const known = this.byCard.get(p.cardId);
-    const w = known && known.wiringId === p.wiringId ? known : this.fresh(p.cardId, p.wiringId, p.model, p.source, now);
+    if (known?.wiringId === p.wiringId && known.requestId && p.requestId && known.requestId !== p.requestId) return false;
+    const w = known && known.wiringId === p.wiringId ? known : this.fresh(p.cardId, p.wiringId, p.model, p.source, now, p.requestId);
     const before = signature(w);
     w.phase = 'ready'; w.code = p.code; w.title = p.title; w.explanation = p.explanation; w.model = p.model; w.source = p.source;
+    if (p.requestId !== undefined) w.requestId = p.requestId;
     w.actions = p.actions; w.needs = [...p.needs];
     w.endedAt ??= now;
     w.latencyMs ??= now - w.startedAt;
     if (w.notes.at(-1)?.phase !== 'ready') w.notes.push({ at: now, phase: 'ready', text: `${p.actions.length} action${p.actions.length === 1 ? '' : 's'}` });
     const changed = signature(w) !== before || w.rev === 0;
     if (changed) { w.updatedAt = now; w.rev++; }
+    return changed;
+  }
+
+  /** Only the matching server-acknowledged ask epoch may stop the displayed program. */
+  stopped(message: Stamped<WireStoppedPayload>, now = Date.now()): boolean {
+    if (!this.first(message.id) || !message.payload.ok) return false;
+    const p = message.payload, w = this.byCard.get(p.cardId);
+    if (!w || w.requestId !== p.requestId || p.wiringId && w.wiringId !== p.wiringId || w.phase === 'stopped') return false;
+    this.stop(w, p.releaseConfirmed === false ? 'Wiring stopped. Device release was not confirmed; use Stop all if needed.' : 'Stopped. Ask Muse again in Quest.', now);
+    return true;
+  }
+
+  private stop(w: Wiring, note: string, now: number): void {
+    this.retire(w); w.phase = 'stopped'; w.note = note; w.endedAt = w.updatedAt = now; w.rev++;
+    w.notes.push({ at: now, phase: 'stopped', text: note });
+  }
+
+  /** Global panic is distinct from the scoped palms stop and withdraws all displayed readiness. */
+  stopAll(now = Date.now()): boolean {
+    let changed = false;
+    for (const w of this.byCard.values()) if (w.phase !== 'stopped') { this.stop(w, 'Stop all received. Ask Muse again in Quest.', now); changed = true; }
     return changed;
   }
 
@@ -129,7 +172,7 @@ export class WiringState {
 }
 
 function signature(w: Wiring): string {
-  return [w.phase, w.model, w.source, w.title, w.explanation, w.request, w.latencyMs, w.note, w.issues.join('\u0001'), w.code, w.actions.length, w.needs.join(',')].join('\u0000');
+  return [w.requestId, w.phase, w.model, w.source, w.title, w.explanation, w.request, w.latencyMs, w.note, w.issues.join('\u0001'), w.code, w.actions.length, w.needs.join(',')].join('\u0000');
 }
 
 // --- words ------------------------------------------------------------------------------------
@@ -155,6 +198,7 @@ export function wiringLine(w: Pick<Wiring, 'phase' | 'model' | 'source' | 'title
     case 'verifying': return `Verifying the wiring on the ${device}…`;
     case 'ready': return `Wiring ready: ${w.title || 'your hands are wired'}`;
     case 'failed': return `Wiring failed${w.issues[0] ? `: ${w.issues[0]}` : ''}`;
+    case 'stopped': return w.note ?? 'Stopped. Ask Muse again in Quest.';
   }
 }
 
