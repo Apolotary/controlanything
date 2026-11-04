@@ -96,7 +96,7 @@ GET  /api/agent/profiles[/:id]      curated device data
 POST /api/agent/select              {frameId, detId} | {cardId} | {deviceId}   (tag in Annotate; reopen in Control)
 POST /api/agent/arm                 {armId, approve, hold?}                      (approver or localhost)
 POST /api/agent/panic
-POST /api/takes/:take                 the headset app's Save take hands its zip here (localhost only) -> apps/quest/public/takes/<take>/
+POST /api/takes/:take                 Save take uploads here (localhost only) -> CE_DATA_DIR/takes/<take>/; private, excluded from builds
 ```
 
 ## Environment

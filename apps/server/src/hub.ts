@@ -37,7 +37,7 @@ import {
 import { type RawData, WebSocket, WebSocketServer } from 'ws';
 import { type Approver, PairingError, type PairingManager } from './pairing/manager';
 import type { DeviceRecord, DeviceRegistry } from './pairing/registry';
-import { allowedSocketOrigin, sameHostOrigin } from './origin';
+import { allowedSocketOrigin, sameHostOrigin, trustedServerHost } from './origin';
 
 export const WS_PATH = '/ws';
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
@@ -111,6 +111,8 @@ export interface HubOptions {
   mode: 'live' | 'fixture';
   serverName: string;
   isLocal: (address: string | undefined) => boolean;
+  publicHost?: string;
+  originPorts?: () => readonly number[];
   log?: (line: string) => void;
   heartbeatMs?: number;
 }
@@ -155,7 +157,7 @@ export class Hub {
         socket.destroy();
         return;
       }
-      if (!allowedSocketOrigin(req.headers)) {
+      if (!trustedServerHost(req.headers.host, this.o.publicHost ? [this.o.publicHost] : []) || !allowedSocketOrigin(req.headers, this.o.originPorts?.())) {
         socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
         return;
       }

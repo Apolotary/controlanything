@@ -1,20 +1,20 @@
 /**
  * Takes recorded by the headset app (session.jsonl + frames/*.jpg, zipped by apps/quest/src/replay/zip.ts) can be
- * handed to the server over localhost (`POST /api/takes/:take`, body = the zip) so they land in the repo at
- * apps/quest/public/takes/<take>/ ready to replay (`/sim/?take=<take>`, `/quest/?replay=takes/<take>/session.jsonl`)
- * and to commit. STORE and DEFLATE entries are read; nothing else is needed for these archives.
+ * handed to the server over localhost (`POST /api/takes/:take`, body = the zip). The HTTP router stores them in
+ * CE_DATA_DIR/takes, outside the public build and Git, ready for local replay (`/sim/?take=<take>`).
+ * STORE and DEFLATE entries are read; nothing else is needed for these archives.
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
-
-export const TAKES_DIR = fileURLToPath(new URL('../../quest/public/takes/', import.meta.url));
 
 export interface ZipFile {
   name: string;
   data: Buffer;
 }
+
+const MAX_TAKE_BYTES = 64 * 1024 * 1024;
+const MAX_TAKE_FILES = 2000;
 
 /** The files of a zip archive (central directory walk). Throws on anything that is not a plain STORE/DEFLATE zip. */
 export function readZip(buf: Buffer): ZipFile[] {
@@ -28,13 +28,16 @@ export function readZip(buf: Buffer): ZipFile[] {
   }
   if (eocd < 0) throw new Error('not a zip archive (no end of central directory)');
   const count = buf.readUInt16LE(eocd + 10);
+  if (count > MAX_TAKE_FILES) throw new Error('too many files in take');
   let p = buf.readUInt32LE(eocd + 16);
   const out: ZipFile[] = [];
+  let bytes = 0;
   for (let i = 0; i < count; i++) {
     if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error('bad central directory entry');
     const method = buf.readUInt16LE(p + 10);
     const csize = buf.readUInt32LE(p + 20);
     const usize = buf.readUInt32LE(p + 24);
+    if (usize > MAX_TAKE_BYTES - bytes) throw new Error('take exceeds the 64 MB unpacked limit');
     const nameLen = buf.readUInt16LE(p + 28);
     const extraLen = buf.readUInt16LE(p + 30);
     const commentLen = buf.readUInt16LE(p + 32);
@@ -45,12 +48,16 @@ export function readZip(buf: Buffer): ZipFile[] {
     const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
     const raw = buf.subarray(start, start + csize);
     if (name.endsWith('/')) continue;
-    if (method === 0) out.push({ name, data: Buffer.from(raw) });
+    if (method === 0) {
+      if (raw.length > MAX_TAKE_BYTES - bytes) throw new Error('take exceeds the 64 MB unpacked limit');
+      out.push({ name, data: Buffer.from(raw) });
+    }
     else if (method === 8) {
-      const data = inflateRawSync(raw);
+      const data = inflateRawSync(raw, { maxOutputLength: Math.max(1, MAX_TAKE_BYTES - bytes) });
       if (usize && data.length !== usize) throw new Error(`size mismatch for ${name}`);
       out.push({ name, data });
     } else throw new Error(`unsupported compression ${method} for ${name}`);
+    bytes += out[out.length - 1]!.data.length;
   }
   return out;
 }
@@ -66,21 +73,31 @@ export function takeName(raw: string): string | undefined {
  * or not; path components that climb out are refused. Returns what was written.
  */
 export function saveTake(root: string, take: string, zip: Buffer): { dir: string; files: string[]; bytes: number } {
+  if (takeName(take) !== take) throw new Error('invalid take name');
   const files = readZip(zip);
-  if (!files.some((f) => f.name.endsWith('session.jsonl'))) throw new Error('a take needs a session.jsonl');
-  const dir = join(root, take);
-  const written: string[] = [];
-  let bytes = 0;
-  for (const f of files) {
+  const prepared = files.map((f) => {
     const parts = f.name.split('/').filter(Boolean);
     if (parts[0] === take) parts.shift();
     if (!parts.length || parts.some((s) => s === '..' || s === '.')) throw new Error(`refusing path ${f.name}`);
     const rel = parts.join('/');
+    // Never host uploaded HTML/JavaScript on the same origin as the owner's bridge.
+    if (rel !== 'session.jsonl' && !/^frames\/[A-Za-z0-9_-]+\.jpe?g$/i.test(rel)) throw new Error(`unsupported take file ${rel}`);
+    return { rel, data: f.data };
+  });
+  if (!prepared.some((f) => f.rel === 'session.jsonl')) throw new Error('a take needs a session.jsonl');
+  if (new Set(prepared.map((f) => f.rel)).size !== prepared.length) throw new Error('duplicate take file');
+  const dir = join(root, take);
+  mkdirSync(root, { recursive: true });
+  // An upload cannot overwrite an earlier capture or follow an existing take-directory symlink.
+  mkdirSync(dir);
+  const written: string[] = [];
+  let bytes = 0;
+  for (const { rel, data } of prepared) {
     const target = join(dir, rel);
     mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, f.data);
+    writeFileSync(target, data, { flag: 'wx' });
     written.push(rel);
-    bytes += f.data.length;
+    bytes += data.length;
   }
   return { dir, files: written, bytes };
 }

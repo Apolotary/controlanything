@@ -64,4 +64,21 @@ describe('takes', () => {
     expect(takeName('../x')).toBeUndefined();
     expect(takeName('a/b')).toBeUndefined();
   });
+  it('refuses active web content and duplicate files before writing a capture', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ce-takes-'));
+    try {
+      const meta = { name: 'session.jsonl', data: Buffer.from('{}') };
+      expect(() => saveTake(root, 'bad', zip([meta, { name: 'index.html', data: Buffer.from('<script>bad()</script>') }]))).toThrow(/unsupported take file/);
+      expect(() => saveTake(root, 'bad', zip([meta, meta]))).toThrow(/duplicate take file/);
+      saveTake(root, 'bad', zip([meta]));
+      expect(() => saveTake(root, 'bad', zip([meta]))).toThrow();
+      expect(readFileSync(join(root, 'bad', 'session.jsonl'), 'utf8')).toBe('{}');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  it('rejects a forged archive size before unbounded decompression', () => {
+    const archive = zip([{ name: 'session.jsonl', data: Buffer.from('{}'), deflate: true }]);
+    const central = archive.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+    archive.writeUInt32LE(65 * 1024 * 1024, central + 24);
+    expect(() => readZip(archive)).toThrow(/64 MB/);
+  });
 });

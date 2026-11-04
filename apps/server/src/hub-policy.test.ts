@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WebSocket } from 'ws';
 import { loadConfig } from './config';
 import { createContext } from './context';
-import { allowedSocketOrigin, sameHostOrigin } from './origin';
+import { allowedSocketOrigin, sameBridgeOrigin, sameHostOrigin, trustedServerHost } from './origin';
 import { createAgent } from './agent';
 
 const cleanup: (() => void)[] = [];
@@ -29,9 +29,25 @@ function harness() {
 }
 
 describe('browser origin policy', () => {
+  it('refuses attacker-controlled Host names even when browser Origin matches after DNS rebinding', () => {
+    expect(trustedServerHost('attacker.example:8787')).toBe(false);
+    expect(trustedServerHost('localhost.attacker.example:8787')).toBe(false);
+    expect(trustedServerHost('attacker.example:8787', ['attacker.example'])).toBe(true);
+    for (const host of ['localhost:8787', '127.0.0.1:8796', '[::1]:8787']) expect(trustedServerHost(host)).toBe(true);
+    const { ctx } = harness();
+    const server = new EventEmitter();
+    ctx.hub.attach(server as Server);
+    const socket = { end: vi.fn(), destroy: vi.fn() };
+    server.emit('upgrade', { url: '/ws', headers: { host: 'attacker.example:8787', origin: 'http://attacker.example:8787' } }, socket, Buffer.alloc(0));
+    expect(socket.end).toHaveBeenCalledWith(expect.stringContaining('403'));
+  });
   it.each(['http://localhost:8787', 'https://localhost:8443'])('accepts the server page at %s across ports', (origin) => {
     expect(allowedSocketOrigin({ host: 'localhost:8787', origin })).toBe(true);
     expect(sameHostOrigin({ host: 'localhost:8787', origin })).toBe(true);
+    expect(sameBridgeOrigin({ host: 'localhost:8787', origin }, [8787, 8443])).toBe(true);
+  });
+  it('rejects an unrelated browser page on another localhost port', () => {
+    expect(allowedSocketOrigin({ host: 'localhost:8787', origin: 'http://localhost:3000' }, [8787, 8443])).toBe(false);
   });
   it('accepts native sockets without assigning page ownership', () => {
     expect(allowedSocketOrigin({ host: 'localhost:8787' })).toBe(true);

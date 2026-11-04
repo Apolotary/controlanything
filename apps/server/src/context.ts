@@ -86,6 +86,8 @@ export function createContext(config: ServerConfig, deps: ContextDeps = {}): Ser
     mode: config.muse.mode,
     serverName: `${SERVER_NAME}@${SERVER_VERSION}`,
     isLocal,
+    publicHost: config.publicHost,
+    originPorts: () => [config.http.enabled ? bound.http ?? config.http.port : 0, config.https.enabled ? bound.https ?? config.https.port : 0].filter((port) => port > 0),
     log,
     heartbeatMs: deps.heartbeatMs,
   });

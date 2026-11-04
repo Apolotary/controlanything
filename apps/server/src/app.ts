@@ -37,8 +37,8 @@ import { gen3dRouter, skinsRouter } from './gen3d';
 import { MAX_AUDIO_BYTES, requestCancellation, RequestCancelledError, TranscribeInputError, TranscribeUpstreamError } from './muse';
 import { type Approver, PairingError } from './pairing/manager';
 import type { DeviceRecord } from './pairing/registry';
-import { saveTake, TAKES_DIR, takeExists, takeName } from './takes';
-import { sameHostOrigin } from './origin';
+import { saveTake, takeExists, takeName } from './takes';
+import { sameBridgeOrigin, sameHostOrigin, trustedServerHost } from './origin';
 import { helperPairUrls } from './net';
 import { helperDevices } from './helpers';
 
@@ -59,6 +59,7 @@ function issuesOf(error: { issues: { path: PropertyKey[]; message: string }[] })
 export function createApp(ctx: ServerContext): express.Express {
   const app = express();
   app.disable('x-powered-by');
+  app.use((_req, res, next) => { res.setHeader('X-Content-Type-Options', 'nosniff'); next(); });
 
   const caller = (req: Request) => {
     const address = req.socket.remoteAddress;
@@ -73,6 +74,23 @@ export function createApp(ctx: ServerContext): express.Express {
   };
 
   const api = express.Router();
+  const originPorts = () => [ctx.config.http.enabled ? ctx.bound.http ?? ctx.config.http.port : 0, ctx.config.https.enabled ? ctx.bound.https ?? ctx.config.https.port : 0].filter((port) => port > 0);
+  // A foreign browser page must not inherit this Mac's loopback ownership (including DNS rebinding).
+  // Native clients without Origin still authenticate normally; browser clients use the bridge's own origin.
+  api.use((req, res, next) => {
+    if (!trustedServerHost(req.headers.host, ctx.config.publicHost ? [ctx.config.publicHost] : [])
+      || (req.headers.origin !== undefined && !sameBridgeOrigin(req.headers, originPorts()))
+      || req.get('sec-fetch-site') === 'cross-site') {
+      res.status(403).json({ error: 'forbidden', message: 'Use this bridge from its own local address.' });
+      return;
+    }
+    next();
+  });
+  const privateRead = (req: Request, res: Response, next: NextFunction) => {
+    const c = caller(req);
+    if (c.local || c.device) return next();
+    res.status(401).json({ error: 'unauthorized', message: 'This view needs a paired device token or localhost.' });
+  };
   // generous so feature routes (e.g. image payloads) work; add new routers below, before the /api 404 handler
   api.use(express.json({ limit: '16mb' }));
 
@@ -99,7 +117,7 @@ export function createApp(ctx: ServerContext): express.Express {
   });
 
   // read-only: every socket per paired device with role, age and owner/superseded state (spot duplicate tabs)
-  api.get('/clients', (_req, res) => {
+  api.get('/clients', privateRead, (_req, res) => {
     res.json(ctx.hub.clients());
   });
 
@@ -108,7 +126,7 @@ export function createApp(ctx: ServerContext): express.Express {
   });
 
   // every model call with its model id, latency and tokens (for the demo's "which Meta model did what")
-  api.get('/muse/calls', (_req, res) => {
+  api.get('/muse/calls', privateRead, (_req, res) => {
     res.json({ mode: ctx.muse.mode, totals: ctx.calls.totals(), calls: ctx.calls.list() });
   });
 
@@ -222,8 +240,8 @@ export function createApp(ctx: ServerContext): express.Express {
   // the Muse buddy: show it real objects (POST /api/buddy/react, /api/buddy/sticker; see buddy/routes.ts)
   api.use('/buddy', buddyRouter(ctx));
 
-  // recorded takes: the headset app on this Mac hands its zip to the server (localhost only), which unpacks it into
-  // apps/quest/public/takes/<take>/ so it replays at once (/sim/?take=<take>) and can be committed
+  // Captures stay in private runtime data, outside Vite's public folder and the Git publication tree.
+  const takesDir = join(ctx.config.dataDir, 'takes');
   api.post('/takes/:take', express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '64mb' }), (req, res) => {
     if (!ctx.isLocal(req.socket.remoteAddress)) {
       res.status(403).json({ error: 'forbidden', message: 'Takes are saved into the repo from this Mac only.' });
@@ -235,16 +253,16 @@ export function createApp(ctx: ServerContext): express.Express {
       return;
     }
     try {
-      const r = saveTake(TAKES_DIR, take, req.body);
+      const r = saveTake(takesDir, take, req.body);
       ctx.log(`[takes] ${take}: ${r.files.length} files, ${Math.round(r.bytes / 1024)} KB -> ${r.dir}`);
       res.json({ ok: true, take, ...r, replay: `/sim/?take=${encodeURIComponent(take)}` });
     } catch (e) {
       res.status(400).json({ error: 'bad_take', message: (e as Error).message });
     }
   });
-  api.get('/takes/:take', (req, res) => {
+  api.get('/takes/:take', privateRead, (req, res) => {
     const take = takeName(String(req.params.take));
-    res.json({ take, exists: Boolean(take && takeExists(TAKES_DIR, take)) });
+    res.json({ take, exists: Boolean(take && takeExists(takesDir, take)) });
   });
 
   api.use((req, res) => {
@@ -261,8 +279,19 @@ export function createApp(ctx: ServerContext): express.Express {
     res.redirect(302, `/companion/?approve=${encodeURIComponent(String(req.params.pairingId))}`);
   });
 
-  // takes saved after the last build are served from the source folder, so no rebuild is needed to replay one
-  app.use('/quest/takes', express.static(TAKES_DIR));
+  // New recordings are local-only by default. Opting into LAN replay is deliberate, never publication by build.
+  app.use('/quest/takes', (req, res, next) => {
+    if (!trustedServerHost(req.headers.host, ctx.config.publicHost ? [ctx.config.publicHost] : [])
+      || (req.headers.origin !== undefined && !sameBridgeOrigin(req.headers, originPorts())) || req.get('sec-fetch-site') === 'cross-site') {
+      res.status(403).json({ error: 'forbidden', message: 'Use this bridge from its own local address.' });
+      return;
+    }
+    if (ctx.isLocal(req.socket.remoteAddress) || ctx.registry.authenticate(bearer(req)) || process.env.CE_SHARE_TAKES === '1') return next();
+    const relativePath = req.path.replace(/^\//, '');
+    // The two checked-in emulator takes are synthetic public fixtures, served by the normal static app below.
+    if (/^take-2026-11-02T02-(?:22-10|45-47)\//.test(relativePath)) return next();
+    res.status(401).json({ error: 'unauthorized', message: 'Recorded takes are private. Replay on the Mac, or explicitly enable LAN sharing with CE_SHARE_TAKES=1.' });
+  }, express.static(takesDir, { dotfiles: 'deny', index: false }));
 
   // static client apps
   app.use((req, res, next) => {

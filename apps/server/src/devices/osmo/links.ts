@@ -11,9 +11,11 @@
  *         loopback WebSocket. For when the server runs somewhere macOS will not grant Bluetooth.
  */
 import { type ChildProcess, spawn } from 'node:child_process';
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
+import { sameBridgeOrigin, trustedServerHost } from '../../origin';
+import { isLoopback } from '../../net';
 import { DumlStream, fromHex, parseDuml, toHex } from './duml';
 import { type Attitude, attitudePushPacket, batteryPushPacket, decodeRotate, OSMO_LIMITS, OSMO_NOTIFY_UUID, OSMO_SERVICE_UUID, OSMO_WRITE_UUID } from './om';
 
@@ -348,7 +350,8 @@ export class WebBluetoothGimbalLink implements GimbalLink {
   }
 
   get url(): string {
-    return `http://localhost:${this.o.port ?? WEB_LINK_PORT}/`;
+    const address = this.server?.address();
+    return `http://localhost:${address && typeof address !== 'string' ? address.port : this.o.port ?? WEB_LINK_PORT}/`;
   }
 
   /** Serve the page and wait (until `signal`) for a tab to pipe a gimbal in. */
@@ -365,6 +368,7 @@ export class WebBluetoothGimbalLink implements GimbalLink {
     const port = this.o.port ?? WEB_LINK_PORT;
     const page = webLinkPage('/pipe');
     this.server = createServer((req, res) => {
+      if (!trustedServerHost(req.headers.host)) { res.writeHead(403); res.end(); return; }
       if (req.url === '/' || req.url === '/index.html') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         res.end(page);
@@ -373,7 +377,14 @@ export class WebBluetoothGimbalLink implements GimbalLink {
         res.end();
       }
     });
-    this.wss = new WebSocketServer({ server: this.server, path: '/pipe' });
+    this.wss = new WebSocketServer({ server: this.server, path: '/pipe', maxPayload: 64 * 1024,
+      verifyClient: ({ req }: { req: IncomingMessage }) => {
+        const address = this.server?.address();
+        const listeningPort = address && typeof address !== 'string' ? address.port : port;
+        return isLoopback(req.socket.remoteAddress) && trustedServerHost(req.headers.host)
+          && sameBridgeOrigin(req.headers, [listeningPort]);
+      },
+    });
     this.wss.on('connection', (ws, req) => {
       // loopback only: the page and the server are on this Mac
       const ip = req.socket.remoteAddress ?? '';

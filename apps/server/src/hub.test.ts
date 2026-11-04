@@ -136,6 +136,29 @@ async function connect(h: Harness, token: string, extra: Partial<PayloadOf<'hell
 
 // --- tests --------------------------------------------------------------------------------
 
+describe('HTTP browser boundary', () => {
+  it('blocks cross-site and rebound requests before localhost approval, and protects private diagnostics', async () => {
+    const h = await start();
+    const body = JSON.stringify({ name: 'Untrusted browser', kind: 'mac' });
+    const foreign = await fetch(`${h.base}/api/pair/start`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://attacker.example' }, body });
+    expect(foreign.status).toBe(403);
+    const rebound = await fetch(`${h.base}/api/pair/start`, { method: 'POST', headers: { 'Content-Type': 'application/json', Host: 'attacker.example:8787', Origin: 'http://attacker.example:8787' }, body });
+    expect(rebound.status).toBe(403);
+    const crossSite = await fetch(`${h.base}/api/pair/start`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'cross-site' }, body });
+    expect(crossSite.status).toBe(403);
+    const otherLocalPort = await fetch(`${h.base}/api/pair/start`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://127.0.0.1:3000' }, body });
+    expect(otherLocalPort.status).toBe(403);
+    expect(h.ctx.registry.size).toBe(0);
+    const mac = await pairLocally(h, 'Trusted local browser');
+    h.setLocal(false);
+    expect((await fetch(`${h.base}/api/health`)).status).toBe(200);
+    expect((await fetch(`${h.base}/api/clients`)).status).toBe(401);
+    expect((await fetch(`${h.base}/api/muse/calls`)).status).toBe(401);
+    expect((await fetch(`${h.base}/api/clients`, { headers: { Authorization: `Bearer ${mac.deviceToken}` } })).status).toBe(200);
+    expect((await fetch(`${h.base}/quest/takes/private-capture/session.jsonl`)).status).toBe(401);
+  });
+});
+
 describe('pairing over WebSocket and relay', () => {
   it('shares owner master volume with all clients and late joins, while refusing a non-owner change', async () => {
     const h = await start(), mac = await pairLocally(h, 'Audio master'), guest = await pairLocally(h, 'Observer', 'devterm');
