@@ -91,6 +91,72 @@ export const SessionClaimPayload = z.object({});
 export type SessionClaimPayload = z.infer<typeof SessionClaimPayload>;
 
 /**
+ * WIRE: Muse writes the glue between the wearer's hands and a device, live, after the wearer asks (see
+ * research/36-muse-wiring-contract.md). Nothing is pre-wired: no request, no interaction.
+ */
+/** C->S (hmd). "What should my hands do?" — a chip, transcribed speech or typed text, for one armed or selected card. */
+export const WireRequestPayload = z.object({
+  cardId: z.string().min(1).max(128),
+  text: z.string().min(1).max(500),
+  source: z.enum(['chip', 'voice', 'text']),
+});
+export type WireRequestPayload = z.infer<typeof WireRequestPayload>;
+
+/** One driver action a wiring program may drive (ids from the verified driver; ranges in the action's units). */
+export const WireAction = z.object({
+  actionId: z.string().min(1).max(64),
+  label: z.string().max(64),
+  kind: z.enum(['set', 'trigger', 'toggle']),
+  min: z.number().optional(),
+  max: z.number().optional(),
+  maxRateHz: z.number().positive().max(120).optional(),
+});
+export type WireAction = z.infer<typeof WireAction>;
+
+/**
+ * S->C (hmd + companion). Progress while Muse writes and the server checks a wiring program.
+ * `codeDelta` appends streamed source while phase = writing; `code` replaces it (repairs, final text).
+ */
+export const WireProgressPayload = z.object({
+  cardId: z.string().min(1).max(128),
+  wiringId: z.string().min(1).max(64),
+  phase: z.enum(['writing', 'validating', 'dry-run', 'verifying', 'ready', 'failed']),
+  request: z.string().max(500).optional(),
+  codeDelta: z.string().max(8192).optional(),
+  code: z.string().max(8192).optional(),
+  title: z.string().max(80).optional(),
+  explanation: z.string().max(300).optional(),
+  /** Model that wrote the code; 'template' when no Meta model wrote it (always shown to the wearer). */
+  model: z.string().max(64),
+  source: z.enum(['live', 'fixture', 'template']),
+  latencyMs: z.number().nonnegative().optional(),
+  /** Validator / dry-run findings, human-readable. */
+  issues: z.array(z.string().max(200)).max(12).optional(),
+  /** e.g. "dry-run ✓ 120 frames · 3 actions". */
+  note: z.string().max(160).optional(),
+});
+export type WireProgressPayload = z.infer<typeof WireProgressPayload>;
+
+/**
+ * S->C (hmd + companion). A validated, dry-run wiring program, ready to run in the headset's sandbox.
+ * The headset runs `code` as the body of `function wire(s, out, mem)` and sends each output as a
+ * `control.event` with widgetId `wire:<actionId>` on this card; the server dispatches it through the driver.
+ */
+export const WireReadyPayload = z.object({
+  cardId: z.string().min(1).max(128),
+  wiringId: z.string().min(1).max(64),
+  code: z.string().min(1).max(8192),
+  title: z.string().max(80),
+  explanation: z.string().max(300),
+  model: z.string().max(64),
+  source: z.enum(['live', 'fixture', 'template']),
+  actions: z.array(WireAction).min(1).max(16),
+  /** Signals the program reads (e.g. ["screen", "right"]); "screen" means the wearer must calibrate the screen first. */
+  needs: z.array(z.enum(['right', 'left', 'screen'])).max(3),
+});
+export type WireReadyPayload = z.infer<typeof WireReadyPayload>;
+
+/**
  * S->C. Another socket of the same headset identity claimed the session (Quest Browser opened the app in a
  * new tab). The server ignores this socket's control/exec/scan/mode messages from now on and closes it with
  * code 4409 "superseded" after `graceMs`. The client must stop its camera, scanner and sends, and must not

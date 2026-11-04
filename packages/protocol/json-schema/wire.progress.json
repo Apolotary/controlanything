@@ -1,0 +1,123 @@
+{
+  "title": "wire.progress",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "wire.progress"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "cardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "wiringId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "writing",
+            "validating",
+            "dry-run",
+            "verifying",
+            "ready",
+            "failed"
+          ]
+        },
+        "request": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "codeDelta": {
+          "type": "string",
+          "maxLength": 8192
+        },
+        "code": {
+          "type": "string",
+          "maxLength": 8192
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "explanation": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "model": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "live",
+            "fixture",
+            "template"
+          ]
+        },
+        "latencyMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "issues": {
+          "maxItems": 12,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 160
+        }
+      },
+      "required": [
+        "cardId",
+        "wiringId",
+        "phase",
+        "model",
+        "source"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}
