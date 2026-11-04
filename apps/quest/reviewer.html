@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="color-scheme" content="dark"><title>ControlAnything · Camera demo</title><link rel="icon" href="data:,"></head>
+<body>
+<header class="top"><a href="./" class="brand">✳ ControlAnything</a><span id="mode" class="badge">Camera + touch demo</span><div class="master"><label for="volume">Sound</label><input id="volume" type="range" min="0" max="100" value="35" aria-label="Master volume"><button id="mute" aria-pressed="false">Mute</button></div></header>
+<main>
+  <section class="intro"><p class="eyebrow">NO HEADSET NEEDED</p><h1>Show Muse your world.<br><span>Make something respond.</span></h1><p>Use your phone camera or laptop webcam. Meet Buddy, then ask Muse to build an instrument you can touch.</p></section>
+  <section id="pairing" class="notice" hidden role="status"></section>
+  <div class="workspace">
+    <section class="scene-card" aria-label="Buddy and camera">
+      <div id="scene"><video id="camera" autoplay playsinline muted hidden></video><canvas id="photo" hidden aria-label="Frozen photo to show Buddy"></canvas><div id="three" aria-label="Animated Muse Buddy"></div><div id="aim" hidden><span>Put your object here</span></div><span id="scene-tag" class="scene-tag">Buddy · interactive 3D</span></div><p id="bubble" role="status">Hi! Wave hello, or show me an object.</p><span id="source"></span>
+      <div class="scene-actions"><button id="camera-start" class="primary">Use camera</button><button id="camera-flip" hidden>Switch camera</button><button id="camera-stop" hidden>Camera off</button><button id="xr" hidden>Place Buddy in AR</button></div>
+      <p id="camera-status" class="hint" role="status">Camera stays off until you choose it. Capture previews a still; Show sends that photo to Muse.</p>
+      <div class="action-grid"><button id="capture" disabled>Capture object</button><button id="show" class="primary" disabled>Show Buddy</button><button id="retake" hidden>Retake</button><button id="virtual">Virtual object</button><button id="wave">Wave hello</button><button id="pet">Pet Buddy</button><button id="high-five">High five</button></div>
+      <p id="privacy" class="hint">Photos stay on this page until you press Show. No microphone. Uploaded stills go to your connected Meta model server.</p>
+    </section>
+    <section class="instrument-card" aria-label="Muse instrument builder">
+      <p class="eyebrow">MUSE WRITES THE CONNECTION</p><h2>Your instrument, made live.</h2><p>Choose a software instrument and describe how it should feel. Muse writes and tests the connector before controls appear.</p>
+      <div class="instrument-options"><button id="choose-visual" class="selected" aria-pressed="true">Water visuals</button><button id="choose-music" aria-pressed="false">Musical synth</button></div>
+      <button id="connect" class="primary">Connect demo</button><p id="connection-status" class="hint" role="status">Uses your own server. It never requests USB MIDI, Bluetooth, or hardware access.</p>
+      <form id="ask-form"><label for="request">What would you like to make?</label><textarea id="request" rows="3" maxlength="350">Design an XY water surface and colorful knobs for ripples and hue. Touch and mouse controls only.</textarea><button id="ask" type="submit" disabled>Ask Muse to build it</button><button id="stop" type="button" hidden>Stop Muse</button></form>
+      <p id="wire-status" class="hint" role="status">Connect, then ask. No interaction is pre-wired.</p>
+      <canvas id="visual" width="640" height="360" hidden aria-label="Live visual synth"></canvas><canvas id="meter" width="640" height="120" hidden aria-label="Tone visualization driven by the software audio analyser"></canvas>
+      <div id="controls" aria-label="Muse generated controls"></div><p id="receipt" class="hint" role="status"></p>
+      <details><summary>Muse's code and progress</summary><pre id="code">Your requested connector will appear here.</pre></details>
+      <p class="hint">This camera mode uses touch and mouse. It has no headset hand tracking or real-world anchoring. Native WebXR AR is offered only when your browser supports it.</p>
+    </section>
+  </div>
+  <footer><a href="./">Quest headset experience</a><span id="model-status">Checking server…</span><a href="./gallery.html">3D control gallery</a></footer>
+</main><script type="module" src="/src/reviewer/main.ts"></script>
+</body></html>

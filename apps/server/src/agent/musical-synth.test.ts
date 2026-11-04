@@ -5,6 +5,7 @@ import { musicalSynthDraft, musicalSynthProfile, MUSICAL_SYNTH_MANIFEST as M } f
 import { midiOutputCandidates } from '../devices/midi';
 import { validateDriver } from '../devices/validate';
 import { musicalSynthCard, musicalSynthHosts } from './musical-synth';
+import { visualSynthCard } from './visual-synth';
 import { tryLink } from './link';
 import { verifyOnce } from './verify';
 import type { VerifyDeps } from './verify';
@@ -38,6 +39,15 @@ function graph(source = 'musical-synth', tone = true, releaseTailRms = 0, forced
 }
 
 describe('manifest-backed musical software instrument', () => {
+  it('keeps reviewer software cards separate from the Quest and from other reviewers', () => {
+    const a = { ...host, app: 'reviewer-software@1', deviceId: 'reviewer-a' };
+    const b = { ...a, deviceId: 'reviewer-b' };
+    for (const make of [musicalSynthCard, visualSynthCard]) {
+      expect(new Set([make(host).cardId, make(a).cardId, make(b).cardId]).size).toBe(3);
+      expect(make(a).notes).toContain('reviewer-a');
+      expect(make(host).cardId).toMatch(/-mac$/);
+    }
+  });
   it('keeps locked software and physical MIDI routes distinct; exact locked owner never falls through to OP-1', async () => {
     const locked = { ...host, ports: host.ports!.map(p => p.id === 'ce-musical-synth' ? { ...p, state: 'disconnected' as const } : p) };
     expect(musicalSynthHosts([locked])).toHaveLength(1);

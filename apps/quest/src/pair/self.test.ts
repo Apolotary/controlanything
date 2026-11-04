@@ -52,6 +52,18 @@ function deferred<T>() {
 }
 
 describe('PairingFlow (device-code)', () => {
+  it('cancels a departed page without saving late approval or starting another pairing', async () => {
+    const store = memStore(), pending = deferred<PairStartResponse>();
+    const api = fakeApi({ starts: [] });
+    api.pairStart = vi.fn(() => pending.promise);
+    const flow = new PairingFlow({ name: 'Camera demo', capabilities: [], store, api, sleep });
+    const stopped = expect(flow.ensure()).rejects.toThrow('pairing superseded');
+    flow.cancel();
+    pending.resolve(start({ status: 'approved', deviceId: 'late', deviceToken: 'late-token' }));
+    await stopped;
+    expect(store.data).toEqual({}); expect(flow.identity).toBeUndefined();
+    expect(api.pairStart).toHaveBeenCalledTimes(1);
+  });
   it('requires an explicit approval when manual pairing is requested over USB', async () => {
     const store = memStore(), approval = deferred<PairStatusResponse>();
     const pairStart = vi.fn<PairApi['pairStart']>().mockResolvedValue(start());

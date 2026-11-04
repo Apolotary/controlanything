@@ -35,7 +35,8 @@ export function virtualScreenExecutor(card?: Pick<DeviceCardPayload, 'notes'>): 
 }
 
 export function visualSynthCard(executor: DeviceInfo): DeviceCardPayload {
-  return { cardId: VISUAL_SYNTH_CARD_ID, name: VISUAL_SYNTH_NAME, maker: 'ControlAnything', model: 'Visual Synth', category: 'synthesizer',
+  const reviewer = executor.app?.startsWith('reviewer-software@') === true;
+  return { cardId: reviewer ? `visual-synth-reviewer-${executor.deviceId}` : VISUAL_SYNTH_CARD_ID, name: VISUAL_SYNTH_NAME, maker: 'ControlAnything', model: 'Visual Synth', category: 'synthesizer',
     confidence: 1, protocols: ['midi'], requires: ['midi'], source: executor.kind === 'sim' ? 'fixture' : 'live',
     notes: `${VIRTUAL_SCREEN_NOTE}${executor.deviceId}`,
     evidence: ['The built-in silent visual instrument on the Mac screen (authored in this repo, not identified).',

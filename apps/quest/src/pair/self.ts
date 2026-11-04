@@ -79,6 +79,9 @@ export class PairingFlow extends Emitter<{ state: PairState }> {
     return this.pair(gen);
   }
 
+  /** Retire a pending flow without starting another pairing or altering a saved identity. */
+  cancel(): void { this.generation++; }
+
   /** Forget the identity (revoked or user reset) and pair again. */
   async repair(): Promise<Identity> {
     clearIdentity(this.store);
