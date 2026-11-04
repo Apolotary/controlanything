@@ -3,11 +3,9 @@
  *
  *   Mac armed -> the card asks "What should your hands do?" (hands do nothing yet) -> a chip -> wire.request ->
  *   the code card types the program -> validating / dry-run / ready -> calibrate the screen (two corners) ->
- *   the program runs in the sandbox -> a fingertip on the screen sends cc22/cc23/cc24 -> both palms out stops it.
+ *   the program runs in the sandbox -> a fingertip on the screen sends the touch X / Y / pressure actions -> both palms out stops it.
  *
- * Until the real WIRE step is on the server (wire.progress / wire.ready), a stand-in inside the page plays the server's
- * part: it watches the outgoing wire.request and answers with a recorded "Touch the water" program (labelled FIXTURE).
- * Set WIRE_LIVE=1 to skip the stand-in and let the server answer.
+ * The fixture server's WIRE step answers (recorded "Touch the water" program, labelled FIXTURE); no Muse credits are used.
  *
  * Runs its own muted fixture server on PORT (default 8797). Screenshots: research/screens/wire-quest/.
  *   /Volumes/macbook_ext/Developer/muse_hack2/research/e2e-lock.sh env PORT=8797 node scripts/e2e-wire-quest.mjs
@@ -26,7 +24,6 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SCREENS = join(ROOT, 'research/screens/wire-quest');
 const PORT = Number(process.env.PORT || 8797);
 const BASE = `http://127.0.0.1:${PORT}`;
-const LIVE = process.env.WIRE_LIVE === '1';
 const UI_TIMEOUT = 30_000;
 const PIPELINE_TIMEOUT = 120_000;
 const SCREEN = /visual[\s-]?synth|laptop|macbook|computer|monitor|screen|display/i;
@@ -170,55 +167,23 @@ const dropHands = () => quest.evaluate(async () => {
   for (const device of ['hand-left', 'hand-right']) await remote.dispatch('set_connected', { device, connected: false });
 });
 
-/** What the server will say for "Touch the water": a recorded answer, labelled FIXTURE. */
-const FIXTURE_CODE = `// Touch the water: your fingertip is the ripple.
-const sc = s.screen;
-if (!sc || !sc.inside) {
-  out.set('cc24', 0);
-  mem.wasTouching = false;
-  return;
-}
-// where the finger is on the screen
-out.set('cc22', sc.u * 127);
-out.set('cc23', sc.v * 127);
-// glow while it hovers, a full splash while it touches
-const pressure = sc.touching ? 127 : Math.round(sc.hover * 36);
-out.set('cc24', pressure);
-mem.wasTouching = sc.touching;
-`;
-
-async function installStub() {
-  await quest.evaluate(({ code, live }) => {
+/** Record what crosses the socket for the wiring (the server answers; nothing is stubbed). */
+async function installTaps() {
+  await quest.evaluate(() => {
     const app = window.__ce;
-    window.__wire = { out: [], requests: [], progress: [] };
+    window.__wire = { out: [], requests: [], phases: [], ready: null, progress: [] };
     app.ws.tap('out', ({ type, payload }) => {
       if (type === 'control.event' && String(payload.widgetId).startsWith('wire:')) window.__wire.out.push({ ...payload, at: performance.now() });
       if (type === 'wire.request') window.__wire.requests.push(payload);
     });
-    if (live) return;
-    // The stand-in for the server's WIRE step: stream the program, validate, dry-run, ready.
-    app.ws.tap('out', ({ type, payload }) => {
-      if (type !== 'wire.request') return;
-      const wiringId = `w-${Date.now()}`;
-      const base = { cardId: payload.cardId, wiringId, request: payload.text, model: 'muse-spark-1.3', source: 'fixture' };
-      const send = (p) => { window.__wire.progress.push(p.phase); app.wiring.onProgress({ ...base, ...p }); };
-      let i = 0;
-      send({ phase: 'writing' });
-      const timer = setInterval(() => {
-        if (i < code.length) { send({ phase: 'writing', codeDelta: code.slice(i, i + 24) }); i += 24; return; }
-        clearInterval(timer);
-        setTimeout(() => send({ phase: 'validating', code }), 300);
-        setTimeout(() => send({ phase: 'dry-run', note: 'dry-run ✓ 120 frames · 3 actions' }), 900);
-        setTimeout(() => send({ phase: 'verifying' }), 1400);
-        setTimeout(() => {
-          const act = (actionId, label) => ({ actionId, label, kind: 'set', min: 0, max: 127, maxRateHz: 60 });
-          app.wiring.onReady({ ...base, code, title: 'Touch the water', explanation: 'Your fingertip on the screen is a ripple: where you touch is where it splashes; a hovering finger leaves a soft glow.',
-            actions: [act('cc22', 'Touch X'), act('cc23', 'Touch Y'), act('cc24', 'Touch pressure')], needs: ['right', 'screen'] });
-        }, 1800);
-      }, 55);
+    app.ws.tap('in', ({ type, payload }) => {
+      if (type === 'wire.progress') { window.__wire.phases.push(payload.phase); window.__wire.progress.push({ phase: payload.phase, source: payload.source, model: payload.model, note: payload.note }); }
+      if (type === 'wire.ready') window.__wire.ready = payload;
     });
-  }, { code: FIXTURE_CODE, live: LIVE });
+  });
 }
+/** The three ids the program writes, in order: touch X, touch Y, pressure. */
+const touchIds = () => quest.evaluate(() => [...window.__wire.ready.code.matchAll(/out\.set\('([^']+)'/g)].map((m) => m[1]).filter((id, i, all) => all.indexOf(id) === i).slice(0, 3));
 
 async function run() {
   await mkdir(SCREENS, { recursive: true });
@@ -244,7 +209,7 @@ async function run() {
       window.__ce.ws.tap('in', ({ type, payload }) => { if (types.has(type)) window.__judge.events.push({ type, payload }); });
       window.__ce.ws.tap('out', ({ type, payload }) => { if (type !== 'scan.frame') window.__judge.requests.push({ type, payload }); });
     });
-    await installStub();
+    await installTaps();
     await quest.locator('#btn-enter').click();
     await waitQuest(() => window.__ce.renderer.xr.isPresenting && window.__ce.cameraState === 'on');
   });
@@ -313,8 +278,15 @@ async function run() {
   await screenshot('05b-code-streaming');
   await until('the program is ready and the screen needs calibrating', () => quest.evaluate(() => window.__ce.wiring.phase === 'calibrating'), 20_000);
   const card = await quest.evaluate(() => window.__ce.hud.root.userData.wire.card);
-  assert(/muse-spark-1\.3 (is|wired)/.test(card.header), `header names the model (${card.header})`);
+  assert(/ (is wiring|wired) "Touch the water"/.test(card.header), `header names the request (${card.header})`);
   assert.equal(card.badge, 'FIXTURE', 'the source is labelled honestly');
+  const phases = await quest.evaluate(() => window.__wire.phases);
+  for (const phase of ['writing', 'validating', 'dry-run', 'ready']) assert(phases.includes(phase), `wire.progress ${phase} arrived (${phases})`);
+  const ready = await quest.evaluate(() => window.__wire.ready);
+  assert(ready && ready.cardId === cardId && ready.actions.length >= 3 && ready.needs.includes('screen'), `wire.ready names the actions and needs the screen (${JSON.stringify(ready?.needs)})`);
+  const [idX, idY, idP] = await touchIds();
+  assert(idX && idY && idP, `the program writes X, Y and pressure (${idX} ${idY} ${idP})`);
+  console.log(`  actions: ${ready.actions.map((a) => `${a.actionId}=${a.label}`).join(', ')}`);
   console.log(`  header: ${card.header} · badge ${card.badge} · phase "${card.phase}"`);
   await screenshot('06-calibrate-top-left');
 
@@ -351,19 +323,22 @@ async function run() {
     const since = await quest.evaluate(() => window.__wire.out.length);
     // hover 6 cm in front of the middle of the screen, then touch, then drag right
     await hands({ left, right: { tip: pt(geometry.mid, 0.06), pose: 'point' } }, 25);
-    const hover = await quest.evaluate(() => window.__wire.out.filter((e) => e.widgetId === 'wire:cc24').slice(-1)[0]?.value);
-    assert(hover > 0 && hover < 127, `hovering sends a soft glow (cc24=${hover})`);
+    const last = (id) => quest.evaluate((id) => window.__wire.out.filter((e) => e.widgetId === `wire:${id}`).slice(-1)[0]?.value, id);
+    const range = await quest.evaluate((id) => { const a = window.__wire.ready.actions.find((x) => x.actionId === id); return { min: a.min ?? 0, max: a.max ?? 1 }; }, idP);
+    const hover = await last(idP);
+    assert(hover > range.min && hover < range.max, `hovering sends a soft glow (${idP}=${hover} of ${range.min}..${range.max})`);
     await hands({ left, right: { tip: pt(geometry.mid, 0.003), pose: 'point' } }, 25);
-    const touch = await quest.evaluate(() => window.__wire.out.filter((e) => e.widgetId === 'wire:cc24').slice(-1)[0]?.value);
-    assert.equal(touch, 127, 'touching sends full pressure');
-    const x0 = await quest.evaluate(() => window.__wire.out.filter((e) => e.widgetId === 'wire:cc22').slice(-1)[0]?.value);
+    const touch = await last(idP);
+    assert.equal(touch, range.max, 'touching sends full pressure');
+    const x0 = await last(idX);
     for (let i = 1; i <= 8; i++) await hands({ left, right: { tip: pt(geometry.mid.map((n, k) => n + geometry.right[k] * i * 0.02), 0.003), pose: 'point' } }, 3);
     await frames(6);
-    const x1 = await quest.evaluate(() => window.__wire.out.filter((e) => e.widgetId === 'wire:cc22').slice(-1)[0]?.value);
-    assert(x1 > x0 + 10, `dragging right moves Touch X (${x0} -> ${x1})`);
+    const x1 = await last(idX);
+    assert(x1 > x0 + (range.max - range.min) * 0.05, `dragging right moves Touch X (${x0} -> ${x1})`);
     const events = await quest.evaluate((n) => window.__wire.out.slice(n), since);
-    assert(events.every((e) => /^wire:cc2[234]$/.test(e.widgetId)), 'Only wire:<actionId> events go out');
-    console.log(`  ${events.length} wire events; X ${Math.round(x0)} -> ${Math.round(x1)}; pressure ${hover} (hover) -> ${touch} (touch)`);
+    const allowed = new Set(await quest.evaluate(() => window.__wire.ready.actions.map((a) => `wire:${a.actionId}`)));
+    assert(events.length > 0 && events.every((e) => allowed.has(e.widgetId)), 'Only wire:<actionId> events for the ready actions go out');
+    console.log(`  ${events.length} wire events; X ${Math.round(x0 * 100) / 100} -> ${Math.round(x1 * 100) / 100}; pressure ${hover} (hover) -> ${touch} (touch)`);
     await screenshot('08-touching');
     // the wrist menu stays shut while the hands work
     await hands({ left: { offset: [-0.18, -0.12, -0.32], pose: 'open', palm: 'toward' }, right: { tip: pt(geometry.mid, 0.05), pose: 'point' } }, 40);
@@ -376,8 +351,9 @@ async function run() {
     const out = await quest.evaluate(() => window.__wire.out.length);
     await hands({ left: { offset: [-0.22, -0.05, -0.45], pose: 'open', palm: 'out' }, right: { offset: [0.22, -0.05, -0.45], pose: 'open', palm: 'out' } }, 30);
     await until('the wiring stopped', () => quest.evaluate(() => window.__ce.wiring.phase === 'stopped'), 5000);
-    const lift = await quest.evaluate((n) => window.__wire.out.slice(n).filter((e) => e.widgetId === 'wire:cc24').map((e) => e.value), out);
-    assert.equal(lift[lift.length - 1], 0, `the pressure lifts to 0 on stop (${lift})`);
+    const [, , idP] = await touchIds();
+    const lift = await quest.evaluate(({ n, id }) => window.__wire.out.slice(n).filter((e) => e.widgetId === `wire:${id}`).map((e) => e.value), { n: out, id: idP });
+    assert(lift.length && lift[lift.length - 1] <= 0.001, `the touch lifts to its minimum on stop (${lift.slice(-4)})`);
     const card = await quest.evaluate(() => window.__ce.hud.root.userData.wire.card);
     assert(/stopped/.test(card.pill), `pill says stopped (${card.pill})`);
     const after = await quest.evaluate(() => window.__wire.out.length);
@@ -400,6 +376,15 @@ async function run() {
 
 try { await run(); } catch (error) {
   console.error(`\nFAIL: ${error.stack ?? error}`);
+  try {
+    const dump = await quest.evaluate(() => {
+      const app = window.__ce;
+      return { wiring: app.wiring?.snapshot?.(), lockedId: app.lockedId, frameErrors: app.frameErrors, wireView: app.hud.root.userData.wire, hudLocked: app.hud.locked,
+        canControl: [...app.modes.tags.values()].map((t) => ({ card: t.cardId, target: t.targetId, conn: t.connection, can: app.canControl(t.cardId) })),
+        log: document.querySelector('#log')?.innerText?.split('\n').slice(-12) };
+    });
+    console.error(`\n-- quest state --\n${JSON.stringify(dump, null, 1).slice(0, 2500)}`);
+  } catch { /* page gone */ }
   console.error(`\n-- browser log --\n${browserLog.slice(-25).join('\n')}`);
   console.error(`\n-- server log (tail) --\n${serverLog.slice(-2500)}`);
   process.exitCode = 1;
