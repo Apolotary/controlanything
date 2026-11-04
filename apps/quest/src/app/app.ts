@@ -212,7 +212,7 @@ export class QuestApp {
     this.recorder.spaceBoundary('reference-reset');
     // A new XR origin invalidates the heading captured when the clutch engaged.
     this.clearHandControl();
-    this.wiring?.reset('XR reference space changed', true);
+    this.suspendWiring('XR reference space changed', true);
     this.projects?.pauseForNavigation();
   };
   readonly mic = new Mic();
@@ -253,9 +253,10 @@ export class QuestApp {
   private readonly nonDominant: Handedness;
   private candidate = { id: null as string | null, since: 0, shown: null as string | null };
   lockedId: string | null = null;
-  private virtualSelection?: { requestId: string; position: Vector3; timeout: ReturnType<typeof setTimeout> };
-  private visualSynthIntent?: { phase: 'pending' | 'unavailable'; message: string; deviceId?: string; attemptedReadyKey: string };
+  private virtualSelection?: { requestId: string; position: Vector3; timeout: ReturnType<typeof setTimeout>; instrument?: 'visual-synth' | 'musical-synth' };
+  private visualSynthIntent?: { phase: 'pending' | 'unavailable'; message: string; deviceId?: string; attemptedReadyKey: string; instrument?: 'visual-synth' | 'musical-synth' };
   private visualSynthReadyKey = '';
+  private musicalSynthReadyKey = '';
   private readonly virtualCards = new Set<string>();
   private readonly consumed = { left: false, right: false };
   private readonly specByCard = new Map<string, string>();
@@ -297,7 +298,7 @@ export class QuestApp {
       this.page.log(`desktop emulator: IWER ${this.emulator.device.version} (${this.emulator.device.name}${this.emulator.devui ? ', DevUI' : ''})`, 'ok');
     }
     await this.setupHud();
-    this.spatial = createSpatialInput(this.scene, this.desktopCam, this.renderer, { meshes: this.params.get('hands') !== '0' });
+    this.spatial = createSpatialInput(this.scene, this.desktopCam, this.renderer, { meshes: this.params.get('hands') === '1' });
     (this.hud as Hud & { setSpatialInput?: (s: SpatialInput) => void }).setSpatialInput?.(this.spatial);
     // buddy: the Muse buddy mascot (src/buddy), wrist palette → Buddy; window.__ce.buddy for scripts; ?buddy=0 turns it off
     if (this.params.get('buddy') !== '0') {
@@ -315,7 +316,10 @@ export class QuestApp {
     this.renderer.setAnimationLoop((t, f) => this.frame(t, f));
     void this.connect();
     // Back on a visible page (or out of a hidden XR session): a busy or lost camera retries at once.
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') this.retryCameraNow(); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') this.retryCameraNow();
+      else this.suspendWiring('Quest page hidden');
+    });
     const replay = this.params.get('replay');
     if (replay) await this.startReplay(replay, (this.params.get('replayMode') as ReplayMode) ?? 'playback');
     if (this.params.get('record') === '1') this.page.log('To record a take, prepare the camera and press Record take before entering AR.');
@@ -555,6 +559,7 @@ export class QuestApp {
     hud.on('helperSkip', () => this.skipHelper());
     hud.on('helperPair', () => this.openHelper());
     hud.on('visualSynth', () => this.selectVisualSynth());
+    hud.on('musicalSynth', () => this.selectMusicalSynth());
     hud.on('identifyArea', () => { void this.beginManualRegion(); });
     hud.on('menuOpened', () => { this.cancelManualRegion(); });
     hud.on('askMuseGeneral', () => { this.cancelManualRegion(); this.clearHandControl(); this.projects?.close(); this.canvas?.close(); this.scanner.stop(); void this.assistant?.toggleGeneral(); });
@@ -638,7 +643,8 @@ export class QuestApp {
       selected: () => {
         const tag = this.modes.mode === 'control' && this.lockedId ? this.modes.tags.get(this.lockedId) : undefined;
         const target = tag ? this.targets.get(tag.targetId) : undefined;
-        return tag?.cardId && target ? { cardId: tag.cardId, targetId: tag.targetId, anchor: target.position, label: tag.name ?? tag.label ?? 'device' } : undefined;
+        return tag?.cardId && target ? { cardId: tag.cardId, targetId: tag.targetId, anchor: target.position, label: tag.name ?? tag.label ?? 'device',
+          instrument: tag.cardId === 'musical-synth-mac' ? 'musical-synth' as const : undefined } : undefined;
       },
       canControl: (cardId) => this.canControl(cardId),
       send: (type, payload) => !!this.ws.send(type, payload, { to: 'server' }),
@@ -833,8 +839,9 @@ export class QuestApp {
       canStop: !!this.activeSetup || this.armedCards.size > 0, visualSynthSelection: this.visualSynthIntent });
     const tag = this.lockedId ? this.modes.tags.get(this.lockedId) : undefined;
     this.hud.setDeviceState?.(tag ? { targetId: tag.targetId, connection: tag.connection, hint: tag.hint, action: tag.action,
-      screenGuide: !!tag.cardId && !!this.virtualCards?.has(tag.cardId) && tag.connection !== 'ready',
-      silentVisual: !!tag.cardId && !!this.virtualCards?.has(tag.cardId),
+      screenGuide: !!tag.cardId && tag.cardId !== 'musical-synth-mac' && !!this.virtualCards?.has(tag.cardId) && tag.connection !== 'ready',
+      silentVisual: !!tag.cardId && tag.cardId !== 'musical-synth-mac' && !!this.virtualCards?.has(tag.cardId),
+      musicalSynth: tag.cardId === 'musical-synth-mac',
       pairingSeconds: this.pairingUntil ? Math.max(1, Math.ceil((this.pairingUntil - performance.now()) / 1000)) : undefined,
       busy: tag.busy, sentence: tag.sentence, canvasReady: !!tag.cardId && this.canvas?.hasDocument(tag.cardId), handControl: this.handMapping?.targetId === tag.targetId,
       legacyPerform: this.params.has('perform'),
@@ -1225,12 +1232,21 @@ export class QuestApp {
 
   /** Choose the known virtual instrument, without identifying a laptop or enabling any controls. */
   selectVisualSynth(deviceId?: string, from?: { label?: string; frameId?: string; detId?: string; position?: Vector3 }): boolean {
-    if (!this.session || !this.lastFrame) { this.hud.toast('Enter AR first, then choose Visual synth.', 'info'); return false; }
-    from ??= this.visualSynthFrom;
-    this.visualSynthFrom = from;
+    return this.selectVirtualInstrument('visual-synth', deviceId, from);
+  }
+
+  /** The second software instrument still needs an explicit Mac Sound on and a Muse wiring request. */
+  selectMusicalSynth(deviceId?: string): boolean { return this.selectVirtualInstrument('musical-synth', deviceId); }
+
+  private selectVirtualInstrument(instrument: 'visual-synth' | 'musical-synth', deviceId?: string, from?: { label?: string; frameId?: string; detId?: string; position?: Vector3 }): boolean {
+    const music = instrument === 'musical-synth';
+    if (!this.session || !this.lastFrame) { this.hud.toast(`Enter AR first, then choose ${music ? 'Musical synth' : 'Visual synth'}.`, 'info'); return false; }
+    if (!music) from ??= this.visualSynthFrom;
     this.release();
     this.setMode('control');
-    this.visualSynthIntent = { phase: 'pending', message: 'Opening visuals in your paired Mac companion…', deviceId, attemptedReadyKey: this.visualSynthReadyKey ?? '' };
+    this.visualSynthFrom = from;
+    this.visualSynthIntent = { phase: 'pending', message: music ? 'Opening the musical synth. Choose Sound on in the paired Mac companion.' : 'Opening visuals in your paired Mac companion…', deviceId,
+      attemptedReadyKey: (music ? this.musicalSynthReadyKey : this.visualSynthReadyKey) ?? '', instrument };
     if (!this.ws.open) { this.visualSynthUnavailable('Reconnect to the server and keep your paired Mac companion tab visible.'); return false; }
     // A pinched laptop/monitor box places the ring on the real screen; the wrist palette places it ahead.
     const position = from?.position?.clone() ?? new Vector3(0, -.05, -1.2).applyQuaternion(this.lastFrame.head.quaternion).add(this.lastFrame.head.position);
@@ -1240,8 +1256,8 @@ export class QuestApp {
       this.clearVirtualSelection(false);
       this.visualSynthUnavailable('The Mac did not respond. Bring your paired companion tab to the front in Chrome, then Retry.');
     }, 10_000);
-    this.virtualSelection = { requestId, position, timeout };
-    const sent = this.ws.send('target.select', { virtual: 'visual-synth', requestId, deviceId,
+    this.virtualSelection = { requestId, position, timeout, instrument };
+    const sent = this.ws.send('target.select', { virtual: instrument, requestId, deviceId,
       position: { x: position.x, y: position.y, z: position.z },
       ...(from?.label ? { label: from.label.slice(0, 80) } : {}),
       ...(from?.frameId && from.detId ? { frameId: from.frameId, detId: from.detId } : {}) }, { to: 'server' });
@@ -1296,6 +1312,7 @@ export class QuestApp {
   private disconnectVisualSynthSelection(): void {
     this.clearVirtualSelection(false);
     this.visualSynthReadyKey = '';
+    this.musicalSynthReadyKey = '';
     if (!this.visualSynthIntent) return;
     this.visualSynthIntent.phase = 'unavailable';
     this.visualSynthIntent.message = 'Reconnect to the server. Keep the paired Mac companion tab visible.';
@@ -1305,17 +1322,22 @@ export class QuestApp {
   /** A newly available renderer resumes only the requested selection, never setup or arming. */
   private resumeVisualSynthSelection(): void {
     const intent = this.visualSynthIntent;
+    const music = intent?.instrument === 'musical-synth';
+    const readyKey = music ? this.musicalSynthReadyKey : this.visualSynthReadyKey;
     if (intent?.phase !== 'unavailable' || !this.session || this.modes.mode !== 'control' || !this.ws.open
-      || !this.visualSynthReadyKey || intent.attemptedReadyKey === this.visualSynthReadyKey) return;
-    const ready = this.visualSynthReadyKey.split('|');
+      || !readyKey || intent.attemptedReadyKey === readyKey) return;
+    const ready = readyKey.split('|');
     if (intent.deviceId ? !ready.includes(intent.deviceId) : ready.length !== 1) return;
-    this.selectVisualSynth(intent.deviceId);
+    if (music) this.selectMusicalSynth(intent.deviceId); else this.selectVisualSynth(intent.deviceId);
   }
 
   private updateVisualSynthPresence(devices: PayloadOf<'presence'>['devices']): void {
     this.visualSynthReadyKey = devices.filter((device) => device.online && device.capabilities.includes('midi') && (device.kind === 'sim' || device.kind === 'mac' && device.role === 'companion')
       && device.ports?.some((port) => port.id === 'ce-visual-synth' && port.kind === 'midi-out' && port.state === 'connected'))
       .map((device) => device.deviceId).sort().join('|');
+    this.musicalSynthReadyKey = devices.filter(device => device.online && device.capabilities.includes('midi') && (device.kind === 'sim' || device.kind === 'mac' && device.role === 'companion')
+      && device.ports?.some(port => port.id === 'ce-musical-synth' && port.kind === 'midi-out' && port.state === 'connected'))
+      .map(device => device.deviceId).sort().join('|');
     this.resumeVisualSynthSelection();
   }
 
@@ -1330,19 +1352,20 @@ export class QuestApp {
     if (!pending || result.requestId !== pending.requestId) return;
     this.clearVirtualSelection(false);
     if (!this.session || this.modes.mode !== 'control') return;
-    if (!result.ok || !result.cardId) { this.visualSynthUnavailable(result.reason ?? 'Bring your paired Mac companion tab to the front in Chrome.'); return; }
+    const music = pending.instrument === 'musical-synth';
+    if (!result.ok || !result.cardId) { this.visualSynthUnavailable(result.reason ?? (music ? 'Enable sound in the paired Mac companion, then choose Retry.' : 'Bring your paired Mac companion tab to the front in Chrome.')); return; }
     const tag = this.modes.byCard(result.cardId);
     if (!tag) { this.visualSynthUnavailable('The device list is still updating. Choose Retry.'); return; }
     this.virtualCards.add(result.cardId);
     let target = this.targets.byCard(result.cardId);
     if (!target) {
-      target = this.materializeTarget({ id: tag.targetId, label: tag.name ?? 'ControlAnything Visual Synth',
+      target = this.materializeTarget({ id: tag.targetId, label: tag.name ?? (music ? 'ControlAnything Synth' : 'ControlAnything Visual Synth'),
         position: pending.position.toArray(), status: 'locked', confirmed: false, sizeM: [.24, .14, .01] }, result.cardId);
       target = this.targets.reattach(tag.targetId, target, result.cardId);
     }
     target.position.copy(pending.position);
     target.locating = false; target.method = 'virtual-display'; target.confirmed = false;
-    target.label = tag.name ?? 'ControlAnything Visual Synth';
+    target.label = tag.name ?? (music ? 'ControlAnything Synth' : 'ControlAnything Visual Synth');
     this.hud.upsertTarget(toHudTarget(target));
     this.lock(target.id, 'virtual-synth', { send: false });
     this.replayLocatedSpec(result.cardId);
@@ -2026,6 +2049,19 @@ export class QuestApp {
     this.hud.showConfirm(null); this.release(); this.refreshTags();
   }
 
+  /** A suspended Worker cannot send a reliable final gate-off. Full Stop also releases the Mac engine and server authority. */
+  private suspendWiring(reason: string, invalidatePlane = false): void {
+    const wiring = this.wiring;
+    const active = wiring && wiring.phase !== 'idle' || this.armedCards?.has('musical-synth-mac') || this.activeSetup === 'musical-synth-mac';
+    if (active) {
+      this.tangible?.release('suspended');
+      this.projects?.pauseForNavigation();
+      this.stopControls();
+      this.ws.send('panic', { reason }, { to: 'server' });
+    }
+    wiring?.reset(reason, invalidatePlane);
+  }
+
   /** Desktop helper: scanning is automatic whenever Annotate is active. */
   toggleScan(): void {
     if (this.modes.mode !== 'annotate') return;
@@ -2274,7 +2310,7 @@ export class QuestApp {
         return { inXr: !!this.session && !this.superseded && this.session.visibilityState !== 'hidden',
           busy: !!this.onboarding?.visible || this.onboarding?.state === 'shown', boxes: this.visibleTargets.size,
           selected: !!this.lockedId || !!this.visualSynthIntent || !!this.virtualSelection,
-          controllable: !!cardId && this.canControl(cardId), cardId,
+          controllable: !!cardId && this.canControl(cardId), cardId, instrument: cardId === 'musical-synth-mac' ? 'musical-synth' : undefined,
           wire: (this.wiring?.snapshot() ?? {}) as TutorialProbe['wire'],
           menuOpen: !!palette?.visible && palette.anchor.open,
           buddyOpen: !!(this as unknown as { buddy?: { isOpen(): boolean } }).buddy?.isOpen() };
@@ -2366,7 +2402,7 @@ export class QuestApp {
     if (xrFrame && !refSpace) return;
     const inXr = Boolean(xrFrame && refSpace);
     if (xrFrame && refSpace && refSpace !== this.refSpace) {
-      this.wiring?.reset('XR reference space changed', true);
+      this.suspendWiring('XR reference space changed', true);
       this.refSpace = refSpace;
       this.xrHit.detach();
       this.xrHit.attach(xrFrame.session, refSpace);
@@ -2563,6 +2599,7 @@ export class QuestApp {
     if (this.superseded) return;
     this.superseded = true;
     const quietly = (fn: () => void) => { try { fn(); } catch { /* partly initialised */ } };
+    quietly(() => this.suspendWiring('Quest tab superseded', true));
     quietly(() => this.ws.stop());
     clearTimeout(this.cameraRetry?.timer);
     this.cameraRetry = undefined;
@@ -2632,12 +2669,12 @@ export class QuestApp {
         // widget move nor a held clutch can resume control without the wearer's next action.
         this.cancelManualRegion(); this.projects?.pauseForNavigation(); this.assistant?.cancel(); this.clearVirtualSelection();
         this.controls.clear(); this.clearHandControl(); this.hud.cancelInteractions?.(); this.refreshHome();
-        this.wiring?.reset('XR session hidden');
+        this.suspendWiring('XR session hidden');
         this.recorder.pose(null, {}, true);
       });
       s.session.addEventListener('end', () => {
         if (this.session !== s.session) return;
-        this.wiring?.reset('XR session ended', true);
+        this.suspendWiring('XR session ended', true);
         this.cancelManualRegion(); this.release();
         this.scanner.stop();
         this.hud.setDeck({ open: false });

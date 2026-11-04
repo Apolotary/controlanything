@@ -37,7 +37,8 @@ export class SpatialInput {
 
   constructor(scene: Scene, private readonly camera: PerspectiveCamera, private readonly renderer: WebGLRenderer, opts: { mouse?: boolean; meshes?: boolean } = {}) {
     // Hand outlines (and Touch Plus controllers) come from this app, not cdn.jsdelivr.net: the Quest on USB has no
-    // internet path. ?hands=0 turns the meshes off; pointers work either way.
+    // internet path. The app enables optional outlines with ?hands=1; its default
+    // feedback is just fingertips. Tracking and pointers work either way.
     this.input = new XRInputManager({
       scene, camera,
       assetLoader: opts.meshes === false

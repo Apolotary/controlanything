@@ -17,6 +17,7 @@ import { clearPlane, loadPlane, planePoint, savePlane, type ScreenPlane } from '
 import { WiringRuntime, type StopKind, type WireEmit, type WiringProgram } from './runtime';
 
 export const WIRE_CHIPS = ['Touch the water', 'Hands as knobs', 'Surprise me'] as const;
+export const MUSICAL_WIRE_CHIPS = ['Play like a theremin', 'Pinch to play notes', 'Surprise me'] as const;
 export const WIRE_TIMING = {
   /** title + explanation stay up this long once the program runs, then the card collapses to a pill */
   explainMs: 6000,
@@ -30,7 +31,7 @@ export const WIRE_TIMING = {
 
 export interface WiringHost {
   /** The selected, set-up device the wiring applies to; undefined when none (or not in Control). */
-  selected(): { cardId: string; targetId: string; anchor: Vector3; label: string } | undefined;
+  selected(): { cardId: string; targetId: string; anchor: Vector3; label: string; instrument?: 'visual-synth' | 'musical-synth' } | undefined;
   canControl(cardId: string): boolean;
   /** Send a client message to the server. */
   send(type: 'wire.request', payload: { cardId: string; text: string; source: 'chip' | 'voice' | 'text' }): boolean;
@@ -480,7 +481,7 @@ export class WiringController {
             : phase === 'running' ? `${w.title || 'Wiring'} · running`
               : phase === 'failed' ? 'Could not wire that · try again'
                 : phase === 'stopped' ? 'Stopped · ask again' : `${w.title || 'Wiring'} · ready`;
-    const chips = busy ? [] : [...WIRE_CHIPS];
+    const chips = busy ? [] : [...(sel.instrument === 'musical-synth' ? MUSICAL_WIRE_CHIPS : WIRE_CHIPS)];
     const code: WireCodeView | undefined = w ? {
       wiringId: w.wiringId || 'pending', phase, model: w.model || 'Muse', source: w.wireSource, request: w.request, code: w.code, phaseLine: w.phaseLine,
       ...(w.title ? { title: w.title } : {}), ...(w.explanation ? { explanation: w.explanation } : {}),
@@ -499,5 +500,8 @@ export class WiringController {
   }
 
   /** For the HUD's own chip ids. */
-  chipText(index: number): string | undefined { return WIRE_CHIPS[clamp(index, 0, WIRE_CHIPS.length - 1)]; }
+  chipText(index: number): string | undefined {
+    const chips = this.host.selected()?.instrument === 'musical-synth' ? MUSICAL_WIRE_CHIPS : WIRE_CHIPS;
+    return chips[clamp(index, 0, chips.length - 1)];
+  }
 }

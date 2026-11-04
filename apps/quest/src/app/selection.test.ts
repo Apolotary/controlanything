@@ -229,6 +229,34 @@ describe('direct visual synth selection', () => {
     return state;
   };
 
+  it('requests the distinct musical device, waits for Sound on and retries only its audio-ready port', () => {
+    const { app, ws, receive } = headset();
+    expect(app.selectMusicalSynth()).toBe(true);
+    let pending = Reflect.get(app, 'virtualSelection');
+    expect(ws.send).toHaveBeenLastCalledWith('target.select', expect.objectContaining({ virtual: 'musical-synth', requestId: pending.requestId }), { to: 'server' });
+    expect(ws.send.mock.calls.some(([type]) => ['wire.request', 'control.setup', 'control.event'].includes(type))).toBe(false);
+    receive('onVirtualSelection', { requestId: pending.requestId, ok: false, reason: 'Enable sound in the paired Mac companion, then try again.' });
+    expect(Reflect.get(app, 'visualSynthIntent')).toMatchObject({ instrument: 'musical-synth', phase: 'unavailable', message: expect.stringContaining('Enable sound') });
+    const count = ws.send.mock.calls.length;
+    const device = { deviceId: 'mac', name: 'Mac', kind: 'mac', role: 'companion', online: true, capabilities: ['midi'] };
+    receive('updateVisualSynthPresence', [{ ...device, ports: [{ id: 'ce-visual-synth', kind: 'midi-out', state: 'connected' }] }]);
+    expect(ws.send.mock.calls.length).toBe(count);
+    receive('updateVisualSynthPresence', [{ ...device, ports: [{ id: 'ce-musical-synth', kind: 'midi-out', state: 'connected' }] }]);
+    pending = Reflect.get(app, 'virtualSelection');
+    expect(pending.instrument).toBe('musical-synth');
+    expect(ws.send).toHaveBeenLastCalledWith('target.select', expect.objectContaining({ virtual: 'musical-synth' }), { to: 'server' });
+    receive('clearVirtualSelection', true);
+  });
+
+  it('names a selected musical target honestly and excludes the silent visual screen guide', () => {
+    const { app, modes, receive, hud } = headset();
+    app.selectMusicalSynth(); const pending = Reflect.get(app, 'virtualSelection');
+    modes.accept({ cardId: 'musical-synth-mac', label: 'ControlAnything Synth', name: 'ControlAnything Synth', connection: 'setup' });
+    receive('onVirtualSelection', { requestId: pending.requestId, ok: true, cardId: 'musical-synth-mac' });
+    expect(app.targets.byCard('musical-synth-mac')?.label).toBe('ControlAnything Synth');
+    expect(hud.setDeviceState).toHaveBeenLastCalledWith(expect.objectContaining({ musicalSynth: true, screenGuide: false, silentVisual: false }));
+  });
+
   it('requires a connected AR session and never starts setup while selecting', () => {
     const { app, ws } = shell();
     expect(app.selectVisualSynth()).toBe(false);

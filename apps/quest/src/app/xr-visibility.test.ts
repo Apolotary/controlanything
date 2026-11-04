@@ -26,17 +26,17 @@ async function setup() {
   const tag = { targetId: 'target', cardId: 'card', connection: 'ready' };
   const controls = new ControlSender(event => { if (app.canControl('card')) sent.push(event); }, 30, () => 0);
   Object.assign(app, {
-    prepareMedia: vi.fn(), renderer: {}, scanner: { stop: vi.fn() }, hud: { setDeck: vi.fn(), cancelInteractions: vi.fn() },
-    release: vi.fn(), clearAnnotations: vi.fn(), setMode: vi.fn(), refreshHome: vi.fn(), refreshHelper: vi.fn(), loadHelper: vi.fn(),
-    roomAnchors: { begin: vi.fn() }, identity: { deviceId: 'headset' }, params: new URLSearchParams(),
+    prepareMedia: vi.fn(), renderer: {}, scanner: { stop: vi.fn() }, hud: { setDeck: vi.fn(), cancelInteractions: vi.fn(), setArmed: vi.fn(), showConfirm: vi.fn() },
+    release: vi.fn(), refreshTags: vi.fn(), clearAnnotations: vi.fn(), setMode: vi.fn(), refreshHome: vi.fn(), refreshHelper: vi.fn(), loadHelper: vi.fn(),
+    roomAnchors: { begin: vi.fn(), end: vi.fn() }, identity: { deviceId: 'headset' }, params: new URLSearchParams(),
     targets: { targets: new Map(), get: () => ({ locating: false }) }, poses: { clear: vi.fn() },
     modes: { mode: 'control', tags: new Map([['target', tag]]), byCard: () => tag },
-    onboarding: { enter: vi.fn() }, xrHit: { attach: vi.fn() }, input: { attach: vi.fn() },
+    onboarding: { enter: vi.fn(), leave: vi.fn() }, xrHit: { attach: vi.fn(), detach: vi.fn() }, input: { attach: vi.fn(), detach: vi.fn() },
     page: { log: vi.fn(), setButton: vi.fn() }, recorder: { input: vi.fn(), spaceBoundary: vi.fn(), pose: vi.fn() },
     projects: { pauseForNavigation: vi.fn() }, assistant: { cancel: vi.fn() },
     controls, visibleTargets: new Set(['target']), armedCards: new Set(['card']), cancelledCards: new Set(), lockedId: 'target',
     handFeedback: { setHover: vi.fn() }, gestureFeedback: { update: vi.fn() },
-    gestureSpecs: new Map([['card', { specId: 'ui', gestureMap: map }]]), controlValues: new Map(),
+    gestureSpecs: new Map([['card', { specId: 'ui', gestureMap: map }]]), specByCard: new Map(), controlValues: new Map(),
     ws: { send: vi.fn((_type: string, event: ControlEventPayload) => { sent.push(event); return true; }) },
   });
   await app.enterXr();
@@ -44,12 +44,41 @@ async function setup() {
   const frame = makeGestureFrame();
   const step = (time: number) => { frame.time = time; app.lastFrame = frame; app.updateHandControl(frame, time); };
   const visibility = (value: string) => { session.visibilityState = value; session.dispatchEvent(new Event('visibilitychange')); };
-  return { app, frame, step, visibility, sent, controls };
+  return { app, frame, step, visibility, sent, controls, session, tag };
 }
 
 afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
 describe('device controls across XR visibility changes', () => {
+  it('uses full Stop for active WIRE on hidden XR and cannot resume its authority on visibility recovery', async () => {
+    const f = await setup();
+    f.app.wiring = { phase: 'running', stop: vi.fn(), reset: vi.fn() };
+    f.visibility('hidden');
+    expect(f.app.ws.send).toHaveBeenCalledWith('panic', { reason: 'XR session hidden' }, { to: 'server' });
+    expect(f.app.armedCards.size).toBe(0); expect(f.tag.connection).toBe('setup');
+    expect(f.app.wiring.stop).toHaveBeenCalledWith('Stop', 'external');
+    expect(f.app.wiring.reset).toHaveBeenCalledWith('XR session hidden', false);
+    f.visibility('visible');
+    expect(f.app.canControl('card')).toBe(false);
+  });
+
+  it('revokes active WIRE on XR end and preserves calibration invalidation', async () => {
+    const f = await setup();
+    f.app.wiring = { phase: 'calibrating', stop: vi.fn(), reset: vi.fn() };
+    f.session.dispatchEvent(new Event('end'));
+    expect(f.app.ws.send).toHaveBeenCalledWith('panic', { reason: 'XR session ended' }, { to: 'server' });
+    expect(f.app.wiring.reset).toHaveBeenCalledWith('XR session ended', true);
+    expect(f.app.armedCards.size).toBe(0);
+  });
+
+  it('uses full Stop on origin invalidation even when the musical device was armed before a wiring request', async () => {
+    const f = await setup(); f.app.wiring = { phase: 'idle', stop: vi.fn(), reset: vi.fn() };
+    f.app.armedCards.add('musical-synth-mac');
+    f.app.suspendWiring('XR reference space changed', true);
+    expect(f.app.ws.send).toHaveBeenCalledWith('panic', { reason: 'XR reference space changed' }, { to: 'server' });
+    expect(f.app.wiring.reset).toHaveBeenCalledWith('XR reference space changed', true);
+    expect(f.app.armedCards.size).toBe(0);
+  });
   it('cancels Perform without needing another frame and requires explicit Perform after resume', async () => {
     const f = await setup();
     f.app.setHandControl('target', true); f.step(0); f.step(50);

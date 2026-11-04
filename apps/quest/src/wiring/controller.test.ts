@@ -4,15 +4,15 @@ import type { WireProgressPayload, WireReadyPayload } from '@ce/protocol';
 import type { WireView } from '../hud/contract';
 import { makeGestureFrame, moveHand } from '../gestures/fixtures.test-support';
 import { fakeWorkerFactory } from './fake-worker.test-support';
-import { WiringController, WIRE_CHIPS, type WiringHost } from './controller';
+import { WiringController, WIRE_CHIPS, MUSICAL_WIRE_CHIPS, type WiringHost } from './controller';
 import { WiringRuntime, type WireEmit } from './runtime';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const anchor = new Vector3(0, 1.45, -0.6);
 
-function setup(options: { micError?: string } = {}) {
+function setup(options: { micError?: string; instrument?: 'musical-synth' } = {}) {
   const sent: { type: string; payload: unknown }[] = [], controls: WireEmit[] = [], toasts: string[] = [], views: (WireView | null)[] = [];
-  let busy = false, canControl = true, selected: { cardId: string; targetId: string; anchor: Vector3; label: string } | undefined = { cardId: 'visual-synth-mac', targetId: 't1', anchor, label: 'Visual synth' };
+  let busy = false, canControl = true, selected: ReturnType<WiringHost['selected']> = { cardId: options.instrument ? 'musical-synth-mac' : 'visual-synth-mac', targetId: 't1', anchor, label: options.instrument ? 'ControlAnything Synth' : 'Visual synth', instrument: options.instrument };
   const voice = { error: vi.fn(() => options.micError), available: () => true, press: vi.fn(async () => {}), release: vi.fn(), cancel: vi.fn() };
   const holder: { controller?: WiringController } = {};
   const runtime = new WiringRuntime({
@@ -46,6 +46,18 @@ async function hold(controller: WiringController, tip: Vector3, ms: number) {
 }
 
 describe('the wiring flow', () => {
+  it('offers musical requests only when its verified device is controllable, without installing a hand map', () => {
+    const t = setup({ instrument: 'musical-synth' }); t.setControl(false);
+    expect(t.controller.view('musical-synth-mac')).toBeNull();
+    expect(t.controller.ask('Play like a theremin', 'chip')).toBe(false);
+    expect(t.sent).toEqual([]); expect(t.controls).toEqual([]);
+    t.setControl(true); t.controller.frame(finger(new Vector3(0, 1.4, -.4)), clock += 16);
+    expect(t.view()?.chips).toEqual([...MUSICAL_WIRE_CHIPS]);
+    expect(t.view()?.chips).not.toContain('Touch the water');
+    expect(t.controller.ask('Play like a theremin', 'chip')).toBe(true);
+    expect(t.sent).toEqual([{ type: 'wire.request', payload: { cardId: 'musical-synth-mac', text: 'Play like a theremin', source: 'chip' } }]);
+    expect(t.runtime.running).toBe(false); expect(t.controls).toEqual([]);
+  });
   it('shows the ask prompt and chips, and the hands do nothing until a wiring runs', async () => {
     const t = setup();
     t.controller.frame(finger(new Vector3(0, 1.4, -0.4)), clock += 16);

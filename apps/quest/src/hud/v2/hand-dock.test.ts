@@ -16,6 +16,13 @@ it('keeps Buddy and every existing wrist action reachable when Tutorial shares t
   const stop = palette.getObjectByName('deck:panic')!, tutorial = palette.getObjectByName('tutorial')!;
   expect(stop.position.y).toBe(tutorial.position.y);
   expect(stop.position.x + stop.userData.width / 2).toBeLessThan(tutorial.position.x - tutorial.userData.width / 2);
+  add('musical-synth', 1, { compactWithPrevious: true }); palette.contentGroup.clear(); palette.rebuild();
+  expect(palette.buttons.map(button => button.name)).toEqual(['layer', 'track', 'visual-synth', 'musical-synth', 'buddy', 'deck:panic', 'tutorial', 'exit-ar']);
+  expect(palette.userData.height).toBe(before);
+  const visual = palette.getObjectByName('visual-synth')!, music = palette.getObjectByName('musical-synth')!;
+  expect(visual.position.y).toBe(music.position.y);
+  expect(visual.userData.width).toBeGreaterThanOrEqual(.07);
+  expect(visual.position.x + visual.userData.width / 2).toBeLessThan(music.position.x - music.userData.width / 2);
 });
 
 function hand(x = -0.2, palmUp = true, palmUpMs = 450): HandState {

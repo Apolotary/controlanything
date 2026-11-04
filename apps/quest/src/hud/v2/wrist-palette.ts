@@ -97,7 +97,11 @@ export class WristPalette extends Group {
   private visibleItems(): PaletteItem[] {
     const shown = this.items.filter((i) => i.visible?.() ?? true);
     const core = shown.filter((i) => (i.order ?? 50) >= 80);
-    const rest = shown.filter((i) => (i.order ?? 50) < 80).slice(0, Math.max(0, PALETTE_MAX_ITEMS - this.rows(core).length));
+    const rest: PaletteItem[] = [];
+    const availableRows = Math.max(0, PALETTE_MAX_ITEMS - this.rows(core).length);
+    for (const item of shown.filter(i => (i.order ?? 50) < 80)) {
+      if (this.rows([...rest, item]).length <= availableRows) rest.push(item);
+    }
     return [...rest, ...core];
   }
 

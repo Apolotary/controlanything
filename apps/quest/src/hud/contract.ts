@@ -9,9 +9,9 @@ import type { CanvasActionPayload, CanvasStatePayload, ObjectInformation, Projec
 export type AppMode = 'annotate' | 'control';
 export type ObjectFilter = 'electronics' | 'objects' | 'lights' | 'everything';
 export type DeviceConnection = 'ready' | 'setup' | 'offline' | 'unknown';
-export interface HomeState { mode: AppMode; filter: ObjectFilter; tagged: number; status: string; canStop?: boolean; visualSynthSelection?: { phase: 'pending' | 'unavailable'; message: string } }
+export interface HomeState { mode: AppMode; filter: ObjectFilter; tagged: number; status: string; canStop?: boolean; visualSynthSelection?: { phase: 'pending' | 'unavailable'; message: string; instrument?: 'visual-synth' | 'musical-synth' } }
 export type MappingOutcome = 'working' | 'review' | 'applied' | 'unchanged' | 'failed' | 'cancelled';
-export interface DeviceState { targetId: string; connection: DeviceConnection; hint?: string; action?: TaggedDevice['action']; busy?: boolean; sentence?: string; handControl?: boolean; performAvailable?: boolean; performingLive?: boolean; performanceRoute?: string; pairingSeconds?: number; screenGuide?: boolean; canvasReady?: boolean; silentVisual?: boolean; mappingSummary?: string; mappingActionId?: string; mappingOutcome?: MappingOutcome;
+export interface DeviceState { targetId: string; connection: DeviceConnection; hint?: string; action?: TaggedDevice['action']; busy?: boolean; sentence?: string; handControl?: boolean; performAvailable?: boolean; performingLive?: boolean; performanceRoute?: string; pairingSeconds?: number; screenGuide?: boolean; canvasReady?: boolean; silentVisual?: boolean; musicalSynth?: boolean; mappingSummary?: string; mappingActionId?: string; mappingOutcome?: MappingOutcome;
   /** `?perform=1`: the old hand-written Perform mapping (Perform toggle, "Set up gestures") is offered; off by default. Muse writes the wiring now. */
   legacyPerform?: boolean }
 export interface CanvasView { targetId: string; state: CanvasStatePayload }
@@ -224,6 +224,7 @@ export interface HudEvents {
   helperSkip: Record<string, never>;
   helperPair: Record<string, never>;
   visualSynth: Record<string, never>;
+  musicalSynth: Record<string, never>;
   menuOpened: {};
   askMuseGeneral: {};
   identifyArea: {};

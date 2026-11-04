@@ -9,6 +9,7 @@ export interface TutorialProbe {
   selected: boolean;
   controllable: boolean;
   cardId?: string;
+  instrument?: 'musical-synth';
   wire: { phase?: string; request?: string; wiringId?: string; needsScreen?: boolean; touching?: boolean; stats?: { sent?: number } };
   menuOpen: boolean;
   buddyOpen: boolean;
@@ -68,7 +69,8 @@ export class TutorialSteps {
       case 'look': return { title: 'Look at your Mac', detail: 'SAM will outline the devices it sees.' };
       case 'pinch': return { title: 'Pinch the Mac’s box', detail: 'Aim, then tap thumb to index.', pinch: true };
       case 'ask': return s.controllable
-        ? { title: 'What should your hands do?', detail: 'Choose Touch the water, or hold the mic to ask Muse.' }
+        ? { title: 'What should your hands do?', detail: s.instrument === 'musical-synth'
+          ? 'Choose Play like a theremin, or hold the mic to ask Muse.' : 'Choose Touch the water, or hold the mic to ask Muse.' }
         : { title: 'Getting the device ready', detail: 'Keep the Mac in view while its controls are checked.' };
       case 'wiring': return s.wire.phase === 'failed' || s.wire.phase === 'stopped'
         ? { title: 'Try your request again', detail: 'Choose a suggestion on the device card.' }

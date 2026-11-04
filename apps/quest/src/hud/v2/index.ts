@@ -249,6 +249,7 @@ export class LeanHud implements Hud {
     this.root.add(this.palette);
     // Not `primary`: a white pill reads as "selected/pressed" next to the Annotate | Control segments.
     this.palette.register({ key: 'visual-synth', label: 'Visual synth', order: 0, onSelect: () => this.events.emit('visualSynth', {}) });
+    this.palette.register({ key: 'musical-synth', label: 'Music synth', order: 1, compactWithPrevious: true, onSelect: () => this.events.emit('musicalSynth', {}) });
     this.palette.register({ key: 'deck:panic', label: 'Stop', order: 80, onSelect: () => {
       this.events.emit('deck', { key: 'panic', phase: 'press' }); this.events.emit('deck', { key: 'panic', phase: 'release' });
     } });
@@ -313,7 +314,8 @@ export class LeanHud implements Hud {
     this.visualSelection.add(this.plate(0.24, 0.16), this.visualSelectionTitle, this.visualSelectionBody);
     this.root.add(this.visualSelection);
     this.widgets.push({ group: this.visualSelection, w: 0.24, h: 0.16, kind: 'handle', start: () => {}, lastMove: 0 });
-    this.visualSelectionRetry = this.button(this.visualSelection, 'visual-synth-retry', 'Retry', 0, -0.045, 0.12, 'handle', () => this.events.emit('visualSynth', {}));
+    this.visualSelectionRetry = this.button(this.visualSelection, 'visual-synth-retry', 'Retry', 0, -0.045, 0.12, 'handle', () =>
+      this.home.visualSynthSelection?.instrument === 'musical-synth' ? this.events.emit('musicalSynth', {}) : this.events.emit('visualSynth', {}));
     this.widgets.push({ group: this.assistant, w: this.assistant.width, h: this.assistant.height, kind: 'handle', start: () => {}, lastMove: 0 });
     for (const group of [this.assistant.apply, this.assistant.dismiss]) this.widgets.push({
       group, w: this.assistant.buttonWidth, h: this.assistant.buttonHeight, kind: 'handle', button: true, lastMove: 0,
@@ -638,6 +640,7 @@ export class LeanHud implements Hud {
     if (!target) return;
     if ((id.startsWith('control:') || id.startsWith('action:')) && !this.manualLookReady()) return;
     if (id === 'control-setup') this.events.emit('setup', { targetId: target.id });
+    else if (id === 'musical-retry') this.events.emit('musicalSynth', {});
     else if (id === 'control-cancel') this.events.emit('cancel', { targetId: target.id });
     else if (id === 'control-pair') this.events.emit('pair', { targetId: target.id });
     else if (id === 'control-pair-cancel') this.events.emit('pairCancel', { targetId: target.id });
@@ -693,7 +696,8 @@ export class LeanHud implements Hud {
   private lookTitle(): string {
     const target = this.selected(), m = this.mounted(), menu = this.menus.get(this.locked ?? this.menuTarget ?? '');
     const name = target?.label ?? menu?.title ?? m?.spec.title ?? 'Device';
-    return /visual.?synth/i.test(name) ? 'Visual synth' : title(name, 24);
+    return this.deviceState?.targetId === this.locked && this.deviceState.musicalSynth ? 'Musical synth'
+      : /visual.?synth/i.test(name) ? 'Visual synth' : title(name, 24);
   }
   private lookAgent(working: boolean): CardAgent | null {
     const view = this.assistantView;
@@ -713,7 +717,7 @@ export class LeanHud implements Hud {
     const connection = this.selectedConnection();
     const name = this.lookTitle();
     const visual = /visual/i.test(name) || !!state?.silentVisual;
-    const route = visual ? 'via Mac' : routeLabel(m?.spec.device?.transport, target?.channel).replace(/ \(.*\)$/, '');
+    const route = visual || state?.musicalSynth ? 'via Mac' : routeLabel(m?.spec.device?.transport, target?.channel).replace(/ \(.*\)$/, '');
     const working = this.setupWorking() || !!state?.busy;
     const actions: CardAction[] = [];
     let subtitle: string, toggle: CardView['toggle'] = null;
@@ -724,11 +728,14 @@ export class LeanHud implements Hud {
       const checks = setupChecks(this.setupProgressView);
       subtitle = checks.passed ? `Setting up… ${checks.passed} of ${checks.total} checked` : 'Setting up…';
       actions.push({ id: 'control-cancel', label: 'Cancel', icon: 'cancel' });
+    } else if (connection === 'offline' && state?.musicalSynth) {
+      subtitle = 'Choose Sound on in the Mac companion';
+      actions.push({ id: 'musical-retry', label: 'Retry', icon: 'retry', primary: true });
     } else if (connection === 'offline' && (state?.action === 'open-companion' || state?.action === 'pair-device')) {
       subtitle = 'Not connected';
       const pairLabel = state.hint?.includes('/pair on this laptop') ? 'Pair' : state.action === 'open-companion' ? 'Connect Mac' : 'Connect';
       actions.push({ id: 'control-pair', label: pairLabel, icon: 'link', primary: true }, { id: 'control-pair-code', label: 'Type code', icon: 'keyboard' });
-    } else if (connection === 'offline') subtitle = 'Offline · open the Mac app';
+    } else if (connection === 'offline') subtitle = state?.musicalSynth ? 'Choose Sound on in the Mac companion' : 'Offline · open the Mac app';
     else if (connection === 'unknown') subtitle = 'Connecting…';
     else if (connection === 'setup') {
       const failed = !!this.setupProgressView?.stages.some((stage) => stage.status === 'failed');
@@ -753,7 +760,7 @@ export class LeanHud implements Hud {
         }
       }
     }
-    if (!visual && !working && (connection === 'setup' || connection === 'offline')) {
+    if (!visual && !state?.musicalSynth && !working && (connection === 'setup' || connection === 'offline')) {
       actions.push({ id: 'correct-device', label: 'Correct device', icon: 'mic' });
     }
     let ask: CardAsk | null = null;
@@ -1243,7 +1250,7 @@ export class LeanHud implements Hud {
   setDeviceState(state: DeviceState | null): void {
     const previous = this.deviceState;
     if (previous === state) return;
-    const sameContent = previous && state && previous.targetId === state.targetId && previous.connection === state.connection && previous.hint === state.hint && previous.action === state.action && previous.busy === state.busy && previous.sentence === state.sentence && previous.handControl === state.handControl && previous.performAvailable === state.performAvailable && previous.screenGuide === state.screenGuide && previous.canvasReady === state.canvasReady && previous.silentVisual === state.silentVisual && previous.mappingSummary === state.mappingSummary && previous.mappingActionId === state.mappingActionId && previous.mappingOutcome === state.mappingOutcome;
+    const sameContent = previous && state && previous.targetId === state.targetId && previous.connection === state.connection && previous.hint === state.hint && previous.action === state.action && previous.busy === state.busy && previous.sentence === state.sentence && previous.handControl === state.handControl && previous.performAvailable === state.performAvailable && previous.screenGuide === state.screenGuide && previous.canvasReady === state.canvasReady && previous.silentVisual === state.silentVisual && previous.musicalSynth === state.musicalSynth && previous.mappingSummary === state.mappingSummary && previous.mappingActionId === state.mappingActionId && previous.mappingOutcome === state.mappingOutcome;
     if (sameContent && previous.pairingSeconds === state.pairingSeconds && previous.performingLive === state.performingLive && previous.performanceRoute === state.performanceRoute) return;
     this.deviceState = state;
     this.setupProgress.setWorking(this.setupWorking());
@@ -1489,7 +1496,9 @@ export class LeanHud implements Hud {
     }
     this.workspaceAnchor.place(this.projectPanel);
     if (selection) {
-      setText(this.visualSelectionTitle, selection.phase === 'pending' ? 'Opening Mac visuals' : 'Waiting for Mac visuals');
+      setText(this.visualSelectionTitle, selection.instrument === 'musical-synth'
+        ? selection.phase === 'pending' ? 'Opening musical synth' : 'Waiting for Mac sound'
+        : selection.phase === 'pending' ? 'Opening Mac visuals' : 'Waiting for Mac visuals');
       setText(this.visualSelectionBody, selection.message);
       this.visualSelectionRetry.group.visible = selection.phase === 'unavailable';
       this.workspaceAnchor.place(this.visualSelection);
