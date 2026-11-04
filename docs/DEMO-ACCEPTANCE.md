@@ -1,12 +1,14 @@
 # ControlAnything: current WIRE demo acceptance
 
-Hardware: **Meta Quest 3 + MacBook**, with the paired companion showing the silent visual synth. This checklist is a procedure, not a pass claim. The old dial/Perform measurements below are historical; the new route needs a fresh record.
+Hardware: **Meta Quest 3 + MacBook**, with the paired companion showing the visual synth with water sounds. This checklist is a procedure, not a pass claim. Earlier silent and dial/Perform measurements below are historical; the current audible route needs a fresh wearer record.
+
+**Current sound policy (user override, November 4):** use water/UI sounds, audible music and OS/browser Buddy speech. Live startup is `CE_DEMO=1 npm start`, without `CE_MAC_SILENT`. The first browser gesture unlocks audio. One shared master volume/mute controls Mac and Quest. `mute=1` is allowed for unattended automation; analyser/graph evidence is separate from listening.
 
 **Golden path:** Enter AR → SAM outline → pinch MacBook → setup → ask Muse → watch JavaScript stream → validate/dry-run/verify → calibrate two corners → touch the water → lift → palms Stop → ask again → Stop all → hold Exit.
 
 ## Prepare once
 
-1. Keep one live server on :8787/:8443, started with `CE_DEMO=1 CE_MAC_SILENT=1 npm start`. `/api/health` must report live mode for a live take. Leave `CE_PREFETCH` unset; prefetch is opt-in rehearsal only. Keep IR and all sound off. Close disposable e2e browsers before the wearer test.
+1. Keep one live server on :8787/:8443, started with `CE_DEMO=1 npm start`, with `CE_MAC_SILENT` unset. `/api/health` must report live mode for a live take. Leave `CE_PREFETCH` unset; prefetch is opt-in rehearsal only. IR remains paused. Check the shared master level; close disposable e2e browsers before the wearer test.
 2. Keep the existing paired data. Open the companion in Chrome, with one executor-leading tab. **Open visuals** must visibly open the instrument or explain why it cannot; bring the Mac screen into the wearer's view. Record driver and wiring provenance separately.
 3. Connect Quest over USB and establish `adb reverse tcp:8787 tcp:8787`. Use the existing single app tab at `http://localhost:8787/quest/`. Reload with `scripts/quest-reload.mjs` only while AR is inactive; do not open a second tab with a new launch command.
 4. Use `scripts/deploy-live.sh quest` / `companion` / `sim` for live asset updates. Do not empty a dist directory that an open AR session still needs for lazy-loaded chunks. Server/protocol changes require a coordinated server restart.
@@ -23,10 +25,10 @@ Hardware: **Meta Quest 3 + MacBook**, with the paired companion showing the sile
 | W5 | Choose **Touch the water**, or hold-to-talk and ask for it | Exact request stays on the selected device. JavaScript streams into the AR code card and Mac code view; a live take is labelled Live with the actual model, not FIXTURE or Template. | Pending |
 | W6 | Watch checking finish | Validating → dry-run → action verification → ready. Failed generation never appears as successful live generation. Retain source, model, code and relevant call/step/exec records. | Pending |
 | W7 | Hold the fingertip still at highlighted top-left, then bottom-right corner | Each corner visibly progresses. Resting hands do not capture a corner by accident. No device touch output runs before calibration succeeds. Saved valid calibration may skip this step; capture one fresh calibration in the proof take. | Pending |
-| W8 | Touch the screen, draw a slow line/circle, lift and touch elsewhere | Splash starts at the real fingertip location; wake follows motion. X/Y/pressure use verified driver actions. Lift and missing tracking release pressure. No dial steals screen contact; no separate Perform step is required. | Pending |
+| W8 | Touch the screen, draw a slow line/circle, lift and touch elsewhere | Splash starts at the real fingertip location; wake follows motion, with contact splash, moving water sound and hover shimmer. X/Y/pressure use verified driver actions. Lift and missing tracking release pressure. No dial steals screen contact; no separate Perform step is required. | Pending |
 | W9 | Turn head, briefly hide the hand, return | No unrelated menu opens or target switch. Tracking loss stops interaction, and recovery is clear. Record latency and comfort separately from successful bytes. | Pending |
 | W10 | Show both palms out, then choose another request | Current wiring and queued commands stop; pressure/note releases. Selected checked device and Ask chips remain. A fresh request generates a new program without setup again; late old replies/outputs cannot restart it. | Pending |
-| W11 | Wrist menu → Stop all, then hold Exit | All controls disarm; sound locks. No automatic restart. Exit returns cleanly. Repeat Stop all in Annotate to confirm the same scope. | Pending |
+| W11 | Wrist menu → Stop all, then hold Exit | Controls disarm; active sounds/notes stop, with a brief stop cue. No automatic restart. Exit returns cleanly. Repeat Stop all in Annotate to confirm the same scope. | Pending |
 
 Record build, headset/browser version, source/model per artifact, card/driver/wiring IDs, verify label, measured timings and uncut clip path. Time **pinch → driver ready**, **ask → wire ready**, **calibration duration**, and **touch → visible splash** separately. A fast generation probe is not total setup latency. Label edits or speed-up in the submission video.
 
@@ -50,11 +52,11 @@ ControlAnything Synth is a browser instrument, not the physical OP-1 Field. Its 
 
 | Step | Action and required observation | Current run |
 |---|---|---|
-| M1 | Choose More → Music in Quest. Its Mac panel opens automatically, sound remains locked and no verification note or hand interaction starts. | Pending |
-| M2 | The present user explicitly chooses Sound on on the Mac. The port becomes available; complete setup and confirm controls in Quest. In automation, master gain must remain zero. | Pending |
+| M1 | Use the first normal Mac click to unlock browser audio, then choose More → Music in Quest. Its Mac panel opens automatically; no hand mapping runs before asking. If autoplay is blocked, the page gives a clear click-to-enable explanation. | Pending |
+| M2 | Sound is audible by default with no separate Sound on step. The port becomes available; complete setup. Check that the shared master volume/mute changes both endpoints. In automation, local output remains zero. | Pending |
 | M3 | Ask Muse how the hands should play. Watch exact request, streamed source, checks and honest Live/FIXTURE/Template label. Setup alone must not install a hand mapping. | Pending |
-| M4 | Use the generated gesture. Verify scale-note and gate changes, analyser pitch/level, release and tracking-loss behavior. Hand-only wiring needs no screen calibration. Audible behavior is an additional attended check only with the user's explicit permission. | Pending |
-| M5 | Both palms stop the current wiring and release its note; ask again without setup or another sound unlock. Then use Stop all, close/hide the panel or disconnect: sound and delay tails stop and lock. No old note resumes; fresh Sound on is required after that full stop. | Pending |
+| M4 | Use the generated gesture. Verify scale-note/gate changes, analyser pitch/level, audible response, release and tracking loss. Hand-only wiring needs no calibration. | Pending |
+| M5 | Both palms stop the current wiring and release its note; ask again without setup. Then use Stop all, close/hide the panel or disconnect: notes and delay tails stop. No old program/note resumes. A later normal browser gesture can restore audio availability; a new Muse request is still needed. | Pending |
 
 `apps/companion/e2e/musical-synth.mjs` exercises this software route with the real companion graph, fixture Muse and emulated hands. Its result must be recorded separately from a live Meta generation or real-headset/audio pass.
 

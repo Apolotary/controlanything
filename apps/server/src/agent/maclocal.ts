@@ -59,16 +59,19 @@ export function planLocal(op: LocalOp): { file: string; args: string[] } | Local
 
 export class MacLocalExecutor {
   readonly deviceId = MAC_LOCAL_ID;
+  private speaking = 0;
+  private musicOwned = false;
   /** the output level the silent Mac pretends to have (0-100); read back by verify's volume restore and UNDO */
   private silentVolume = 50;
   constructor(
     private readonly run: Runner = execFileRunner,
     private readonly enabled: boolean = process.platform === 'darwin',
     /**
-     * CE_MAC_SILENT=1: this Mac must make no sound (user rule). Nothing audible is executed: `say` and Music are
+     * CE_MAC_SILENT=1 is an explicit automated-test option. Nothing audible is executed: `say` and Music are
      * not run and the volume is only kept in memory. Every ack says so; the oracles judge what they can.
      */
     readonly silent: boolean = false,
+    private readonly audioMaster?: () => { volume: number; muted: boolean },
   ) {}
 
   get available(): boolean {
@@ -95,11 +98,39 @@ export class MacLocalExecutor {
     if (dryRun) return { ok: true, detail: `dry run: ${plan.file} ${plan.args.join(' ')}` };
     if (!this.enabled) return { ok: false, error: 'unsupported', detail: 'local execution is only available on macOS' };
     if (this.silent) return this.silently(op);
+    const master = this.audioMaster?.();
+    if (master && (master.muted || master.volume <= 0) && (op.op === 'say' || op.op === 'music' && !['pause'].includes(String(op.arg)))) {
+      return { ok: false, error: 'device_error', detail: 'Master sound is muted. Unmute ControlAnything to hear this action.' };
+    }
     try {
-      const out = await this.run(plan.file, plan.args);
+      // Standard Additions' OS speech accepts a per-utterance volume (0..1).
+      // Pass text as argv; generated text never becomes AppleScript source.
+      let out: string;
+      if (op.op === 'say' && master) {
+        this.speaking++;
+        try { out = await this.run('osascript', ['-e', 'on run argv\nsay (item 1 of argv) volume ((item 2 of argv) as real)\nend run', plan.args[0]!, String(Math.max(0, Math.min(1, master.volume)))]); }
+        finally { this.speaking--; }
+      } else if (op.op === 'music' && master) {
+        out = await this.run('osascript', ['-e', `tell application "Music" to set sound volume to ${Math.round(Math.max(0, Math.min(1, master.volume)) * 100)}`, ...plan.args]);
+        this.musicOwned = String(op.arg ?? 'playpause') !== 'pause';
+      } else out = await this.run(plan.file, plan.args);
       return { ok: true, detail: out || `${plan.file} ok` };
     } catch (e) {
       return { ok: false, error: 'device_error', detail: (e as Error).message.slice(0, 300) };
+    }
+  }
+
+  /** Cancel our active OS speech when the shared master is muted. */
+  masterChanged(): void {
+    const state = this.audioMaster?.();
+    if (!this.silent && this.speaking > 0 && state && (state.muted || state.volume <= 0)) {
+      void this.run('osascript', ['-e', 'say "" stopping current speech true']).catch(() => {});
+    }
+    if (!this.silent && this.musicOwned && state) {
+      const volume = state.muted ? 0 : Math.round(Math.max(0, Math.min(1, state.volume)) * 100);
+      void this.run('osascript', ['-e', `tell application "Music" to set sound volume to ${volume}`,
+        ...(volume === 0 ? ['-e', 'tell application "Music" to pause'] : [])]).catch(() => {});
+      if (volume === 0) this.musicOwned = false;
     }
   }
 

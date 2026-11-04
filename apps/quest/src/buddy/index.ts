@@ -36,6 +36,8 @@ import { FRAME_DIST, FRAME_SIZE, Viewfinder } from './viewfinder';
 
 /** What the buddy needs from the shell (QuestApp satisfies it structurally). */
 export interface BuddyHost {
+  /** Browser/OS speech and reactions share the room master volume. */
+  demoAudio?: { speak(text: string): void; play(cue: 'curious' | 'giggle' | 'celebrate'): void; setThinking(source: string, active: boolean): void };
   scene: Scene;
   camera: CameraSource;
   poses: PoseRing;
@@ -222,7 +224,11 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
   let awakeUntil = 0;
   let asleep = false;
   const wake = (now = time) => { awakeUntil = now + AWAKE_S; };
-  const say = (text: string, meta = '', holdS = 6) => built?.bubble.say(text, meta, holdS);
+  const say = (text: string, meta = '', holdS = 6) => {
+    built?.bubble.say(text, meta, holdS);
+    // Short model reactions and quest instructions get a voice; progress is a soft cue.
+    if (!/^(?:Looking|Thinking)….*/.test(text)) app.demoAudio?.speak(text);
+  };
 
   const refreshCard = (status = '') => {
     if (!built) return;
@@ -352,12 +358,14 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
       return;
     }
     built.mascot.play('giggle');
+    app.demoAudio?.play('giggle');
     built.mascot.setMood('amused', 1.6);
     say(pick(POKE_LINES), '', 3);
   }
 
   function setPhase(p: BuddyPhase): void {
     phase = p;
+    app.demoAudio?.setThinking('buddy', p === 'thinking');
     stage.userData.phase = p;
   }
 
@@ -427,6 +435,7 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
     lastReaction = r;
     stage.userData.lastReaction = r;
     const x = r.reaction;
+    app.demoAudio?.play(x.questMet ? 'celebrate' : x.emotion === 'love' || x.emotion === 'delighted' ? 'giggle' : 'curious');
     app.page.log(`[buddy] ${x.object} → ${x.emotion}/${x.action}${x.questMet ? ' · quest met' : ''} · ${metaLine(r)}`, 'ok');
     setPhase('reacting');
     reactingUntil = time + 2.5;
@@ -479,6 +488,7 @@ export function installBuddy(app: BuddyHost): BuddyFeature {
         built.mascot.play('dance');
         built.mascot.setMood('delighted', 4);
         built.mascot.celebrate(true);
+        app.demoAudio?.play('celebrate');
         say(`You did all ${ROUND} quests! You're a treasure hunter!`, 'Show me anything, or press Again', 9);
         refreshCard();
       }, 3800);

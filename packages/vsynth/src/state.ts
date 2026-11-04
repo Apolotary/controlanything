@@ -1,4 +1,4 @@
-/** A visual instrument only: no audio output or audio APIs. */
+/** Visual instrument state; optional browser water feedback follows these same touch values. */
 export const VISUAL_SYNTH_PORT = 'ControlAnything Visual Synth';
 export const VISUAL_SYNTH_PORT_ID = 'ce-visual-synth';
 export const VISUAL_SYNTH_CHANNEL = 'ce-visual-synth';

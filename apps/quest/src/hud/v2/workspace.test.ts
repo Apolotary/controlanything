@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EXAMPLES } from '@ce/gen3d';
 import { PerspectiveCamera, Quaternion, Scene, Vector3, type Object3D, type WebGLRenderer } from 'three';
 import type { HandState, Hud, HudFrame } from '../contract';
 import { createHud } from './index';
+import type { WristPalette } from './wrist-palette';
 
 const instances: Hud[] = [];
 function fixture() {
@@ -23,6 +24,20 @@ function fixture() {
 afterEach(() => instances.splice(0).forEach((hud) => hud.dispose()));
 
 describe('one persistent task workspace', () => {
+  it.each(['layer', 'track', 'master-audio'])('dismisses the wrist menu after a %s segment press', key => {
+    const f = fixture();
+    f.hud.setHome?.({ mode: 'annotate', filter: 'everything', tagged: 2, status: 'Choose a device' });
+    const hud = f.hud as unknown as { palette: WristPalette; widgets: { group: Object3D; start(point: Vector3): void }[]; rebuildPalette(): void };
+    if (key === 'master-audio') hud.palette.register({ key, label: 'Sound', onSelect() {},
+      segments: [{ key: 'mute', label: 'Mute', width: .075 }], onSegment: vi.fn() });
+    const dismiss = vi.spyOn(hud.palette.anchor, 'dismiss');
+    hud.palette.item('palette-more')!.onSelect(); hud.rebuildPalette();
+    expect(hud.palette.userData.page).toBe('more');
+    const widget = hud.widgets.find(w => w.group.name.startsWith(key + ':'))!;
+    expect(widget).toBeDefined(); widget.start(new Vector3());
+    expect(dismiss).toHaveBeenCalledOnce(); expect(hud.palette.userData.page).toBe('primary');
+  });
+
   it.skip('keeps device, conversation, confirmation and project content at one anchor through a head turn', () => {
     const f = fixture(), anchor = f.node('device-card').position.clone();
     f.head.position.x = 0.4; f.head.quaternion.setFromAxisAngle(new Vector3(0, 1, 0), 0.8);

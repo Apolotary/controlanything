@@ -23,7 +23,8 @@ describe('visual synth capability manifest', () => {
 
   it('keeps the existing controls and still never accepts notes', () => {
     for (const cc of [1, 7, 10, 11, 20, 21, 71, 74]) expect(VISUAL_SYNTH_MANIFEST.controls.some((control) => control.cc === cc), `CC${cc}`).toBe(true);
-    expect(VISUAL_SYNTH_MANIFEST.silent).toBe(true);
+    expect(VISUAL_SYNTH_MANIFEST.silent).toBe(false);
+    expect(VISUAL_SYNTH_MANIFEST.touch).toContain('shared master volume');
     expect(VISUAL_SYNTH_MANIFEST.rejects.join(' ')).toMatch(/note on\/off/);
     expect(VISUAL_SYNTH_MANIFEST.programs).toHaveLength(4);
   });

@@ -21,11 +21,12 @@ function setup(options: { micError?: string; instrument?: 'musical-synth' } = {}
     createWorker: fakeWorkerFactory({ posted: [] }),
   });
   const userStopped = vi.fn();
+  const feedback = vi.fn();
   const host: WiringHost = {
     selected: () => selected, canControl: () => canControl,
     send: (type, payload) => { sent.push({ type, payload }); return true; },
     sendControl: (_card, event) => { controls.push(event); return true; },
-    render: (view) => { views.push(view); }, setHandsBusy: (b) => { busy = b; }, userStopped,
+    render: (view) => { views.push(view); }, setHandsBusy: (b) => { busy = b; }, userStopped, feedback,
     toast: (text) => { toasts.push(text); }, log: () => {}, voice, tapBlocked: () => false, runtime,
   };
   const controller = holder.controller = new WiringController(host);
@@ -33,7 +34,7 @@ function setup(options: { micError?: string; instrument?: 'musical-synth' } = {}
   const requestId = () => (sent.findLast(e => e.type === 'wire.request')?.payload as { requestId?: string } | undefined)?.requestId;
   const receiveReady = (p: WireReadyPayload) => controller.onReady({ ...p, requestId: p.requestId ?? requestId() });
   const receiveProgress = (p: WireProgressPayload) => controller.onProgress({ ...p, requestId: p.requestId ?? requestId() });
-  return { controller, requestId, receiveReady, receiveProgress, sent, controls, toasts, views, view, voice, runtime, userStopped, busy: () => busy, setControl: (v: boolean) => { canControl = v; }, deselect: () => { selected = undefined; } };
+  return { controller, requestId, receiveReady, receiveProgress, sent, controls, toasts, views, view, voice, runtime, userStopped, feedback, busy: () => busy, setControl: (v: boolean) => { canControl = v; }, deselect: () => { selected = undefined; } };
 }
 
 const base = { cardId: 'visual-synth-mac', wiringId: 'w1', model: 'muse-spark-1.3', source: 'fixture' as const };
@@ -49,6 +50,24 @@ async function hold(controller: WiringController, tip: Vector3, ms: number) {
 }
 
 describe('the wiring flow', () => {
+  it('makes lifecycle feedback only for accepted replies, and stops a pending request on executor disconnect', () => {
+    const t = setup();
+    t.receiveReady(ready(['right'])); expect(t.feedback).not.toHaveBeenCalled();
+    t.controller.ask('Hands as knobs', 'chip');
+    expect(t.feedback).toHaveBeenLastCalledWith('asking');
+    t.receiveProgress(progress({ phase: 'writing', code: CODE }));
+    const requestId = t.requestId()!;
+    t.controller.onStopped({ cardId: 'visual-synth-mac', requestId, wiringId: 'w1', ok: true, releaseConfirmed: false, reason: 'Mac disconnected' });
+    expect(t.controller.phase).toBe('stopped'); expect(t.feedback).toHaveBeenLastCalledWith('idle');
+    t.receiveReady(ready(['right'])); expect(t.runtime.running).toBe(false);
+    expect(t.feedback.mock.calls.filter(([cue]) => cue === 'ready')).toHaveLength(0);
+    t.controller.ask('Hands as knobs', 'chip'); t.receiveReady({ ...ready(['right']), wiringId: 'w2' }); t.receiveReady({ ...ready(['right']), wiringId: 'w2' });
+    expect(t.feedback.mock.calls.filter(([cue]) => cue === 'ready')).toHaveLength(1);
+    t.controller.stop('both palms out');
+    expect(t.feedback.mock.calls.filter(([cue]) => cue === 'stop')).toHaveLength(1);
+    t.controller.reset();
+  });
+
   it('offers musical requests only when its verified device is controllable, without installing a hand map', () => {
     const t = setup({ instrument: 'musical-synth' }); t.setControl(false);
     expect(t.controller.view('musical-synth-mac')).toBeNull();

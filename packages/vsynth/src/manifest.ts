@@ -29,8 +29,8 @@ export interface VisualSynthManifest {
   name: string;
   port: { id: string; name: string };
   channel: 1;
-  /** no audio output: verification is visual (headset camera) and the renderer's own receipt */
-  silent: true;
+  /** Browser water feedback is audible after unlock; verification remains visual/state-based. */
+  silent: false;
   controls: VisualSynthManifestControl[];
   programs: VisualSynthManifestProgram[];
   /** messages that reset every parameter (the server uses them; a driver never needs them) */
@@ -62,17 +62,18 @@ export const VISUAL_SYNTH_MANIFEST: VisualSynthManifest = {
   name: 'ControlAnything Visual Synth',
   port: { id: VISUAL_SYNTH_PORT_ID, name: VISUAL_SYNTH_PORT },
   channel: 1,
-  silent: true,
+  silent: false,
   controls: VISUAL_SYNTH_CONTROLS.map((control) => ({
     cc: control.cc, parameter: control.parameter, label: control.label, effect: EFFECTS[control.parameter] ?? control.label,
     rendererRange: [control.min, control.max], curve: control.curve,
   })),
   programs: VISUAL_SYNTH_PATTERNS.map((name, program) => ({ program, name, effect: PROGRAM_EFFECTS[program] ?? name })),
   resets: 'CC120, CC121, CC123 or panic reset every parameter to its default',
-  rejects: ['note on/off (it has no sound)', 'any channel other than 1', 'program changes above 3', 'SysEx other than the identity request'],
+  rejects: ['note on/off (water feedback is gesture-driven, not a musical note instrument)', 'any channel other than 1', 'program changes above 3', 'SysEx other than the identity request'],
   receipt: 'Each accepted CC/PC is acknowledged with the renderer state after it (exec.ack.applied.params, 0..1 units).',
   touch: 'Touch the water: CC22 X and CC23 Y place the fingertip on the visible canvas (0..127 across, top-left 0,0) and CC24 is its pressure '
     + '(0 lifted, 1-20 hover, 21-127 touching). Pressure crossing 20 is a touch-down: one splash at the current X/Y (stronger with higher pressure, applied within one frame, never smoothed). '
     + 'While touching, moving X/Y leaves a wake (ripples spawned along the path at about 20 per second). Hover shows a soft glow that grows as pressure rises toward 20. '
+    + 'The browser adds a splash on contact, a soft moving water sound during the wake, and a gentle shimmer while hovering; these follow the same pressure and position data and respect the shared master volume. '
     + 'Lifting (pressure back to 0..20) sends one soft ring and the existing waves fade by themselves. Send X and Y first or together with pressure; keep sending X/Y at 20-60 Hz while touching; send pressure 0 when the finger leaves or is lost.',
 };

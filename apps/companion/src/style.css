@@ -443,3 +443,8 @@ body.stage .passcode { font-size: 32px; }
 .wiring-source { margin: 0; padding: 12px 14px; border-radius: 8px; background: var(--bg-app); font: 400 12px/1.65 var(--font-mono); white-space: pre; overflow: auto; tab-size: 2; }
 @keyframes wiring-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .wiring-card.working .wiring-line::before { animation: none; } }
+#master-audio { position: fixed; z-index: 10000; right: 18px; bottom: 14px; display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 18px; border: 1px solid var(--border); color: var(--text); background: var(--bg-panel, #202124); box-shadow: 0 8px 28px #0005; font-size: 12px; }
+#master-audio button { min-height: 34px; padding: 4px 12px; border-radius: 14px; }
+#master-audio input { width: 110px; accent-color: #fff; }
+#master-audio output { min-width: 32px; color: var(--text-secondary); }
+@media (max-width: 500px) { #master-audio { right: 8px; bottom: 8px; gap: 6px; } #master-audio input { width: 80px; } }

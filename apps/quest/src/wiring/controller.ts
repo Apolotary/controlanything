@@ -43,6 +43,8 @@ export interface WiringHost {
   userStopped?(reason: string, request: Omit<WireStopPayload, 'reason'>): void;
   toast(text: string, level?: 'info' | 'ok' | 'warn' | 'error'): void;
   log(text: string, level?: 'info' | 'ok' | 'warn' | 'error'): void;
+  /** Actual accepted lifecycle only; stale server replies must not make audible success cues. */
+  feedback?(event: 'asking' | 'ready' | 'stop' | 'idle'): void;
   /** hold-to-talk plumbing (voice/ptt.ts, local mode) */
   voice: {
     /** why the microphone cannot be used right now, or undefined */
@@ -154,6 +156,7 @@ export class WiringController {
     this.w = { cardId: sel.cardId, targetId: sel.targetId, label: sel.label, request, requestId, source, wiringId: '', phase: 'asked', code: '', model: '', wireSource: 'live', phaseLine: 'sent to Muse…',
       needsScreen: false, stopped: false, askedAt: this.now() };
     this.host.log(`wire.request (${source}): "${request}" for ${sel.cardId}`, 'info');
+    this.host.feedback?.('asking');
     this.changed();
     return true;
   }
@@ -190,6 +193,7 @@ export class WiringController {
         break;
       }
     }
+    this.host.feedback?.(p.phase === 'failed' || p.phase === 'ready' ? 'idle' : 'asking');
     this.changed();
   }
 
@@ -205,6 +209,7 @@ export class WiringController {
     w.needsScreen = p.needs.includes('screen');
     w.program = { wiringId: p.wiringId, requestId: w.requestId, cardId: p.cardId, code: p.code, title: p.title, explanation: p.explanation, model: p.model, source: p.source, actions: p.actions };
     w.stopped = false; w.phase = 'ready'; w.phaseLine = 'ready';
+    this.host.feedback?.('ready');
     this.host.log(`wire.ready "${p.title}" · ${p.model} · ${p.source} · ${p.actions.length} actions · needs ${p.needs.join(',') || 'hands'}`, 'ok');
     if (w.needsScreen) {
       this.plane = loadPlane(w.cardId, sel.anchor);
@@ -234,6 +239,7 @@ export class WiringController {
   stop(reason: string, kind: StopKind = 'user'): void {
     const w = this.w;
     const alreadyStopped = !this.acceptServerWiring;
+    this.host.feedback?.(kind === 'user' && !alreadyStopped && w ? 'stop' : 'idle');
     this.acceptServerWiring = false;
     this.retireCurrent();
     if (!w) return;
@@ -250,8 +256,9 @@ export class WiringController {
   /** A scoped server receipt may explain release, but can never change a newer request. */
   onStopped(p: WireStoppedPayload): void {
     const w = this.w;
-    if (!w || w.phase !== 'stopped' && w.phase !== 'failed' || p.cardId !== w.cardId || p.requestId !== w.requestId
+    if (!w || p.cardId !== w.cardId || p.requestId !== w.requestId
       || p.wiringId && w.wiringId && p.wiringId !== w.wiringId) return;
+    if (p.ok && w.phase !== 'stopped' && w.phase !== 'failed') this.stop(p.reason ?? 'Wiring stopped by the server', 'external');
     if (!p.ok || p.releaseConfirmed === false) {
       this.host.toast(p.reason || 'Wiring stopped locally; device release was not confirmed.', 'warn');
     }
@@ -259,6 +266,7 @@ export class WiringController {
 
   /** Disconnect, deselect, leaving Control: stop quietly and forget the card. */
   reset(reason = 'reset', invalidatePlane = false): void {
+    this.host.feedback?.('idle');
     if (invalidatePlane) {
       const cardId = this.w?.cardId ?? this.host.selected()?.cardId;
       if (cardId) clearPlane(cardId);
@@ -280,6 +288,7 @@ export class WiringController {
   }
 
   private onRuntimeStop(reason: string, kind: StopKind): void {
+    this.host.feedback?.('idle');
     const w = this.w;
     this.host.setHandsBusy(false); this.lastBusy = false;
     if (!w) return;
@@ -362,7 +371,7 @@ export class WiringController {
     }
     const cur = this.w;
     if (cur) {
-      if (cur.phase === 'asked' && this.now() - cur.askedAt > WIRE_TIMING.silenceMs) { cur.phase = 'failed'; cur.phaseLine = 'Muse did not answer'; this.host.toast('Muse did not answer in time. Try again.', 'warn'); this.changed(); }
+      if (cur.phase === 'asked' && this.now() - cur.askedAt > WIRE_TIMING.silenceMs) { cur.phase = 'failed'; cur.phaseLine = 'Muse did not answer'; this.host.feedback?.('idle'); this.host.toast('Muse did not answer in time. Try again.', 'warn'); this.changed(); }
       if (cur.phase === 'calibrating') this.calibrateFrame(frame, timeMs, sel.anchor);
       else if (cur.phase === 'running') {
         const sf = this.tracker.update(frame, timeMs, { plane: this.plane, tapBlocked: (hand) => this.host.tapBlocked(hand) });

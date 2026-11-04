@@ -256,6 +256,8 @@ export interface HudEvents {
   confirm: { id: string; approve: boolean; hold?: boolean };
   /** a pinch or poke landed on a HUD widget: the shell must not treat it as lock / refine */
   consumed: { hand: string; widget: 'control' | 'hack' | 'deck' | 'handle' | 'confirm' | 'approval' };
+  /** A discrete accepted press, not the per-frame consumed/drag signal. */
+  uiPress: Record<string, never>;
   grab: { specId: string; position: [number, number, number]; yawDeg: number };
 }
 

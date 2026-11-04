@@ -137,6 +137,20 @@ async function connect(h: Harness, token: string, extra: Partial<PayloadOf<'hell
 // --- tests --------------------------------------------------------------------------------
 
 describe('pairing over WebSocket and relay', () => {
+  it('shares owner master volume with all clients and late joins, while refusing a non-owner change', async () => {
+    const h = await start(), mac = await pairLocally(h, 'Audio master'), guest = await pairLocally(h, 'Observer', 'devterm');
+    h.setLocal(false);
+    const { c: owner } = await connect(h, mac.deviceToken);
+    expect((await owner.next('audio.master')).payload).toEqual({ volume: .35, muted: false });
+    owner.send('audio.master', { volume: .62, muted: true }, { to: 'server' });
+    expect((await owner.next('audio.master')).payload).toEqual({ volume: .62, muted: true });
+    const { c: observer } = await connect(h, guest.deviceToken);
+    expect((await observer.next('audio.master')).payload).toEqual({ volume: .62, muted: true });
+    observer.send('audio.master', { volume: 1, muted: false }, { to: 'server' });
+    expect((await observer.next('log')).payload.code).toBe('forbidden');
+    expect(h.ctx.hub.audioMasterState).toEqual({ volume: .62, muted: true });
+  });
+
   it('pairs a remote Cardputer via a paired Mac and relays control.event between them', async () => {
     const h = await start();
     const mac = await pairLocally(h, 'MacBook companion');

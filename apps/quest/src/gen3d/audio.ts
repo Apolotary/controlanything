@@ -3,14 +3,14 @@
  * a PannerNode at the widget. UI stays ≥ 12 dB under the instrument; synth key presses make no sound.
  */
 import type { Vector3 } from 'three';
+import { demoAudioMaster } from '@ce/protocol';
 
 export type Cue = 'tick' | 'click' | 'lock' | 'step' | 'ok' | 'fail' | 'blip' | 'daemon' | 'sweep' | 'voiceOn' | 'voiceOff' | 'pluck' | 'knock' | 'chirp';
 
 /**
- * Global mute (user directive, Nov 2: no Web Audio playback on this Mac until lifted). While true, no
- * AudioContext is created and play() is a no-op. Flip with `UiAudio.muted = false` or `?audio=1`.
+ * Demo sounds are on by default. An explicit local test mute creates no AudioContext.
  */
-let MUTED = true;
+let MUTED = false;
 try {
   if (typeof location !== 'undefined') {
     const q = new URLSearchParams(location.search);
@@ -31,6 +31,14 @@ export class UiAudio {
   private bus: GainNode | null = null;
   private blipIndex = 0;
   enabled = true;
+  private masterVolume = demoAudioMaster.effectiveVolume;
+  constructor() {
+    demoAudioMaster.registerOutput(volume => {
+      this.masterVolume = volume;
+      if (this.bus && this.ctx) this.bus.gain.setTargetAtTime(.25 * volume, this.ctx.currentTime, .025);
+    });
+    demoAudioMaster.onUnlock(() => this.unlock());
+  }
 
   static get muted(): boolean {
     return muted();
@@ -49,7 +57,7 @@ export class UiAudio {
     try {
       this.ctx = new AudioContext();
       this.bus = this.ctx.createGain();
-      this.bus.gain.value = 0.25;
+      this.bus.gain.value = 0.25 * this.masterVolume;
       this.bus.connect(this.ctx.destination);
     } catch {
       this.ctx = null;

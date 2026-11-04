@@ -13,7 +13,7 @@ Built for the **Meta Global AI Developer Hackathon** (Indie Developer track, *Pu
 
 ## The golden path
 
-One MacBook and one Quest 3. The Mac runs the server, a paired companion and a silent full-screen **visual synth**. Its capability manifest describes what the instrument accepts; the hand-to-device wiring is generated after your request.
+One MacBook and one Quest 3. The Mac runs the server, a paired companion and a full-screen **visual synth** with water sounds. Its capability manifest describes what the instrument accepts; the hand-to-device wiring is generated after your request.
 
 The Mac server now hosts a small **Muse agent harness** for that request: Muse chooses native API tools to inspect the selected connector and Quest signals, submit code for real checks, repair it, and finish the exact checked artifact. Inference uses Meta's API; the fast hand program runs on Quest. This is ControlAnything's own bounded harness, not Hermes or Muse Code. See [the harness and its receipts](docs/MUSE-HARNESS.md).
 
@@ -33,7 +33,7 @@ The deliberate palm menu closes after a selection and stays out of the way while
 
 For a longer request, choose **Details → Read request** after stopping the wiring. A flat panel opens in front of you with short, large-type pages, generous line spacing, Back/Next and **Close**; surrounding controls are hidden while reading. It stays at its opening position rather than following every head movement. Details also offers deliberate code inspection and screen recalibration. Opening/closing these views never asks Muse or restarts wiring. Requests over 500 characters are rejected with an instruction to shorten them, rather than silently cut off.
 
-**Optional musical route:** choose **More → Music** to open **ControlAnything Synth**, a separate browser instrument on the paired Mac. It starts with sound locked; the present user must choose **Sound on** on that Mac. Complete setup, then ask Muse how your hands should play. Muse writes the note/gate and parameter mapping after the request; there is no built-in playable hand preset. The authored engine provides a two-octave C minor scale, filter, envelope, delay and three sound presets. Both palms stop the current wiring and release its note, keeping the checked instrument ready for another ask. **Stop all**, closing/hiding the panel or disconnecting locks sound again. This route does not send physical MIDI. Its real-headset and audible acceptance remain pending; muted tests use `/companion/?mute=1`, independently of the server's `CE_MAC_SILENT` setting.
+**Optional musical route:** choose **More → Music** to open **ControlAnything Synth**, a separate browser instrument on the paired Mac. Sound is audible by default after the first Mac interaction unlocks browser audio; there is no extra Sound on gate. Complete setup, then ask Muse how your hands should play. Muse writes the note/gate and parameter mapping after the request; there is no built-in playable hand preset. The authored engine provides a two-octave C minor scale, filter, envelope, delay and three sound presets. Both palms stop the current wiring and release its note, keeping the checked instrument ready for another ask. **Stop all**, closing/hiding the panel or disconnecting releases notes and delay tails; an old program never resumes. One shared master volume/mute controls Mac and headset sounds. This route does not send physical MIDI. Real-headset listening remains an acceptance check; muted automation uses `/companion/?mute=1`.
 
 ## Meta model calls vs. OS and browser features
 
@@ -56,9 +56,10 @@ These parts are OS or browser features, or plain code. None of them is an AI mod
 | An object you hold as a controller | Follows the hand that holds it (WebXR joints). SAM 3.1 finds it first. |
 | Camera verification (*seen ✓*) | Deterministic before/after frame comparison inside the SAM 3.1 outline. |
 | Passthrough frames | Quest Browser camera access (`getUserMedia`). |
-| The Mac visual synth | A WebGL shader in Chrome. |
+| The Mac visual synth | A WebGL shader with procedural Web Audio splash, wake and hover sounds in Chrome. |
 | The Mac musical synth | An authored Web Audio instrument in Chrome; sound requires an explicit Mac click. Muse writes its hand wiring, not the oscillator/effect engine. |
-| Mac speech and music actions | macOS `say` and AppleScript (Music), which are OS features. They're off in the demo (`CE_MAC_SILENT=1`). |
+| App voices, reactions and UI sounds | Browser `speechSynthesis`, macOS OS speech, and procedural Web Audio tones/noise; no non-Meta AI voice model. Shared master volume/mute applies across Quest and Mac. |
+| Mac speech and music actions | macOS speech and AppleScript (Music), which are OS features. Live startup leaves `CE_MAC_SILENT` unset; explicit muted automation can still use it. |
 | iPhone spoken replies | The iOS system voice (`AVSpeechSynthesizer`). |
 | Device links | Web MIDI, Web Serial and Web Bluetooth (browser), bleak (Bluetooth LE), stored IR codes. |
 | QR pairing | jsQR decoding (not a model). |
@@ -131,7 +132,7 @@ These checks use server fixture detections. They do not measure detector accurac
 
 ## Run it with hardware
 
-1. **Mac:** put `MODEL_API_KEY` in `.env` for live Meta models. Then run `npm run build`, then `CE_DEMO=1 CE_MAC_SILENT=1 npm start`. HTTP serves on :8787 and HTTPS on :8443.
+1. **Mac:** put `MODEL_API_KEY` in `.env` for live Meta models. Build before opening the app, then run `CE_DEMO=1 npm start` with `CE_MAC_SILENT` unset. HTTP serves on :8787 and HTTPS on :8443. The first click/Enter AR unlocks browser audio; a shared visible volume/mute controls the demo.
 
 2. **Quest 3** (developer mode, USB-C): `sh scripts/quest-grant-camera.sh` grants camera access and sets up `adb reverse`. In Quest Browser, open `http://localhost:8787/quest/` and choose **Enter AR**. Over the LAN, use `https://<mac-ip>:8443/quest/` and accept the development certificate.
 3. **Companion:** open `http://localhost:8787/companion/` in its own Chrome window, full screen. Look at its QR code from the headset.

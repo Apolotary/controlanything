@@ -64,7 +64,7 @@ If a selected-object observation is available, its timestamp and image are suppl
 Use the normal server command with a Meta key in the untracked environment:
 
 ```sh
-CE_DEMO=1 CE_MAC_SILENT=1 npm start
+CE_DEMO=1 npm start
 ```
 
 Ask on the selected Quest card as usual. Actual code/progress continues through the existing AR and companion code views. Previews reflect received API chunks; a whole program can arrive in one chunk, with no artificial typing. The owner can inspect:

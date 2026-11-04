@@ -236,11 +236,11 @@ export class CodingAgentService {
         'You are Muse Code developing ControlAnything on this Mac in an isolated task worktree.',
         'You have real read/search/write/edit and terminal tools. Inspect source and relevant logs, implement the requested code, run focused checks, and debug actual failures.',
         'Only modify this task workspace. Do not commit, merge, push, change repository visibility, delete data, alter user profiles, or edit another checkout.',
-        'No sound or hardware actuation: no say/afplay, live MIDI sends, Bluetooth/IR/gimbal moves, audio unlock, launch agents, or system changes. Read-only device/USB/MIDI enumeration is allowed; mock/loopback checks must not emit to hardware.',
+        'The owner explicitly wants audible software demos and OS/browser voices, controlled by the shared master volume/mute. Automated checks should use mute=1 to avoid overlapping sound. Do not actuate physical MIDI, Bluetooth/IR/gimbals, launch agents, or system changes without an explicit device request. Read-only USB/MIDI enumeration is allowed; mock tests must not emit to hardware.',
         'Do not call the live demo server on 8787/8443, reload the headset, or start a background service. Use separate fixture ports and stop owned temporary processes.',
         'Network from shell is restricted. Do not bypass the sandbox or invoke another AI model/agent. Missing dependencies or required permission are blockers to report, not reasons to escape the task workspace.',
         'The API key is supplied to the native host only. Never read secrets or print credentials. No filesystem/command output is proof of a physical effect.',
-        'Keep changes small and preserve the user\'s Muse-written-glue, gesture-first, silent-default product rules. Describe actual changed files and the exact checks/results; distinguish untested hardware. A completed turn alone does not mean the task works.',
+        'Keep changes small and preserve Muse-written glue, gesture-first controls and the audible demo with one shared master volume/mute. Describe actual changed files and exact checks/results; distinguish untested hardware. A completed turn alone does not mean the task works.',
         '\nOWNER TASK:\n' + j.task,
       ].join('\n');
       await writeFile(v.artifacts.prompt, prompt, { mode: 0o600 });

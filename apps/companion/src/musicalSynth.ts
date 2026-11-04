@@ -1,4 +1,4 @@
-import type { ExecAckPayload, ExecCommandPayload, Port } from '@ce/protocol';
+import { demoAudioMaster, type ExecAckPayload, type ExecCommandPayload, type Port } from '@ce/protocol';
 import { MusicalSynth } from '@ce/vsynth/musical';
 import { MUSICAL_SCALE, MUSICAL_SYNTH_NAME, MUSICAL_SYNTH_PORT_ID } from '@ce/vsynth/musical-manifest';
 import { checkMidiOp } from './contracts';
@@ -13,13 +13,13 @@ const noteName = (midi: number) => `${['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯
 
 /** Device readiness is separate from an accepted program; no Mac signal proves the Quest Worker is running. */
 export function musicalStageText(soundOn: boolean, phase?: WiringPhase): { status: string; readout: string } {
-  if (!soundOn) return { status: 'Sound off · choose Sound on on this Mac to enable device checks. Then ask Muse in Quest.', readout: 'Sound is off' };
+  if (!soundOn) return { status: 'Click anywhere on this Mac page to enable browser audio, then ask Muse in Quest.', readout: 'Waiting for a Mac click' };
   if (phase === 'writing') return { status: 'Muse is writing your requested hand wiring · wait in Quest', readout: 'Muse is writing…' };
   if (phase && ['validating', 'dry-run', 'verifying'].includes(phase)) return { status: 'Checking the requested wiring · wait for the result in Quest', readout: 'Checking your wiring…' };
   if (phase === 'stopped') return { status: 'Wiring stopped · ask Muse again in Quest', readout: 'Stopped · ask Muse again' };
   if (phase === 'failed') return { status: 'Wiring did not finish · retry your request in Quest', readout: 'Try your request again' };
   if (phase === 'ready') return { status: 'Wiring ready · follow Muse’s gesture instructions in Quest', readout: 'Follow your Quest instructions' };
-  return { status: 'Sound on · complete device checks in Quest, then ask Muse to wire your hands', readout: 'Ask Muse in Quest' };
+  return { status: 'Ready to sound · ask Muse in Quest to wire your hands', readout: 'Ask Muse in Quest' };
 }
 
 /** Own browser-only virtual instrument; never forwards a command to Web MIDI. */
@@ -42,6 +42,8 @@ export class MusicalSynthPanel {
   private readonly visibility = () => this.update();
   constructor(private readonly options: { connected(): boolean; changed(): void; muted?: boolean }) {
     this.synth = new MusicalSynth({ muted: options.muted, changed: () => { this.render(); this.notify(); } });
+    demoAudioMaster.registerOutput(volume => { this.synth.setMasterVolume(volume); this.render(); });
+    demoAudioMaster.onUnlock(() => { void this.unlock(); });
   }
   get opened(): boolean { return !!this.panel; }
   get available(): boolean { return this.opened && this.synth.enabled && !document.hidden && this.options.connected(); }
@@ -55,7 +57,11 @@ export class MusicalSynthPanel {
     const body = document.createElement('div'); body.className = 'musical-body';
     const caption = document.createElement('p'); caption.textContent = 'Ask Muse to write how your hands play this instrument. C minor · two octaves · three sound presets.';
     const sound = this.sound = document.createElement('button'); sound.type = 'button'; sound.id = 'musical-sound-toggle';
-    sound.onclick = () => { if (this.synth.enabled) this.panic(); else void this.unlock(); };
+    sound.hidden = true; // The shared visible master, rather than a second instrument gate, owns sound.
+    sound.onclick = () => {
+      demoAudioMaster.unlock();
+      demoAudioMaster.set(demoAudioMaster.state.volume, !demoAudioMaster.state.muted);
+    };
     const status = this.status = document.createElement('p'); status.id = 'musical-status'; status.setAttribute('role', 'status');
     const note = this.note = document.createElement('div'); note.id = 'musical-note';
     const level = this.level = document.createElement('meter'); level.min = 0; level.max = 1; level.setAttribute('aria-label', 'Software instrument signal level');
@@ -68,15 +74,16 @@ export class MusicalSynthPanel {
     document.addEventListener('visibilitychange', this.visibility);
     this.timer = setInterval(() => { this.render(); this.notify(); }, 200);
     this.update();
+    if (demoAudioMaster.unlocked) void this.unlock();
   }
   private async unlock(): Promise<void> {
-    if (this.unlocking || !this.panel || !this.options.connected() || document.hidden) return;
+    if (this.unlocking || this.synth.enabled || !this.options.connected() || document.hidden) return;
     this.error = ''; this.unlocking = true; this.render();
-    try { if (!await this.synth.unlock()) this.error = 'Chrome did not enable audio. Keep this tab visible and choose Sound on again.'; }
-    catch { this.synth.lock(); this.error = 'Audio could not start in this browser. Use the paired Chrome tab and try Sound on again.'; }
+    try { if (!await this.synth.unlock()) this.error = 'Chrome is waiting for a click. Click anywhere on this Mac page to enable audio.'; }
+    catch { this.synth.lock(); this.error = 'Audio could not start. Keep this Chrome tab visible and click to retry.'; }
     finally {
       this.unlocking = false;
-      if (!this.panel || document.hidden || !this.options.connected()) this.synth.lock();
+      if (document.hidden || !this.options.connected()) this.synth.lock();
       this.render(); this.notify();
     }
   }
@@ -120,11 +127,11 @@ export class MusicalSynthPanel {
     if (!this.panel || !this.status || !this.sound || !this.note) return;
     const receipt = this.synth.receipt(), enabled = this.synth.enabled;
     const text = (node: HTMLElement, value: string) => { if (node.textContent !== value) node.textContent = value; };
-    text(this.sound, this.unlocking ? 'Enabling sound…' : enabled ? 'Sound off' : 'Sound on');
-    this.sound.disabled = this.unlocking || !this.options.connected();
-    this.sound.setAttribute('aria-pressed', String(enabled));
+    text(this.sound, demoAudioMaster.state.muted ? 'Unmute all sound' : 'Mute all sound');
+    this.sound.disabled = !this.options.connected();
+    this.sound.setAttribute('aria-pressed', String(demoAudioMaster.state.muted));
     const stage = musicalStageText(enabled, this.codeView?.phase);
-    const status = this.error || (!this.options.connected() ? 'Reconnect this paired companion before enabling sound.' : stage.status);
+    const status = this.error || (!this.options.connected() ? 'Reconnect this paired companion before playing.' : stage.status);
     text(this.status, status + (this.options.muted ? ' · Test output is muted' : ''));
     text(this.note, this.unlocking ? 'Starting the instrument…' : enabled && this.codeView?.phase === 'ready' && receipt.audio.activeNote !== undefined
       ? `${noteName(receipt.audio.activeNote)} · ${receipt.audio.frequency.toFixed(0)} Hz` : stage.readout);
@@ -141,7 +148,7 @@ export class MusicalSynthPanel {
     if (generated && !generated.ok) return ack(false, { error: 'refused', detail: generated.error });
     if (cmd.dryRun) return ack(true, { detail: 'dry run; no sound or state change' });
     if (op.msg === 'panic') { this.panic(); return ack(true); }
-    if (!this.available) return ack(false, { error: 'no_port', detail: 'Open Musical synth and choose Sound on in this paired Mac companion.' });
+    if (!this.available) return ack(false, { error: 'no_port', detail: 'Open Musical synth and click anywhere on the paired Mac page to enable browser audio.' });
     if (op.msg === 'sysex-identity') return ack(true, { reply: [0xf0, 0x7e, 0, 6, 2, 0x7d, 0, 2, 0, 0, 1, 0, 0, 0, 0xf7] });
     if (op.msg !== 'cc' && op.msg !== 'pc') return ack(false, { error: 'unsupported', detail: 'Use the declared scale-note and gate CC actions.' });
     const bytes = generated?.ok ? generated.bytes : op.msg === 'cc' ? [0xb0, op.number!, op.value as number] : [0xc0, op.number!];

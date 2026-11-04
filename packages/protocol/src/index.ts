@@ -14,3 +14,4 @@ export * from './object-information';
 export * from './projects';
 
 export * from './workspace-context';
+export * from './demo-audio';

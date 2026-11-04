@@ -130,17 +130,17 @@ export function actionBriefs(driver: Pick<Driver, 'actions' | 'executor'>, manif
 export function deviceHints(driver: Pick<Driver, 'actions' | 'executor'>, manifest = VISUAL_SYNTH_MANIFEST): string[] {
   if (isMusicalSynthPort(driver.executor.port)) return [
     `Device capability manifest: ${JSON.stringify(MUSICAL_SYNTH_MANIFEST)}`,
-    'This is the browser software musical instrument, not the silent visual synth or a physical MIDI device. Numeric values are raw wire units, not normalized UI units.',
+    'This is the browser software musical instrument, distinct from the visual water instrument or a physical MIDI device. Numeric values are raw wire units, not normalized UI units.',
     'For a request to play notes, use Scale note (CC16, integer 0..14) together with Note gate (CC17, >=64 on, 0 releases). Gate alone is a single fixed pitch, and pitch alone is silent.',
     'Always send Note gate 0 when the controlling hand disappears, or when the requested play gesture ends. Send it on that edge even when no hands remain, using mem if needed.',
     'A held note stops after eight seconds. The wearer must release and play again to retrigger; repeated identical values are not a heartbeat. Make the explanation honest about how to start and release the note.',
-    'Sound is enabled only by an explicit Mac Sound on click. Do not invent code that unlocks audio, changes physical ports, or claims a sound was heard.',
+    'Sound is audible by default after the browser accepts the first Mac gesture; the shared master volume/mute controls it. Do not invent code that bypasses autoplay, changes physical ports, or claims a sound was heard.',
     'Choose the hand movement and gesture only from what the wearer asked for; the capability catalog does not prescribe a hand mapping.',
   ];
   if (!isVisualSynthPort(driver.executor.port)) return [];
   const touch = touchControls(manifest.controls);
   const lines = [
-    `Device hints from its capability manifest ("${manifest.name}", a silent visual instrument on the Mac screen; CC values 0-127 on channel 1):`,
+    `Device hints from its capability manifest ("${manifest.name}", a visual water instrument with procedural sound feedback on the Mac screen; CC values 0-127 on channel 1):`,
     ...manifest.controls.filter((c) => driver.actions.some((a) => a.encode.kind === 'midi' && a.encode.msg === 'cc' && a.encode.number === c.cc)).map((c) => `- cc${c.cc} "${c.label}"${touch.includes(c) ? ' [touch input]' : ''}: ${c.effect}`),
   ];
   if (touch.length) {

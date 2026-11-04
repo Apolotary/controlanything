@@ -103,6 +103,21 @@ describe('rate limiter and dispatcher', () => {
     await expect(mac.exec({ kind: 'local', op: 'volume', arg: 30 }, true)).resolves.toMatchObject({ ok: true, detail: expect.stringMatching(/dry run/) });
     await expect(mac.exec({ kind: 'midi', msg: 'cc', channel: 1 })).resolves.toMatchObject({ ok: false, error: 'unsupported' });
   });
+
+  it('uses the shared master for native speech and cancels our speech when muted', async () => {
+    let state = { volume: .35, muted: true };
+    let finish!: (value: string) => void;
+    const run = vi.fn(async (_file: string, args: string[]) => args[1]?.startsWith('on run') ? new Promise<string>(resolve => { finish = resolve; }) : 'done');
+    const mac = new MacLocalExecutor(run, true, false, () => state);
+    await expect(mac.exec({ kind: 'local', op: 'say', arg: 'Ready' })).resolves.toMatchObject({ ok: false, detail: expect.stringContaining('muted') });
+    expect(run).not.toHaveBeenCalled();
+    state = { volume: .35, muted: false };
+    const pending = mac.exec({ kind: 'local', op: 'say', arg: 'Ready "with quotes"' });
+    expect(run).toHaveBeenCalledWith('osascript', expect.arrayContaining(['Ready "with quotes"', '0.35']));
+    state = { volume: .35, muted: true }; mac.masterChanged();
+    expect(run).toHaveBeenLastCalledWith('osascript', ['-e', 'say "" stopping current speech true']);
+    finish('spoken'); await expect(pending).resolves.toMatchObject({ ok: true });
+  });
 });
 
 describe('executor and sensor picking by capability', () => {

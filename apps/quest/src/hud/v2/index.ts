@@ -1736,9 +1736,12 @@ export class LeanHud implements Hud {
       const item = this.palette.item(group.userData.paletteKey ?? group.name)!;
       const segment = group.userData.segmentKey as string | undefined;
       this.widgets.push({ group, w: group.userData.width, h: group.userData.height, kind: 'deck', button: true, lastMove: 0,
-        // A button does its job and the menu gets out of the way (it reopens after the palm turns away and back);
-        // segment rows (Annotate | Control, what to track) keep it open for a second choice.
-        start: () => { if (segment) item.onSegment?.(segment); else if (item.hold) this.palette.beginHold(item.key, this.time * 1000); else { item.onSelect(); if (!item.keepOpen) { this.palette.resetPage(); this.palette.anchor.dismiss(this.time * 1000); } } },
+        // Feature presses finish and dismiss; only deliberate More/Back navigation stays open.
+        start: () => {
+          if (segment) { item.onSegment?.(segment); this.palette.resetPage(); this.palette.anchor.dismiss(this.time * 1000); }
+          else if (item.hold) this.palette.beginHold(item.key, this.time * 1000);
+          else { item.onSelect(); if (!item.keepOpen) { this.palette.resetPage(); this.palette.anchor.dismiss(this.time * 1000); } }
+        },
         end: item.hold ? () => this.palette.cancelExitHold() : undefined });
     }
   }
@@ -1811,6 +1814,7 @@ export class LeanHud implements Hud {
     if (!hand) return;
     e.stopPropagation?.();
     this.events.emit('consumed', { hand: hand === 'mouse' ? 'right' : hand, widget: widget.kind });
+    this.events.emit('uiPress', {});
     this.pressUntil.set(widget.group.name, this.time + 0.12);
     if (this.isTap(widget)) { this.taps.set(e.pointerId, widget); return; }
     const plane = new Matrix4().copy(widget.group.matrixWorld).invert();
@@ -2008,6 +2012,7 @@ export class LeanHud implements Hud {
         capture.dragNear = cursor.canPoke && Math.abs(this.point.z) <= THEME.control.near && this.inside(winner, this.point);
         this.pressUntil.set(winner.group.name, this.time + 0.12);
         this.events.emit('consumed', { hand: cursor.hand, widget: winner.kind });
+        this.events.emit('uiPress', {});
         winner.start(this.local);
       }
     }

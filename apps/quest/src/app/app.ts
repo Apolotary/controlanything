@@ -11,7 +11,8 @@
  *   scan=fixture       use recorded photo boxes or projected sim layout (automatic for sim + fixture server)
  *   replay=<url>       a take (session.jsonl or .zip); replayMode=playback|pipeline
  *   record=1           highlight recording instructions (recording requires the Record button)
- *   mic=0              never open the microphone (no AudioContext at all)
+ *   mic=0              never open the microphone (demo feedback can still use browser audio)
+ *   mute=1             local automated-test mute; leaves the room master setting unchanged
  *   hud=v2|v1|debug    compact HUD (default), original HUD, or shell debug HUD
  *   dominant=left      left-handed: the menu follows the RIGHT hand
  *   ws=<url>           WebSocket override
@@ -20,7 +21,8 @@
  */
 import type { Channel, ControlEvent, Gen3dSpec, HackItem, HudStatus, ModelChip } from '@ce/gen3d';
 import type { AgentStepPayload, LibraryDevice, PayloadOf, TargetState } from '@ce/protocol';
-import { SetupProgressTracker, type Message } from '@ce/protocol';
+import { demoAudioMaster, SetupProgressTracker, type Message } from '@ce/protocol';
+import { QuestDemoAudio } from '../audio/demo-audio';
 import { ObjectCanvas } from './canvas';
 import { ProjectControls, headsetCanvasUrl } from './projects';
 import { ManualRegionSelector } from '../scan/manual-region';
@@ -153,6 +155,7 @@ function channelOf(t: string | undefined): Channel {
 
 export class QuestApp {
   readonly params: URLSearchParams;
+  readonly demoAudio: QuestDemoAudio;
   readonly page = new Page();
   readonly scene = new Scene();
   readonly desktopCam = new PerspectiveCamera(70, 1, 0.01, 100);
@@ -282,6 +285,7 @@ export class QuestApp {
 
   constructor(params: URLSearchParams) {
     this.params = params;
+    this.demoAudio = new QuestDemoAudio(params);
     this.onboarding = new HelperOnboarding(params.get('camera') === 'sim');
     this.nonDominant = params.get('dominant') === 'left' ? 'right' : 'left';
   }
@@ -299,6 +303,7 @@ export class QuestApp {
       this.page.log(`desktop emulator: IWER ${this.emulator.device.version} (${this.emulator.device.name}${this.emulator.devui ? ', DevUI' : ''})`, 'ok');
     }
     await this.setupHud();
+    this.setupDemoAudio();
     this.spatial = createSpatialInput(this.scene, this.desktopCam, this.renderer, { meshes: this.params.get('hands') === '1' });
     (this.hud as Hud & { setSpatialInput?: (s: SpatialInput) => void }).setSpatialInput?.(this.spatial);
     // buddy: the Muse buddy mascot (src/buddy), wrist palette → Buddy; window.__ce.buddy for scripts; ?buddy=0 turns it off
@@ -319,7 +324,7 @@ export class QuestApp {
     // Back on a visible page (or out of a hidden XR session): a busy or lost camera retries at once.
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') this.retryCameraNow();
-      else this.suspendWiring('Quest page hidden');
+      else { this.demoAudio?.suspend(); this.suspendWiring('Quest page hidden'); }
     });
     const replay = this.params.get('replay');
     if (replay) await this.startReplay(replay, (this.params.get('replayMode') as ReplayMode) ?? 'playback');
@@ -528,6 +533,7 @@ export class QuestApp {
       const hand = e.hand === 'mouse' ? 'right' : e.hand;
       if (hand === 'left' || hand === 'right') this.consumed[hand as Handedness] = true;
     });
+    hud.on('uiPress', () => { demoAudioMaster.unlock(); this.demoAudio?.play('tap'); });
     // desktop: gen3d's widgets take a mouse "dev cursor" that raycasts the HUD's own objects (as in its gallery)
     const devHud = hud as Hud & { setDevCursors?: (c: unknown[]) => void };
     if (this.emulator && kind === 'gen3d' && typeof devHud.setDevCursors === 'function') {
@@ -640,6 +646,11 @@ export class QuestApp {
       return { cardId, specId: cardId ? this.specByCard.get(cardId) : undefined };
     });
     this.wiring = new WiringController({
+      feedback: event => {
+        this.demoAudio?.setThinking('wire', event === 'asking');
+        if (event === 'ready') this.demoAudio?.play('ready');
+        else if (event === 'stop') this.demoAudio?.play('stop');
+      },
       userStopped: (reason, request) => this.stopWiringRequest(reason, request),
       selected: () => {
         const tag = this.modes.mode === 'control' && this.lockedId ? this.modes.tags.get(this.lockedId) : undefined;
@@ -724,6 +735,7 @@ export class QuestApp {
     this.ws.onState = (s, info) => {
       this.page.badge('b-ws', s, s === 'open' ? 'ok' : s === 'connecting' ? 'warn' : 'bad');
       if (s === 'closed') {
+        this.demoAudio?.suspend();
         this.cancelManualRegion();
         this.projects?.disconnect();
         this.canvas?.disconnect();
@@ -1611,6 +1623,7 @@ export class QuestApp {
 
   private wireMessages(): void {
     const ws = this.ws;
+    ws.on('audio.master', m => { if (m.from === 'server') demoAudioMaster.receive(m.payload as PayloadOf<'audio.master'>); });
     // Runs after typed handlers so selection, approval and terminal states are already current.
     ws.onAny((message) => this.onSetupProgress(message));
     ws.on('welcome', (m) => {
@@ -2033,6 +2046,7 @@ export class QuestApp {
 
   onDeck(key: string, phase: 'press' | 'release'): void {
     if (key === 'panic' && phase === 'press') {
+      this.demoAudio?.play('stop');
       this.tangible?.release('stop'); this.cancelManualRegion(); this.projects?.pauseForNavigation();
       // Stop (wrist menu, home bar, X key) stops the Buddy too
       (this as unknown as { buddy?: { close(): void } }).buddy?.close();
@@ -2049,6 +2063,7 @@ export class QuestApp {
   }
 
   private stopControls(): void {
+    this.demoAudio?.suspend();
     const stoppedRequestId = this.wiring?.snapshot?.()?.requestId;
     if (typeof stoppedRequestId === 'string') this.tutorialStoppedRequestId = stoppedRequestId;
     this.setupProgress?.clear();
@@ -2257,6 +2272,7 @@ export class QuestApp {
       // SAM 3.1's "laptop" prompt (or a name like "MacBook") is the Mac: the first pinch opens its visual synth.
       // A box still called "electronic device" is tagged; when Muse names it the Mac, the same pinch continues (eea4eca).
       if (t && (this.isScreenBox(t.label) || this.isScreenBox(t.prompt))) {
+        this.demoAudio?.play('tap');
         this.selectVisualSynth(undefined, { label: this.isScreenBox(t.label) ? t.label : t.prompt!, frameId: t.frameId, detId: t.detId, position: t.position.clone() });
         return;
       }
@@ -2265,6 +2281,7 @@ export class QuestApp {
     if (this.modes.mode === 'control' && !this.modes.tags.has(id)) return;
     const t = this.targets.get(id);
     if (!t) return;
+    if (['chip', 'touch', 'ray', 'gaze'].includes(how)) this.demoAudio?.play('tap');
     if (this.modes.mode === 'annotate' && !this.modes.tags.has(id)) {
       const match = matchSavedDevice([...this.roomAnchors.devices.values()], t);
       if (match.kind === 'ambiguous') { this.pendingPlacement = { target: t, devices: match.devices, index: 0 }; this.showPlacementChoice(); return; }
@@ -2312,6 +2329,25 @@ export class QuestApp {
   }
 
   // --- extension points (other lanes register here; see wrist-palette.ts) ---------------------------
+
+  private setupDemoAudio(): void {
+    demoAudioMaster.bind(state => { this.ws.send('audio.master', state, { to: 'server' }); });
+    const unlock = () => demoAudioMaster.unlock();
+    document.addEventListener('pointerdown', unlock, { capture: true });
+    this.registerPaletteItem({ key: 'master-audio', label: 'Sound', order: 76, section: 'more',
+      segments: [{ key: 'mute', label: 'Mute', width: .075 }, { key: 'down', label: '− Vol', width: .075 }, { key: 'up', label: '+ Vol', width: .075 }],
+      selected: () => demoAudioMaster.effectiveVolume === 0 ? 'mute' : '', onSelect: () => {},
+      onSegment: key => {
+        demoAudioMaster.unlock();
+        const state = demoAudioMaster.state;
+        if (key === 'mute') demoAudioMaster.set(state.volume || .35, !state.muted && state.volume > 0);
+        else demoAudioMaster.set(Math.max(0, Math.min(1, state.volume + (key === 'up' ? .15 : -.15))), false);
+        const next = demoAudioMaster.state;
+        this.hud.toast(next.muted || next.volume === 0 ? 'Sound muted on Quest and Mac' : `Quest + Mac volume ${Math.round(next.volume * 100)}%`, 'info');
+      },
+    });
+    addEventListener('pagehide', () => { document.removeEventListener('pointerdown', unlock, { capture: true }); this.demoAudio?.dispose(); }, { once: true });
+  }
 
   private setupTutorial(): void {
     if (this.params.get('tutorial') === '0') return;
@@ -2644,6 +2680,7 @@ export class QuestApp {
 
   async enterXr(): Promise<void> {
     if (this.enteringXr || this.superseded) return;
+    demoAudioMaster.unlock();
     if (this.session) {
       await this.session.end();
       return;
@@ -2657,6 +2694,7 @@ export class QuestApp {
       if (this.superseded) return;
       const s = await startXr(this.renderer, { allowVr: Boolean(this.emulator) });
       this.session = s.session;
+      s.session.addEventListener('selectstart', () => demoAudioMaster.unlock());
       this.scanner.stop();
       this.hud.setDeck({ open: false });
       // No world coordinate survives the reference-space boundary, including a second AR entry on this page.
@@ -2680,6 +2718,7 @@ export class QuestApp {
         if (this.session !== s.session) return;
         if (s.session.visibilityState === 'visible') { this.retryCameraNow(); return; }
         if (s.session.visibilityState !== 'hidden') return;
+        this.demoAudio?.suspend();
         // Hidden sessions may stop delivering frames. Cancel immediately, so neither a queued
         // widget move nor a held clutch can resume control without the wearer's next action.
         this.cancelManualRegion(); this.projects?.pauseForNavigation(); this.assistant?.cancel(); this.clearVirtualSelection();
@@ -2689,6 +2728,7 @@ export class QuestApp {
       });
       s.session.addEventListener('end', () => {
         if (this.session !== s.session) return;
+        this.demoAudio?.suspend();
         this.suspendWiring('XR session ended', true);
         this.cancelManualRegion(); this.release();
         this.scanner.stop();

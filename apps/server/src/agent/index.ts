@@ -166,8 +166,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const midiCharts = new MidiChartStore(opts.tagsFile === null ? undefined : join(knowledgeDir, 'reviewed-midi-charts.json'));
   for (const warning of midiCharts.warnings) log(`[midi-charts] ${warning}`);
   const macEnabled = opts.macLocal ?? (process.platform === 'darwin' && !process.env.VITEST && process.env.CE_MAC_LOCAL !== '0');
-  // CE_MAC_SILENT=1: this Mac must stay silent; nothing audible runs and a recorded clip stands in for its voice
-  const macLocal = new MacLocalExecutor(undefined, macEnabled, process.env.CE_MAC_SILENT === '1');
+  // Explicit test opt-in only; the live demo uses the shared master sound state.
+  const macLocal = new MacLocalExecutor(undefined, macEnabled, process.env.CE_MAC_SILENT === '1', () => hub.audioMasterState);
+  const unsubscribeAudio = hub.onAudioMaster(() => macLocal.masterChanged());
   const silentSpeech = macLocal.silent ? loadRecordedSpeech(undefined, log) : undefined;
   if (macLocal.silent) log('[silent] CE_MAC_SILENT=1: say / Music are not run and the volume is kept in memory; acks and evidence say so');
   // a sensor whose last reply timed out (a dead headset tab) yields to a healthy one for ~30 s
@@ -1550,6 +1551,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       assistant?.invalidate();
       unsubscribe();
       unsubscribePresence();
+      unsubscribeAudio();
       unsubscribeTags();
       unsubscribeForge();
       combos.cancel();

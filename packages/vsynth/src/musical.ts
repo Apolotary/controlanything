@@ -22,6 +22,7 @@ export class MusicalSynth {
   private noteTimer?: ReturnType<typeof setTimeout>;
   private state = musicalDefaults();
   private unlocked = false;
+  private outputVolume = 1;
   constructor(private readonly options: { muted?: boolean; changed?(): void; context?(): AudioContext } = {}) {}
   get enabled(): boolean { return this.unlocked && this.ctx?.state === 'running'; }
   get clock(): { contextTime: number; contextState: AudioContextState | 'closed' } {
@@ -59,7 +60,7 @@ export class MusicalSynth {
     }
     if (this.ctx !== ctx || this.generation !== generation) return false;
     this.unlocked = ctx.state === 'running';
-    this.master!.gain.setValueAtTime(this.options.muted ? 0 : .16, ctx.currentTime);
+    this.master!.gain.setValueAtTime(this.options.muted ? 0 : .22 * this.outputVolume, ctx.currentTime);
     this.options.changed?.(); return this.enabled;
   }
   /** Immediate silence also kills the delay tail; re-enabling requires another click. */
@@ -79,6 +80,12 @@ export class MusicalSynth {
   }
   dispose(): void { this.lock(); }
   get masterGain(): number { return this.master?.gain.value ?? 0; }
+  /** Shared master changes output only; the analyser still proves the instrument graph. */
+  setMasterVolume(volume: number): void {
+    this.outputVolume = Number.isFinite(volume) ? Math.max(0, Math.min(1, volume)) : 0;
+    const ctx = this.ctx;
+    if (ctx && this.master) this.master.gain.setTargetAtTime(this.options.muted || !this.unlocked ? 0 : .22 * this.outputVolume, ctx.currentTime, .015);
+  }
   receiveMidi(bytes: readonly number[]): boolean {
     if (bytes[0] === 0xff || bytes[0] === 0xb0 && [120, 121, 123].includes(bytes[1]!)) { this.lock(); return true; }
     if (!this.enabled || bytes[0] === undefined || (bytes[0] & 15) !== 0) return false;
@@ -142,7 +149,7 @@ export class MusicalSynth {
       rms = Math.sqrt(rms / this.wave.length);
       if (rms > 1e-5 && crossings > 1 && last > first) frequency = this.ctx.sampleRate * (crossings - 1) / (last - first);
     }
-    return { params: this.getState(), audio: { unlocked: this.enabled, muted: !!this.options.muted, rms, peak, frequency,
+    return { params: this.getState(), audio: { unlocked: this.enabled, muted: !!this.options.muted || this.outputVolume === 0, rms, peak, frequency,
       ...(this.state.gate >= 64 ? { activeNote: MUSICAL_SCALE[this.state.noteIndex] } : {}) }, frame: ++this.frame, at: Date.now() };
   }
 }

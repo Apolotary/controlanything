@@ -2,7 +2,7 @@
   "name": "@ce/vsynth",
   "version": "0.1.0",
   "private": true,
-  "description": "Silent original WebGL2 visual instrument shared by the companion and room simulator.",
+  "description": "Original WebGL2 visual instrument with gesture-driven browser water feedback.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",

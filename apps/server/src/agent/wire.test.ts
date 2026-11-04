@@ -19,7 +19,7 @@ const set = (id: string, label: string, n: number): DriverAction => ({ actionId:
 const pc = (n: number): DriverAction => ({ actionId: `pattern${n}`, label: ['Flow', 'Rings', 'Prism'][n]!, kind: 'trigger', encode: { kind: 'midi', msg: 'pc', channel: 1, number: n }, expect: { sense: 'camera', effect: 'any' } });
 // a manifest that has the touch inputs gp-mac is adding (the real one is read at run time)
 const MANIFEST = {
-  id: 'controlanything-visual-synth' as const, name: 'ControlAnything Visual Synth', port: { id: 'ce-visual-synth', name: 'ControlAnything Visual Synth' }, channel: 1 as const, silent: true as const,
+  id: 'controlanything-visual-synth' as const, name: 'ControlAnything Visual Synth', port: { id: 'ce-visual-synth', name: 'ControlAnything Visual Synth' }, channel: 1 as const, silent: false as const,
   controls: [
     { cc: 71, parameter: 'warp', label: 'Warp', effect: 'how strongly the field bends', rendererRange: [0, 1] as [number, number], curve: 'linear' as const },
     { cc: 21, parameter: 'ripple', label: 'Water ripples', effect: 'ripple depth', rendererRange: [0, 1] as [number, number], curve: 'linear' as const },

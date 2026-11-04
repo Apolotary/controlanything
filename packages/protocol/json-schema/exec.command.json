@@ -338,6 +338,42 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128
+        },
+        "generatedMidi": {
+          "type": "object",
+          "properties": {
+            "connectorId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "hash": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "portId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "bytes": {
+              "minItems": 2,
+              "maxItems": 3,
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255
+              }
+            }
+          },
+          "required": [
+            "connectorId",
+            "hash",
+            "portId",
+            "bytes"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [

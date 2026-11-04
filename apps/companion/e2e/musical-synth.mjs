@@ -1,4 +1,4 @@
-/** Real companion + Quest Worker; fixture Muse, virtual port only, output irrevocably muted. */
+/** Real companion + Quest Worker; fixture Muse, virtual port only, Chrome output irrevocably muted. */
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import { chromium } from 'playwright-core';
 import { ROOT, pairMac, startFixtureServer } from './harness.mjs';
 
 const OUT = join(ROOT, 'research/screens/musical-synth');
+const appAudioEnabled = process.env.CE_E2E_APP_AUDIO === '1';
 let fixture, browser, mac, quest, phase = 'start';
 const errors = [], evidence = {};
 const wait = (fn, arg, timeout = 45000) => quest.waitForFunction(fn, arg, { timeout });
@@ -71,10 +72,10 @@ try {
   const mc=await browser.newContext({viewport:{width:1440,height:1000}});
   await mc.addInitScript(id=>localStorage.setItem('ce.device',JSON.stringify(id)),identity);
   mac=await mc.newPage(); mac.on('pageerror',e=>errors.push(`Mac: ${e.message}`));
-  await mac.goto(`${fixture.base}/companion/?mute=1`);
+  await mac.goto(`${fixture.base}/companion/?mute=${appAudioEnabled ? '0' : '1'}`);
   const qc=await browser.newContext({viewport:{width:1440,height:1000},permissions:['microphone']});
   quest=await qc.newPage(); quest.on('pageerror',e=>errors.push(`Quest: ${e.message}`));
-  await quest.goto(`${fixture.base}/quest/?emulate=1&camera=photo&mute=1&mic=1`);
+  await quest.goto(`${fixture.base}/quest/?emulate=1&camera=photo&mute=${appAudioEnabled ? '0' : '1'}&mic=1`);
   await wait(()=>window.__ce?.welcome && window.__ce.ws.open);
   await quest.evaluate(()=>{
     window.__musicOut=[]; window.__musicIn=[];
@@ -82,10 +83,11 @@ try {
     window.__ce.ws.tap('in',m=>{if(['wire.ready','wire.progress','wire.stopped','arm.request','arm.result'].includes(m.type))window.__musicIn.push(m);});
   });
   await quest.locator('#btn-enter').click(); await wait(()=>window.__ce.renderer.xr.isPresenting);
+  if (appAudioEnabled) await wait(()=>window.__ce.demoAudio.snapshot().contextState==='running');
   await wait(()=>window.__ce.mic.ready);
   evidence.microphone={source:'Chromium synthetic capture device',realMicrophone:false,pushToTalkExercised:false};
 
-  phase='actual-menu-and-sound-lock';
+  phase='actual-menu-and-browser-audio-permission';
   await hand('left',-.12);
   await wait(()=>{const p=window.__ce.hud.root.getObjectByName('wrist-palette');return p?.visible&&p.anchor.open;});
   await shot('00-quick-actions');
@@ -101,12 +103,23 @@ try {
   assert.equal(await quest.evaluate(()=>window.__musicOut.some(m=>m.type==='wire.request')),false);
   assert.equal((await fixture.json('/api/agent/exec')).sent.length,0,'Opening must not play or verify while sound is locked');
   await shot('01-locked-mac',mac); await shot('01-locked-quest');
-  assert.equal(await mac.locator('#musical-note').innerText(), 'Sound is off');
+  assert.equal(await mac.locator('#musical-note').innerText(), 'Waiting for a Mac click');
 
-  phase='explicit-muted-unlock-and-setup';
-  await mac.locator('#musical-sound-toggle').click();
+  phase='first-mac-click-and-setup';
+  assert.equal(await mac.locator('#musical-sound-toggle').isVisible(), false, 'There is no separate Sound on gate');
+  await mac.locator('#musical-status').click();
   await mac.waitForFunction(()=>window.__ceMusicalSnapshot().enabled);
-  assert.equal((await snapshot()).masterGain,0,'mute=1 must prevent audible output after explicit unlock');
+  if (appAudioEnabled) assert((await snapshot()).masterGain>0, 'Live app sound must become audible after the first Mac click');
+  else assert.equal((await snapshot()).masterGain,0,'mute=1 must prevent audible output after the first Mac click');
+  await mac.locator('#master-mute').click();
+  await wait(()=>window.__ce.demoAudio.snapshot().master.muted===true);
+  assert.equal(await quest.evaluate(()=>window.__ce.demoAudio.snapshot().effectiveVolume),0);
+  await mac.waitForFunction(()=>window.__ceMusicalSnapshot().masterGain<.00001);
+  await mac.locator('#master-mute').click();
+  await wait(()=>window.__ce.demoAudio.snapshot().master.muted===false);
+  if (appAudioEnabled) assert((await quest.evaluate(()=>window.__ce.demoAudio.snapshot().effectiveVolume))>0);
+  if (appAudioEnabled) await mac.waitForFunction(()=>window.__ceMusicalSnapshot().masterGain>0);
+  evidence.masterAudio={sharedMuteReachedQuest:true,appAudioEnabled,chromeOutputMuted:true,noSeparateSoundOnGate:true};
   await fixture.until('musical setup and Enable', async () => {
     const t = await target();
     if(t.state==='failed') throw Error(`Musical setup failed: ${t.lastError || t.detail}`);
@@ -134,6 +147,12 @@ try {
   await click('wire-chip:Play like a theremin');
   await wait(()=>window.__ce.wiring.running,undefined,120000);
   evidence.ready=await quest.evaluate(()=>window.__musicIn.findLast(m=>m.type==='wire.ready').payload);
+  if (appAudioEnabled) {
+    const audio = await quest.evaluate(()=>window.__ce.demoAudio.snapshot());
+    assert.equal(audio.contextState,'running');
+    assert(Object.values(audio.stats).some(value=>typeof value==='number'&&value>0),'Actual Quest sound cues must run');
+    evidence.questAudio=audio;
+  }
   assert.equal(evidence.ready.source,'fixture');
   evidence.harness=(await fixture.json('/api/agent/harness')).runs.find(run=>run.runId===evidence.ready.wiringId);
   assert.equal(evidence.harness?.outcome,'checked'); assert.equal(evidence.harness.currentlyAuthorized,true);
@@ -158,7 +177,8 @@ try {
   },low.analyser.frequency);
   const high=await snapshot();
   assert(high.state.noteIndex>low.state.noteIndex,'Actual tracked hand height must change the scale note');
-  assert.equal(high.masterGain,0); assert.equal(high.muted,true);
+  if (appAudioEnabled) { assert(high.masterGain>0); assert.equal(high.muted,false); }
+  else { assert.equal(high.masterGain,0); assert.equal(high.muted,true); }
   await shot('03-analyser-performance',mac);
   await hand('right',.05,0);
   await mac.waitForFunction(()=>window.__ceMusicalSnapshot().state.gate===0);
@@ -268,8 +288,8 @@ try {
   assert.deepEqual(errors,[]);
   await shot('04-stopped-mac',mac);
   await writeFile(join(OUT,'receipt.json'),JSON.stringify({status:'passed',fixture:true,physicalHeadset:false,audibleOutput:false,
-    checks:['actual-wrist-menu','sound-locked-by-default','explicit-mac-unlock','muted-master','generated-worker-after-request','height-pitch','pinch-gate','tracking-loss-release','analyser-evidence','palms-stop-preserves-device','ask-again-without-setup','full-request-reader','wrong-device-guidance-without-generation','stop-all-and-relock'],...evidence},null,2));
-  console.log('PASS musical synth: explicit muted unlock, generated Worker, tracked hands, pitch/gate, palms Stop/Ask again and Stop all');
+    checks:['actual-wrist-menu','browser-autoplay-permission','first-mac-click-unlock','one-shared-master-mute','generated-worker-after-request','height-pitch','pinch-gate','tracking-loss-release','analyser-evidence','palms-stop-preserves-device','ask-again-without-setup','full-request-reader','wrong-device-guidance-without-generation','stop-all-and-relock'],...evidence},null,2));
+  console.log('PASS musical synth: first-click audio, shared master, generated Worker, tracked hands, pitch/gate, palms Stop/Ask again and Stop all');
 } catch(e) {
   console.error(`FAIL ${phase}:`,e); process.exitCode=1;
   if(mac)await shot('FAIL-mac',mac).catch(()=>{}); if(quest)await shot('FAIL-quest').catch(()=>{});

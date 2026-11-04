@@ -4,6 +4,7 @@
     "hello": "hello.json",
     "welcome": "welcome.json",
     "presence": "presence.json",
+    "audio.master": "audio.master.json",
     "session.claim": "session.claim.json",
     "session.superseded": "session.superseded.json",
     "wire.request": "wire.request.json",

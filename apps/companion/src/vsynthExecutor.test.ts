@@ -73,8 +73,8 @@ describe('silent virtual output', () => {
 describe('musical sound permission lifecycle', () => {
   afterEach(() => vi.unstubAllGlobals());
   it('distinguishes locked, unwired, writing, checking, ready and stopped without claiming the Quest Worker is running', () => {
-    expect(musicalStageText(false).readout).toBe('Sound is off');
-    expect(musicalStageText(false, 'ready').readout).toBe('Sound is off');
+    expect(musicalStageText(false).readout).toBe('Waiting for a Mac click');
+    expect(musicalStageText(false, 'ready').readout).toBe('Waiting for a Mac click');
     expect(musicalStageText(true).readout).toBe('Ask Muse in Quest');
     expect(musicalStageText(true, 'writing').readout).toBe('Muse is writing…');
     expect(musicalStageText(true, 'dry-run').readout).toBe('Checking your wiring…');

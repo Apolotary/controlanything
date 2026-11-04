@@ -27,6 +27,7 @@ import {
   type TaggedDevice,
   type UiSpecPayload,
   type VerifyResultPayload,
+  demoAudioMaster,
 } from '@ce/protocol';
 import { toString as qrSvg } from 'qrcode';
 import { api, ApiError, type CallRecord, type CallsResponse, type Health } from './api';
@@ -60,8 +61,9 @@ import { replayArmResult, runReplay } from './replay';
 import { deviceLabel, overlayHeading, WiringState, wiringActive, wiringLine } from './ui/wiring';
 import { WiringCard, WiringPanel } from './ui/wiring-view';
 
-const APP = 'companion@0.2.0+generated-midi-v1';
+const APP = 'companion@0.2.0+generated-midi-v1+audio-master-v1';
 const params = new URLSearchParams(location.search);
+demoAudioMaster.forceMute(params.get('mute') === '1');
 const pairNow = params.get('pair') === '1';
 
 // --- state ----------------------------------------------------------------------------------
@@ -247,7 +249,7 @@ const openVisuals = (): void => {
   if (!visualLauncher.open()) { visualsOpening = false; visualsOpenTimedOut = true; clearVisualsOpenTimer(); }
   render('calm');
 };
-/** This can show the instrument, but only its Mac Sound on button may unlock audio. */
+/** A prior Mac gesture enables audio; opening never invents a hand mapping or starts a note. */
 const openMusical = (): void => {
   if (replaying) { showVisualsNote('Musical synth is off in this display-only demo.'); return; }
   if (!identity) { showVisualsNote('Not paired yet. Pair this Mac with your Quest first.'); return; }
@@ -284,7 +286,7 @@ function visualScreenStatus(): { state: string; hint: string; tone: string } {
   if (visualsOpening) return { state: 'Opening visuals…', hint: 'Opening visuals… Waiting for a visible screen in this browser.', tone: 'warn' };
   if (visualsOpenTimedOut) return { state: 'No visuals detected', hint: 'No visual screen was detected. Bring this paired companion tab to the front. If graphics failed, choose Open visuals to retry.', tone: 'warn' };
   if (visualsSeen) return { state: 'Visuals paused', hint: 'No visible visual screen is detected. Bring it to the front, or choose Try visual synth in Quest to reopen it here.', tone: 'warn' };
-  return { state: 'Available', hint: 'Choose Try visual synth in Quest to open silent visuals here automatically. Keep this companion tab visible.', tone: '' };
+  return { state: 'Available', hint: 'Choose Try visual synth in Quest to open the water scene here automatically. Keep this companion tab visible.', tone: '' };
 }
 
 /** /p/<id>#<code> redirects here as /companion/?approve=<id>#<code> */
@@ -676,7 +678,7 @@ function renderHomeDevices(ports: Port[]): void {
       : 'Needs setup';
     const subtitle = virtual
       ? `${visualScreen.hint} In Quest, choose Visual synth and complete setup, then ask Muse how your hands should control it. Muse writes the wiring before interaction starts.`
-      : musical ? 'Open this instrument and choose Sound on on this Mac. In Quest, choose Musical synth and ask Muse how your hands should play. No hand interaction is pre-wired.'
+      : musical ? 'Open this instrument; your first Mac click enables browser audio. In Quest, ask Muse how your hands should play. No hand interaction is pre-wired.'
       : companionText(tag?.hint ?? (count ? `${count} verified controls${ready ? ' · Enabled in your headset' : ' · Waiting for headset confirmation'}`
         : target && (target.state === 'armed' || target.state === 'controlling') ? 'The displayed controls have not passed verification. Set up control again in your headset.'
         : [card.maker, card.model, connected ? 'Connected to this Mac' : 'Select the device in your headset to set up controls'].filter(Boolean).join(' · ')));
@@ -696,7 +698,7 @@ function renderHomeDevices(ports: Port[]): void {
     }
     if (port.id === MUSICAL_SYNTH_PORT_ID) {
       addRow('▥', 'ControlAnything Synth', 'Browser instrument', musicalPanel.available ? 'Sound on' : 'Sound off',
-        'Open this instrument and choose Sound on on this Mac. In Quest, choose Musical synth and ask Muse to write the hand interaction.', musicalPanel.available ? 'on' : '', button('Open instrument', openMusical));
+        'Open this instrument, then ask Muse in Quest to write the hand interaction. The shared master controls its volume.', musicalPanel.available ? 'on' : '', button('Open instrument', openMusical));
       continue;
     }
     addRow('▥', port.name, 'USB MIDI', 'Connected', 'USB discovered · Device actions still need setup and verification in your headset.', 'on', button('Details', () => showView('details')));
@@ -1804,6 +1806,8 @@ function connect(): void {
     }
   };
   c.onInvalid = (error) => log('warn', `ignored a message from the server: ${error}`);
+  demoAudioMaster.bind(state => { if (!replaying) c.send('audio.master', state, { to: 'server' }); });
+  c.on('audio.master', m => { if (m.from === 'server') demoAudioMaster.receive(m.payload); });
   c.on('welcome', (m) => {
     welcome = m.payload;
     canApprove = m.payload.canApprove;
@@ -2120,6 +2124,22 @@ export async function bootWorkbench(): Promise<void> {
   document.title = `${PRODUCT_NAME} Companion`;
   $('product-name').textContent = PRODUCT_NAME;
   $('headset-qr').setAttribute('aria-label', `Open ${PRODUCT_NAME} in Quest Browser`);
+  // One room master remains visible over both full-screen instrument views.
+  const audio = document.createElement('section'); audio.id = 'master-audio'; audio.setAttribute('aria-label', 'Master sound');
+  const mute = document.createElement('button'); mute.type = 'button'; mute.id = 'master-mute';
+  const label = document.createElement('label'); label.htmlFor = 'master-volume'; label.textContent = 'Volume';
+  const volume = document.createElement('input'); volume.id = 'master-volume'; volume.type = 'range'; volume.min = '0'; volume.max = '100'; volume.step = '1';
+  volume.setAttribute('aria-label', 'Master volume for Mac and headset');
+  const readout = document.createElement('output'); readout.setAttribute('for', 'master-volume');
+  mute.onclick = () => { demoAudioMaster.unlock(); const state = demoAudioMaster.state; demoAudioMaster.set(state.volume, !state.muted); };
+  volume.oninput = () => { demoAudioMaster.unlock(); demoAudioMaster.set(Number(volume.value) / 100, false); };
+  demoAudioMaster.subscribe((state, effective) => {
+    mute.textContent = state.muted ? 'Unmute' : 'Mute'; mute.setAttribute('aria-pressed', String(state.muted));
+    volume.value = String(Math.round(state.volume * 100)); readout.textContent = params.get('mute') === '1' ? 'Test muted' : `${Math.round(effective * 100)}%`;
+  });
+  audio.append(mute, label, volume, readout); document.body.append(audio);
+  document.addEventListener('pointerdown', () => demoAudioMaster.unlock(), { capture: true });
+  document.addEventListener('keydown', () => demoAudioMaster.unlock(), { capture: true });
   document.body.classList.toggle('stage', stage);
   $('workbench').classList.toggle('simple', simple);
   $('simple-visuals').addEventListener('click', openVisuals);

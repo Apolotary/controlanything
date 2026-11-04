@@ -401,8 +401,8 @@ async function observeOnce(deps: VerifyDeps, t: Target, driver: Driver, a: Drive
  * evidence says which one did. Verification can never zero the demo while the Mac acknowledges the commands.
  */
 /** Known software instrument only. A real analyser tone and exact applied state are both required.
- * The ready port proves the person explicitly chose Sound on; this path cannot unlock it.
- * Every probe releases its gate and restores settings, including cancellation, without relocking Sound on.
+ * The ready port proves the browser audio graph is available after a normal user gesture; this path cannot bypass autoplay.
+ * Every probe releases its gate and restores settings, including cancellation.
  */
 async function observeMusical(deps: VerifyDeps, t: Target, driver: Driver, a: DriverAction, o: VerifyOptions,
   base: Pick<Evidence, 'evidenceId' | 'cardId' | 'driverId' | 'actionId' | 'attempt' | 'expected'>): Promise<{ evidence: Evidence }> {
@@ -426,7 +426,7 @@ async function observeMusical(deps: VerifyDeps, t: Target, driver: Driver, a: Dr
   let ack: ExecAckPayload | undefined;
   try {
     initial = (await send(cc(17, 0), 'probe-release')).applied;
-    if (initial?.source !== 'musical-synth' || !initial.audio?.unlocked || initial.visible !== true) throw new ExecError('On the Mac, choose Sound on and keep ControlAnything Synth visible', 'offline');
+    if (initial?.source !== 'musical-synth' || !initial.audio?.unlocked || initial.visible !== true) throw new ExecError('Click the Mac page once to enable browser audio and keep ControlAnything Synth visible', 'offline');
     ack = await send(op, 'probe-action');
     let measured = ack;
     // Presets release notes, and filter/envelope settings need a sounding note for graph evidence.

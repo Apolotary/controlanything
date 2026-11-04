@@ -1,4 +1,5 @@
-import { createVisualSynth, createVisualSynthRelay, type VisualSynthParameters, type VisualSynthRenderer, type VisualSynthRelay } from '@ce/vsynth';
+import { createVisualSynth, createVisualSynthRelay, WaterAudio, type VisualSynthParameters, type VisualSynthRenderer, type VisualSynthRelay } from '@ce/vsynth';
+import { demoAudioMaster } from '@ce/protocol';
 import { announceVisualRenderer } from './visualPresence';
 import { showCode } from './ui/wiring-view';
 import { WIRING_OVERLAY_HIDE_MS, type WiringPhase } from './ui/wiring';
@@ -36,6 +37,8 @@ export class VisualSynthLauncher {
   private gauges = new Map<string, { arc: SVGPathElement; value: HTMLElement }>();
   private renderer?: VisualSynthRenderer;
   private relay?: VisualSynthRelay;
+  private waterAudio?: WaterAudio;
+  private audioSubscriptions: (() => void)[] = [];
   private presence?: ReturnType<typeof announceVisualRenderer>;
   private ownerId?: string;
   private ready = false;
@@ -83,7 +86,7 @@ export class VisualSynthLauncher {
     this.close(); this.ownerId = owner;
     const panel = document.createElement('section'); panel.className = 'visual-launcher'; panel.id = 'visual-launcher';
     panel.setAttribute('aria-label', 'Visual synth');
-    const canvas = document.createElement('canvas'); canvas.setAttribute('aria-label', 'Silent visual synth controlled from Quest');
+    const canvas = document.createElement('canvas'); canvas.setAttribute('aria-label', 'Visual synth and water sounds controlled from Quest');
     const toolbar = document.createElement('div'); toolbar.className = 'visual-launcher-toolbar';
     const brand = document.createElement('div'); brand.className = 'visual-launcher-brand';
     const live = document.createElement('span'); live.className = 'visual-launcher-live';
@@ -125,10 +128,15 @@ export class VisualSynthLauncher {
     this.panel = panel; this.canvas = canvas; this.output = output; this.retry = retry;
     this.readoutName = readoutName; this.readoutValue = readoutValue; this.live = live;
     panel.addEventListener('pointermove', () => this.showChrome());
+    panel.addEventListener('pointerdown', () => demoAudioMaster.unlock());
     panel.addEventListener('dblclick', () => this.toggleFullscreen());
     this.resize();
     try {
       const renderer = this.renderer = createVisualSynth(canvas, { onChange: (label, parameters) => this.changed(label, parameters) });
+      const audio = this.waterAudio = new WaterAudio();
+      audio.adopt(renderer.getState());
+      this.audioSubscriptions = [demoAudioMaster.registerOutput(volume => audio.setVolume(volume)),
+        demoAudioMaster.onUnlock(() => { void audio.unlock().catch(() => {}); })];
       // Creation compiles the shaders and draws once. Draw at the actual canvas
       // dimensions before publishing any visible-renderer readiness.
       renderer.renderAt(0);
@@ -139,7 +147,7 @@ export class VisualSynthLauncher {
       this.ready = true;
       this.presence = announceVisualRenderer(owner, () => this.available);
       canvas.addEventListener('webglcontextlost', (event) => {
-        event.preventDefault(); this.ready = false; renderer.stop(); this.presence?.update();
+        event.preventDefault(); this.ready = false; renderer.stop(); this.waterAudio?.setActive(false); this.presence?.update();
         if (this.output) this.output.textContent = 'Graphics paused. Choose Try again to reopen this screen.';
         if (this.retry) this.retry.hidden = false;
       });
@@ -151,6 +159,8 @@ export class VisualSynthLauncher {
       this.applyWiring();
       return true;
     } catch (error) {
+      for (const unsubscribe of this.audioSubscriptions.splice(0)) unsubscribe();
+      this.waterAudio?.dispose(); this.waterAudio = undefined;
       this.ready = false; this.renderer?.dispose(); this.renderer = undefined;
       output.textContent = error instanceof Error ? error.message : 'The visual screen could not start. Choose Try again.';
       retry.hidden = false;
@@ -165,6 +175,7 @@ export class VisualSynthLauncher {
     if (this.ready && !document.hidden) { this.renderer?.start(); this.keepAwake(); }
     else this.renderer?.stop();
     const available = this.available;
+    this.waterAudio?.setActive(available);
     this.live?.classList.toggle('on', available);
     if (this.output && this.ready) {
       const text = available ? '' : document.hidden ? 'Paused while this companion tab is hidden' : 'Paused · Reconnecting to your room';
@@ -192,6 +203,8 @@ export class VisualSynthLauncher {
     void this.wakeLock?.release().catch(() => {}); this.wakeLock = undefined;
     this.ready = false; this.presence?.dispose(); this.presence = undefined;
     this.relay?.dispose(); this.relay = undefined;
+    for (const unsubscribe of this.audioSubscriptions.splice(0)) unsubscribe();
+    this.waterAudio?.dispose(); this.waterAudio = undefined;
     this.renderer?.dispose(); this.renderer = undefined;
     clearTimeout(this.idleTimer); clearTimeout(this.chromeTimer);
     if (this.wiringTimer) clearTimeout(this.wiringTimer.timer);
@@ -262,6 +275,8 @@ export class VisualSynthLauncher {
   }
 
   private changed(label: string, parameters: VisualSynthParameters): void {
+    if (label === 'Connected · Ready' || label === 'Reset · Ready') this.waterAudio?.adopt(parameters);
+    else if (label.startsWith('Touch ')) this.waterAudio?.receive(parameters);
     this.meters(parameters);
     // The fingertip (Touch X / Y / pressure, tens of updates a second) is drawn in the water itself; no big number for it.
     if (label === 'Connected · Ready' || label.startsWith('Touch ')) return;
@@ -273,6 +288,9 @@ export class VisualSynthLauncher {
     clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => this.panel?.classList.remove('changing'), 2200);
   }
+
+  /** Read-only actual graph state for the muted acceptance capture. */
+  audioDiagnostics() { return this.waterAudio?.diagnostics(); }
 
   private meters(parameters: VisualSynthParameters): void {
     for (const { key } of GAUGES) {

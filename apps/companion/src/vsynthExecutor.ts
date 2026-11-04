@@ -30,7 +30,7 @@ export class VisualSynthExecutor {
     if (error || op.channel !== 1) return ack(false, { error: 'bad_args', detail: error ?? 'Visual synth listens on channel 1' });
     const generated = generatedMidiPacket(cmd, visualSynthPort.id);
     if (generated && !generated.ok) return ack(false, { error: 'refused', detail: generated.error });
-    if (op.msg === 'note') return ack(false, { error: 'unsupported', detail: 'Visual synth accepts CCs and patterns; it has no audio' });
+    if (op.msg === 'note') return ack(false, { error: 'unsupported', detail: 'Visual synth accepts CCs and patterns; water feedback does not accept musical notes' });
     if (cmd.dryRun) return ack(true, { detail: 'dry run' });
     if (op.msg !== 'panic' && !this.connected()) return ack(false, { error: 'no_port', detail: 'Open visuals from this companion and keep the visual screen visible.' });
     if (op.msg === 'sysex-identity') return ack(true, { reply: [...VISUAL_SYNTH_IDENTITY_REPLY] });

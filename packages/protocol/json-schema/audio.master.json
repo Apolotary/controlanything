@@ -1,0 +1,59 @@
+{
+  "title": "audio.master",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "audio.master"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "volume": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "muted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "volume",
+        "muted"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

@@ -31,6 +31,8 @@ import {
   type Role,
   SERVER_ID,
   SERVER_ONLY_TYPES,
+  DEFAULT_AUDIO_MASTER,
+  AudioMasterPayload,
 } from '@ce/protocol';
 import { type RawData, WebSocket, WebSocketServer } from 'ws';
 import { type Approver, PairingError, type PairingManager } from './pairing/manager';
@@ -118,6 +120,8 @@ export class Hub {
   private readonly conns = new Map<string, Connection>();
   private readonly messageListeners = new Set<(e: HubMessageEvent) => void>();
   private readonly presenceListeners = new Set<(p: PresencePayload) => void>();
+  private masterAudio: AudioMasterPayload = { ...DEFAULT_AUDIO_MASTER };
+  private readonly audioListeners = new Set<(state: AudioMasterPayload) => void>();
   private readonly log: (line: string) => void;
   private readonly heartbeat: ReturnType<typeof setInterval>;
   private readonly unsubscribe: (() => void)[] = [];
@@ -169,6 +173,11 @@ export class Hub {
   onPresence(fn: (p: PresencePayload) => void): () => void {
     this.presenceListeners.add(fn);
     return () => this.presenceListeners.delete(fn);
+  }
+
+  get audioMasterState(): AudioMasterPayload { return { ...this.masterAudio }; }
+  onAudioMaster(fn: (state: AudioMasterPayload) => void): () => void {
+    this.audioListeners.add(fn); fn(this.audioMasterState); return () => { this.audioListeners.delete(fn); };
   }
 
   /** Send from the server to every connection of one device. Returns the number of sockets reached. */
@@ -378,6 +387,17 @@ export class Hub {
       c.ignored = (c.ignored ?? 0) + 1;
       return;
     }
+    if (m.type === 'audio.master') {
+      const device = this.o.registry.get(c.deviceId);
+      if (!c.local && !device?.canApprove) {
+        this.sendLog(c, { level: 'error', code: 'forbidden', message: 'Only the paired owner may change master sound.', ref: m.id });
+        return;
+      }
+      this.masterAudio = AudioMasterPayload.parse(m.payload);
+      this.broadcast('audio.master', this.masterAudio);
+      for (const fn of this.audioListeners) fn(this.audioMasterState);
+      return;
+    }
     this.relay(c, m, parsed.raw);
   }
 
@@ -428,6 +448,7 @@ export class Hub {
         server: this.o.serverName,
         mode: this.o.mode,
       });
+      this.send(c, 'audio.master', this.masterAudio);
       if (this.isApproverConn(c)) for (const p of this.o.pairing.listPending()) this.send(c, 'pair.pending', p);
     }
     this.broadcastPresence(first ? 'join' : 'update', device.deviceId);

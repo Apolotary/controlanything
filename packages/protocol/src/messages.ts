@@ -79,6 +79,7 @@ import { ProjectListPayload, ProjectGetPayload, ProjectRequestPayload, ProjectPr
 import { Id, PROTOCOL_VERSION } from './primitives';
 import { LibraryStatePayload, LibraryPlacePayload, LibraryForgetPayload, LibraryRestorePayload, LibraryRenamePayload } from './library';
 import { CanvasRequestPayload, CanvasGetPayload, CanvasCancelPayload, CanvasRestorePayload, CanvasActionPayload, CanvasStatePayload } from './canvas';
+import { AudioMasterPayload } from './demo-audio';
 
 export const SERVER_ID = 'server';
 
@@ -100,6 +101,7 @@ export const PayloadSchemas = {
   hello: HelloPayload,
   welcome: WelcomePayload,
   presence: PresencePayload,
+  'audio.master': AudioMasterPayload,
   'session.claim': SessionClaimPayload,
   'session.superseded': SessionSupersededPayload,
   'wire.request': WireRequestPayload,
@@ -206,6 +208,7 @@ export const MessageSchemas = {
   hello: message('hello'),
   welcome: message('welcome'),
   presence: message('presence'),
+  'audio.master': message('audio.master'),
   'session.claim': message('session.claim'),
   'session.superseded': message('session.superseded'),
   'wire.request': message('wire.request'),
@@ -292,6 +295,7 @@ export const Message = z.discriminatedUnion('type', [
   MessageSchemas.hello,
   MessageSchemas.welcome,
   MessageSchemas.presence,
+  MessageSchemas['audio.master'],
   MessageSchemas['session.claim'],
   MessageSchemas['session.superseded'],
   MessageSchemas['wire.request'],
