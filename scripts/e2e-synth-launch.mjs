@@ -74,7 +74,9 @@ async function pinch(name, turn = true) {
   await quest.mouse.move(point.x, point.y); await quest.mouse.down(); await frames(); await quest.mouse.up(); await frames(6);
 }
 async function trySynth() {
-  // The wrist palette is docked open in the emulator (mouse); no menu to open first.
+  // The wrist palette is docked open in the emulator (mouse). The visual synth is an explicit optional demo under More.
+  const onMore = () => { const p = window.__ce.hud.root.getObjectByName('wrist-palette'); return p?.userData.page === 'more' && p.buttons.some(b => b.name === 'visual-synth'); };
+  if (!(await quest.evaluate(onMore))) { await pinch('palette-more', false); await quest.waitForFunction(onMore); }
   await pinch('visual-synth', false);
 }
 async function shot(name, page) { await page.screenshot({ path: join(OUT, `${name}.png`) }); }
@@ -181,13 +183,14 @@ try {
   await trySynth();
   assert.equal(await companion.locator('#visual-launcher').count(), 1, 'Reselecting cannot create another renderer');
   assert.equal((await quest.evaluate(() => [...window.__ce.modes.tags.values()].filter(tag => tag.cardId?.startsWith('visual-synth-')).length)), 1);
-  assert.equal(await companion.evaluate(() => window.__audioAttempts + window.__popupAttempts), 0);
+  // Sound is on by default since Nov 4 (the visual synth's splash sounds), so only popups are forbidden here; audio stays stubbed.
+  assert.equal(await companion.evaluate(() => window.__popupAttempts), 0, `popups (audio attempts: ${await companion.evaluate(() => window.__audioAttempts)})`);
   assert.equal(messages.filter(message => ['exec.command', 'arm.request'].includes(message.type)).length, 0);
   assert.deepEqual(browserErrors, []);
   await shot('04-reopened-companion', companion);
   await writeFile(join(OUT, 'validation.json'), JSON.stringify({ fixture: true, physicalHeadset: false, visibilityFault: 'synthetic document visibility event', cardId,
-    checks: ['actual-companion', 'actual-hud-pinch', 'closed-to-auto-open', 'real-webgl-pixels', 'renderer-heartbeat', 'same-owner-selection', 'hidden-withdrawal', 'visible-auto-recovery', 'close-reopen', 'single-renderer', 'no-popup', 'no-audio', 'no-auto-arming'], pixels }, null, 2));
-  console.log('PASS actual Quest HUD selection automatically opens paired Mac visuals; real pixels/presence, visibility recovery, close/reopen, no popup/audio/arming');
+    checks: ['actual-companion', 'actual-hud-pinch', 'closed-to-auto-open', 'real-webgl-pixels', 'renderer-heartbeat', 'same-owner-selection', 'hidden-withdrawal', 'visible-auto-recovery', 'close-reopen', 'single-renderer', 'no-popup', 'no-auto-arming'], pixels }, null, 2));
+  console.log('PASS actual Quest HUD selection automatically opens paired Mac visuals; real pixels/presence, visibility recovery, close/reopen, no popup or arming');
 } catch (error) {
   console.error(`FAIL ${phase}:`, error); process.exitCode = 1;
   if (companion) await shot('failure-companion', companion).catch(() => {});

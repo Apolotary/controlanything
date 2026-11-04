@@ -71,10 +71,12 @@ try {
     await page.mouse.up();
     await page.waitForFunction(() => { const a = window.__ce.hud.root.userData.instrument.visualizerActions; return a.cc22 > 0 && a.cc23 > 0; });
   }
+  // Non-note effects live 0.9 s, so check them right after the gesture, not after the slower ack polling below.
+  await page.waitForFunction(() => window.__ce.hud.root.userData.instrument.activeEffects > 0, null, { timeout: 5000 });
   await until(c.id + ' connector ack', async () => { const j = await (await fetch(`${BASE}/api/agent/connectors`)).json(); return j.connectors.reduce((sum, c) => sum + c.ops, 0) > opsBefore && j.connectors.flatMap(c => c.logs).some(l => l.includes(c.ack)); });
   await page.waitForFunction(before => window.__ce.hud.root.userData.instrument.visualizerEvents > before, before);
   const info = await page.evaluate(() => ({ instrument: window.__ce.hud.root.userData.instrument, render: window.__ce.renderer.info.render, snapshot: window.__ce.wiring.snapshot(), codeMode: window.__ce.hud.root.userData.wire.card.mode, instrumentDrawCalls: window.__ce.hud.root.getObjectByName('muse-instrument').userData.renderCalls }));
-  assert.ok(info.instrument.activeEffects > 0); assert.equal(info.codeMode, 'pill');
+  assert.equal(info.codeMode, 'pill');
   await shot(`${c.id}-playing`);
   const connectors = (await (await fetch(`${BASE}/api/agent/connectors`)).json()).connectors;
   receipt.push({ case: c.id, baselineDrawCalls, ...info, logs: connectors.flatMap(c => c.logs).slice(-12) });

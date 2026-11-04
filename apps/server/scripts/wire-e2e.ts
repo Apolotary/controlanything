@@ -3,6 +3,7 @@
  *
  *   node --import tsx apps/server/scripts/wire-e2e.ts            (from the repo root; PORT=8796 by default)
  *
+ * The older setup-first flow, so the server runs the legacy harness (CE_AGENT=0 unless CE_AGENT is set).
  * Starts `node --import tsx apps/server/src/index.ts` with HTTP_PORT=$PORT HTTPS_PORT=0 CE_DATA_DIR=<tmp> MODEL_MODE=fixture
  * MODEL_API_KEY= CE_DEMO=1 CE_MAC_SILENT=1, pairs a sim Mac (the visual synth's renderer, answering exec.command with the
  * real visual synth state machine) and a sim headset, selects the Mac, and checks:
@@ -83,6 +84,8 @@ async function main(): Promise<void> {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env, HTTP_PORT: String(PORT), HTTPS_PORT: '0', HTTP_HOST: '127.0.0.1', PUBLIC_HOST: '127.0.0.1', CE_DATA_DIR: dataDir,
+      // The older setup-first flow (identify, link, driver, arm): pin the legacy harness unless CE_AGENT is set.
+      CE_AGENT: process.env.CE_AGENT ?? '0',
       MODEL_MODE: 'fixture', MODEL_API_KEY: '', CE_SCAN_PROMPTS: '', CE_DEMO: '1', CE_MAC_SILENT: '1', CE_MAC_LOCAL: '0', CE_OSMO: '', CE_REMO: '0', REMO_HOST: '', REMO_SEND: '0',
       CE_TRUST_FIRST_DEVICE: '1', CE_TRUST_LOOPBACK: '1', CE_CONSOLE_APPROVE: '0', MUSE_REPLAY: '1', MUSE_RECORD: '0', MUSE_RECORD_DIR: '', FIXTURE_DELAY_MS: '100', GEN3D_REPLAY_SPEED: '0', GEN3D_SKIN: '0', CE_WIRE_CHUNK_MS: '20', VITEST: '',
       CE_PREFETCH: '',

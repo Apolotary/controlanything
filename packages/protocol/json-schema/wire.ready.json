@@ -71,7 +71,6 @@
           ]
         },
         "actions": {
-          "minItems": 1,
           "maxItems": 16,
           "type": "array",
           "items": {
@@ -1963,6 +1962,25 @@
           },
           "required": [
             "entry"
+          ],
+          "additionalProperties": false
+        },
+        "scene": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 80
+            },
+            "code": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            }
+          },
+          "required": [
+            "title",
+            "code"
           ],
           "additionalProperties": false
         }

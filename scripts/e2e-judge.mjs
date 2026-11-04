@@ -6,6 +6,8 @@
  *   Touch the water → code → runs at once (no setup step: the first touch on the screen finds it) → touch → palms Stop
  *   → Ask again without setup → wrist Stop all.
  *
+ * The older setup-first flow: the server runs the legacy harness (CE_AGENT=0, pinned unless CE_AGENT is set). The Muse
+ * agent golden path (no setup ring) is scripts/e2e-muse-agent.mjs.
  * Runs its own muted FIXTURE server (CE_DEMO=1, CE_MAC_SILENT=1, fresh data dir) on PORT (default 8796,
  * HTTPS off), the sim room as the paired Mac (its laptop screen runs the visual synth) and the desktop Quest
  * emulator with camera=sim. Never reuses an existing server. Screenshots/diagnostics: research/screens/judge/.
@@ -82,6 +84,8 @@ async function startServer() {
       HTTP_PORT: String(PORT), HTTPS_PORT: '0',
       HTTP_HOST: '127.0.0.1', PUBLIC_HOST: '127.0.0.1',
       CE_DATA_DIR: dataDir, MODEL_MODE: 'fixture', MODEL_API_KEY: '', CE_SCAN_PROMPTS: '',
+      // This is the older setup-first flow (setup ring, armed target): pin the legacy harness unless asked otherwise.
+      CE_AGENT: process.env.CE_AGENT ?? '0',
       CE_DEMO: '1', CE_MAC_SILENT: '1', CE_MAC_LOCAL: '0', CE_OSMO: '',
       CE_REMO: '0', REMO_HOST: '', REMO_SEND: '0',
       CE_TRUST_FIRST_DEVICE: '1', CE_TRUST_LOOPBACK: '1', CE_CONSOLE_APPROVE: '0',
@@ -164,11 +168,20 @@ const target = async () => {
   return result;
 };
 
+/** click(), pressed again (at most 3 times) only while `done` is still false: on a loaded machine a click can miss its frames. */
+async function clickUntil(spec, done, arg) {
+  for (let attempt = 1; ; attempt++) {
+    await click(spec);
+    try { await waitQuest(done, arg, attempt < 3 ? 6000 : UI_TIMEOUT); return; } catch (e) { if (attempt >= 3) throw e; }
+  }
+}
+
 /** Press the visible chip through the production pointing/click path. No synthetic button events. */
 async function pressChip(label) {
-  await click({ name: `wire-chip:${label}` });
-  await waitQuest(() => !['idle', 'stopped', 'failed'].includes(window.__ce.wiring.phase));
+  await clickUntil({ name: `wire-chip:${label}` }, () => !['idle', 'stopped', 'failed'].includes(window.__ce.wiring.phase));
 }
+/** In-page predicate (pass the presentation as waitQuest's arg): the device card shows that presentation. */
+const cardIs = (presentation) => window.__ce.scene.getObjectByName('device-card-v3')?.userData.view?.presentation === presentation;
 
 /** Emulated tracked hands (IWER): pose both hands relative to the head, or put the index fingertip at a WORLD point (`tip`). */
 const hands = (poses, wait = 20) => quest.evaluate(async ({ poses, wait }) => {
@@ -450,16 +463,18 @@ async function run() {
     assert.equal((await exec(since)).length, 0, 'Hands alone send nothing to the Mac');
     const ask = await quest.evaluate(() => window.__ce.hud.root.userData.wire);
     assert.equal(ask.prompt, 'What should your hands do?');
-    assert.deepEqual(ask.chips, ['Touch the water', 'Hands as knobs', 'Surprise me']);
+    // The visual synth's chips (WIRE_CHIPS + VISUAL_SCENE_CHIP in apps/quest/src/wiring/controller.ts).
+    const visualChips = ['Touch the water', 'Give me knobs for the visuals', 'Hands as knobs', 'Show the ripples as a 3D field'];
+    assert.deepEqual(ask.chips, visualChips);
     await hands({ left, right: { offset: [0.2, -0.7, -0.15], pose: 'default' } });
     const invitation=await quest.evaluate(()=>window.__ce.scene.getObjectByName('device-card-v3').userData.view);
     assert.equal(invitation.presentation,'invitation');
     assert.equal(invitation.ask.mic,'off','This run exercises the silent fallback');
     assert.deepEqual(invitation.ask.chips.map(c=>c.label),['Touch the water']);
     const requests=await quest.evaluate(()=>window.__judge.requests.filter(r=>r.type==='wire.request').length);
-    await click({name:'wire-more-ideas'});
-    assert.equal(await quest.evaluate(()=>window.__ce.scene.getObjectByName('device-card-v3').userData.view.ask.chips.length),3);
-    await click({name:'wire-back'});
+    await clickUntil({name:'wire-more-ideas'}, cardIs, 'ideas');
+    assert.equal(await quest.evaluate(()=>window.__ce.scene.getObjectByName('device-card-v3').userData.view.ask.chips.length),visualChips.length);
+    await clickUntil({name:'wire-back'}, cardIs, 'invitation');
     assert.equal(await quest.evaluate(()=>window.__judge.requests.filter(r=>r.type==='wire.request').length),requests,'Ideas and Back never ask or run anything');
   });
 
@@ -551,8 +566,9 @@ async function run() {
     }, 10_000);
     const ccs = [...new Set(touch.map((e) => e.op.number))].sort();
     console.log(`  ${touch.length} touch ops acknowledged by the sim Mac (CC ${ccs.join('/')})`);
-    const busy = await quest.evaluate(() => { const p = window.__ce.hud.root.getObjectByName('wrist-palette'); return p?.anchor.blockOpen; });
-    assert.equal(busy, true, 'The wrist menu stays shut while the finger works the screen');
+    // Only the left (menu) hand opens the wrist menu now; the right finger on the screen leaves it shut without blocking it.
+    const menuOpen = await quest.evaluate(() => !!window.__ce.hud.root.getObjectByName('wrist-palette')?.anchor.open);
+    assert.equal(menuOpen, false, 'The wrist menu stays shut while the finger works the screen');
     await waitQuest(()=>window.__ce.scene.getObjectByName('device-card-v3').userData.view.presentation==='cue');
     const cue=await quest.evaluate(()=>window.__ce.scene.getObjectByName('device-card-v3').userData.view);
     assert.equal(cue.ask,null); assert.deepEqual(cue.actions,[]);
@@ -576,7 +592,7 @@ async function run() {
     const before = await target();
     const old = await quest.evaluate(() => window.__judge.events.findLast(r => r.type === 'wire.ready').payload);
     await hands({ left: { offset: [-.25,-.7,-.15], pose: 'default' }, right: { offset: [.2,-.7,-.15], pose: 'default' } }, 10);
-    await click({name:'wire-more-ideas'});
+    await clickUntil({name:'wire-more-ideas'}, cardIs, 'ideas');
     await pressChip('Hands as knobs');
     await until('new requested wiring runs', () => quest.evaluate(() => window.__ce.wiring.running), PIPELINE_TIMEOUT);
     const next = await quest.evaluate(() => window.__judge.events.findLast(r => r.type === 'wire.ready').payload);

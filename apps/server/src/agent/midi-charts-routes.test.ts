@@ -44,7 +44,7 @@ describe('reviewed MIDI chart API', () => {
   it('requires owner access and explicit reviewed identity, and refuses an active setup', async () => {
     const h = await setup(false);
     expect((await h.post(body)).status).toBe(403);
-    expect((await fetch(`${h.base}/midi-charts/orion`)).status).toBe(403);
+    expect((await fetch(`${h.base}/midi-charts/orion`)).status).toBe(401); // unpaired GETs stop at the router's room-diagnostics guard
     expect((await h.post({ ...body, reviewed: false }, 'owner')).status).toBe(400);
     expect((await h.post({ ...body, chart: { ...body.chart, model: 'Another device' } }, 'owner')).status).toBe(400);
     h.target.armed = true; expect((await h.post(body, 'owner')).status).toBe(409);
