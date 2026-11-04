@@ -24,6 +24,8 @@ export interface PaletteItem {
   segments?: { key: string; label: string; width: number }[];
   selected?: () => string;
   onSegment?: (key: string) => void;
+  /** A small companion action on the previous plain row (Tutorial beside Stop), preserving menu height. */
+  compactWithPrevious?: boolean;
 }
 
 export const PALETTE_MAX_ITEMS = 6;
@@ -95,8 +97,18 @@ export class WristPalette extends Group {
   private visibleItems(): PaletteItem[] {
     const shown = this.items.filter((i) => i.visible?.() ?? true);
     const core = shown.filter((i) => (i.order ?? 50) >= 80);
-    const rest = shown.filter((i) => (i.order ?? 50) < 80).slice(0, Math.max(0, PALETTE_MAX_ITEMS - core.length));
+    const rest = shown.filter((i) => (i.order ?? 50) < 80).slice(0, Math.max(0, PALETTE_MAX_ITEMS - this.rows(core).length));
     return [...rest, ...core];
+  }
+
+  private rows(items: PaletteItem[]): PaletteItem[][] {
+    const rows: PaletteItem[][] = [];
+    for (const item of items) {
+      const previous = rows.at(-1);
+      if (item.compactWithPrevious && !item.hold && !item.segments && previous?.length === 1 && !previous[0]!.hold && !previous[0]!.segments) previous.push(item);
+      else rows.push([item]);
+    }
+    return rows;
   }
 
   /** Rebuild the button column. The caller disposes the old groups' widgets first (LeanHud.clear). */
@@ -104,16 +116,32 @@ export class WristPalette extends Group {
     const shown = this.visibleItems();
     this.shownKeys = shown.map((i) => i.key).join('|');
     this.cancelExitHold();
-    const rows = shown.map((item) => item.segments ? SEGMENT_H : BUTTON_H);
-    const height = rows.reduce((a, b) => a + b, 0) + Math.max(0, shown.length - 1) * GAP + 0.02;
+    const layout = this.rows(shown);
+    const rows = layout.map((items) => items[0]!.segments ? SEGMENT_H : BUTTON_H);
+    const height = rows.reduce((a, b) => a + b, 0) + Math.max(0, rows.length - 1) * GAP + 0.02;
     const rowWidth = Math.max(BUTTON_W, ...shown.map((item) => item.segments ? item.segments.reduce((a, seg) => a + seg.width, 0) + (item.segments.length - 1) * 0.004 : 0));
     this.width = rowWidth + 0.02;
     this.userData.height = height;
     const ui = this.buildUi(height);
     const buttons: Group[] = [];
     let y = height / 2 - 0.01;
-    shown.forEach((item, i) => {
+    layout.forEach((items, i) => {
+      const item = items[0]!;
       const rowH = rows[i]!;
+      if (items.length === 2) {
+        const width = (rowWidth - 0.008) / 2;
+        const faces = ui ? new Container({ flexDirection: 'row', gap: 8, height: BUTTON_H * 1000, flexShrink: 0 }) : undefined;
+        items.forEach((compact, index) => {
+          const group = new Group(); group.name = compact.key;
+          group.position.set((index - .5) * (width + .008), y - rowH / 2, THEME.panel.depth);
+          group.userData.width = width; group.userData.height = BUTTON_H; group.userData.menuButton = true;
+          group.userData.primary = !!compact.primary; group.userData.paletteKey = compact.key;
+          this.content.add(group); buttons.push(group);
+          faces?.add(this.face(group, compact.label, width, BUTTON_H, 14));
+        });
+        if (faces) ui!.add(faces);
+        y -= rowH + GAP; return;
+      }
       if (item.segments) {
         // One row of small pills; each segment is its own button (named `${key}:${segment}`).
         const row = new Group(); row.name = item.key; row.position.set(0, y - rowH / 2, THEME.panel.depth); this.content.add(row);

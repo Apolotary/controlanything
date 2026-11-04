@@ -70,7 +70,7 @@ async function startServer() {
       CE_DATA_DIR: dataDir, MODEL_MODE: 'fixture', MODEL_API_KEY: '', CE_SCAN_PROMPTS: '',
       CE_DEMO: '1', CE_MAC_SILENT: '1', CE_MAC_LOCAL: '0', CE_OSMO: '', CE_REMO: '0', REMO_HOST: '', REMO_SEND: '0',
       CE_TRUST_FIRST_DEVICE: '1', CE_TRUST_LOOPBACK: '1', CE_CONSOLE_APPROVE: '0',
-      MUSE_REPLAY: '1', MUSE_RECORD: '0', MUSE_RECORD_DIR: '', FIXTURE_DELAY_MS: '300', GEN3D_REPLAY_SPEED: '0', GEN3D_SKIN: '0', VITEST: '',
+      MUSE_REPLAY: '1', MUSE_RECORD: '0', MUSE_RECORD_DIR: '', CE_WIRE_CHUNK_MS: '180', FIXTURE_DELAY_MS: '300', GEN3D_REPLAY_SPEED: '0', GEN3D_SKIN: '0', VITEST: '',
     },
   });
   for (const stream of [server.stdout, server.stderr]) stream.on('data', (chunk) => { serverLog = (serverLog + chunk).slice(-250_000); });
@@ -107,7 +107,7 @@ async function phase(name, action, capture = true) {
 function screenPoint(spec) {
   return quest.evaluate(({ name, world, any }) => {
     const app = window.__ce;
-    const shown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
+    const shown = (o) => { for (let p=o; p; p=p.parent) { if (p.isVisible?.peek) { if (!p.isVisible.peek()) return false; } else if (!p.visible) return false; } return true; };
     let position;
     if (name) {
       let node = null;
@@ -127,20 +127,10 @@ async function click(spec) {
   await quest.mouse.down(); await frames(3); await quest.mouse.up(); await frames(6);
 }
 
-/** Press a card chip with the emulator mouse (a held pinch). uikit buttons need the ray settled on them first, so retry; the last
- *  resort dispatches the button's own click (and says so), which still goes through the card's handler -> app -> wiring. */
+/** Press the visible chip through the production pointing/click path. No synthetic button events. */
 async function pressChip(label) {
-  const name = `wire-chip:${label}`;
-  for (let attempt = 0; attempt < 3 && await quest.evaluate(() => window.__ce.wiring.phase === 'idle' || window.__ce.wiring.phase === 'stopped' || window.__ce.wiring.phase === 'failed'); attempt++) {
-    const p = await screenPoint({ name, any: true });
-    await quest.mouse.move(p.x - 6, p.y - 6); await frames(4);
-    await quest.mouse.move(p.x, p.y); await frames(8);
-    await quest.mouse.down(); await frames(3); await quest.mouse.up(); await frames(8);
-  }
-  if (await quest.evaluate(() => ['idle', 'stopped', 'failed'].includes(window.__ce.wiring.phase))) {
-    console.log(`  (the emulator mouse did not latch on "${label}"; dispatching the button's click)`);
-    await quest.evaluate((n) => { let node; window.__ce.scene.traverse((o) => { if (o.name === n) node = o; }); node.dispatchEvent({ type: 'click', stopPropagation() {}, nativeEvent: {}, point: node.getWorldPosition(node.position.clone()) }); }, name);
-  }
+  await click({ name: `wire-chip:${label}` });
+  await waitQuest(() => !['idle', 'stopped', 'failed'].includes(window.__ce.wiring.phase));
 }
 
 /** Emulated tracked hands (IWER). `tip` places the index fingertip at a WORLD point instead of an offset from the head. */
@@ -195,7 +185,7 @@ async function installTaps() {
       if (type === 'wire.request') window.__wire.requests.push(payload);
     });
     app.ws.tap('in', ({ type, payload }) => {
-      if (type === 'wire.progress') { window.__wire.phases.push(payload.phase); window.__wire.progress.push({ phase: payload.phase, source: payload.source, model: payload.model, note: payload.note }); }
+      if (type === 'wire.progress') { window.__wire.phases.push(payload.phase); window.__wire.progress.push({ phase: payload.phase, source: payload.source, model: payload.model, note: payload.note, codeChars: (payload.code ?? payload.codeDelta ?? '').length }); }
       if (type === 'wire.ready') window.__wire.ready = payload;
     });
   });
@@ -286,14 +276,14 @@ async function run() {
     // mid-stream: the code card is up and typing
     await until('the code card is typing', () => quest.evaluate(() => {
       const w = window.__ce.hud.root.userData.wire;
-      return w?.phase === 'writing' && w.card.code.length > 60;
+      return w?.card.code.length > 60 && window.__wire.progress.some(p => p.phase === 'writing' && p.codeChars > 0);
     }));
     await delay(250);
   });
   await screenshot('05b-code-streaming');
   await until('the program is ready and the screen needs calibrating', () => quest.evaluate(() => window.__ce.wiring.phase === 'calibrating'), 20_000);
   const card = await quest.evaluate(() => window.__ce.hud.root.userData.wire.card);
-  assert(/ (is wiring|wired) "Touch the water"/.test(card.header), `header names the request (${card.header})`);
+  assert(/Touch the water/.test(card.header), `header names the request (${card.header})`);
   assert.equal(card.badge, 'FIXTURE', 'the source is labelled honestly');
   const phases = await quest.evaluate(() => window.__wire.phases);
   for (const phase of ['writing', 'validating', 'dry-run', 'ready']) assert(phases.includes(phase), `wire.progress ${phase} arrived (${phases})`);
@@ -367,12 +357,13 @@ async function run() {
   await phase('09-both-palms-out-stops', async () => {
     const out = await quest.evaluate(() => window.__wire.out.length);
     await hands({ left: { offset: [-0.22, -0.05, -0.45], pose: 'open', palm: 'out' }, right: { offset: [0.22, -0.05, -0.45], pose: 'open', palm: 'out' } }, 30);
-    await until('the wiring stopped', () => quest.evaluate(() => window.__ce.wiring.phase === 'stopped'), 5000);
+    await until('the wiring stopped', () => quest.evaluate(() => !window.__ce.wiring.running && ['idle', 'stopped'].includes(window.__ce.wiring.phase)), 5000);
     const [, , idP] = await touchIds();
     const lift = await quest.evaluate(({ n, id }) => window.__wire.out.slice(n).filter((e) => e.widgetId === `wire:${id}`).map((e) => e.value), { n: out, id: idP });
-    assert(lift.length && lift[lift.length - 1] <= 0.001, `the touch lifts to its minimum on stop (${lift.slice(-4)})`);
-    const card = await quest.evaluate(() => window.__ce.hud.root.userData.wire.card);
-    assert(/stopped/.test(card.pill), `pill says stopped (${card.pill})`);
+    await sim.waitForFunction(() => window.ceSimDebug.visualSynth.getState().touchPressure === 0);
+    assert(lift.length === 0 || lift[lift.length - 1] <= 0.001, `no nonzero pressure remains after Stop (${lift.slice(-4)})`);
+    assert(await quest.evaluate(() => window.__judge.requests.some(r => r.type === 'panic')), 'Stop also revokes server authority');
+    assert.equal((await json(`/api/agent/targets/${encodeURIComponent(cardId)}`)).armed, false);
     const after = await quest.evaluate(() => window.__wire.out.length);
     await frames(20);
     assert.equal(await quest.evaluate(() => window.__wire.out.length), after, 'nothing is sent after stop');
@@ -380,8 +371,14 @@ async function run() {
 
   await phase('10-collapses-to-a-pill-while-running', async () => {
     await dropHands();
-    await quest.evaluate(() => window.__ce.wiring.ask('Touch the water', 'chip'));
+    const previousId = await quest.evaluate(() => window.__wire.ready.wiringId);
+    await quest.keyboard.press('g'); // Explicitly select and re-enable after the full Stop.
+    await until('selected device is ready again', () => quest.evaluate(() => { const a=window.__ce; const t=a.lockedId && a.modes.tags.get(a.lockedId); return t?.cardId && a.canControl(t.cardId); }));
+    await frames(8);
+    assert.notEqual(await quest.evaluate(() => window.__ce.wiring.phase), 'running', 'Re-enabling a device must not restore its old wiring');
+    await pressChip('Touch the water');
     await until('running again', () => quest.evaluate(() => window.__ce.wiring.phase === 'running'), 30_000);
+    assert.notEqual(await quest.evaluate(() => window.__wire.ready.wiringId), previousId, 'Ask again produces a new wiring');
     await until('collapsed to a pill', () => quest.evaluate(() => window.__ce.hud.root.userData.wire?.card?.mode === 'pill'), 12_000);
     const card = await quest.evaluate(() => window.__ce.hud.root.userData.wire.card);
     assert(/Touch the water · running/.test(card.pill), `pill: ${card.pill}`);

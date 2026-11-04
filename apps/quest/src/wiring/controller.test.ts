@@ -20,16 +20,17 @@ function setup(options: { micError?: string } = {}) {
     onStop: (reason, kind) => (holder.controller as unknown as { onRuntimeStop(r: string, k: string): void }).onRuntimeStop(reason, kind),
     createWorker: fakeWorkerFactory({ posted: [] }),
   });
+  const userStopped = vi.fn();
   const host: WiringHost = {
     selected: () => selected, canControl: () => canControl,
     send: (type, payload) => { sent.push({ type, payload }); return true; },
     sendControl: (_card, event) => { controls.push(event); return true; },
-    render: (view) => { views.push(view); }, setHandsBusy: (b) => { busy = b; },
+    render: (view) => { views.push(view); }, setHandsBusy: (b) => { busy = b; }, userStopped,
     toast: (text) => { toasts.push(text); }, log: () => {}, voice, tapBlocked: () => false, runtime,
   };
   const controller = holder.controller = new WiringController(host);
   const view = () => views.at(-1);
-  return { controller, sent, controls, toasts, views, view, voice, runtime, busy: () => busy, setControl: (v: boolean) => { canControl = v; }, deselect: () => { selected = undefined; } };
+  return { controller, sent, controls, toasts, views, view, voice, runtime, userStopped, busy: () => busy, setControl: (v: boolean) => { canControl = v; }, deselect: () => { selected = undefined; } };
 }
 
 const base = { cardId: 'visual-synth-mac', wiringId: 'w1', model: 'muse-spark-1.3', source: 'fixture' as const };
@@ -53,6 +54,10 @@ describe('the wiring flow', () => {
     for (let i = 0; i < 30; i++) { t.controller.frame(finger(new Vector3(0, 1.4 + i * 0.005, -0.4)), clock += 16); await wait(1); }
     expect(t.controls).toEqual([]);
     expect(t.sent).toEqual([]);
+    t.controller.onProgress(progress({ phase: 'writing', code: CODE }));
+    t.controller.onReady(ready(['right']));
+    expect(t.runtime.running).toBe(false); // A broadcast from an older session is not a new ask.
+    expect(t.controller.phase).toBe('idle');
   });
 
   it('asks Muse, streams the code, calibrates the screen, runs, and stops on both palms out', async () => {
@@ -93,6 +98,9 @@ describe('the wiring flow', () => {
     expect(t.controls.filter((e) => e.widgetId === 'wire:p').at(-1)!.value).toBe(0);
     // stop
     t.controller.stop('both palms out', 'user');
+    expect(t.userStopped).toHaveBeenCalledExactlyOnceWith('both palms out');
+    t.controller.stop('Stop', 'external');
+    expect(t.userStopped).toHaveBeenCalledTimes(1);
     await wait(100);
     expect(t.controller.phase).toBe('stopped');
     expect(t.toasts.some((m) => /Wiring stopped/.test(m))).toBe(true);
@@ -101,6 +109,9 @@ describe('the wiring flow', () => {
     expect(t.controls.length).toBe(n);
     expect(t.view()!.code).toMatchObject({ mode: 'pill', stopped: true });
     expect(t.view()!.prompt).toBe('Stopped · ask again');
+    expect(t.controller.snapshot().calibrated).toBe(true);
+    t.controller.reset('XR reference space changed', true);
+    expect(t.controller.snapshot().calibrated).toBe(false);
   });
 
   it('a wiring that does not need the screen starts at once; a new request silences the old one', async () => {
@@ -113,6 +124,39 @@ describe('the wiring flow', () => {
     t.controller.ask('Surprise me', 'chip');
     expect(t.controller.phase).toBe('asked');
     await wait(100);
+    expect(t.runtime.running).toBe(false);
+  });
+
+  it('does not restart on duplicate readiness or on delayed readiness after Stop/reset', async () => {
+    const t = setup();
+    const start = vi.spyOn(t.runtime, 'start');
+    t.controller.ask('Hands as knobs', 'chip');
+    t.controller.onReady(ready(['right']));
+    t.controller.onReady(ready(['right']));
+    expect(start).toHaveBeenCalledTimes(1);
+    t.controller.stop('Stop');
+    t.controller.onProgress(progress({ phase: 'writing', code: CODE }));
+    t.controller.onReady(ready(['right']));
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(t.controller.phase).toBe('stopped');
+    t.controller.reset('XR hidden');
+    t.controller.onReady({ ...ready(['right']), wiringId: 'late-unknown-id' });
+    expect(t.controller.phase).toBe('idle');
+    expect(start).toHaveBeenCalledTimes(1);
+    t.controller.ask('Hands as knobs', 'chip');
+    t.controller.onReady({ ...ready(['right']), wiringId: 'fresh-id' });
+    expect(start).toHaveBeenCalledTimes(2);
+    t.controller.reset();
+    await wait(10);
+  });
+
+  it('Stop during generation keeps a late program from starting', () => {
+    const t = setup();
+    t.controller.ask('Hands as knobs', 'chip');
+    t.controller.stop('Stop');
+    t.controller.onProgress(progress({ phase: 'writing', code: CODE }));
+    t.controller.onReady(ready(['right']));
+    expect(t.controller.phase).toBe('stopped');
     expect(t.runtime.running).toBe(false);
   });
 

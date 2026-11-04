@@ -38,6 +38,8 @@ export interface WiringHost {
   sendControl(cardId: string, event: WireEmit): boolean;
   render(view: WireView | null): void;
   setHandsBusy(busy: boolean): void;
+  /** The app's full Stop path also withdraws the server-side wiring authority. */
+  userStopped?(reason: string): void;
   toast(text: string, level?: 'info' | 'ok' | 'warn' | 'error'): void;
   log(text: string, level?: 'info' | 'ok' | 'warn' | 'error'): void;
   /** hold-to-talk plumbing (voice/ptt.ts, local mode) */
@@ -77,6 +79,10 @@ export class WiringController {
   readonly tracker = new SignalTracker();
   readonly calibrator = new ScreenCalibrator();
   readonly runtime: WiringRuntime;
+  // Readiness broadcasts can belong to another/previous headset session. This
+  // session starts accepting code only after its wearer explicitly asks.
+  private acceptServerWiring = false;
+  private readonly retiredWirings = new Set<string>();
   private w: Wiring | null = null;
   private plane: ScreenPlane | null = null;
   private mic: 'idle' | 'listening' | 'busy' = 'idle';
@@ -90,6 +96,8 @@ export class WiringController {
   private lastBusy = false;
   private lastCardId: string | undefined;
   private readonly corners: (Vector3 | null)[] = [null, null];
+  /** Current measured contact, exposed only for tutorial/debug observation. */
+  private screenTouching = false;
 
   constructor(private readonly host: WiringHost) {
     this.runtime = host.runtime ?? new WiringRuntime({
@@ -109,7 +117,8 @@ export class WiringController {
   snapshot(): Record<string, unknown> {
     const w = this.w;
     return { phase: this.phase, request: w?.request, wiringId: w?.wiringId, title: w?.title, model: w?.model, source: w?.wireSource, codeChars: w?.code.length,
-      running: this.running, calibrated: !!this.plane, mic: this.mic, stats: { ...this.runtime.stats }, step: this.calibrator.step };
+      running: this.running, calibrated: !!this.plane, needsScreen: w?.needsScreen ?? false,
+      touching: this.running && this.screenTouching, mic: this.mic, stats: { ...this.runtime.stats }, step: this.calibrator.step };
   }
 
   // --- asking -----------------------------------------------------------------------------------------------------
@@ -121,6 +130,8 @@ export class WiringController {
     if (!sel || !request) return false;
     if (!this.host.canControl(sel.cardId)) { this.host.toast('Set up this device first, then tell it what your hands should do', 'info'); return false; }
     this.cancelVoice();
+    this.retireCurrent();
+    this.acceptServerWiring = true;
     // A new request replaces whatever was wired: the hands go quiet until the new program is ready and running.
     if (this.runtime.running) this.runtime.stop('asking Muse for something new', 'external', true);
     this.calibrator.reset(); this.corners[0] = this.corners[1] = null; this.calibrationOutline = undefined;
@@ -140,10 +151,13 @@ export class WiringController {
 
   onProgress(p: WireProgressPayload): void {
     const sel = this.host.selected();
-    if (!sel || sel.cardId !== p.cardId) return;
+    if (!this.acceptServerWiring || this.retiredWirings.has(p.wiringId) || !sel || sel.cardId !== p.cardId || !this.host.canControl(p.cardId)) return;
     let w = this.w;
+    // A response already on the socket when a new request was sent must not
+    // replace that new request before its first progress message arrives.
+    if (w?.phase === 'asked' && p.request && p.request !== w.request) return;
     if (!w || w.cardId !== p.cardId) {
-      // Muse is writing for this device although this headset did not ask (the Mac asked): show it too.
+      // Defensive recovery of the current explicitly requested stream.
       w = this.w = { cardId: sel.cardId, targetId: sel.targetId, label: sel.label, request: p.request ?? 'your request', source: 'text', wiringId: p.wiringId, phase: 'writing', code: '',
         model: p.model, wireSource: p.source, phaseLine: '', needsScreen: false, stopped: false, askedAt: this.now() };
     }
@@ -175,8 +189,11 @@ export class WiringController {
 
   onReady(p: WireReadyPayload): void {
     const sel = this.host.selected();
-    if (!sel || sel.cardId !== p.cardId) return;
+    if (!this.acceptServerWiring || this.retiredWirings.has(p.wiringId) || !sel || sel.cardId !== p.cardId || !this.host.canControl(p.cardId)) return;
     let w = this.w;
+    // Replayed readiness is a state snapshot, not another instruction to start
+    // or recalibrate a program that already arrived.
+    if (w?.program?.wiringId === p.wiringId) return;
     if (!w || w.cardId !== p.cardId) {
       w = this.w = { cardId: sel.cardId, targetId: sel.targetId, label: sel.label, request: 'your request', source: 'text', wiringId: p.wiringId, phase: 'ready', code: p.code,
         model: p.model, wireSource: p.source, phaseLine: 'ready', needsScreen: false, stopped: false, askedAt: this.now() };
@@ -214,18 +231,36 @@ export class WiringController {
   /** The wearer (or the app) stops the wiring. Safe at any time. */
   stop(reason: string, kind: StopKind = 'user'): void {
     const w = this.w;
+    const alreadyStopped = !this.acceptServerWiring;
+    this.acceptServerWiring = false;
+    this.retireCurrent();
     if (!w) return;
-    if (w.phase === 'calibrating') { this.cancelCalibration(); w.phase = 'stopped'; w.stopped = true; this.changed(); return; }
-    if (this.runtime.running) this.runtime.stop(reason, kind, true);
+    if (w.phase === 'calibrating') { this.cancelCalibration(); w.phase = 'stopped'; w.stopped = true; this.changed(); }
+    else if (this.runtime.running) this.runtime.stop(reason, kind, true);
+    else { w.phase = 'stopped'; w.stopped = true; w.phaseLine = reason; this.changed(); }
+    if (kind === 'user' && !alreadyStopped) this.host.userStopped?.(reason);
   }
 
   /** Disconnect, deselect, leaving Control: stop quietly and forget the card. */
-  reset(reason = 'reset'): void {
+  reset(reason = 'reset', invalidatePlane = false): void {
+    if (invalidatePlane) {
+      const cardId = this.w?.cardId ?? this.host.selected()?.cardId;
+      if (cardId) clearPlane(cardId);
+      this.plane = null;
+    }
+    this.acceptServerWiring = false;
+    this.retireCurrent();
     this.cancelVoice();
     if (this.runtime.running) this.runtime.stop(reason, 'external', false);
     this.cancelCalibration();
     this.w = null; this.host.setHandsBusy(false); this.lastBusy = false;
     this.changed();
+  }
+
+  private retireCurrent(): void {
+    if (!this.w?.wiringId) return;
+    this.retiredWirings.add(this.w.wiringId);
+    if (this.retiredWirings.size > 32) this.retiredWirings.delete(this.retiredWirings.values().next().value!);
   }
 
   private onRuntimeStop(reason: string, kind: StopKind): void {
@@ -284,21 +319,21 @@ export class WiringController {
 
   private lastControllable = false;
   frame(frame: ShellFrame, timeMs: number): void {
+    this.screenTouching = false;
     const sel = this.host.selected();
     const w = this.w;
     // The card's ask section appears and disappears with "selected and under control"; redraw when that flips.
     const controllable = !!sel && this.host.canControl(sel.cardId);
     if (controllable !== this.lastControllable) { this.lastControllable = controllable; this.dirty = true; this.lastRender = -Infinity; }
     if (!sel || !this.host.canControl(sel.cardId)) {
-      if (w) { if (this.runtime.running) this.runtime.stop('the device is not under control any more', 'external', false); this.w = null; this.cancelCalibration(); this.changed(); }
+      if (w) this.reset('the device is not under control any more');
       this.setBusy(false);
       this.syncView(sel?.cardId);
       return;
     }
     if (w && w.cardId !== sel.cardId) {
       // Another device was selected: the wiring belongs to the old one.
-      if (this.runtime.running) this.runtime.stop('another device was selected', 'external', false);
-      this.cancelCalibration(); this.w = null; this.changed();
+      this.reset('another device was selected');
     }
     const cur = this.w;
     if (cur) {
@@ -306,6 +341,7 @@ export class WiringController {
       if (cur.phase === 'calibrating') this.calibrateFrame(frame, timeMs, sel.anchor);
       else if (cur.phase === 'running') {
         const sf = this.tracker.update(frame, timeMs, { plane: this.plane, tapBlocked: (hand) => this.host.tapBlocked(hand) });
+        this.screenTouching = !!sf.signals.screen?.touching;
         if (sf.stop) this.stop('both palms out', 'user');
         else this.runtime.tick(sf.signals);
         this.setBusy(this.runtime.running && (sf.rightInZone || sf.hovering));

@@ -68,6 +68,8 @@ import { Mic } from '../voice/mic';
 import { pairingApi } from '../io/api';
 import { PushToTalk } from '../voice/ptt';
 import { WiringController } from '../wiring/controller';
+import { TutorialController } from '../tutorial';
+import type { TutorialProbe } from '../tutorial/steps';
 import { VoiceAssistant } from '../voice/assistant';
 import { mappingSummary } from '../voice/mapping-summary';
 import { workspaceContext } from './demo-workspace';
@@ -210,6 +212,7 @@ export class QuestApp {
     this.recorder.spaceBoundary('reference-reset');
     // A new XR origin invalidates the heading captured when the clutch engaged.
     this.clearHandControl();
+    this.wiring?.reset('XR reference space changed', true);
     this.projects?.pauseForNavigation();
   };
   readonly mic = new Mic();
@@ -225,6 +228,7 @@ export class QuestApp {
   ptt!: PushToTalk;
   /** Muse writes the glue: the wiring flow for the selected device (ask, code card, calibration, sandboxed run). */
   wiring!: WiringController;
+  tutorial?: TutorialController;
   assistant?: VoiceAssistant;
   controls!: ControlSender;
   emulator?: Emulator;
@@ -305,6 +309,7 @@ export class QuestApp {
     this.setupTangible();
     this.refreshHome();
     this.setupIo();
+    this.setupTutorial();
     this.setupUi();
     if (this.superseded) return;
     this.renderer.setAnimationLoop((t, f) => this.frame(t, f));
@@ -629,6 +634,7 @@ export class QuestApp {
       return { cardId, specId: cardId ? this.specByCard.get(cardId) : undefined };
     });
     this.wiring = new WiringController({
+      userStopped: () => this.onDeck('panic', 'press'),
       selected: () => {
         const tag = this.modes.mode === 'control' && this.lockedId ? this.modes.tags.get(this.lockedId) : undefined;
         const target = tag ? this.targets.get(tag.targetId) : undefined;
@@ -779,8 +785,9 @@ export class QuestApp {
   private switchLayer(mode: AppMode): void {
     if (mode !== 'control' || this.modes.mode === 'control') { this.setMode(mode); return; }
     const tags = [...this.modes.tags.values()], armed = (cardId?: string) => !!cardId && this.armedCards.has(cardId);
-    const tag = [this.lockedId ? this.modes.tags.get(this.lockedId) : undefined, tags.find((t) => t.cardId === 'visual-synth-mac'), ...tags]
-      .find((t) => armed(t?.cardId));
+    // A new physical tag needs the Control card to reach Set up. An older armed Mac must not steal that choice.
+    const current = this.lockedId ? this.modes.tags.get(this.lockedId) : undefined;
+    const tag = current?.cardId ? current : tags.slice().reverse().find(t => !!t.cardId) ?? tags.find(t => armed(t.cardId));
     if (!tag?.cardId) { this.hud.toast('Control needs a device: pinch its box, or tap Visual synth', 'info'); return; }
     if (tag.cardId === 'visual-synth-mac' && !this.canControl(tag.cardId)) { this.selectVisualSynth(); return; }
     this.setMode('control');
@@ -2256,6 +2263,30 @@ export class QuestApp {
 
   // --- extension points (other lanes register here; see wrist-palette.ts) ---------------------------
 
+  private setupTutorial(): void {
+    if (this.params.get('tutorial') === '0') return;
+    let storage: Storage | undefined;
+    try { storage = localStorage; } catch { /* Storage is optional in private browsing. */ }
+    const tutorial = this.tutorial = new TutorialController({ parent: this.scene, storage,
+      probe: (): TutorialProbe => {
+        const cardId = this.lockedId ? this.modes.tags.get(this.lockedId)?.cardId : undefined;
+        const palette = (this.hud as Hud & { palette?: { visible: boolean; anchor: { open: boolean } } }).palette;
+        return { inXr: !!this.session && !this.superseded && this.session.visibilityState !== 'hidden',
+          busy: !!this.onboarding?.visible || this.onboarding?.state === 'shown', boxes: this.visibleTargets.size,
+          selected: !!this.lockedId || !!this.visualSynthIntent || !!this.virtualSelection,
+          controllable: !!cardId && this.canControl(cardId), cardId,
+          wire: (this.wiring?.snapshot() ?? {}) as TutorialProbe['wire'],
+          menuOpen: !!palette?.visible && palette.anchor.open,
+          buddyOpen: !!(this as unknown as { buddy?: { isOpen(): boolean } }).buddy?.isOpen() };
+      },
+      anchor: () => this.targets.get(this.lockedId ?? this.visibleTargets.values().next().value ?? '')?.position,
+    });
+    this.registerPaletteItem({ key: 'tutorial', label: 'Tutorial', order: 85, compactWithPrevious: true,
+      onSelect: () => tutorial.replay() });
+    this.addFrameHook((frame, dt, time) => tutorial.frame(frame, dt, time));
+    addEventListener('pagehide', () => tutorial.dispose(), { once: true });
+  }
+
   /** Add a wrist-palette button (≤ 5 shown in all). Returns an unregister function. */
   registerPaletteItem(item: PaletteItem): () => void {
     const hud = this.hud as Hud & { registerPaletteItem?: (i: PaletteItem) => () => void };
@@ -2335,6 +2366,7 @@ export class QuestApp {
     if (xrFrame && !refSpace) return;
     const inXr = Boolean(xrFrame && refSpace);
     if (xrFrame && refSpace && refSpace !== this.refSpace) {
+      this.wiring?.reset('XR reference space changed', true);
       this.refSpace = refSpace;
       this.xrHit.detach();
       this.xrHit.attach(xrFrame.session, refSpace);
@@ -2357,13 +2389,14 @@ export class QuestApp {
     const f = this.input.sample(time, cam, xrFrame, refSpace);
     this.lastFrame = f;
     this.poses.push(time, f.head.position, f.head.quaternion);
+    // Reference-space resets also invalidate hand/screen calibration when no take is being recorded.
+    if (refSpace !== this.recordingRefSpace) {
+      this.recordingRefSpace?.removeEventListener('reset', this.onRecordingSpaceReset);
+      this.recordingRefSpace = refSpace;
+      refSpace?.addEventListener('reset', this.onRecordingSpaceReset);
+      if (this.recorder.recording) this.recorder.spaceBoundary('reference-change');
+    }
     if (this.recorder.recording) {
-      if (refSpace !== this.recordingRefSpace) {
-        this.recordingRefSpace?.removeEventListener('reset', this.onRecordingSpaceReset);
-        this.recordingRefSpace = refSpace;
-        refSpace?.addEventListener('reset', this.onRecordingSpaceReset);
-        this.recorder.spaceBoundary('reference-change');
-      }
       const visible = !this.session || this.session.visibilityState !== 'hidden';
       const viewer = visible && xrFrame && refSpace ? xrFrame.getViewerPose(refSpace) : null;
       const head = viewer ? { position: viewer.transform.position, quaternion: viewer.transform.orientation } : this.emulator && visible ? f.head : null;
@@ -2599,10 +2632,12 @@ export class QuestApp {
         // widget move nor a held clutch can resume control without the wearer's next action.
         this.cancelManualRegion(); this.projects?.pauseForNavigation(); this.assistant?.cancel(); this.clearVirtualSelection();
         this.controls.clear(); this.clearHandControl(); this.hud.cancelInteractions?.(); this.refreshHome();
+        this.wiring?.reset('XR session hidden');
         this.recorder.pose(null, {}, true);
       });
       s.session.addEventListener('end', () => {
         if (this.session !== s.session) return;
+        this.wiring?.reset('XR session ended', true);
         this.cancelManualRegion(); this.release();
         this.scanner.stop();
         this.hud.setDeck({ open: false });

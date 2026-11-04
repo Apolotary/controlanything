@@ -53,6 +53,20 @@ function shell() {
 }
 
 describe('selected device setup progress', () => {
+  it('opens Control setup for an unarmed physical tag instead of switching to an older armed Mac', () => {
+    for (const alreadySelected of [true, false]) {
+      const { app, target, modes, hud, ws } = shell();
+      const physical = { targetId: target.id, cardId: 'op1-field', label: 'OP-1 Field', connection: 'setup' as const };
+      const mac = { targetId: 'saved-mac', cardId: 'visual-synth-mac', label: 'Visual synth', connection: 'ready' as const };
+      if (alreadySelected) { modes.tags.set(target.id, physical); modes.tags.set(mac.targetId, mac); app.lockedId = target.id; }
+      else { modes.tags.set(mac.targetId, mac); modes.tags.set(target.id, physical); }
+      Reflect.get(app, 'armedCards').add(mac.cardId);
+      Reflect.get(app, 'switchLayer').call(app, 'control');
+      expect(modes.mode).toBe('control'); expect(app.lockedId).toBe(target.id);
+      expect(hud.setDeviceState).toHaveBeenLastCalledWith(expect.objectContaining({ targetId: target.id, connection: 'setup' }));
+      expect(ws.send.mock.calls.some(([type]) => ['target.select', 'control.setup', 'control.event', 'wire.request'].includes(type))).toBe(false);
+    }
+  });
   it('releases setup busy state when the server rejects missing MIDI-chart prerequisites', () => {
     const { app, target, modes, connected, receive, ws } = shell(); connected('setup');
     app.setupControl(target.id);

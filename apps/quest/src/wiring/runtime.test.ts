@@ -18,7 +18,7 @@ describe('checkWiringCode', () => {
   });
   it('refuses the contract list', () => {
     for (const bad of ['fetch("x")', 'import("x")', 'require("fs")', 'new WebSocket("ws://x")', 'XMLHttpRequest', 'eval("1")', 'new Function("return 1")', 'globalThis.x', 'self.x', 'postMessage(1)',
-      'setTimeout(() => {}, 1)', 'document.title', 'window.x', 'this.x', 'while (true) {}', 'for (;;) {}', 'importScripts("x")']) {
+      'setTimeout(() => {}, 1)', 'document.title', 'window.x', 'navigator.storage', 'location.href', 'this.x', 'while (true) {}', 'for (;;) {}', 'importScripts("x")']) {
       expect(checkWiringCode(bad), bad).toMatch(/^uses /);
     }
     expect(checkWiringCode('')).toBe('empty program');
@@ -97,6 +97,7 @@ describe('worker script', () => {
     expect(log.posted).toHaveLength(1);
     expect((log.posted[0] as { sets: Record<string, number> }).sets).toEqual({ a: 1 });
     expect(scope.fetch).toBeUndefined();
+    for (const key of ['navigator', 'location', 'setTimeout', 'setInterval', 'queueMicrotask']) expect(scope[key]).toBeUndefined();
   });
   it('reports a throw and a syntax error without dying', () => {
     const { log, send } = boot();

@@ -636,11 +636,13 @@ export class LeanHud implements Hud {
   private lookAction(id: string): void {
     const target = this.selected(), m = this.mounted();
     if (!target) return;
+    if ((id.startsWith('control:') || id.startsWith('action:')) && !this.manualLookReady()) return;
     if (id === 'control-setup') this.events.emit('setup', { targetId: target.id });
     else if (id === 'control-cancel') this.events.emit('cancel', { targetId: target.id });
     else if (id === 'control-pair') this.events.emit('pair', { targetId: target.id });
     else if (id === 'control-pair-cancel') this.events.emit('pairCancel', { targetId: target.id });
     else if (id === 'control-pair-code') this.openPairCode();
+    else if (id === 'correct-device') this.events.emit('assistantTalk', { targetId: target.id });
     else if (id === 'gesture-setup') this.events.emit('gestureSetup', { targetId: target.id });
     else if (id.startsWith('control:') && m) {
       const c = m.spec.controls.find((control) => control.id === id.slice(8));
@@ -663,12 +665,16 @@ export class LeanHud implements Hud {
   }
   private lookDial(id: string, fraction: number, phase: 'start' | 'move' | 'end'): void {
     const m = this.mounted(), c = m?.spec.controls.find((control) => control.id === id);
-    if (!m || !c || !this.isArmed(m, c)) return;
+    if (!m || !c || !this.isArmed(m, c) || !this.manualLookReady()) return;
     const value = controlValue(fraction, c.range ?? { min: 0, max: 1 });
     m.values.set(c.id, value);
     if (isBrightness(c)) m.power = true;
     this.emitControl(m, c, phase);
     this.refreshDials();
+  }
+  /** Setup verifies capabilities; the wearer still has to ask Muse to create an interaction. */
+  private manualLookReady(): boolean {
+    return !!this.deviceState?.legacyPerform || this.wireView?.targetId === this.locked && this.wireView.phase === 'running';
   }
   private dialModel(m: Mounted, c: Control | undefined): DialModel | null {
     if (!c) return null;
@@ -747,6 +753,9 @@ export class LeanHud implements Hud {
         }
       }
     }
+    if (!visual && !working && (connection === 'setup' || connection === 'offline')) {
+      actions.push({ id: 'correct-device', label: 'Correct device', icon: 'mic' });
+    }
     let ask: CardAsk | null = null;
     const wire = this.wireView;
     if (wire && wire.targetId === this.locked && !working && connection === 'ready' && m?.armed) {
@@ -754,6 +763,7 @@ export class LeanHud implements Hud {
       const chips: CardAsk['chips'] = wire.chips.map((label) => ({ id: label, label, ...(label === wire.activeChip ? { active: true } : {}) }));
       if (wire.canRecalibrate) chips.push({ id: 'recalibrate', label: 'Recalibrate screen', icon: 'retry' });
       ask = { chips, mic: wire.mic };
+      if (!this.manualLookReady()) actions.length = 0;
     }
     return { title: name, subtitle, toggle, actions: actions.slice(0, 3), agent: this.lookAgent(working), ask };
   }
@@ -775,7 +785,8 @@ export class LeanHud implements Hud {
     const ready = connection === 'ready' && !!m?.armed && !this.setupWorking() && !state?.busy;
     // While Muse's wiring runs the hands are the control: the arcs only display, so a fingertip on the screen never grabs one.
     const wiring = this.wireView?.phase === 'running';
-    const mode: DialMode = !workspace || !box ? 'hidden' : ready ? state?.handControl || wiring ? 'perform' : 'armed' : 'setup';
+    const askFirst = this.wireView?.targetId === this.locked && !state?.legacyPerform;
+    const mode: DialMode = !workspace || !box ? 'hidden' : ready ? state?.handControl || wiring ? 'perform' : askFirst ? 'waiting' : 'armed' : 'setup';
     look.rig.setMode(mode);
     if (box && mode !== 'hidden') {
       this.boxes.facingQuaternion(this.head, box.center, this.lookFacing, box.facing);

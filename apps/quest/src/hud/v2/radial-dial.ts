@@ -14,7 +14,7 @@ import { LOOK } from './theme';
 export type DialSide = 'left' | 'right';
 export interface DialModel { id: string; label: string; fraction: number; display: string }
 export type DialPhase = 'start' | 'move' | 'end';
-export type DialMode = 'hidden' | 'setup' | 'armed' | 'perform';
+export type DialMode = 'hidden' | 'setup' | 'waiting' | 'armed' | 'perform';
 
 interface PointerLike {
   pointerId: number; pointerType?: string; point?: Vector3; pointerQuaternion?: Quaternion;
@@ -265,19 +265,19 @@ export class DialRig extends Group {
     const ring: RingMode = mode === 'hidden' ? 'hidden' : mode === 'setup' ? 'setup' : mode === 'perform' ? 'live' : 'quiet';
     this.ring.setMode(ring);
     for (const dial of this.dials) {
-      dial.visible = mode === 'armed' || mode === 'perform';
+      dial.visible = mode === 'waiting' || mode === 'armed' || mode === 'perform';
       dial.setLive(mode === 'perform');
       // Hands perform freely: the dials only display during Perform.
       dial.setInteractive(mode === 'armed');
     }
-    this.labels?.setProperties({ visibility: mode === 'armed' || mode === 'perform' ? 'visible' : 'hidden' });
+    this.labels?.setProperties({ visibility: mode === 'waiting' || mode === 'armed' || mode === 'perform' ? 'visible' : 'hidden' });
     if (mode === 'hidden') this.placed = false;
   }
 
   setDials(left: DialModel | null, right: DialModel | null): void {
     this.left.setModel(left); this.right.setModel(right);
-    this.left.visible = !!left && (this.mode === 'armed' || this.mode === 'perform');
-    this.right.visible = !!right && (this.mode === 'armed' || this.mode === 'perform');
+    this.left.visible = !!left && (this.mode === 'waiting' || this.mode === 'armed' || this.mode === 'perform');
+    this.right.visible = !!right && (this.mode === 'waiting' || this.mode === 'armed' || this.mode === 'perform');
     this.left.setInteractive(this.mode === 'armed'); this.right.setInteractive(this.mode === 'armed');
   }
 

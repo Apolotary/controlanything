@@ -1073,3 +1073,24 @@ describe('bounded card wording and stable home updates', () => {
     hud.dispose();
   });
 });
+
+
+describe('physical device identity entry', () => {
+  it('offers explicit correction before setup without sending a control', () => {
+    const f = setup(), asked: string[] = [], controls: string[] = [];
+    f.hud.upsertTarget({ ...target, label: 'External wired keyboard', connection: 'setup' });
+    f.hud.setLocked(target.id);
+    f.hud.setDeviceState?.({ targetId: target.id, connection: 'setup' });
+    f.hud.on('assistantTalk', e => asked.push(e.targetId));
+    f.hud.on('control', e => controls.push(e.controlId));
+    f.hud.update(f.frame(undefined, 200));
+    const card = () => f.hud.root.getObjectByName('device-card-v3')!.userData.view;
+    expect(card().actions).toContainEqual({ id: 'correct-device', label: 'Correct device', icon: 'mic' });
+    (f.hud as unknown as { lookAction(id: string): void }).lookAction('correct-device');
+    expect(asked).toEqual([target.id]); expect(controls).toEqual([]);
+    f.hud.setDeviceState?.({ targetId: target.id, connection: 'setup', busy: true });
+    f.hud.update(f.frame(undefined, 200));
+    expect(card().actions.some((a: {id: string}) => a.id === 'correct-device')).toBe(false);
+    f.hud.dispose();
+  });
+});

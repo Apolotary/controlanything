@@ -81,7 +81,7 @@ async function startServer() {
       CE_REMO: '0', REMO_HOST: '', REMO_SEND: '0',
       CE_TRUST_FIRST_DEVICE: '1', CE_TRUST_LOOPBACK: '1', CE_CONSOLE_APPROVE: '0',
       MUSE_REPLAY: '1', MUSE_RECORD: '0', MUSE_RECORD_DIR: '',
-      FIXTURE_DELAY_MS: '300', GEN3D_REPLAY_SPEED: '0', GEN3D_SKIN: '0', VITEST: '',
+      CE_WIRE_CHUNK_MS: '180', FIXTURE_DELAY_MS: '300', GEN3D_REPLAY_SPEED: '0', GEN3D_SKIN: '0', VITEST: '',
     },
   });
   for (const stream of [server.stdout, server.stderr]) stream.on('data', (chunk) => { serverLog = (serverLog + chunk).slice(-250_000); });
@@ -130,7 +130,7 @@ async function phase(name, action, capture = true) {
 function screenPoint(spec) {
   return quest.evaluate(({ name, world, any }) => {
     const app = window.__ce;
-    const shown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
+    const shown = (o) => { for (let p=o; p; p=p.parent) { if (p.isVisible?.peek) { if (!p.isVisible.peek()) return false; } else if (!p.visible) return false; } return true; };
     let position;
     if (name) {
       let node = null;
@@ -178,20 +178,10 @@ async function dragArc(side, from, to) {
   await quest.mouse.up(); await frames(8);
 }
 
-/** Press a card chip with the emulator mouse (a held pinch). uikit buttons need the ray settled on them first, so retry; the last
- *  resort dispatches the button's own click (and says so), which still goes through the card's handler -> app -> wiring. */
+/** Press the visible chip through the production pointing/click path. No synthetic button events. */
 async function pressChip(label) {
-  const name = `wire-chip:${label}`;
-  for (let attempt = 0; attempt < 3 && await quest.evaluate(() => window.__ce.wiring.phase === 'idle' || window.__ce.wiring.phase === 'stopped' || window.__ce.wiring.phase === 'failed'); attempt++) {
-    const p = await screenPoint({ name, any: true });
-    await quest.mouse.move(p.x - 6, p.y - 6); await frames(4);
-    await quest.mouse.move(p.x, p.y); await frames(8);
-    await quest.mouse.down(); await frames(3); await quest.mouse.up(); await frames(8);
-  }
-  if (await quest.evaluate(() => ['idle', 'stopped', 'failed'].includes(window.__ce.wiring.phase))) {
-    console.log(`  (the emulator mouse did not latch on "${label}"; dispatching the button's click)`);
-    await quest.evaluate((n) => { let node; window.__ce.scene.traverse((o) => { if (o.name === n) node = o; }); node.dispatchEvent({ type: 'click', stopPropagation() {}, nativeEvent: {}, point: node.getWorldPosition(node.position.clone()) }); }, name);
-  }
+  await click({ name: `wire-chip:${label}` });
+  await waitQuest(() => !['idle', 'stopped', 'failed'].includes(window.__ce.wiring.phase));
 }
 
 /** Emulated tracked hands (IWER): pose both hands relative to the head, or put the index fingertip at a WORLD point (`tip`). */
@@ -275,6 +265,9 @@ async function run() {
     });
     await quest.locator('#btn-enter').click();
     await waitQuest(() => window.__ce.renderer.xr.isPresenting && window.__ce.cameraState === 'on');
+    await waitQuest(() => window.__ce.tutorial?.snapshot().visible);
+    const tutorialWidth = await quest.evaluate(() => window.__ce.scene.getObjectByName('tutorial-bubble-plate').size.peek()[0] * .001);
+    assert(tutorialWidth <= .221, `Tutorial must fit a 22cm bubble (${tutorialWidth}m)`);
   });
 
   let screen;
@@ -333,13 +326,12 @@ async function run() {
     console.log(`  pinch → armed ${timings.pinchToArmed}s; verified by: ${verifiedBy}; evidence: ${notes.slice(0, 160)}`);
   });
 
-  await phase('06-dial-moves-the-visuals', async () => {
-    // The dials are Warp (CC71) and Water ripples (CC21); either side must reach the Mac's renderer.
+  await phase('06-no-manual-bypass-before-muse', async () => {
     const since = Date.now(), before = await visualState();
+    assert.equal(await quest.evaluate(() => window.__ce.hud.root.getObjectByName('spatial-controls')?.userData.mode), 'waiting');
     await dragArc('left', 0.1, 0.95);
-    const sent = await until('a dial CC reached the executor', async () => (await exec(since)).find((e) => [21, 71].includes(e.op?.number)));
-    await sim.waitForFunction((s) => JSON.stringify(window.ceSimDebug.visualSynth.getState()) !== s, before);
-    console.log(`  CC${sent.op.number} → the sim Mac's screen changed`);
+    assert.equal((await exec(since)).length, 0, 'A setup driver alone must not allow interaction before the wearer asks Muse');
+    assert.equal(await visualState(), before, 'Pre-request dials are displays, not prewired controls');
   });
 
   await phase('07-hands-do-nothing-until-muse-wires-it', async () => {
@@ -365,7 +357,7 @@ async function run() {
     assert.deepEqual(request, { cardId: request.cardId, text: 'Touch the water', source: 'chip' });
     await until('Muse wrote the wiring and it needs the screen calibrated', () => quest.evaluate(() => window.__ce.wiring.phase === 'calibrating'), PIPELINE_TIMEOUT);
     const card = await quest.evaluate(() => window.__ce.hud.root.userData.wire.card);
-    assert(/ (is wiring|wired) "Touch the water"/.test(card.header) && card.badge === 'FIXTURE', `the code card names the request and its source (${card.header} / ${card.badge})`);
+    assert(/Touch the water/.test(card.header) && card.badge === 'FIXTURE', `the code card names the request and its source (${card.header} / ${card.badge})`);
     await screenshot('08-code-card');
     geometry = await quest.evaluate((c) => {
       const app = window.__ce, p = app.desktopCam.position.clone().fromArray(c), head = app.emulator.head();
@@ -397,10 +389,23 @@ async function run() {
 
   await phase('10-both-palms-stop', async () => {
     await hands({ left: { offset: [-0.22, -0.05, -0.45], pose: 'open', palm: 'out' }, right: { offset: [0.22, -0.05, -0.45], pose: 'open', palm: 'out' } });
-    await until('the wiring stopped', () => quest.evaluate(() => window.__ce.wiring.phase === 'stopped'), 5000);
+    await until('the wiring stopped', () => quest.evaluate(() => !window.__ce.wiring.running && ['idle', 'stopped'].includes(window.__ce.wiring.phase)), 5000);
+    await until('server disarmed after palms Stop', async () => !(await target()).armed);
+    await sim.waitForFunction(() => window.ceSimDebug.visualSynth.getState().touchPressure === 0);
+    assert(await quest.evaluate(() => window.__judge.requests.some(r => r.type === 'panic')), 'Palms Stop must revoke server wiring authority');
     for (const page of [sim, quest]) for (const frame of page.frames()) {
       assert.equal(await frame.evaluate(() => window.__audioAttempts ?? 0), 0, 'No page may construct an audio graph');
     }
+  });
+  await phase('11-tutorial-menu-replay-and-skip', async () => {
+    await hands({ left: { offset: [-.18, -.12, -.32], pose: 'open', palm: 'toward' }, right: { offset: [.3, -.7, -.2], pose: 'default' } }, 50);
+    await waitQuest(() => { const p=window.__ce.hud.root.getObjectByName('wrist-palette'); return p?.visible && p.anchor.open; });
+    await click({ name: 'tutorial' });
+    await waitQuest(() => window.__ce.tutorial?.snapshot().visible);
+    await screenshot('11a-tutorial-replayed');
+    await click({ name: 'tutorial-skip' });
+    await waitQuest(() => window.__ce.tutorial?.snapshot().finished);
+    assert.equal(await quest.evaluate(() => localStorage.getItem('ce.tutorial.wire.v1')), 'skipped');
   });
   await writeFile(join(SCREENS, 'summary.json'), JSON.stringify({ fixture: true, demo: true, verifiedBy, timings }, null, 2));
 }

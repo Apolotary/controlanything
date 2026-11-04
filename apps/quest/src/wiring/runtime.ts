@@ -45,6 +45,7 @@ const FORBIDDEN: readonly [RegExp, string][] = [
   [/\beval\b/, 'eval'], [/\bFunction\b/, 'Function'], [/\bglobalThis\b/, 'globalThis'], [/\bself\b/, 'self'], [/\bpostMessage\b/, 'postMessage'],
   [/\bimportScripts\b/, 'importScripts'], [/\bsetTimeout\b/, 'setTimeout'], [/\bsetInterval\b/, 'setInterval'], [/\bdocument\b/, 'document'],
   [/\bwindow\b/, 'window'], [/\bthis\b/, 'this'], [/while\s*\(\s*(?:true|1)\s*\)/, 'while(true)'], [/for\s*\(\s*;\s*;\s*\)/, 'for(;;)'],
+  [/\bnavigator\b/, 'navigator'], [/\blocation\b/, 'location'],
 ];
 /** The reason a program is refused before it ever reaches the worker, or null. */
 export function checkWiringCode(code: string): string | null {
@@ -128,7 +129,7 @@ export class OutputGate {
 export const WORKER_SOURCE = String.raw`(function () {
   var post = self.postMessage.bind(self);
   var now = performance.now.bind(performance);
-  var BLOCK = ['fetch', 'importScripts', 'XMLHttpRequest', 'WebSocket', 'WebSocketStream', 'WebTransport', 'EventSource', 'indexedDB', 'IDBFactory', 'caches', 'CacheStorage', 'Cache', 'Worker', 'SharedWorker', 'BroadcastChannel', 'openDatabase', 'FileReaderSync', 'Notification'];
+  var BLOCK = ['fetch', 'importScripts', 'XMLHttpRequest', 'WebSocket', 'WebSocketStream', 'WebTransport', 'EventSource', 'indexedDB', 'IDBFactory', 'caches', 'CacheStorage', 'Cache', 'Worker', 'SharedWorker', 'BroadcastChannel', 'openDatabase', 'FileReaderSync', 'Notification', 'navigator', 'location', 'setTimeout', 'setInterval', 'queueMicrotask', 'requestAnimationFrame'];
   function lock(o, n, v) { try { Object.defineProperty(o, n, { value: v, writable: false, configurable: false }); } catch (e) { try { o[n] = v; } catch (e2) {} } }
   for (var i = 0; i < BLOCK.length; i++) lock(self, BLOCK[i], undefined);
   for (var o = Object.getPrototypeOf(self); o; o = Object.getPrototypeOf(o)) for (var j = 0; j < BLOCK.length; j++) if (Object.prototype.hasOwnProperty.call(o, BLOCK[j])) lock(o, BLOCK[j], undefined);
