@@ -14,6 +14,12 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
+if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 12)) {
+  console.error(`ControlAnything needs Node 22.12 or newer (you have v${process.versions.node}). https://nodejs.org`);
+  process.exit(1);
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(here, '../../..');
 const args = new Set(process.argv.slice(2));
@@ -81,11 +87,24 @@ async function main(): Promise<void> {
 
       env: { ...process.env, MODEL_MODE: mode, CE_TRUST_FIRST_DEVICE: process.env.CE_TRUST_FIRST_DEVICE ?? '1',
         CE_DEMO: process.env.CE_DEMO ?? '1', ...(muted ? { CE_MAC_SILENT: '1', CE_MAC_LOCAL: '0' } : {}) },
-      stdio: ['inherit', 'pipe', 'inherit'],
+      stdio: ['inherit', 'pipe', 'pipe'],
     });
+    let errTail = '';
     child.stdout?.on('data', (d: Buffer) => process.stdout.write(c.dim(d.toString())));
+    child.stderr?.on('data', (d: Buffer) => {
+      process.stderr.write(d);
+      errTail = (errTail + d.toString()).slice(-4000);
+    });
     child.on('exit', (code) => {
       console.log(c.red(`server exited (${code})`));
+      if (!h) {
+        // the server says "HTTP port 8787 on 0.0.0.0 is already in use (another server running?)"
+        const busy = /(HTTPS?) port (\d+) on \S+ is already in use/.exec(errTail);
+        const alt = busy && (busy[1] === 'HTTP' ? (busy[2] === '8796' ? 8797 : 8796) : Number(busy[2]) + 1);
+        console.log(busy
+          ? c.red(`Port ${busy[2]} is already in use by another program. Stop that program, or start on a free port: `) + c.b(`${busy[1]}_PORT=${alt} npm run demo:sim`)
+          : c.red('The server stopped before it was ready. Its last lines are just above.'));
+      }
       process.exit(code ?? 1);
     });
     for (let i = 0; i < 60 && !h; i++) {

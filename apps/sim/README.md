@@ -17,12 +17,14 @@ npm run demo:sim         # builds missing apps; sound on after the first browser
 # Add -- --fixture to force recorded/scripted replies; -- --mute is for unattended checks.
 ```
 
-1. Open [the sim room](http://localhost:8787/sim/) first. It pairs automatically on localhost and acts as your Mac.
-2. Open [the desktop Quest emulator](http://localhost:8787/quest/?emulate=1&camera=sim&mic=0) and choose **Enter AR**. Click = pinch, right-drag = look.
-3. Tag the laptop's box in Annotate, then deliberately choose **Control**. Ask Muse to make an instrument for the visual synth. Watch the connector/code stream, then use the generated keys, XY surface or controls.
+After `npm run demo:sim`:
+
+1. Open `http://localhost:8787/sim/` first. It pairs automatically on localhost and acts as your Mac.
+2. Open `http://localhost:8787/quest/?emulate=1&camera=sim&mic=0` (the desktop Quest emulator) and choose **Enter AR**. Click = pinch, right-drag = look.
+3. Tag the laptop's box in Annotate, then deliberately choose **Control** (`M`) and choose **Give me knobs for this**. Watch the connector/code stream, then use the generated controls. The **Swipe my hand to scroll Instagram Reels** suggestion is not simulated: it opens Instagram in Google Chrome and presses keys on the Mac that runs the server.
 4. Choose **Stop** or press `X` to retire the connector. If a requested hand program needs screen calibration, follow its two-corner guidance; the emulator does not substitute mouse clicks for real screen contact.
 
-For a simpler touch/webcam route without emulated hands, open [the reviewer demo](http://localhost:8787/quest/reviewer.html). Its instruments use the same Muse agent path. No-key runs are visibly **FIXTURE**, not live recognition/generation.
+For a simpler touch/webcam route without emulated hands, open `/quest/reviewer.html` ([reviewer guide](../../docs/REVIEWER-DEMO.md)). Its instruments use the same Muse agent path. No-key runs are visibly **FIXTURE**, not live recognition/generation.
 
 The light and OP-1-style synth remain protocol twins for other checks. Historical setup-first scripts require `CE_AGENT=0`; they are not the default flow.
 
