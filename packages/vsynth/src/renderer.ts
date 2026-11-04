@@ -37,14 +37,25 @@ vec3 hsv(float h, float s, float v) {
   vec3 rgb = clamp(abs(fract(h + vec3(0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
   return v * mix(vec3(1), rgb, s);
 }
-// An analytic water surface: expanding, damped wavefronts lit from the surface gradient.
-// Depth CC motion launches the wavefronts. Wavelengths are large (a fifth of the screen) so the
-// rings read through a headset's passthrough camera; Warp tints the pool and quickens its caustics,
-// so height control stays visible while Water is active.
-vec3 waterSurface(vec2 p) {
-  vec2 gradient = vec2(0.0);
+// Ripples on every pattern. Two parts, both with big wavelengths (a third of the screen) and bright
+// crests so they read through a headset's passthrough camera:
+// - steady concentric rings expanding from the centre, as deep as the Ripples value (water.y);
+// - expanding, damped wavefronts launched by each live Ripples change (push/pull in Perform).
+float steadyRipple(vec2 p, out vec2 gradient, out float crest) {
+  float radius = max(.0001, length(p));
+  float depth = pow(clamp(water.y, 0.0, 1.0), 1.5);
+  float fall = 1.0 / (1.0 + .7 * radius);
+  float ring = radius * 10.0 - water.x * 3.0;
+  float wave = sin(ring);
+  float amplitude = .05 * depth * fall;
+  gradient = p / radius * amplitude * 10.0 * cos(ring);
+  crest = depth * fall * pow(max(0.0, wave), 8.0);
+  return amplitude * wave;
+}
+float rippleWaves(vec2 p, out vec2 gradient, out float crest) {
+  gradient = vec2(0.0);
+  crest = 0.0;
   float height = 0.0;
-  float crest = 0.0;
   for (int i = 0; i < 6; i++) {
     float age = max(0.0, water.x - ripples[i].z);
     vec2 offset = p - ripples[i].xy;
@@ -57,6 +68,17 @@ vec3 waterSurface(vec2 p) {
     gradient += offset / radius * strength * (16.0 * cos(front * 16.0) - 14.0 * front * wave);
     crest += abs(strength) * smoothstep(.55, 1.0, wave);
   }
+  return height;
+}
+// An analytic water surface lit from the ripple gradient. Warp tints the pool and quickens its caustics,
+// so height control stays visible while Water is active.
+vec3 waterSurface(vec2 p) {
+  vec2 gradient, steadyGradient;
+  float crest, steadyCrest;
+  float height = rippleWaves(p, gradient, crest);
+  height += steadyRipple(p, steadyGradient, steadyCrest);
+  gradient += steadyGradient;
+  crest += steadyCrest * .12;
   float warp = colour.w;
   vec3 normal = normalize(vec3(-gradient * .9, 1.0));
   vec3 light = normalize(vec3(-.45, .65, .9));
@@ -76,6 +98,12 @@ vec3 waterSurface(vec2 p) {
 void main() {
   vec2 p = (gl_FragCoord.xy * 2.0 - resolution) / max(resolution.y, 1.0);
   if (shape.z > 2.5) { outputColour = vec4(waterSurface(p), 1.0); return; }
+  // Flow, Rings and Prism: the ripples bend the field (screen space, before zoom) and light their crests.
+  vec2 waveGradient, steadyGradient;
+  float waveCrest, steadyCrest;
+  rippleWaves(p, waveGradient, waveCrest);
+  float steadyHeight = steadyRipple(p, steadyGradient, steadyCrest);
+  p += waveGradient * .03 + steadyGradient * .16;
   p *= 0.65 + shape.x * 3.2;
   float radius = length(p);
   if (shape.y > 1.5) {
@@ -101,7 +129,11 @@ void main() {
   vec3 base = hsv(hue, colour.z * 0.78, light);
   vec3 ribbon = hsv(hue + 0.07, colour.z * 0.55, light * 1.22);
   float edge = pow(0.5 + 0.5 * cos(structure * 22.0), 8.0);
-  outputColour = vec4(mix(base, ribbon, edge * 0.52), 1.0);
+  vec3 colourOut = mix(base, ribbon, edge * 0.52);
+  // Troughs darken and crests glow, so the rings keep their contrast on every palette.
+  colourOut *= 1.0 - clamp(-steadyHeight * 9.0, 0.0, .35);
+  colourOut += vec3(.80, .95, 1.0) * (steadyCrest * .55 + waveCrest * 2.0);
+  outputColour = vec4(colourOut, 1.0);
 }`;
 
 export interface VisualSynthRenderer {
@@ -184,10 +216,10 @@ export function createVisualSynth(
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   };
   const change = (parameters: VisualSynthParameters, label: string, liveMidi = false): void => {
-    // The first activation establishes a baseline. It must not manufacture a
-    // large splash merely because a saved value differs from the initial midpoint.
-    if (liveMidi && parameters.pattern === 3 && target.pattern === 3) waterRipples.push(target.ripple, parameters.ripple, waterSeconds);
-    else if (parameters.pattern !== target.pattern || !liveMidi && parameters.ripple !== target.ripple) waterRipples.reset();
+    // A live Ripples change launches a wavefront on every pattern. A snapshot (another tab, a resume) or a
+    // reset never manufactures a splash merely because a saved value differs from the current one.
+    if (liveMidi && parameters.ripple !== target.ripple) waterRipples.push(target.ripple, parameters.ripple, waterSeconds);
+    else if (!liveMidi && parameters.ripple !== target.ripple) waterRipples.reset();
     target = { ...parameters };
     options.onChange?.(label, { ...target });
   };
@@ -195,8 +227,9 @@ export function createVisualSynth(
     receiveMidi(bytes) {
       const result = applyVisualSynthMidi(target, bytes);
       if (!result) return false;
-      if (bytes[0] === 0xff || (bytes[0] & 0xf0) === 0xb0 && [120, 121, 123].includes(bytes[1])) { phase = waterSeconds = 0; waterRipples.reset(); }
-      change(result.parameters, result.label, true);
+      const resetAll = bytes[0] === 0xff || (bytes[0] & 0xf0) === 0xb0 && [120, 121, 123].includes(bytes[1]);
+      if (resetAll) { phase = waterSeconds = 0; waterRipples.reset(); }
+      change(result.parameters, result.label, !resetAll);
       return true;
     },
     reset() {

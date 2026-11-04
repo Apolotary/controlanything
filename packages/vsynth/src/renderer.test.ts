@@ -11,10 +11,10 @@ function renderer() {
   return { synth, gl };
 }
 
-describe('Mac visual synth Water renderer', () => {
-  it('resumes an authoritative Water snapshot without replaying motion as a fresh wave', () => {
-    const { synth } = renderer(); synth.receiveMidi([0xb0, 21, 20]); synth.receiveMidi([0xb0, 21, 60]);
-    expect(synth.getWaterDiagnostics().waves).toHaveLength(1);
+describe('Mac visual synth ripples renderer', () => {
+  it('resumes an authoritative snapshot without replaying motion as a fresh wave', () => {
+    const { synth } = renderer(); synth.receiveMidi([0xc0, 3]); synth.receiveMidi([0xb0, 21, 20]); synth.render(0); synth.render(200); synth.receiveMidi([0xb0, 21, 60]);
+    expect(synth.getWaterDiagnostics().waves).toHaveLength(2);
     synth.setState({ ...synth.getState(), ripple: .9 });
     expect(synth.getState()).toMatchObject({ pattern: 3, ripple: .9 });
     expect(synth.getWaterDiagnostics().waves).toEqual([]);
@@ -22,13 +22,18 @@ describe('Mac visual synth Water renderer', () => {
     expect(synth.getWaterDiagnostics().waves[0]?.strength).toBeLessThan(0); synth.dispose();
   });
 
-  it('activates Water with no fabricated startup impulse, then creates bounded forward/back waves', () => {
+  it('makes bounded forward/back ripple waves on every pattern and keeps the selected pattern', () => {
     const { synth, gl } = renderer();
+    for (const pattern of [0, 1, 2]) {
+      synth.receiveMidi([0xc0, pattern]); synth.render(0); synth.render(300); synth.receiveMidi([0xb0, 21, pattern * 40]);
+      expect(synth.getState().pattern).toBe(pattern);
+      expect(synth.getWaterDiagnostics().waves.length).toBeGreaterThan(0);
+      synth.reset();
+    }
     synth.receiveMidi([0xb0, 21, 0]);
-    expect(synth.getState()).toMatchObject({ pattern: 3, ripple: 0, warp: .4 });
-    expect(synth.getWaterDiagnostics().waves).toEqual([]);
+    expect(synth.getState()).toMatchObject({ pattern: 0, ripple: 0, warp: .4 });
     synth.render(0); synth.render(100); synth.receiveMidi([0xb0, 21, 40]);
-    expect(synth.getWaterDiagnostics().waves[0]?.strength).toBeGreaterThan(0);
+    expect(synth.getWaterDiagnostics().waves.some(wave => wave.strength > 0)).toBe(true);
     synth.render(200); synth.render(300); synth.receiveMidi([0xb0, 21, 10]);
     expect(synth.getWaterDiagnostics().waves.some(wave => wave.strength < 0)).toBe(true);
     const count = synth.getWaterDiagnostics().waves.length;

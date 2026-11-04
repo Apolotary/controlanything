@@ -14,7 +14,7 @@ export interface VisualSynthParameters {
   speed: number;
   zoom: number;
   warp: number;
-  /** CC21 is a dedicated water depth control, distinct from Warp. */
+  /** CC21 Ripples depth, distinct from Warp: concentric ripples on every pattern; it never changes the pattern. */
   ripple: number;
   symmetry: number;
   pattern: number;
@@ -58,7 +58,7 @@ export function applyVisualSynthMidi(current: VisualSynthParameters, bytes: read
   const unit = bytes[2] / 127;
   const value = control.parameter === 'symmetry' ? 1 + Math.round(unit * 7) : unit;
   return {
-    parameters: { ...current, [control.parameter]: value, ...(control.parameter === 'ripple' ? { pattern: 3 } : {}) },
+    parameters: { ...current, [control.parameter]: value },
     label: `${control.label} · ${control.parameter === 'symmetry' ? value : `${Math.round(value * 100)}%`}`,
   };
 }

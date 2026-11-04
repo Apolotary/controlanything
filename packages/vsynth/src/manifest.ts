@@ -47,10 +47,10 @@ const EFFECTS: Record<string, string> = {
   speed: 'animation speed of the flowing field',
   zoom: 'scale of the noise field (zoomed out to zoomed in)',
   warp: 'how strongly the field bends and folds',
-  ripple: 'water ripple depth; any value switches the screen to the Water pattern and expanding ripple waves',
+  ripple: 'ripple depth on every pattern: concentric rings across the screen get deeper and brighter, and each change sends an expanding wave; it never changes the pattern (program changes do)',
   symmetry: 'kaleidoscope symmetry, 1 to 8 mirrored segments',
 };
-const PROGRAM_EFFECTS = ['flowing domain-warped field', 'concentric rings', 'prismatic colour bands', 'water surface with ripples'];
+const PROGRAM_EFFECTS = ['flowing domain-warped field', 'concentric rings', 'prismatic colour bands', 'lit water surface (Ripples make its waves)'];
 
 export const VISUAL_SYNTH_MANIFEST: VisualSynthManifest = {
   id: 'controlanything-visual-synth',

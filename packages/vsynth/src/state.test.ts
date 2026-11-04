@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { applyVisualSynthMidi, createVisualSynthState, isVisualSynthState, VISUAL_SYNTH_CONTROLS } from './state.js';
 
 describe('silent visual instrument MIDI state', () => {
-  it('routes depth CC21 to Water mode without changing the previous Warp value', () => {
+  it('sets Ripples depth with CC21 without changing the pattern or Warp (Perform sends CC21 constantly)', () => {
     const before = createVisualSynthState();
     const water = applyVisualSynthMidi(before, [0xb0, 21, 100])!;
-    expect(water.parameters).toMatchObject({ pattern: 3, ripple: 100 / 127, warp: before.warp });
+    expect(water.parameters).toMatchObject({ pattern: 0, ripple: 100 / 127, warp: before.warp });
     expect(water.label).toContain('Water ripples');
-    expect(applyVisualSynthMidi(water.parameters, [0xb0, 71, 127])?.parameters).toMatchObject({ pattern: 3, ripple: 100 / 127, warp: 1 });
+    expect(applyVisualSynthMidi(water.parameters, [0xb0, 71, 127])?.parameters).toMatchObject({ pattern: 0, ripple: 100 / 127, warp: 1 });
+    const prism = applyVisualSynthMidi(water.parameters, [0xc0, 2])!.parameters;
+    expect(applyVisualSynthMidi(prism, [0xb0, 21, 10])?.parameters).toMatchObject({ pattern: 2, ripple: 10 / 127 });
     expect(isVisualSynthState({ ...water.parameters, ripple: NaN })).toBe(false);
     expect(isVisualSynthState({ ...water.parameters, ripple: 1.1 })).toBe(false);
   });
