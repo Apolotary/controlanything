@@ -58,6 +58,12 @@ export const HelloPayload = z.object({
   ports: z.array(Port).max(128).optional(),
   /** client app name and version, e.g. "companion@0.1.0" */
   app: z.string().max(120).optional(),
+  /**
+   * Headsets: whether this tab is visible now (document.visibilityState === 'visible'). A hidden tab that
+   * (re)connects while another socket of the same headset owns the session does not take it over: it is told
+   * `session.superseded` {reason:'background-tab'} instead. Omitted = foreground (the newest socket wins).
+   */
+  foreground: z.boolean().optional(),
 });
 export type HelloPayload = z.infer<typeof HelloPayload>;
 
@@ -76,6 +82,28 @@ export const WelcomePayload = z.object({
   mode: ModelSource,
 });
 export type WelcomePayload = z.infer<typeof WelcomePayload>;
+
+/**
+ * C->S. "This tab is the one in use": the newest claim for a headset identity wins (also implied by every new
+ * hmd socket's hello). The Quest sends it on visibilitychange→visible and on Enter AR. Never relayed.
+ */
+export const SessionClaimPayload = z.object({});
+export type SessionClaimPayload = z.infer<typeof SessionClaimPayload>;
+
+/**
+ * S->C. Another socket of the same headset identity claimed the session (Quest Browser opened the app in a
+ * new tab). The server ignores this socket's control/exec/scan/mode messages from now on and closes it with
+ * code 4409 "superseded" after `graceMs`. The client must stop its camera, scanner and sends, and must not
+ * reconnect by itself (that would kick the newer tab).
+ */
+export const SessionSupersededPayload = z.object({
+  reason: z.string().min(1).max(64),
+  /** server clock, epoch ms */
+  at: z.number(),
+  /** how long until the server closes this socket */
+  graceMs: z.number().int().min(0).optional(),
+});
+export type SessionSupersededPayload = z.infer<typeof SessionSupersededPayload>;
 
 /** S->C. Everyone paired to the space, with online state. Sent on every join/leave/update. */
 export const PresencePayload = z.object({

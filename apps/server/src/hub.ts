@@ -7,6 +7,9 @@
  *   `from` stamped to the sender's deviceId. `to: "server"` means "for the server only, do not relay".
  * - control.event and snapshot are dropped for a receiver whose socket is backed up (latest wins).
  * - Server code (the agent loop) subscribes with hub.onMessage() and talks back with send/broadcast.
+ * - Single instance for headsets (role hmd): the newest claim for a deviceId wins. A claim is a new socket's
+ *   hello or an explicit `session.claim`. The previous socket gets `session.superseded`, is ignored from then on
+ *   (except panic) and is closed with 4409 after a short grace, so a second Quest Browser tab cannot steer.
  */
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Server as HttpsServer } from 'node:https';
@@ -41,6 +44,12 @@ export const BACKPRESSURE_BYTES = 1024 * 1024;
 const DROPPABLE = new Set<string>(DROPPABLE_TYPES);
 
 export const CLOSE_UNAUTHORIZED = 4401;
+/** A newer socket of the same headset claimed the session; the client must not reconnect by itself. */
+export const CLOSE_SUPERSEDED = 4409;
+/** Time between `session.superseded` and the close, so the old tab can show why it stopped. */
+export const SUPERSEDE_GRACE_MS = 500;
+/** Roles that run one live socket per deviceId (the newest claim wins). Companion tabs elect an executor themselves. */
+const SINGLE_INSTANCE_ROLES = new Set<Role>(['hmd']);
 
 export interface Connection {
   readonly clientId: string;
@@ -57,6 +66,30 @@ export interface Connection {
   /** pairing requests started or watched on this socket */
   watching: Set<string>;
   connectedAt: number;
+  /** when a newer socket of this headset claimed the session; this one is ignored from then on */
+  superseded?: number;
+  /** messages dropped because this socket was superseded */
+  ignored?: number;
+  /** headsets: the tab reported itself visible (hello.foreground, or a session.claim) */
+  foreground?: boolean;
+}
+
+/** One row of GET /api/clients. */
+export interface ClientRow {
+  clientId: string;
+  role?: Role;
+  app?: string;
+  executor?: boolean;
+  state: 'owner' | 'active' | 'superseded';
+  ageSec: number;
+  local: boolean;
+  ignored?: number;
+}
+
+export interface ClientsReport {
+  at: number;
+  unauthenticated: number;
+  devices: { deviceId: string; name?: string; kind?: string; connections: ClientRow[]; duplicateRoles: Role[] }[];
 }
 
 export interface HubMessageEvent {
@@ -83,7 +116,11 @@ export class Hub {
   private readonly log: (line: string) => void;
   private readonly heartbeat: ReturnType<typeof setInterval>;
   private readonly unsubscribe: (() => void)[] = [];
+  /** deviceId -> clientId of the socket that owns a single-instance (hmd) session */
+  private readonly owners = new Map<string, string>();
+  private readonly closeTimers = new Set<ReturnType<typeof setTimeout>>();
   dropped = 0;
+  superseded = 0;
 
   constructor(private readonly o: HubOptions) {
     this.log = o.log ?? ((line) => console.log(line));
@@ -177,7 +214,7 @@ export class Hub {
     });
   }
 
-  stats(): { connections: number; authenticated: number; devicesOnline: number; byRole: Record<string, number> } {
+  stats(): { connections: number; authenticated: number; devicesOnline: number; byRole: Record<string, number>; superseded: number; duplicates: string[] } {
     const authed = this.authed();
     const byRole: Record<string, number> = {};
     const online = new Set<string>();
@@ -187,11 +224,38 @@ export class Hub {
       const role = c.role ?? 'device';
       byRole[role] = (byRole[role] ?? 0) + 1;
     }
-    return { connections: this.conns.size, authenticated: authed.length, devicesOnline: online.size, byRole };
+    const duplicates = this.clients().devices.flatMap((d) => d.duplicateRoles.map((role) => `${d.deviceId}:${role}`));
+    return { connections: this.conns.size, authenticated: authed.length, devicesOnline: online.size, byRole, superseded: this.superseded, duplicates };
+  }
+
+  /** Every socket per paired device, with its role, age and single-instance state (GET /api/clients). */
+  clients(): ClientsReport {
+    const now = Date.now();
+    const byDevice = new Map<string, ClientRow[]>();
+    let unauthenticated = 0;
+    for (const c of this.conns.values()) {
+      if (!c.deviceId) { unauthenticated++; continue; }
+      const row: ClientRow = { clientId: c.clientId, state: c.superseded ? 'superseded' : this.owners.get(c.deviceId) === c.clientId ? 'owner' : 'active',
+        ageSec: Math.round((now - c.connectedAt) / 100) / 10, local: c.local };
+      if (c.role) row.role = c.role;
+      if (c.app) row.app = c.app;
+      if (c.executor !== undefined) row.executor = c.executor;
+      if (c.ignored) row.ignored = c.ignored;
+      byDevice.set(c.deviceId, [...(byDevice.get(c.deviceId) ?? []), row]);
+    }
+    const devices = [...byDevice].map(([deviceId, connections]) => {
+      const d = this.o.registry.get(deviceId);
+      const live = connections.filter((r) => r.state !== 'superseded');
+      const duplicateRoles = [...new Set(live.map((r) => r.role).filter((role): role is Role => !!role && live.filter((r) => r.role === role).length > 1))];
+      return { deviceId, name: d?.name, kind: d?.kind, connections, duplicateRoles };
+    });
+    return { at: now, unauthenticated, devices };
   }
 
   close(): void {
     clearInterval(this.heartbeat);
+    for (const t of this.closeTimers) clearTimeout(t);
+    this.closeTimers.clear();
     for (const u of this.unsubscribe) u();
     for (const c of this.conns.values()) c.ws.terminate();
     this.conns.clear();
@@ -223,7 +287,10 @@ export class Hub {
   private onClose(c: Connection): void {
     this.conns.delete(c.clientId);
     if (!c.deviceId) return;
+    if (this.owners.get(c.deviceId) === c.clientId) this.owners.delete(c.deviceId);
     this.o.registry.touch(c.deviceId);
+    // A superseded socket already stopped counting: its device's presence did not change.
+    if (c.superseded) return;
     this.broadcastPresence('leave', c.deviceId);
   }
 
@@ -263,6 +330,8 @@ export class Hub {
         switch (k.type) {
           case 'hello':
             return this.onHello(c, k.payload, k.id);
+          case 'session.claim':
+            return this.onClaim(c, k.id);
           case 'pair.start':
             return this.onPairStart(c, k.payload);
           case 'pair.status':
@@ -297,10 +366,19 @@ export class Hub {
       this.sendLog(c, { level: 'error', code: 'server_only', message: `${m.type} is sent by the server only.`, ref: m.id });
       return;
     }
+    // A superseded tab no longer steers anything (control, exec acks, scans, mode...). Stop always gets through.
+    if (c.superseded && m.type !== 'panic') {
+      c.ignored = (c.ignored ?? 0) + 1;
+      return;
+    }
     this.relay(c, m, parsed.raw);
   }
 
   private onHello(c: Connection, p: PayloadOf<'hello'>, ref: string): void {
+    if (c.superseded) {
+      c.ignored = (c.ignored ?? 0) + 1;
+      return;
+    }
     const device = this.o.registry.authenticate(p.deviceToken);
     if (!device) {
       this.sendLog(c, { level: 'error', code: 'unauthorized', message: 'Unknown or revoked device token; pair this device again.', ref });
@@ -313,6 +391,17 @@ export class Hub {
     if (p.ports) c.ports = p.ports;
     if (p.app) c.app = p.app;
     if (p.executor !== undefined) c.executor = p.executor;
+    if (p.foreground !== undefined) c.foreground = p.foreground;
+    // Before welcome/presence: the presence this hello triggers already counts only the headset socket in use.
+    if (this.singleInstance(c) && this.owners.get(device.deviceId) !== c.clientId) {
+      const owner = this.ownerOf(device.deviceId);
+      // A hidden tab (or an older build, next to a tab that reports its visibility) does not take over a live session.
+      if (owner && owner !== c && (p.foreground === false || (p.foreground === undefined && owner.foreground === true))) {
+        this.supersede(c, owner, `hello (${p.foreground === false ? 'hidden tab' : 'no visibility reported'})`, 'other-tab-active');
+        return;
+      }
+      this.claim(c, 'hello');
+    }
     c.capabilities = p.capabilities ?? c.capabilities ?? device.capabilities;
     if (p.capabilities && c.executor !== false) this.o.registry.update(device.deviceId, { capabilities: p.capabilities });
     this.o.registry.touch(device.deviceId);
@@ -332,6 +421,64 @@ export class Hub {
       if (this.isApproverConn(c)) for (const p of this.o.pairing.listPending()) this.send(c, 'pair.pending', p);
     }
     this.broadcastPresence(first ? 'join' : 'update', device.deviceId);
+  }
+
+  // --- single instance (hmd) ----------------------------------------------------------------
+
+  private singleInstance(c: Connection): boolean {
+    return !!c.role && SINGLE_INSTANCE_ROLES.has(c.role);
+  }
+
+  /** `session.claim`: this (open, authenticated) socket is the tab in use now. */
+  private onClaim(c: Connection, ref: string): void {
+    if (!c.deviceId) {
+      this.sendLog(c, { level: 'error', code: 'not_authenticated', message: 'Send hello {deviceToken} first.', ref });
+      return;
+    }
+    if (c.superseded) {
+      c.ignored = (c.ignored ?? 0) + 1;
+      return;
+    }
+    c.foreground = true;
+    if (!this.singleInstance(c) || this.owners.get(c.deviceId) === c.clientId) return;
+    this.claim(c, 'session.claim');
+    this.broadcastPresence('update', c.deviceId);
+  }
+
+  /** Make `c` the owner of its device's session; every other live socket of that device and role is superseded. */
+  private claim(c: Connection, via: 'hello' | 'session.claim'): void {
+    const deviceId = c.deviceId!;
+    this.owners.set(deviceId, c.clientId);
+    for (const old of this.conns.values()) {
+      if (old === c || old.deviceId !== deviceId || old.superseded || !this.singleInstance(old)) continue;
+      this.supersede(old, c, via);
+    }
+  }
+
+  private ownerOf(deviceId: string): Connection | undefined {
+    const id = this.owners.get(deviceId);
+    const c = id ? this.conns.get(id) : undefined;
+    return c && !c.superseded && c.ws.readyState === WebSocket.OPEN ? c : undefined;
+  }
+
+  /** reason: 'newer-tab' (a newer tab took over) or 'other-tab-active' (this one connected while another tab is in use). */
+  private supersede(old: Connection, by: Connection, via: string, reason: 'newer-tab' | 'other-tab-active' = 'newer-tab'): void {
+    const at = Date.now();
+    old.superseded = at;
+    this.superseded++;
+    this.send(old, 'session.superseded', { reason, at, graceMs: SUPERSEDE_GRACE_MS });
+    this.log(`[hub] ${old.deviceId} ${old.role} socket ${old.clientId} (${((at - old.connectedAt) / 1000).toFixed(1)} s old) superseded (${reason}) by ${by.clientId} via ${via}; closing in ${SUPERSEDE_GRACE_MS} ms`);
+    const close = setTimeout(() => {
+      this.closeTimers.delete(close);
+      if (old.ws.readyState === WebSocket.CLOSED) return;
+      old.ws.close(CLOSE_SUPERSEDED, 'superseded');
+      // A frozen background tab may never answer the close handshake.
+      const kill = setTimeout(() => { this.closeTimers.delete(kill); if (old.ws.readyState !== WebSocket.CLOSED) old.ws.terminate(); }, 3000);
+      kill.unref?.();
+      this.closeTimers.add(kill);
+    }, SUPERSEDE_GRACE_MS);
+    close.unref?.();
+    this.closeTimers.add(close);
   }
 
   private onPairStart(c: Connection, p: PayloadOf<'pair.start'>): void {
@@ -422,8 +569,9 @@ export class Hub {
 
   // --- outbound helpers -------------------------------------------------------------------
 
+  /** Open, authenticated and not superseded: the sockets that count for presence and receive server messages. */
   private authed(): Connection[] {
-    return [...this.conns.values()].filter((c) => c.deviceId && c.ws.readyState === WebSocket.OPEN);
+    return [...this.conns.values()].filter((c) => c.deviceId && !c.superseded && c.ws.readyState === WebSocket.OPEN);
   }
 
   private toApprovers<T extends MessageType>(type: T, payload: PayloadOf<T>): void {

@@ -188,6 +188,74 @@ describe('pairing over WebSocket and relay', () => {
     expect(macWs.has('control.event')).toBe(false);
   });
 
+  it('runs one headset session per deviceId: the newest claim wins, the old tab is told, ignored and closed with 4409', async () => {
+    const h = await start();
+    const mac = await pairLocally(h, 'Mac');
+    const quest = await pairLocally(h, 'Quest 3', 'quest');
+    const { c: macWs } = await connect(h, mac.deviceToken);
+    const { c: oldTab, welcome: w1 } = await connect(h, quest.deviceToken);
+    expect(w1.role).toBe('hmd');
+    const { c: newTab, welcome: w2 } = await connect(h, quest.deviceToken);
+    const sup = await oldTab.next('session.superseded');
+    expect(sup.payload).toMatchObject({ reason: 'newer-tab', graceMs: 500 });
+    // presence counts only the newest headset socket
+    const devices = h.ctx.hub.devices();
+    expect(devices.find((d) => d.deviceId === quest.deviceId)).toMatchObject({ online: true, connections: 1 });
+    // the old tab no longer steers anything; the new one does
+    macWs.inbox.length = 0;
+    oldTab.send('control.event', { widgetId: 'warp', value: 0.9, ts: Date.now(), phase: 'move' });
+    newTab.send('control.event', { widgetId: 'warp', value: 0.2, ts: Date.now(), phase: 'move' });
+    expect((await macWs.next('control.event')).payload).toMatchObject({ value: 0.2 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(macWs.has('control.event')).toBe(false);
+    // server messages reach only the owner
+    expect(h.ctx.hub.sendToDevice(quest.deviceId, 'log', { level: 'info', message: 'only new' })).toBe(1);
+    expect((await newTab.next('log')).payload.message).toBe('only new');
+    let report = await json(await fetch(`${h.base}/api/clients`));
+    const row = report.devices.find((d: { deviceId: string }) => d.deviceId === quest.deviceId);
+    expect(row.connections.map((c: { clientId: string; state: string }) => [c.clientId, c.state]).sort()).toEqual([[w1.clientId, 'superseded'], [w2.clientId, 'owner']].sort());
+    expect(row.duplicateRoles).toEqual([]);
+    expect(await oldTab.closed(3000)).toBe(4409);
+    // an explicit claim from another open socket of the same headset takes over again
+    const { c: third } = await connect(h, quest.deviceToken);
+    expect((await newTab.next('session.superseded')).payload.reason).toBe('newer-tab');
+    expect(await newTab.closed(3000)).toBe(4409);
+    report = await json(await fetch(`${h.base}/api/clients`));
+    expect(report.devices.find((d: { deviceId: string }) => d.deviceId === quest.deviceId).connections).toHaveLength(1);
+    third.send('session.claim', {});
+    await new Promise((r) => setTimeout(r, 50));
+    expect(third.has('session.superseded')).toBe(false);
+    // companion tabs are not single-instance (they elect their executor with Web Locks)
+    const { c: mac2 } = await connect(h, mac.deviceToken, { executor: false });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mac2.has('session.superseded') || macWs.has('session.superseded')).toBe(false);
+    expect((await json(await fetch(`${h.base}/api/health`))).clients.duplicates).toEqual([`${mac.deviceId}:companion`]);
+  });
+
+  it('a hidden (or older-build) headset tab that reconnects does not take over the visible tab in use', async () => {
+    const h = await start();
+    const quest = await pairLocally(h, 'Quest 3', 'quest');
+    const { c: visible } = await connect(h, quest.deviceToken, { foreground: true });
+    const hidden = await Client.open(h.wsUrl);
+    hidden.send('hello', { deviceToken: quest.deviceToken, foreground: false });
+    expect((await hidden.next('session.superseded')).payload.reason).toBe('other-tab-active');
+    expect(hidden.has('welcome')).toBe(false);
+    expect(await hidden.closed(3000)).toBe(4409);
+    // an old build reports no visibility: it does not kick a tab that does
+    const old = await Client.open(h.wsUrl);
+    old.send('hello', { deviceToken: quest.deviceToken });
+    expect((await old.next('session.superseded')).payload.reason).toBe('other-tab-active');
+    expect(visible.has('session.superseded')).toBe(false);
+    expect(h.ctx.hub.devices().find((d) => d.deviceId === quest.deviceId)).toMatchObject({ online: true, connections: 1 });
+    // with nobody else in session, a hidden tab is the session (e.g. after a server restart it reconnected first)
+    visible.ws.close();
+    await visible.closed();
+    const { c: alone } = await connect(h, quest.deviceToken, { foreground: false });
+    const { c: front } = await connect(h, quest.deviceToken, { foreground: true });
+    expect((await alone.next('session.superseded')).payload.reason).toBe('newer-tab');
+    expect(front.has('session.superseded')).toBe(false);
+  });
+
   it('refuses invalid, unauthenticated and server-only messages with log errors', async () => {
     const h = await start();
     const anon = await Client.open(h.wsUrl);
