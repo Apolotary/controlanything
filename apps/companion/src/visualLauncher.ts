@@ -198,7 +198,8 @@ export class VisualSynthLauncher {
 
   private changed(label: string, parameters: VisualSynthParameters): void {
     this.meters(parameters);
-    if (label === 'Connected · Ready') return;
+    // The fingertip (Touch X / Y / pressure, tens of updates a second) is drawn in the water itself; no big number for it.
+    if (label === 'Connected · Ready' || label.startsWith('Touch ')) return;
     const [name, value] = label.split(' · ');
     if (!this.readoutName || !this.readoutValue || !this.panel) return;
     this.readoutName.textContent = label === 'Reset · Ready' ? 'Reset' : name ?? '';

@@ -18,6 +18,12 @@ export interface VisualSynthParameters {
   ripple: number;
   symmetry: number;
   pattern: number;
+  /** CC22: where the wearer's fingertip is on the visible canvas, 0 = left edge, 1 = right edge. */
+  touchX: number;
+  /** CC23: 0 = top edge, 1 = bottom edge (top-left is 0,0). */
+  touchY: number;
+  /** CC24: 0 = lifted, CC 1..20 = hovering, CC 21..127 = touching. */
+  touchPressure: number;
 }
 
 export interface VisualSynthChange {
@@ -34,10 +40,22 @@ export const VISUAL_SYNTH_CONTROLS = [
   { cc: 71, parameter: 'warp', label: 'Warp', min: 0, max: 1, curve: 'linear' },
   { cc: 21, parameter: 'ripple', label: 'Water ripples', min: 0, max: 1, curve: 'linear' },
   { cc: 20, parameter: 'symmetry', label: 'Symmetry', min: 1, max: 8, curve: 'stepped' },
+  { cc: 22, parameter: 'touchX', label: 'Touch X', min: 0, max: 1, curve: 'linear' },
+  { cc: 23, parameter: 'touchY', label: 'Touch Y', min: 0, max: 1, curve: 'linear' },
+  { cc: 24, parameter: 'touchPressure', label: 'Touch pressure', min: 0, max: 1, curve: 'linear' },
 ] as const;
 
+/** CC24 at or below this is a hovering fingertip (a glow); above it the fingertip is touching the water. */
+export const TOUCH_HOVER_MAX_CC = 20;
+export type TouchPhase = 'lifted' | 'hover' | 'touching';
+/** The phase of a Touch pressure value in 0..1 units (CC / 127). */
+export function touchPhase(pressure: number): TouchPhase {
+  const cc = Math.round(pressure * 127);
+  return cc <= 0 ? 'lifted' : cc <= TOUCH_HOVER_MAX_CC ? 'hover' : 'touching';
+}
+
 export function createVisualSynthState(): VisualSynthParameters {
-  return { brightness: 0.75, hue: 0.54, saturation: 0.85, speed: 0.35, zoom: 0.45, warp: 0.4, ripple: 0.5, symmetry: 1, pattern: 0 };
+  return { brightness: 0.75, hue: 0.54, saturation: 0.85, speed: 0.35, zoom: 0.45, warp: 0.4, ripple: 0.5, symmetry: 1, pattern: 0, touchX: 0.5, touchY: 0.5, touchPressure: 0 };
 }
 
 /** The same CC ranges are published in the device chart for later gesture bindings. */
