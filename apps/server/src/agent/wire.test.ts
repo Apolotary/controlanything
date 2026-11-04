@@ -125,7 +125,8 @@ describe('fixtures and templates', () => {
     expect(touch.needs).toEqual(['screen']);
     expect(validateWiring(touch.code, extended).ok).toBe(true);
     expect(dryRun(touch.code, extended, ['screen']).actions.sort()).toEqual(['cc22', 'cc23', 'cc24']);
-    const knobs = buildWiring(briefs, 'Hands as knobs', 'FIXTURE', 'Recorded.');
+    const knobs = buildWiring(briefs, 'Hands as knobs', 'FIXTURE', 'Recorded.', MANIFEST.controls);
+    expect(knobs.code).not.toMatch(/cc22|cc23|cc24/);
     expect(knobs.title).toBe('FIXTURE: Hands as knobs');
     expect(validateWiring(knobs.code, extended).ok).toBe(true);
     expect(dryRun(knobs.code, extended, knobs.needs).ok).toBe(true);
@@ -254,13 +255,18 @@ describe('writeWiring', () => {
 
 describe('rates and hacks', () => {
   it('visual synth CCs run at 30 Hz, triggers at <= 3 Hz, physical devices keep their caps', () => {
-    const d = { transport: 'midi' as const, maxRateHz: 200 };
+    const exec = { deviceId: 'x' };
+    const d = { transport: 'midi' as const, maxRateHz: 200, executor: { deviceId: 'mac', port: 'ce-visual-synth' } };
     expect(wireRateHz(d, set('cc22', 'Touch X', 22))).toBe(30);
+    expect(wireRateHz(d, set('cc71', 'Warp', 71))).toBe(30);
+    // whole-picture light and colour keep the dials' photosensitivity cap
+    expect(wireRateHz(d, set('cc7', 'Brightness', 7))).toBe(3);
+    expect(wireRateHz(d, set('cc10', 'Hue', 10))).toBe(3);
     expect(wireRateHz(d, pc(0))).toBe(3);
-    expect(wireRateHz({ transport: 'midi', maxRateHz: 10 }, set('cc22', 'x', 22))).toBe(10);
-    expect(wireRateHz({ transport: 'ir' }, { ...set('level', 'Level', 1), encode: { kind: 'step', upActionId: 'a', downActionId: 'b', steps: 10 } })).toBe(2);
-    expect(wireRateHz({ transport: 'local' }, { ...set('volume', 'Volume', 1), encode: { kind: 'local', op: 'volume', arg: '$value' }, expect: { sense: 'ack', effect: 'any' } })).toBe(10);
-    expect(wireRateHz({ transport: 'midi' }, { ...set('l', 'Lamp', 1), expect: { sense: 'camera', effect: 'brighter' } })).toBe(3);
+    expect(wireRateHz({ transport: 'midi', maxRateHz: 10, executor: exec }, set('cc22', 'x', 22))).toBe(10);
+    expect(wireRateHz({ transport: 'ir', executor: exec }, { ...set('level', 'Level', 1), encode: { kind: 'step', upActionId: 'a', downActionId: 'b', steps: 10 } })).toBe(2);
+    expect(wireRateHz({ transport: 'local', executor: exec }, { ...set('volume', 'Volume', 1), encode: { kind: 'local', op: 'volume', arg: '$value' }, expect: { sense: 'ack', effect: 'any' } })).toBe(10);
+    expect(wireRateHz({ transport: 'midi', executor: exec }, { ...set('l', 'Lamp', 1), expect: { sense: 'camera', effect: 'brighter' } })).toBe(3);
   });
 
   it('a wire hack clamps through its param range and is latest-wins "control" for set actions', () => {

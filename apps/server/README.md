@@ -38,6 +38,28 @@ Every step is an `agent.step` with the model id, effort and latency; every model
 from `fixtures/recorded/` (SAM, identification, driver drafts, forge runs), each labelled `FIXTURE` with the
 model that produced it.
 
+### WIRE: Muse writes the glue (`wire.ts`, `wire-check.ts`, `wire-fixture.ts`)
+
+After the driver exists, nothing connects the wearer's hands to it until the wearer asks. Nothing is prefetched
+(`CE_PREFETCH=1` is a rehearsal-only opt-in) and nothing is pre-wired. On `wire.request {cardId, text, source}` the server
+sets the card up first if it has no driver, then:
+
+| Phase (`wire.progress.phase`) | What happens |
+|---|---|
+| `writing` | `muse-spark-1.3` (json_schema `{title ≤ 60, explanation ≤ 200, code, needs}`, effort low) writes the body of `function wire(s, out, mem)` from the request, the Signals API, the driver's actions and the device's capability-manifest hints; tokens stream to the headset and the companion as `codeDelta` (a model that cannot stream is replayed in ~8 chunks) |
+| `validating` | ≤ 4 KB, no forbidden tokens (`import`, `fetch`, `eval`, `this`, timers, …), `new vm.Script` syntax, action ids only from the driver |
+| `dry-run` | the program runs in an empty `node:vm` context (timeout, no globals) over four 120-frame traces (screen touch-drag, two-hand height sweep, pinch taps, idle): it must not throw, average < 2 ms/frame and emit ≥ 1 valid action on a trace for the signals it needs |
+| repair → Wonder → template | one repair round with the findings, then `muse-wonder-1.0` behind the length guard, then a hand-written template titled `Template: …` (`source: 'template'`): never the default |
+| `verifying` | driver actions the program uses that have not passed VERIFY are verified first (the visual synth's touch inputs come from its manifest and are verified on first use) |
+| `ready` | `wire.ready {code, title, explanation, model, source, actions, needs}` to the headset and the companion |
+
+The headset runs the program in its own sandbox and sends each output as `control.event` `wire:<actionId>`; the server
+dispatches it through the driver like a dial (range clamp, `max_rate_hz`, latest-wins at ≤ 30 Hz for visual synth CCs,
+physical devices keep their caps, armed + verified actions only, and only actions of the current `wire.ready`). Generated
+code runs on the server only in the dry-run sandbox, never on the Mac. In FIXTURE mode (`MODEL_MODE=fixture`) recorded
+wirings for "Touch the water" and "Hands as knobs" answer, labelled `FIXTURE`. `node --import tsx apps/server/scripts/wire-e2e.ts`
+runs the whole flow against a fixture server on :8796.
+
 ### The room (`combos.ts`, `daemons.ts`, `heard.ts`)
 
 Once two or more devices are verified, the server assembles `ui.spec` **`spec_room`** from their drivers
@@ -81,7 +103,7 @@ POST /api/takes/:take                 the headset app's Save take hands its zip 
 
 See `.env.example`. Brain-specific: `CE_SCAN_PROMPTS` (SAM prompts), `CE_IR_LEARN=1` (always learn the
 remote), `CE_MAC_LOCAL=0` (disable the in-process Mac executor), `CE_MAC_SILENT=1` (the Mac stays silent: nothing audible runs, a recorded clip stands in for its voice), `CE_DATA_DIR` (registry location),
-`MUSE_RECORD=1` (record live answers for replay).
+`MUSE_RECORD=1` (record live answers for replay), `CE_PREFETCH=1` (rehearsal only: Muse writes the Mac visual synth's driver as soon as the Mac appears; off by default), `CE_WIRE_TIMEOUT_MS` (the whole WIRE model phase, default 90 s, then the labelled template).
 
 ## Pairing API
 

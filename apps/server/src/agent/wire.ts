@@ -20,6 +20,7 @@ import type { Hub } from '../hub';
 import { type ChatMessage, ModelCallError, ModelOutputError, type MuseChat, parseModelJson } from '../muse/adapter';
 import type { CallLog } from '../muse/callLog';
 import { RequestCancelledError } from '../muse/cancellation';
+import { SMOOTH_VISUAL_CCS } from './control';
 import { WONDER_MAX_TOKENS, WONDER_TIMEOUT_MS } from './drive';
 import type { TargetStore } from './targets';
 import type { Target } from './types';
@@ -30,7 +31,8 @@ export const WIRE_EFFORT = 'low' as const;
 /** The whole WIRE model phase (all attempts) is bounded: past this the labelled template stands in. */
 export const WIRE_BUDGET_MS = Number(process.env.CE_WIRE_TIMEOUT_MS) > 0 ? Number(process.env.CE_WIRE_TIMEOUT_MS) : 90_000;
 const SPARK_TIMEOUT_MS = 50_000;
-const WIRE_SETUP_WAIT_MS = 150_000;
+/** Visual synth parameters that change the whole picture's light or colour: they keep the dials' photosensitivity cap. */
+const FLICKER_PARAMETERS = new Set(['brightness', 'hue', 'saturation', 'symmetry']);
 
 /** What Muse returns (json_schema). Keys stream out alphabetically, so `code` arrives first. */
 export const WireDraft = z.object({
@@ -366,15 +368,22 @@ export async function writeWiring(deps: WireDeps, input: WireInput, emit: WireEm
 
 // --- rate, hack and registry -----------------------------------------------------------------------------------------
 
-/** Per-action send rate: 30 Hz for visual synth CCs and other MIDI, physical devices keep their caps (gestures.ts axisCap). */
-export function wireRateHz(driver: Pick<Driver, 'transport' | 'maxRateHz'>, action: DriverAction): number {
+/**
+ * Per-action send rate (events past it are coalesced, latest wins). The visual synth's smooth geometry (Warp, Ripples, Zoom,
+ * Speed) and its fingertip inputs (the manifest's touch controls) follow the hand at 30 Hz; its brightness, colour and symmetry
+ * keep the dials' <= 3 Hz (photosensitivity), as do pattern buttons. Physical devices keep their caps (gestures.ts axisCap).
+ */
+export function wireRateHz(driver: Pick<Driver, 'transport' | 'maxRateHz' | 'executor'>, action: DriverAction): number {
+  const e = action.encode;
+  const visualCc = isVisualSynthPort(driver.executor.port) && e.kind === 'midi' && e.msg === 'cc' && e.number !== undefined ? e.number : undefined;
+  const flicker = visualCc !== undefined && !SMOOTH_VISUAL_CCS.has(visualCc) && VISUAL_SYNTH_MANIFEST.controls.some((c) => c.cc === visualCc && FLICKER_PARAMETERS.has(c.parameter));
   const light = action.expect?.sense === 'camera' && ['on', 'off', 'brighter', 'dimmer', 'warmer', 'cooler'].includes(action.expect.effect);
-  const cap = driver.transport === 'ir' || action.encode.kind === 'step' ? 2 : light ? 3 : driver.transport === 'local' || driver.transport === 'ble' ? 10 : 30;
+  const cap = driver.transport === 'ir' || action.encode.kind === 'step' ? 2 : light || flicker ? 3 : driver.transport === 'local' || driver.transport === 'ble' ? 10 : 30;
   const hz = Math.min(30, driver.maxRateHz ?? 30, cap);
   return action.kind === 'set' ? hz : Math.min(3, hz);
 }
 
-export function toWireAction(driver: Pick<Driver, 'transport' | 'maxRateHz'>, a: DriverAction): WireAction {
+export function toWireAction(driver: Pick<Driver, 'transport' | 'maxRateHz' | 'executor'>, a: DriverAction): WireAction {
   return { actionId: a.actionId, label: a.label.slice(0, 64), kind: a.kind, ...(a.range ? { min: a.range.min, max: a.range.max } : {}), maxRateHz: wireRateHz(driver, a) };
 }
 

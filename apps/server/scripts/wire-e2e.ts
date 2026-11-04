@@ -233,6 +233,19 @@ async function main(): Promise<void> {
   await sleep(300);
   check(!execs.slice(b8).some((e) => e.op.number === ccOf(knob.actionId) && e.op.value === 80), 'after panic a wire: event reaches nothing');
 
+  // --- 6b. select again: the saved driver comes back from the library, and the ask works right behind the pinch ------
+  console.log('6b. pinch again (driver from the library) and ask straight away');
+  quest.send('target.select', { virtual: 'visual-synth', requestId: 'sel-2' });
+  quest.send('wire.request', { cardId, text: 'Hands as knobs', source: 'voice' });
+  const third = await until('wire.ready after the re-selection', () => quest.of('wire.ready').find((m) => m.payload.wiringId !== second.payload.wiringId && m.payload.wiringId !== ready.payload.wiringId), 60_000);
+  const prog3 = quest.of('wire.progress').filter((m) => m.payload.wiringId === third.payload.wiringId).map((m) => m.payload);
+  check(prog3.some((p) => /driver from your library, written by/.test(p.note ?? '')), 'the reused driver is labelled "from your library"', prog3.map((p) => p.note).filter(Boolean));
+  const knob3 = third.payload.actions.find((a) => a.kind === 'set')!;
+  const b9 = execs.length;
+  quest.send('control.event', { widgetId: `wire:${knob3.actionId}`, value: 77, ts: Date.now(), phase: 'move', specId });
+  await sleep(300);
+  check(execs.slice(b9).some((e) => e.op.number === ccOf(knob3.actionId) && e.op.value === 77), 'the wiring written after re-arming drives the Mac');
+
   // --- 7. a bad request fails clearly -----------------------------------------------------------------------------
   console.log('7. wire.request for an unknown card');
   const n = quest.of('wire.progress').length;

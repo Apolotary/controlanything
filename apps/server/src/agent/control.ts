@@ -19,7 +19,7 @@ import { isVisualSynthPort } from '../devices/visualSynth';
  * (photosensitivity), as does every physical device.
  */
 export const VISUAL_CONTROL_HZ = 20;
-const SMOOTH_VISUAL_CCS = new Set([71, 21, 74, 1]);
+export const SMOOTH_VISUAL_CCS = new Set([71, 21, 74, 1]);
 export function controlRateHz(driver: Driver, hack: Hack): number {
   if (hack.kind !== 'control' || !isVisualSynthPort(driver.executor.port) || !hack.commands.length) return hack.max_rate_hz;
   const smooth = hack.commands.every((c) => {

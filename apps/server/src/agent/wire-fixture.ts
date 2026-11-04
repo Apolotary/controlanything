@@ -82,8 +82,10 @@ export function buildWiring(actions: ActionBrief[], request: string, prefix: 'FI
       code: touchCode(t.x, t.y, t.pressure), needs: ['screen'],
     };
   }
-  // Hands as knobs: the first controls the device has (right hand height / push, left hand height, pinch).
-  const knobs = sets.slice(0, 3);
+  // Hands as knobs: the first controls the device has (right hand height / push, left hand height, pinch); the
+  // fingertip inputs (Touch X / Y / pressure) are not knobs.
+  const touchIds = new Set(controls.map((c) => `cc${c.cc}`));
+  const knobs = sets.filter((a) => !touchIds.has(a.actionId)).slice(0, 3);
   if (!knobs.length && !trigger) {
     return { title: `${prefix}: nothing to wire`, explanation: `${note} This device has no actions to play.`.slice(0, 200), code: `// ${prefix}: this device has no controls\nconst r = s.right;`, needs: ['right'] };
   }
