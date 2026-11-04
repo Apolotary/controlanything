@@ -1872,6 +1872,10 @@ export async function bootWorkbench(): Promise<void> {
   $('workbench').classList.toggle('simple', simple);
   $('simple-visuals').addEventListener('click', () => { if (!visualLauncher.opened) openVisuals(); });
   $('simple-details').addEventListener('click', () => { simple = false; $('workbench').classList.remove('simple'); renderAll(); });
+  // Back from the full workbench to the one calm screen (button or Esc when no sheet is open).
+  const backToSimple = (): void => { if (simple) return; simple = true; showView('home', false); $('workbench').classList.add('simple'); renderAll(); };
+  $('simple-back').addEventListener('click', backToSimple);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !document.querySelector('dialog[open]')) backToSimple(); });
   $('simple-stop').addEventListener('click', () => $('panic').click());
   if (replaying) {
     const tag = el('a', { className: 'cornertag', text: 'Demo · display only', title: 'A scripted run injected into this page; nothing is executed or sent. Click to leave.' });
