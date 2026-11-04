@@ -75,7 +75,10 @@ export const WIRE_SYSTEM =
   'The wearer watches the code appear as you write it, so write readable code with short plain-words comments (one per idea). ' +
   'Answer with one JSON object matching the schema: title (at most 60 characters, what the wearer will recognise), explanation (ONE sentence for the wearer, at most 200 characters: what their hands do now), ' +
   'code (the BODY of function wire(s, out, mem): no function header, no export), needs (the signals the code reads: "right", "left" and/or "screen"). ' +
-  'Use only the device actions you are given; never invent one. Keep the program short (under 40 lines).';
+  'Use only the device actions you are given; never invent one. Keep the program short (under 40 lines). ' +
+  'Do exactly what the wearer asked and nothing more: read only the signals the request needs (a hands-as-knobs or ' +
+  'mid-air request reads hand signals and never the screen; a touch request reads the screen), drive only the actions ' +
+  'that request needs, and make the title name what they asked for.';
 
 export const FORBIDDEN_LIST =
   '`import`, `require`, `fetch`, `XMLHttpRequest`, `WebSocket`, `eval`, `Function`, `globalThis`, `self`, `postMessage`, `setTimeout`, `setInterval`, `while(true)` / `for(;;)`, `document`, `window`, `this`, `constructor`, `__proto__`, `prototype` ' +
