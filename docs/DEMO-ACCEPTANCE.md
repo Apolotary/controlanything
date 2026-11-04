@@ -1,142 +1,84 @@
-# ControlAnything: current WIRE demo acceptance
+# ControlAnything: demo acceptance
 
-Hardware: **Meta Quest 3 + MacBook**, with the paired companion showing the visual synth with water sounds. This checklist is a procedure, not a pass claim. Earlier silent and dial/Perform measurements below are historical; the current audible route needs a fresh wearer record.
+This is a procedure and evidence ledger, not a blanket pass claim. The current route is **Annotate → tag → Control → ask → Muse writes/deploys/tests → generated controls or hand interaction → Stop**. No Set up / Enable press is required before asking on the default agent path. The old chain remains behind `CE_AGENT=0`.
 
-**Current sound policy (user override, November 4):** use water/UI sounds, audible music and OS/browser Buddy speech. Live startup is `CE_DEMO=1 npm start`, without `CE_MAC_SILENT`. The first browser gesture unlocks audio. One shared master volume/mute controls Mac and Quest. `mute=1` is allowed for unattended automation; analyser/graph evidence is separate from listening.
+## Observed before this change (November 4)
 
-**Default flow:** Enter AR in Annotate → choose object filter → pinch/tag an object → stay in Annotate → deliberately choose Control → connect the required companion/transport → Set up → Enable → ask Muse for controls. No automatic laptop-to-visual-synth redirect.
+| Path | Actual evidence |
+|---|---|
+| Tag → ask → deployed connector → AR knobs → acked CC21 → cancel/Stop | Fixture emulator, `scripts/e2e-muse-agent.mjs`. |
+| Visual synth controller and water-touch program | User confirmed working on real Quest with live Muse; generation about 45s. |
+| Browser musical synth Air Theremin | Real Quest, live generation about 37s. |
+| OP-1 notes and CCs | Real Quest and physical instrument, after the user enabled MIDI receive on the OP-1. |
+| OM 4 small pan/tilt/recenter | Physical Bluetooth commands through the direct test route; Muse-driven end-to-end hardware path still pending. |
+| Palm + pinch wrist menu | Deployed before this work; wearer confirmation pending. |
+| New instrument UI, reviewer camera demo and revised Buddy | Require fresh software receipts below and separate attended headset/phone/laptop checks. |
 
-**Optional water demo:** explicitly choose More → Visual synth → setup → ask Muse → watch JavaScript stream → validate/dry-run/verify → calibrate two corners → touch the water → lift → palms Stop → ask again → Stop all → hold Exit.
+Do not combine unrelated probe times, screenshots or fixture receipts into one claimed continuous live run.
 
-## Prepare once
+## Prepare without disturbing a session
 
-1. Keep one live server on :8787/:8443, started with `CE_DEMO=1 npm start`, with `CE_MAC_SILENT` unset. `/api/health` must report live mode for a live take. Leave `CE_PREFETCH` unset; prefetch is opt-in rehearsal only. IR remains paused. Check the shared master level; close disposable e2e browsers before the wearer test.
-2. Keep the existing paired data. Open the companion in Chrome, with one executor-leading tab. **Open visuals** must visibly open the instrument or explain why it cannot; bring the Mac screen into the wearer's view. Record driver and wiring provenance separately.
-3. Connect Quest over USB and establish `adb reverse tcp:8787 tcp:8787`. Use the existing single app tab at `http://localhost:8787/quest/`. Reload with `scripts/quest-reload.mjs` only while AR is inactive; do not open a second tab with a new launch command.
-4. Use `scripts/deploy-live.sh quest` / `companion` / `sim` for live asset updates. Do not empty a dist directory that an open AR session still needs for lazy-loaded chunks. Server/protocol changes require a coordinated server restart.
-5. Sit 0.6–1m from the Mac with its display and both hands visible. Test a five-second Quest compositor recording and review it muted: it must contain passthrough **and** AR panels. The app's Record take is a separate video/pose artifact and does not capture the rendered AR UI.
+- One live server on :8787/:8443; `CE_DEMO=1 CE_OSMO=web npm start` for an attended gimbal demo. Leave `CE_MAC_SILENT` and `CE_PREFETCH` unset. Sound is part of the demo; first browser gesture unlocks audio and one master volume/mute controls app sound. Keep physical instrument volume available.
+- One paired executor-leading Chrome companion; preserve the existing pairing/workspace. For gimbal, preserve the Osmo Chrome tab on :8799. USB-C is power; gimbal control is Bluetooth.
+- Keep one Quest tab. Never launch another tab, reload while in AR, or restart a live server without coordinating with the wearer. Stage development output in `/tmp`; the user deploys. Never build into a dist currently serving lazy chunks.
+- Every runtime model must be Meta. Keep live, fixture, library and template sources visibly distinct. A template must be explicit, never an undisclosed replacement.
 
-## One continuous real-headset take
+## Continuous wearer route
 
-| Step | Wearer action | Required observation | Current run |
-|---|---|---|---|
-| W1 | Enter AR; look at the Mac | Camera and hands work; SAM 3.1 outline appears. No competing camera tab. Annotate frame rate is measured again after the SAM-only change. | Pending |
-| W2 | Raise a deliberate flat left palm | Quick actions are easy to target; More/Back reaches instruments, Tutorial, layers and filters without changing the device or running anything. It closes after selection and stays away from active control. | Pending |
-| W3 | Pinch a device box once, then wait for identification | It is tagged in Annotate. Scanning continues; no software synth opens, no setup or device commands start, and delayed identification does not change the layer. | Pending |
-| W3a | Choose Control for that tagged device | The same physical object is selected, with its real companion/transport instructions. Setup waits for Set up; an older saved demo never steals selection. | Pending |
-| W3b | For water, deliberately choose More → Visual synth | The optional software instrument opens and starts its disclosed demo setup; the separately tagged physical device is retained. | Pending |
-| W4 | Wait for setup | A compact device invitation makes voice primary and offers one example; Ideas reveals the other suggestions. No side dials or parameter handles appear in the default flow; hands do not drive the device yet. Driver verification is labelled camera / renderer / acknowledgement honestly. | Pending |
-| W5 | Choose **Touch the water**, or hold-to-talk and ask for it | Exact request stays on the selected device. JavaScript streams into the AR code card and Mac code view; a live take is labelled Live with the actual model, not FIXTURE or Template. | Pending |
-| W6 | Watch checking finish | Validating → dry-run → action verification → ready. Failed generation never appears as successful live generation. Retain source, model, code and relevant call/step/exec records. | Pending |
-| W7 | Hold the fingertip still at highlighted top-left, then bottom-right corner | Each corner visibly progresses. Resting hands do not capture a corner by accident. No device touch output runs before calibration succeeds. Saved valid calibration may skip this step; capture one fresh calibration in the proof take. | Pending |
-| W8 | Touch the screen, draw a slow line/circle, lift and touch elsewhere | Splash starts at the real fingertip location; wake follows motion, with contact splash, moving water sound and hover shimmer. X/Y/pressure use verified driver actions. Lift and missing tracking release pressure. No dial steals screen contact; no separate Perform step is required. | Pending |
-| W9 | Turn head, briefly hide the hand, return | No unrelated menu opens or target switch. Tracking loss stops interaction, and recovery is clear. Record latency and comfort separately from successful bytes. | Pending |
-| W10 | Show both palms out, then choose another request | Current wiring and queued commands stop; pressure/note releases. Selected checked device and Ask chips remain. A fresh request generates a new program without setup again; late old replies/outputs cannot restart it. | Pending |
-| W11 | Wrist menu → Stop all, then hold Exit | Controls disarm; active sounds/notes stop, with a brief stop cue. No automatic restart. Exit returns cleanly. Repeat Stop all in Annotate to confirm the same scope. | Pending |
+| Step | Action | Required observation |
+|---|---|---|
+| A1 | Enter AR in Annotate; choose Electronics / Objects / All | SAM outlines objects. Camera/hands work, no competing tab. Measure current Annotate performance. |
+| A2 | Pinch an object and wait | It tags/identifies and stays in Annotate. No default synth redirect, setup, commands or prefetch. |
+| A3 | Deliberately choose Control and the tagged object | Ask Muse appears immediately. Missing companion/transport has a clear Connect Mac or device instruction. |
+| A4 | Speak/choose what the hands should do | Exact request stays on that object. Muse's actual tool/code/progress streams; no interaction exists before the ask. |
+| A5 | During generation, choose Stop Muse once | Generation cancels; no late connector or readiness survives. Ask again deliberately. |
+| A6 | Watch deploy, test and finish | Startup/errors and actual acknowledgements are inspected. Generated controls bind only declared actions; bad output is rejected rather than called success. |
+| A7 | Play the generated instrument | OP-1 keys/pads produce bounded notes; encoders have reachable targets. XY water interaction produces visible outgoing feedback. Poke/press works; pinch-drag is optional. Code card does not cover controls. |
+| A8 | If hand code needs a screen, capture top-left/bottom-right calibration | Deliberate corner progress; no screen output before calibration. Touch splash corresponds to real finger location and pressure releases on lift/loss. |
+| A9 | Turn head and briefly lose tracking | Workspace is stable; no accidental wrist menu or target switch. Loss/return does not replay old notes or restart a retired program. |
+| A10 | Both palms Stop, then ask again | Current program/connector/queued output retires. The selected device remains available. Another ask creates another interaction. |
+| A11 | Raise flat left palm deliberately, or palm + pinch | Menu opens intentionally, stays closed while a control owns the hand, and closes after selection. Wrist Stop all and Exit remain reachable. |
+| A12 | Stop all and Exit | Sounds/notes and connectors stop; no automatic resume. Exit releases the session cleanly. |
 
-Record build, headset/browser version, source/model per artifact, card/driver/wiring IDs, verify label, measured timings and uncut clip path. Time **pinch → driver ready**, **ask → wire ready**, **calibration duration**, and **touch → visible splash** separately. A fast generation probe is not total setup latency. Label edits or speed-up in the submission video.
+Retain build, headset/browser version, selected object, request/wiring IDs, exact generated source/model, executor receipts and uncut clip. Time selection, model generation, calibration and visible/audible response separately. Real hardware output and comfort remain distinct from bytes and emulator success.
 
-## Software checks before inviting the wearer
+## Optional demos
 
-Use a separate fixture data directory and unused port; never bind test servers to :8787/:8443. Serialize heavy browser checks. These commands establish software flow, not real-world accuracy:
+**Visual synth:** explicitly choose More → Visual synth, then ask. The authored renderer/manifest supports Muse-written connector and hand glue. Verify water splash/wake and water/UI sound. Visual synth is never silently substituted for a physical laptop.
+
+**Music / OP-1:** explicitly choose the software Music instrument or the actual physical OP-1. Ask before playing. Check shared mute, bounded note duration, release, tracking loss and Stop. Software analyser activity is not heard sound or physical MIDI proof. For OP-1, enable MIDI receive on the instrument and confirm actual output/channel/parameter. See [hardware procedure](HARDWARE-DEMO.md).
+
+**OM 4:** use connected Bluetooth and begin with small moves. A successful rotate reply means accepted command, not measured position: the live angle layout is unconfirmed. Mock angles must say mock. Verify Muse-generated gimbal controls on the actual unit before claiming the end-to-end hardware route.
+
+**Buddy:** greet/pet/high-five and show an object intentionally. Capture should present an accurate preview with retake/send; holding up a hand alone must not silently take a picture. Show a virtual object too and check its animation/reaction. Browser/OS speech is allowed; no foreign voice model.
+
+**Reviewer without headset:** use the [mobile/laptop demo](REVIEWER-DEMO.md), with opt-in camera and touch/mouse. Record which device/browser and whether native immersive AR or inline camera fallback was used. An inline camera overlay is not world-tracked Quest passthrough or native hand tracking. Test denied permission, retry, retake, Stop and camera-off.
+
+## Software checks on staging
+
+Use one separate fixture server/data directory on 8796+ (not 8787, 8443 or 8799). Muted automation is allowed. Heavy browser runs are serialized with `research/e2e-lock.sh` when available.
 
 ```sh
-npx tsc -p apps/quest/tsconfig.json
 npx tsc -p apps/server/tsconfig.json
-node --import tsx apps/server/scripts/wire-e2e.ts
-PORT=8797 node scripts/e2e-wire-quest.mjs
-PORT=8796 node scripts/e2e-judge.mjs
+npx tsc -p apps/quest/tsconfig.json
+npx tsc -p apps/companion/tsconfig.json
+npx tsc -p packages/protocol/tsconfig.json
+(cd apps/quest && npx vite build --outDir /tmp/ce-stage-quest --emptyOutDir)
+CE_QUEST_DIST=/tmp/ce-stage-quest node scripts/e2e-muse-agent.mjs
+npx vitest run apps/server/src/devices/osmo/bridge.test.ts
+node scripts/audit-public-repo.mjs
 ```
 
-The integrated browser check must cover chip → streamed source → calibration → actual Worker outputs (`wire:cc22`, `wire:cc23`, `wire:cc24`) reaching the simulated Mac → Stop. For Mac source display, use `apps/companion/e2e/wiring-view.mjs`. Fixture replay remains visibly FIXTURE, even when the original recorded model was live.
+Record actual result and screenshot paths in the task's completion receipt. A scripted fixture is no-credit software validation; it does not prove a new live model decision, real microphone transcription, device sound or Quest frame timing. Target headset rendering: p95 frame time ≤13.9ms (72fps), missed frames <5%, draws ≤120. Desktop renderer counters are useful, but cannot establish a Quest frame budget.
 
-## Optional musical route: separate acceptance
+## Recovery and source boundaries
 
-ControlAnything Synth is a browser instrument, not the physical OP-1 Field. Its authored sound engine supplies capabilities; Muse must write the requested note/gate and parameter mapping after the wearer asks. These checks remain pending until observed. Keep output muted for automation (`/companion/?mute=1` and Chrome's mute-audio flag); an analyser receipt measures the graph before that mute, not audible playback. `CE_MAC_SILENT=1` alone does not mute this browser instrument.
+- No camera: keep one tab, read the explicit permission/retry explanation and reload only outside AR.
+- No Mac/port: follow Connect Mac / exact port guidance; never claim delivery while offline.
+- Failed/cancelled generation: keep actual error/source. Retry explicitly; do not auto-install a template.
+- Wrong target: Stop and select/correct the intended object. A physical request must not redirect to a software instrument.
+- Screen moved: Stop, recalibrate and explicitly ask/restart. SAM does not provide the calibrated plane.
+- No visible/audible response: inspect current connector logs, executor ack and real device. No reliable angle or no analyser receipt is not proof that the hardware failed.
+- Set up / Enable instructions apply only when deliberately testing `CE_AGENT=0`; they are not prerequisites for the current Muse-agent route.
 
-| Step | Action and required observation | Current run |
-|---|---|---|
-| M1 | Use the first normal Mac click to unlock browser audio, then choose More → Music in Quest. Its Mac panel opens automatically; no hand mapping runs before asking. If autoplay is blocked, the page gives a clear click-to-enable explanation. | Pending |
-| M2 | Sound is audible by default with no separate Sound on step. The port becomes available; complete setup. Check that the shared master volume/mute changes both endpoints. In automation, local output remains zero. | Pending |
-| M3 | Ask Muse how the hands should play. Watch exact request, streamed source, checks and honest Live/FIXTURE/Template label. Setup alone must not install a hand mapping. | Pending |
-| M4 | Use the generated gesture. Verify scale-note/gate changes, analyser pitch/level, audible response, release and tracking loss. Hand-only wiring needs no calibration. | Pending |
-| M5 | Both palms stop the current wiring and release its note; ask again without setup. Then use Stop all, close/hide the panel or disconnect: notes and delay tails stop. No old program/note resumes. A later normal browser gesture can restore audio availability; a new Muse request is still needed. | Pending |
-
-`apps/companion/e2e/musical-synth.mjs` exercises this software route with the real companion graph, fixture Muse and emulated hands. Its result must be recorded separately from a live Meta generation or real-headset/audio pass.
-
-### Software checks — November 4
-
-The latest actual-pointer golden path passed in the emulator: no manual or hand interaction before asking, requested WIRE, fresh calibration, 41 fingertip touch operations on CC22/23/24, scoped both-palms Stop, Ask again with the same checked driver and a fresh wiring, wrist Stop all, then menu reopen and Tutorial replay/Skip. Lowering the menu hand now freezes the closing menu instead of following it toward the desk; recalling it requires a fresh raised-palm dwell. Setup used labelled acknowledgement evidence after a fixture-camera miss; this is not a real display or headset acceptance.
-
-The latest musical browser check passed with the default tutorial, real companion Web Audio graph and emulated tracked hands: all ten capability checks, explicit muted unlock, requested Worker program, height/pitch, pinch/release, tracking loss, scoped Stop/Ask again and full Stop/relock. A 490-character simulated voice transcript remained readable in three pages, with read-only navigation and no restart. Requesting a connected physical OP-1 from the software card returned selection guidance with no model call, fallback or physical command. Master output remained zero. Autonomous Worker failure/release and superseded verification cleanup also passed focused regressions. These are software checks, not actual microphone, headset or physical-device acceptance.
-
-A separate single-call live `muse-spark-1.3` probe generated a program that passed bounded synthetic height/pinch/release/hand-loss checks; no device commands ran in that probe. Neither check establishes attended sound quality or a live real-Quest interaction.
-
-## Failure/recovery
-
-- **Waiting for Muse:** show the current stage; don't describe default prefetch as a fix. Keep the actual waiting time in the source footage. Retry a failed request explicitly.
-- **No Mac visuals:** bring the executor companion tab forward; use Open visuals and read its status. Preserve pairing; avoid clearing data as routine recovery.
-- **Wrong/missing screen plane:** Stop, choose Recalibrate screen and capture both corners again. Recalibrate after moving the display or changing room reference.
-- **Touching does nothing:** inspect current wiring/source, selected target, calibration and actual permitted actions. A dial or the old Perform demo is not a substitute for this acceptance step.
-- **Camera failed:** check single-session ownership and existing permission/retry state. Keep one Quest tab; reload only outside AR.
-- **Failed or cancelled wiring:** keep the error and source label visible. A labelled template can be demonstrated as a fallback, not represented as live Muse-written code.
-- **Long request:** after stopping, choose Details → Read request and page through the full accepted transcript in the larger front-facing panel. Other controls must clear, text must fit without shrinking/clipping, and head movement/page presses must not reposition it. Close must restore the stopped workspace without restarting a program or making a model call. An over-500-character request must explain the limit without replacing the active wiring.
-- **Physical OP-1 requested from a software card:** explain the wrong target and point to Annotate → select OP-1 → Correct device if needed. Do not create a visual substitute, switch targets silently or send hardware commands.
-
-## Evidence boundary and next footage
-
-The earlier real-Quest run below demonstrated driver setup and dial/Perform command execution, not the new generated-code touch-water interaction. Separate live WIRE probes reported Touch the water ready in 8.1s and Hands as knobs in about 11s. The integrated real-headset run above remains pending until observed.
-
-For the three-minute video, capture the continuous ask/code/calibrate take and a matched Quest/Mac touch-water take first. Buddy, a real Motion lab recording and physical OP-1 Field are separate checks. Don't claim a musical-synth/hardware/IR effect until its own output is observed. Keep sound off unless the present wearer explicitly enables it.
-
-## Historical measurements: pre-WIRE route
-
-The following records are preserved from November 4's earlier build. Their labels and timings must not be reused as passes for W1–W10.
-
-### Historical performance (real Quest 3, Quest Browser)
-
-Measure with `node scripts/quest-cdp.mjs --fps 450` (≈5 s at 90 Hz) in each state while worn. Then run `--sweep 5000` during a head sweep. Target: **fps at p95 ≥ 72**, missed frames < 5 %, draws ≤ 120.
-
-| When / build | State | fps (mean) | p95 ms (fps) | p99 ms | missed | draws | tris | sweep flips | Notes |
-|---|---|---|---|---|---|---|---|---|---|
-| Nov 4 04:00, `4a296f3` bundle (pre-WP1–3) | Control (visual synth tag locked, server down), on desk | 87.8 | 11.84 (84.5) | 24.1 | 1.8 % | 50 | 1,860 | 0 | 90 Hz session, 1 render/frame, 26 drawables (all transparent), heap 23 MB |
-| Nov 4 10:29–10:30, HEAD b12469f, worn | Annotate, while a stale tab held the camera (38 samples) | 86.5 | 18.7 (53) | — | 10 % | 22 (88 max) | 13.5k | — | Camera failed ("Could not start video source"); fixed by closing the old tab |
-| Nov 4 10:31, b12469f, worn | Control, camera on (29 samples) | 90.0 | 12.1 (82) | — | 0 % | 24–84 | 13.9k | — | |
-| Nov 4 10:54, f3861cc+, worn | **Annotate**, camera on (7 samples) | 85 | 19.3 (52); worst 47 | — | 7 % | 24 (28 max) | 19.6k | — | **Below target.** CPU-side (camera + YOLO + upload), not draws. Lasts only the ~10 s before the pinch |
-| Nov 4 10:55, f3861cc+, worn | **Armed** (42 samples) | 89.9 | 12.34 (81); worst 15.0 | — | 0 % | 50 (86 max) | 24.9k | 45 frames / 45 s (reticles, wrist palette) | **Pass** |
-| Nov 4 10:56–10:57, f3861cc+, worn | **Perform** fist open / **live** (17 + 19 samples) | 90 | 12.05 / 12.40 (83 / 81); worst 14.7 | — | 0 % | 50–56 | 24.5k | — | **Pass**. Mac acks: 100/100 ok, renderer, visible; ack latency 1 ms p50, 46 ms p95 |
-
-### Historical Mac renderer checks
-
-| Check | Result | How |
-|---|---|---|
-| Keeps animating while visible but unfocused | **Pass**: 121 fps (120 Hz panel), same as focused | Headed Chrome (Playwright, normal occlusion flags), another window in front |
-| Notification banner on screen | **Pass**: 121 fps, page stays visible | `display notification` (silent) during the measurement |
-| Brief hide (Space switch, reload) | Commands still apply for 15 s (`visualPresence.recent()`). The advertised port flips honestly; the server's 15 s grace keeps setup alive. | Code path. Re-check on the real run. |
-| Real run, live Muse, real Quest camera | **Pass**: 6/6 setup actions and 100/100 Perform commands acknowledged by the Mac renderer (`visible: true`, frames advancing). The headset camera missed the first change at this distance, so the renderer receipt carried verification | Nov 4 10:54–10:57, `/api/agent/exec` |
-| Renderer self-report in `exec.ack` | **Pass** (fixture): Warp CC 110 → receipt `warp 0.866, visible true, frame 103`, `applied.source: renderer` | :8794 fixture server, headless Chrome |
-| Server setup driven by renderer receipts | **Pass** (fixture, `CE_DEMO=1`, real companion, no headset camera): select → visuals auto-open → 5/5 *verified by renderer* → template forge → auto-armed, under 1 s | :8794 fixture server, fake Quest socket |
-| Silent | No AudioContext or audio element in the renderer; `CE_MAC_SILENT=1` on the server | — |
-
-
-### Historical run log
-
-| Run | Time | Build | Result | Notes / clip |
-|---|---|---|---|---|
-| 1 | Nov 4 10:54:45–10:57 | HEAD after f3861cc (tab reloaded 10:54:39) | Pinch → armed in 3 s; Perform drives Warp, Ripples and Hue on the Mac; armed/perform 81 fps at p95; Annotate 52 fps at p95 | Stop (G10) and Exit (G11) not observed: at 10:57:34 the XR session went hidden (headset off or Home) while still armed, with no panic/Stop sent. Earlier attempt 10:29 failed: a stale Quest tab held the camera |
-
-
-### Object-first acceptance additions
-
-The main water path must require no wrist/mode/settings visit. With mic disabled, the one contextual example must still generate wiring only when pressed. Ideas/Details/More/Back must not ask Muse, record speech, change the target or resume controls. During play the device form clears, but Muse’s generated gesture/clutch instruction and Live/FIXTURE/Template source remain in one passive cue. Streaming code and checks must still appear automatically after asking. Stop all and held Exit remain reachable on both quick-menu pages; Tutorial is under More. Real permission/PTT quality and wearer comfort remain separate acceptance.
-
-
-## Muse bridge harness acceptance
-
-The normal selected-device WIRE request now uses the embedded native Muse tool loop. It is not Hermes or Muse Code. Existing driver generation remains separate; general questions/Canvas are not replaced. Inference is hosted by Meta's API, with orchestration on the Mac and the fast generated program on Quest.
-
-- Actual request reaches `/api/agent/harness` with the same wiring ID. Both scoped inspections, real `check_program` and exact-hash `finish_program` must succeed; prose cannot declare readiness.
-- `checked` is program-validation/synthetic-dry-run evidence. Device verification and current authorization remain separate. Stop/replacement must make `currentlyAuthorized` false.
-- Missing/unapproved stream model metadata, unknown/foreign-scope tools, cancelled jobs and exhausted budgets must not install wiring or an implicit template. Fixture conversations must be clearly labelled scripted.
-- The explicit live smoke check is `node --import tsx apps/server/scripts/harness-probe.ts --live`. It costs Meta API calls, uses a synthetic image and fake connector, and sends no device commands. It checks actual push sensitivity and height independence in generated code, not physical display response.
-- Current full browser checks must still pass for water and muted music; they do not substitute for the attended Quest and real-microphone gates above.
+Historical pre-agent dial/Perform measurements are retained in local research/handoff archives. They must not be represented as acceptance of newly expanded UI or reviewer modes. Publishing, pushing, deleting data and public visibility changes require the user's approval; development verification does not authorize them.
