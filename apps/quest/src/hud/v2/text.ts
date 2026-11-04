@@ -6,6 +6,7 @@ export interface SdfTextOptions {
   text: string;
   size?: number;
   color?: string;
+  /** Default 500 (Inter Medium, as in the uikit cards). */
   weight?: 400 | 500 | 600;
   /** Semibold Inter with its native tabular digit glyphs selected in the local font. */
   tabular?: boolean;
@@ -54,7 +55,8 @@ export function makeText(o: SdfTextOptions): SdfText {
   t.text = localText(o.text);
   t.fontSize = o.size ?? THEME.font.body;
   t.color = o.color ?? THEME.color.text;
-  t.font = o.mono ? THEME.font.mono : o.tabular ? THEME.font.tabular : o.weight === 600 ? THEME.font.semibold : o.weight === 500 ? THEME.font.medium : THEME.font.regular;
+  // Horizon type: Inter Medium by default (the uikit cards' only weight); 400 only when asked for.
+  t.font = o.mono ? THEME.font.mono : o.tabular ? THEME.font.tabular : o.weight === 600 ? THEME.font.semibold : o.weight === 400 ? THEME.font.regular : THEME.font.medium;
   t.anchorX = o.anchorX ?? 'left';
   t.anchorY = o.anchorY ?? 'middle';
   t.textAlign = o.align ?? (o.anchorX === 'center' ? 'center' : 'left');

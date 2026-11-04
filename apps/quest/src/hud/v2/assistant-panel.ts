@@ -91,7 +91,7 @@ export class AssistantPanel extends Group {
   private readonly infoDetail = new UIKitReader();
   private readonly factText = Array.from({ length: 6 }, () => makeText({ text: '', size: THEME.font.detail, maxWidth: 0.38, maxHeight: 0.045, anchorY: 'top' }));
   private readonly heading = makeText({ text: 'Ask Muse', size: THEME.font.title, weight: 600, maxWidth: 0.38, maxHeight: 0.045 });
-  private readonly status = makeText({ text: '', size: THEME.font.detail, color: THEME.color.accent, maxWidth: 0.38, singleLine: true });
+  private readonly status = makeText({ text: '', size: THEME.font.detail, color: THEME.color.muted, maxWidth: 0.38, singleLine: true });
   private readonly transcript = makeText({ text: '', size: THEME.font.detail, color: THEME.color.muted, maxWidth: 0.38, anchorY: 'top', maxHeight: 0.045 });
   private readonly response = makeText({ text: '', size: THEME.font.body, maxWidth: 0.38, anchorY: 'top', maxHeight: 0.066 });
   private readonly mapping = makeText({ text: '', size: THEME.font.detail, maxWidth: 0.38, anchorY: 'top', maxHeight: 0.12 });
