@@ -223,7 +223,8 @@ export class LeanHud implements Hud {
     // First child of the HUD root, so name lookups ('visual-synth', 'deck:panic', 'exit-ar') find the palette before
     // the hidden lab menu's same-named buttons (e2e scripts and the judge path use these names).
     this.root.add(this.palette);
-    this.palette.register({ key: 'visual-synth', label: 'Visual synth', order: 0, primary: true, onSelect: () => this.events.emit('visualSynth', {}) });
+    // Not `primary`: a white pill reads as "selected/pressed" next to the Annotate | Control segments.
+    this.palette.register({ key: 'visual-synth', label: 'Visual synth', order: 0, onSelect: () => this.events.emit('visualSynth', {}) });
     this.palette.register({ key: 'deck:panic', label: 'Stop', order: 80, onSelect: () => {
       this.events.emit('deck', { key: 'panic', phase: 'press' }); this.events.emit('deck', { key: 'panic', phase: 'release' });
     } });
@@ -1496,7 +1497,9 @@ export class LeanHud implements Hud {
       const item = this.palette.item(group.userData.paletteKey ?? group.name)!;
       const segment = group.userData.segmentKey as string | undefined;
       this.widgets.push({ group, w: group.userData.width, h: group.userData.height, kind: 'deck', button: true, lastMove: 0,
-        start: () => { if (segment) item.onSegment?.(segment); else if (item.hold) this.palette.beginHold(item.key, this.time * 1000); else item.onSelect(); },
+        // A button does its job and the menu gets out of the way (it reopens after the palm turns away and back);
+        // segment rows (Annotate | Control, what to track) keep it open for a second choice.
+        start: () => { if (segment) item.onSegment?.(segment); else if (item.hold) this.palette.beginHold(item.key, this.time * 1000); else { item.onSelect(); this.palette.anchor.dismiss(this.time * 1000); } },
         end: item.hold ? () => this.palette.cancelExitHold() : undefined });
     }
   }
@@ -1855,7 +1858,7 @@ export class LeanHud implements Hud {
     if (this.palette.needsRebuild()) this.rebuildPalette();
     this.palette.update(frame);
     const held = this.palette.updateHold(frame.time);
-    if (held) { this.palette.cancelExitHold(); this.palette.item(held)?.onSelect(); }
+    if (held) { this.palette.cancelExitHold(); this.palette.item(held)?.onSelect(); this.palette.anchor.dismiss(frame.time); }
     for (const target of this.targets.values()) {
       if (this.home.mode === 'control' && !target.tagged) this.boxes.setOpacity(target.id, 0);
       else if (this.home.mode === 'annotate' && this.boxes.boxes.get(target.id)?.opacity === 0) this.boxes.setOpacity(target.id, 1);
