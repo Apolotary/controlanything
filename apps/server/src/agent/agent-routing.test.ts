@@ -32,4 +32,11 @@ describe('selected Muse connector routing', () => {
     expect(visualSynthCard(web).cardId).not.toBe(visualSynthCard(mac).cardId);
     expect(musicalSynthCard(web).cardId).not.toBe(musicalSynthCard(mac).cardId);
   });
+
+  it('ignores a headset remembered as the tag selector and routes to the online Mac', () => {
+    const quest = { ...device('quest-3', 'quest', []), role: 'hmd', capabilities: [] } as DeviceInfo;
+    expect(agentCompanion([quest, mac], { selection: { preferDeviceId: 'quest-3' } })?.deviceId).toBe('physical-mac');
+    const offline = { ...mac, deviceId: 'old-mac', online: false } as DeviceInfo;
+    expect(agentCompanion([quest, offline, mac], { selection: { preferDeviceId: 'old-mac' } })).toBeUndefined();
+  });
 });
