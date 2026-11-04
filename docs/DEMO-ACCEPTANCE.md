@@ -44,7 +44,7 @@ Retain build, headset/browser version, selected object, request/wiring IDs, exac
 
 ## Optional demos
 
-**Visual synth:** explicitly choose More → Visual synth, then ask. The authored renderer/manifest supports Muse-written connector and hand glue. Verify water splash/wake and water/UI sound. Visual synth is never silently substituted for a physical laptop.
+**Visual synth:** explicitly choose More → Demo: visual synth, then ask. The authored renderer/manifest supports Muse-written connector and hand glue. Verify water splash/wake and water/UI sound. Visual synth is never silently substituted for a physical laptop.
 
 **Music / OP-1:** explicitly choose the software Music instrument or the actual physical OP-1. Ask before playing. Check shared mute, bounded note duration, release, tracking loss and Stop. Software analyser activity is not heard sound or physical MIDI proof. For OP-1, enable MIDI receive on the instrument and confirm actual output/channel/parameter. See [hardware procedure](HARDWARE-DEMO.md).
 

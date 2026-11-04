@@ -6,11 +6,12 @@ For a local laptop:
 
 ```sh
 npm install
-npm run build                 # only when a live session is not using dist
-MODEL_MODE=fixture CE_DEMO=1 npm start
+npm run demo:sim              # builds what is missing; add -- --fixture to force FIXTURE replies
 ```
 
-Visit [the camera demo](http://localhost:8787/quest/reviewer.html). Without an API key the server returns clearly labelled **FIXTURE** recordings/scripted connector output; these are examples, not live recognition or generation. To use Muse Spark live, configure `MODEL_API_KEY` in your private `.env` and start the normal server. Never put a key into the webpage or URL. Keep sound on for the demo; `?mute=1` is available for unattended browser checks.
+After `npm run demo:sim`, open `http://localhost:8787/quest/reviewer.html`. The manual alternative is `npm run build` (only when a live session is not using `dist`) and then `MODEL_MODE=fixture CE_DEMO=1 npm start`. Without an API key the server returns clearly labelled **FIXTURE** recordings/scripted connector output; these are examples, not live recognition or generation. To use Muse Spark live, configure `MODEL_API_KEY` in your private `.env` and start the normal server. Never put a key into the webpage or URL. Keep sound on for the demo; `?mute=1` is available for unattended browser checks.
+
+For webcam hand tracking with particle visuals and the same Muse ask flow, see the separate [hands demo](HANDS-DEMO.md) (`/quest/hands.html`).
 
 ## Meet Buddy
 

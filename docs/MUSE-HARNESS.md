@@ -18,13 +18,17 @@ Muse receives the selected observation (with timestamp), companion MIDI outputs,
 
 Default limits: 24 turns, 40 tools, five minutes (`CE_AGENT_BUDGET_MS`). Every runtime model call is Meta. Credentials stay server-side; child process environment is reduced. Generated Node code still has local process permissions. Run only as a trusted local prototype; [security review](SECURITY-REVIEW.md) describes publication and deployment boundaries.
 
+## Muse Code engine (opt-in)
+
+`CE_AGENT_ENGINE=muse-code` hands the whole loop to Meta's **Muse Code** CLI (`muse exec`, Meta provider, `muse-spark-1.3`), implemented in `apps/server/src/agent/muse-code-engine.ts`. Muse Code uses its own shell and file tools in the same workspace and reaches `say`, `open_visuals`, `deploy_connector`, `test_action` and `finish` through a loopback MCP server with a per-run bearer token, so those calls get the same checks and result as the built-in loop. Its commands and files stream into the AR code card. With no key, no Muse Code binary, in fixture mode, or if Muse Code stops before calling a device tool, the built-in loop answers the same request. `GET /api/agent/connectors` reports the engine that ran. A live emulator run on Nov 5 went from the ask to working knobs in about 30 s, with every model call `muse-spark-1.3`; see [the evidence frames](evidence/README.md).
+
 ## Connector and hand-program hosts
 
-The retained agent workspace is under `CE_DATA_DIR/muse-agent` (normally `apps/server/.data/muse-agent`). `ce.mjs` provides `onSet`, `onTrigger`, `onStop`, MIDI helpers, gimbal helpers, `log` and `ready`. The connector speaks JSON lines over stdin/stdout:
+The retained agent workspace is under `CE_DATA_DIR/muse-agent` (normally `apps/server/.data/muse-agent`). `ce.mjs` provides `onSet`, `onTrigger`, `onStop`, MIDI helpers, gimbal helpers, Mac helpers (`mac.open`, `mac.activate`, `mac.key`), `log` and `ready`. `mac.key` presses keys in the front app (for example to scroll Instagram Reels in Chrome); macOS needs Accessibility permission for the app running the server, and the connector reports that instead of retrying. The connector speaks JSON lines over stdin/stdout:
 
 ```text
 in:  set / trigger / stop
-out: midi / gimbal / log / ready
+out: midi / gimbal / mac / log / ready
 ```
 
 MIDI uses the paired Chrome companion's actual output names, including the explicit virtual instruments. Gimbal output uses the Osmo bridge. Stop/replacement retires the service. Local files and learned notes persist; do not delete them as routine recovery.
