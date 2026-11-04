@@ -45,9 +45,11 @@ export interface MidiIO {
 const portLabel = (p: MidiPortLike) => p.name || p.id;
 
 /**
- * Pick an output: exact id, then exact name (case-insensitive), then substring; without a hint,
- * the only connected output. Among several substring matches a "standalone" port wins (Ableton Move
- * exposes four ports and only the Standalone Port reaches its tracks).
+ * Pick an output: exact id, then a unique exact name (case-insensitive), then a unique
+ * substring; without a hint, the only connected output. Duplicate exact-name matches or
+ * ambiguous substring matches refuse to choose. Among several substring matches a uniquely
+ * matching "standalone" port still wins (Ableton Move exposes four ports and only the
+ * Standalone Port reaches its tracks).
  */
 export function resolvePort<T extends MidiPortLike>(ports: T[], want?: string): { port?: T; error?: string } {
   const live = ports.filter((p) => p.state !== 'disconnected');
@@ -59,10 +61,18 @@ export function resolvePort<T extends MidiPortLike>(ports: T[], want?: string): 
   const w = want.toLowerCase();
   const byId = live.find((p) => p.id === want);
   if (byId) return { port: byId };
-  const byName = live.find((p) => (p.name ?? '').toLowerCase() === w);
-  if (byName) return { port: byName };
+  const exact = live.filter((p) => (p.name ?? '').toLowerCase() === w);
+  if (exact.length === 1) return { port: exact[0] };
+  if (exact.length > 1) {
+    return { error: `several MIDI outputs match "${want}" (${exact.map(portLabel).join(', ')}); say which port` };
+  }
   const partial = live.filter((p) => (p.name ?? '').toLowerCase().includes(w) || w.includes((p.name ?? '\u0000').toLowerCase()));
-  if (partial.length) return { port: partial.find((p) => /standalone/i.test(p.name ?? '')) ?? partial[0] };
+  if (partial.length === 1) return { port: partial[0] };
+  if (partial.length > 1) {
+    const standalone = partial.filter((p) => /standalone/i.test(p.name ?? ''));
+    if (standalone.length === 1) return { port: standalone[0] };
+    return { error: `several MIDI outputs match "${want}" (${partial.map(portLabel).join(', ')}); say which port` };
+  }
   return { error: `no MIDI output matches "${want}" (have: ${names})` };
 }
 

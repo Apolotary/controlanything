@@ -120,6 +120,35 @@ describe('resolvePort', () => {
     expect(resolvePort(ports).error).toContain('several');
     expect(resolvePort([ports[0]]).port?.id).toBe('a');
   });
+  it('refuses duplicate exact-name matches', () => {
+    const dupes = [
+      { id: 'a1', name: 'OP-1', state: 'connected' },
+      { id: 'a2', name: 'OP-1', state: 'connected' },
+    ];
+    expect(resolvePort(dupes, 'OP-1').port).toBeUndefined();
+    expect(resolvePort(dupes, 'op-1').error).toContain('several');
+    // Exact id routing still works despite the duplicate names.
+    expect(resolvePort(dupes, 'a2').port?.id).toBe('a2');
+    // A disconnected dupe does not create ambiguity.
+    const withGone = [...dupes, { id: 'a3', name: 'OP-1', state: 'disconnected' }];
+    expect(resolvePort(withGone, 'OP-1').error).toContain('several');
+    expect(resolvePort([dupes[0], { id: 'a3', name: 'OP-1', state: 'disconnected' }], 'OP-1').port?.id).toBe('a1');
+  });
+  it('refuses ambiguous substring matches but keeps unique ones', () => {
+    const pair = [
+      { id: 'a1', name: 'OP-1 field', state: 'connected' },
+      { id: 'a2', name: 'OP-1 drum', state: 'connected' },
+    ];
+    expect(resolvePort(pair, 'OP-1').port).toBeUndefined();
+    expect(resolvePort(pair, 'OP-1').error).toContain('several');
+    expect(resolvePort(pair, 'drum').port?.id).toBe('a2');
+    // Two standalone ports matching is still ambiguous.
+    const moves = [
+      { id: 'm1', name: 'Move Standalone A', state: 'connected' },
+      { id: 'm2', name: 'Move Standalone B', state: 'connected' },
+    ];
+    expect(resolvePort(moves, 'move').error).toContain('several');
+  });
 });
 
 describe('unsafeReason', () => {
@@ -215,6 +244,18 @@ describe('MidiExecutor', () => {
     expect(ack.reply).toEqual(fromHex('F0 7E 33 06 02 00 20 76 20 00 02 00 00 00 00 00 F7'));
     expect(ack.detail).toContain('Teenage Engineering');
     expect(ack.detail).toContain('family 0x0020');
+  });
+
+  it('refuses to send when two OP-1 outputs match', async () => {
+    const io = new FakeMidi([
+      { id: 'o1', name: 'OP-1', state: 'connected' },
+      { id: 'o2', name: 'OP-1', state: 'connected' },
+    ]);
+    const ex = new MidiExecutor(io, { clock: new FakeClock() });
+    const ack = await ex.execute(cmd({ kind: 'midi', msg: 'cc', channel: 1, number: 46, value: 1 }, { port: 'OP-1' }));
+    expect(ack.ok).toBe(false);
+    expect(ack.error).toBe('no_port');
+    expect(io.sent).toHaveLength(0);
   });
 
   it('times out cleanly when nobody answers the identity request', async () => {
