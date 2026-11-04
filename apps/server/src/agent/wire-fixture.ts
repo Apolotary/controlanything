@@ -42,7 +42,7 @@ function touchCode(x: ActionBrief, y: ActionBrief, p: ActionBrief, real: boolean
     ]
     : [
       '  // Pressure: a soft glow while the finger hovers, a full splash on contact.',
-      '  const press = t.touching ? 1 : t.hover * 0.25;',
+      '  const press = t.touching ? 1 : t.hover * 0.15; // hover stays under the touch threshold (20 of 127)',
       `  out.set(${q(p.actionId)}, ${lerp(p, 'press')});`,
     ];
   return [
