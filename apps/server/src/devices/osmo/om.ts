@@ -24,6 +24,7 @@ export const CMD_ROTATE = 0x14;
 export const CMD_SPEED = 0x0c;
 export const CMD_ATTITUDE_PUSH = 0x05;
 export const CMD_BATTERY_PUSH = 0x06;
+export const ROTATE_CMD_TYPE = 0x40;
 
 export const RotateMode = { relative: 0x04, absolute: 0x05, speed: 0x80 } as const;
 export type RotateMode = keyof typeof RotateMode;
@@ -85,7 +86,9 @@ export function rotatePayload(a: Attitude, mode: RotateMode, durationMs: number)
 }
 
 export function rotatePacket(a: Attitude, mode: RotateMode, durationMs: number, seq: number): Uint8Array {
-  return buildDuml({ sender: DEV_APP, receiver: DEV_GIMBAL, seq, cmdType: 0x00, cmdSet: SET_GIMBAL, cmdId: mode === 'speed' ? CMD_SPEED : CMD_ROTATE, payload: rotatePayload(a, mode, durationMs) });
+  // cmd type 0x40 = "ack after execution", exactly as DJI's own app sends rotate commands (frames captured in
+  // alkersan/om-research). With 0x00 an OM 4 answered telemetry but did not move (Nov 4 hardware test).
+  return buildDuml({ sender: DEV_APP, receiver: DEV_GIMBAL, seq, cmdType: ROTATE_CMD_TYPE, cmdSet: SET_GIMBAL, cmdId: mode === 'speed' ? CMD_SPEED : CMD_ROTATE, payload: rotatePayload(a, mode, durationMs) });
 }
 
 export interface RotateCommand {

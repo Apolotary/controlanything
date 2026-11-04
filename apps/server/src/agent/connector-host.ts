@@ -11,7 +11,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import type { MidiOp } from '@ce/protocol';
+import type { BleOp, MidiOp } from '@ce/protocol';
 
 export interface ConnectorAction {
   id: string;
@@ -21,7 +21,9 @@ export interface ConnectorAction {
   max?: number;
 }
 
-export interface ConnectorOut { cardId: string; port: string; op: MidiOp }
+/** One device command from a connector: MIDI through the Mac companion, or a DJI gimbal move through the Osmo bridge. */
+export type ConnectorOut = { cardId: string; target: 'midi'; port: string; op: MidiOp } | { cardId: string; target: 'gimbal'; op: BleOp };
+const GIMBAL_OPS = new Set(['pan', 'tilt', 'nudge', 'recenter', 'stop']);
 export type OpResult = (ok: boolean, detail?: string) => void;
 
 interface Running {
@@ -124,10 +126,20 @@ export class ConnectorHost {
       const op = { kind: 'midi', ...m.op } as MidiOp;
       run.ops++;
       const what = describeMidi(op);
-      this.o.send({ cardId: run.cardId, port: m.port, op }, (ok, detail) => {
+      this.o.send({ cardId: run.cardId, target: 'midi', port: m.port, op }, (ok, detail) => {
         if (!ok) run.failures++;
         // Keep the log readable at 30 Hz: every failure, and successes only now and then.
         if (!ok || Date.now() < run.verboseUntil || run.ops % 15 === 1) push(`${ok ? '→' : '✗'} ${what} on ${m.port}${ok ? '' : `: ${detail ?? 'refused'}`}`);
+      });
+      return;
+    }
+    if (m.type === 'gimbal' && GIMBAL_OPS.has(m.op)) {
+      const op = { kind: 'ble', profile: 'dji-osmo', op: m.op, ...(m.arg !== undefined ? { arg: m.arg } : {}) } as BleOp;
+      run.ops++;
+      const what = `gimbal ${m.op}${typeof m.arg === 'number' ? ` ${Math.round(m.arg)}°` : m.arg && typeof m.arg === 'object' ? ` ${JSON.stringify(m.arg)}` : ''}`;
+      this.o.send({ cardId: run.cardId, target: 'gimbal', op }, (ok, detail) => {
+        if (!ok) run.failures++;
+        if (!ok || Date.now() < run.verboseUntil || run.ops % 10 === 1) push(`${ok ? '→' : '✗'} ${what}${ok ? detail ? ` (${detail.slice(0, 80)})` : '' : `: ${detail ?? 'refused'}`}`);
       });
       return;
     }
@@ -207,6 +219,18 @@ export const midi = {
   note: (port, channel, note, velocity = 100, durationMs = 250) => emit({ type: 'midi', port, op: { msg: 'note', channel, number: b7(note), velocity: Math.max(1, b7(velocity)), durationMs: Math.max(0, Math.min(10000, Math.round(durationMs))) } }),
   program: (port, channel, program) => emit({ type: 'midi', port, op: { msg: 'pc', channel, number: b7(program) } }),
   allNotesOff: (port, channel = 1) => emit({ type: 'midi', port, op: { msg: 'panic', channel } }),
+};
+const deg = (v) => Math.max(-180, Math.min(180, Number(v) || 0));
+/**
+ * A DJI Osmo Mobile gimbal over Bluetooth (via the server's Osmo bridge). Angles are degrees from centre.
+ * The bridge clamps to pan ±120°, tilt ±45° and limits speed to 90°/s, at most 10 moves a second (latest wins).
+ */
+export const gimbal = {
+  pan: (yaw) => emit({ type: 'gimbal', op: 'pan', arg: deg(yaw) }),
+  tilt: (pitch) => emit({ type: 'gimbal', op: 'tilt', arg: deg(pitch) }),
+  nudge: (yaw = 0, pitch = 0, durationMs) => emit({ type: 'gimbal', op: 'nudge', arg: { yaw: deg(yaw), pitch: deg(pitch), ...(durationMs ? { durationMs: Math.round(durationMs) } : {}) } }),
+  recenter: () => emit({ type: 'gimbal', op: 'recenter' }),
+  stop: () => emit({ type: 'gimbal', op: 'stop' }),
 };
 /** Tell the server you are up (optional). */
 export const ready = (text = '') => emit({ type: 'ready', text: String(text).slice(0, 200) });

@@ -49,6 +49,8 @@ export interface AgentContext {
   card?: DeviceCardPayload;
   observation?: { jpeg: string; capturedAt: number; label?: string };
   companion: { online: boolean; deviceId?: string; name?: string; midiOutputs: string[]; visualsOpen: boolean; musicalOpen: boolean; app?: string };
+  /** A DJI Osmo gimbal bridge (CE_OSMO): off, running without a gimbal, or connected. */
+  gimbal?: { bridge: 'off' | 'waiting' | 'connected'; name?: string; howToConnect?: string };
 }
 
 export interface AgentWritten {
@@ -145,6 +147,7 @@ export const AGENT_SYSTEM = [
   'You are Muse, the coding agent inside ControlAnything, running on the wearer\'s Mac. The wearer has a Meta Quest 3 on, has selected a real object in mixed reality, and asked you for a way to control it. You write the glue live: a connector program on the Mac plus the controls in AR.',
   'You have a real terminal and file system (your workspace persists; it is your home). Work like a senior engineer who is fast: look, write, deploy, test, finish. Aim for 5-8 tool calls; never stop at a prose answer.',
   'Connector contract: a Node ES module, normally connectors/<device-slug>/index.mjs, that imports from "../../ce.mjs" (the runtime file in the workspace root): onSet((id, value) => ...), onTrigger((id) => ...), onStop(() => ...), midi.cc(port, channel, number, value0to127), midi.note(port, channel, note, velocity, durationMs), midi.program(port, channel, n), midi.allNotesOff(port, channel), log(...), ready(text). The server starts it with `node <entry>` from the workspace root. midi.* goes out through the paired Mac companion\'s Web MIDI, so the port is a MIDI output name from the context (USB synths appear there when plugged in). Anything else (HTTP to smart lights, serial, child_process `say`) you may do directly from Node. Keep connectors dependency-free unless a package is really needed (npm works in the workspace).',
+  'Gimbal contract (DJI Osmo Mobile over Bluetooth, when connected): import { gimbal } from "../../ce.mjs"; gimbal.pan(deg) and gimbal.tilt(deg) aim absolutely (degrees from centre; the bridge clamps pan ±120, tilt ±45 and limits speed to 90°/s, 10 moves/s, latest wins), gimbal.nudge(dYaw, dPitch, ms) moves relatively, gimbal.recenter(), gimbal.stop() holds. A phone may be mounted on it: test with small moves (e.g. pan 15) and recenter after testing. Acknowledgements report whether the gimbal got there.',
   'Values: onSet gets values in the min..max you declared for the action; scale them to the device yourself (e.g. 0..1 -> 0..127), smooth or rate-limit if the device needs it, and release held notes on stop or when a gate action goes to 0. Never send MIDI that could damage a patch (no SysEx exists in this API).',
   'Always deploy_connector, then test_action at least the main action and read the acknowledgements. A ✗ means the port name or message is wrong: fix it (check the exact port name in the context) and redeploy. If the needed device or the Mac companion is missing, say exactly what the wearer must do (plug the USB-C cable, open/pair ControlAnything on the Mac) via say(), and finish with what works or explain in the finish explanation.',
   'Controls: give the wearer what they asked for. "knobs"/"sliders"/"buttons" -> controls (they appear as large AR knobs beside the device; the wearer twists them with a pinch). Hand/gesture/touch/"play with my hands" requests -> hand_program. Both is fine. Keep it to at most 4 controls unless asked.',
@@ -256,6 +259,11 @@ export class MuseAgent {
       `Built-in software instruments on the Mac (always available while the companion is online):`,
       `  "${VISUAL_PORT}" (MIDI channel 1, ${c.visualsOpen ? 'its window is open' : 'its window is closed: call open_visuals before driving it'}): full-screen water/light visuals. CCs: ${VISUAL_SYNTH_MANIFEST.controls.map((k) => `CC${k.cc} ${k.label}`).join(', ')}. Programs 0-3: ${VISUAL_SYNTH_MANIFEST.programs.map((p) => p.name).join(', ')}. ${VISUAL_SYNTH_MANIFEST.touch}`,
       `  "${MUSICAL_PORT}" (MIDI channel 1, ${c.musicalOpen ? 'open' : 'closed (the wearer opens it from the Quest menu: More → Music)'}): ${MUSICAL_SYNTH_MANIFEST.controls.map((k) => `CC${k.cc} ${k.label} (${k.min}-${k.max})`).join(', ')}. ${MUSICAL_SYNTH_MANIFEST.playing}`,
+      ctx.gimbal?.bridge === 'connected'
+        ? `DJI Osmo gimbal (Bluetooth via the Osmo bridge): CONNECTED as "${ctx.gimbal.name ?? 'DJI Osmo'}". Drive it with gimbal.* from ce.mjs.`
+        : ctx.gimbal?.bridge === 'waiting'
+          ? `DJI Osmo gimbal: the Bluetooth bridge is running but no gimbal is connected. ${ctx.gimbal.howToConnect ?? ''}`
+          : 'DJI Osmo gimbal: no Bluetooth bridge on this server (it needs CE_OSMO=web or ble). A DJI Osmo Mobile is controlled over Bluetooth only; its USB-C port is power.',
       '',
       `Workspace: ${ws} (cwd for bash). Files: ce.mjs (runtime), NOTES.md, connectors/ ${connectors.length ? `(existing: ${connectors.slice(0, 12).join(', ')})` : '(empty)'}. Node ${process.version}.`,
       ...(notes.trim() ? ['', 'NOTES.md (your memory):', notes.slice(-2000)] : []),
@@ -512,7 +520,12 @@ export class MuseAgent {
       }
       return fail('Muse ran out of turns without finishing. Ask again, more specifically.');
     } catch (e) {
-      if (opts.signal?.aborted) throw new RequestCancelledError();
+      if (opts.signal?.aborted) {
+        // Stopped by the wearer: nothing this run started may keep running.
+        if (deployed) this.d.host.stop(cardId, 'stopped by the wearer');
+        log(`[muse-agent] ${cardId} stopped by the wearer after ${((Date.now() - started) / 1000).toFixed(1)} s · ${tools} tools`);
+        throw new RequestCancelledError();
+      }
       if (deadline.aborted) return fail(`Muse took longer than ${Math.round(AGENT_LIMITS.budgetMs / 1000)} s. Ask again, more specifically.`);
       log(`[muse-agent] ${cardId} error: ${(e as Error).stack ?? e}`);
       return fail(`Muse agent error: ${(e as Error).message}`);

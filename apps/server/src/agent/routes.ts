@@ -64,6 +64,20 @@ export function agentRouter(ctx: ServerContext): express.Router {
     res.json({ agent: 'Muse coding agent (muse-spark-1.3 tools: bash, files, deploy, test)', mode: ctx.muse.mode, workspace: agent.agentWorkspace,
       connectors: host.cards().map((cardId) => ({ cardId, ...host.info(cardId), actions: host.actions(cardId), logs: host.logs(cardId).slice(-40), wiring: agent.wireReady(cardId) ? { title: agent.wireReady(cardId)!.title, controls: agent.wireReady(cardId)!.controls ?? [] } : null })) });
   });
+  /** Owner/localhost: one small, explicit gimbal move through the Osmo bridge (pan/tilt/nudge/recenter/stop). */
+  r.post('/gimbal-test', express.json(), async (req, res) => {
+    if (!harnessAccess(req, res)) return;
+    const op = String(req.body?.op ?? ''), arg = req.body?.arg;
+    if (!['pan', 'tilt', 'nudge', 'recenter', 'stop'].includes(op)) { res.status(400).json({ error: 'op must be pan|tilt|nudge|recenter|stop' }); return; }
+    if ((op === 'pan' || op === 'tilt') && (typeof arg !== 'number' || Math.abs(arg) > 30)) { res.status(400).json({ error: 'test moves are limited to ±30 degrees' }); return; }
+    const g = ctx.hub.devices().find((d) => d.online && d.capabilities.includes('ble') && d.ports?.some((p) => p.id === 'dji-osmo'));
+    if (!g) { res.status(409).json({ error: 'no Osmo bridge online (start the server with CE_OSMO=web)' }); return; }
+    try {
+      const ack = await agent.dispatcher.exec(g.deviceId, { kind: 'ble', profile: 'dji-osmo', op, ...(arg !== undefined ? { arg } : {}) } as never,
+        { port: 'dji-osmo', actionId: 'owner:gimbal-test', timeoutMs: 4000, waitForSlot: true });
+      res.json({ ok: ack.ok, detail: ack.detail, applied: ack.applied });
+    } catch (e) { res.status(502).json({ ok: false, error: (e as Error).message }); }
+  });
   r.get('/harness/runs/:runId', (req, res) => {
     if (!harnessAccess(req, res)) return;
     const run = agent.harness.get(String(req.params.runId));

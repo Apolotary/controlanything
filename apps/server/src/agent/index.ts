@@ -265,6 +265,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   let connectorHost: ConnectorHost | undefined;
   const dispatcher = new Dispatcher({ hub, macLocal, log, prepareMidi: request => connectors.encode(request), canExec: (request) => {
     if (request.actionId?.startsWith('agent:') && request.cardId) return Boolean(connectorHost?.has(request.cardId));
+    // The owner's explicit "move the gimbal a little" check from the Mac (localhost route); BLE moves only.
+    if (request.actionId === 'owner:gimbal-test') return request.op.kind === 'ble';
     const t = request.cardId ? targets.get(request.cardId) : undefined;
     const verifying = request.cardId ? wireVerifying.get(request.cardId) : undefined;
     if (t && wireReleasing.has(t.cardId) && request.priorityRelease && isNeutralSoftwareRelease(request)) {
@@ -1292,8 +1294,16 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     const real = online.filter((d) => d.kind !== 'sim');
     return real.find((d) => d.ports?.some((p) => p.kind === 'midi-out' && p.id !== 'ce-visual-synth' && p.id !== MUSICAL_SYNTH_PORT_ID)) ?? real[0] ?? online[0];
   };
+  /** The DJI Osmo bridge's loopback device (CE_OSMO=web|ble|mock), when it is online. */
+  const gimbalDevice = (): DeviceInfo | undefined => hub.devices().find((d) => d.online && d.capabilities.includes('ble') && d.ports?.some((p) => p.id === 'dji-osmo'));
   connectorHost = new ConnectorHost({ log,
     send: (out, done) => {
+      if (out.target === 'gimbal') {
+        const g = gimbalDevice();
+        if (!g) { done(false, 'no DJI gimbal is connected (Bluetooth bridge off or gimbal not paired)'); return; }
+        dispatcher.fire(g.deviceId, out.op, { port: 'dji-osmo', cardId: out.cardId, actionId: `agent:gimbal-${out.op.op}`, onResult: done });
+        return;
+      }
       const mac = companionDevice();
       if (!mac) { done(false, 'the Mac companion is not connected'); return; }
       dispatcher.fire(mac.deviceId, out.op, { port: out.port, cardId: out.cardId, actionId: `agent:${out.op.msg}`, onResult: done });
@@ -1326,6 +1336,12 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       companion: { online: !!mac, ...(mac ? { deviceId: mac.deviceId, name: mac.name, ...(mac.app ? { app: mac.app } : {}) } : {}),
         midiOutputs: outs.map((p) => p.name), visualsOpen: outs.some((p) => p.id === 'ce-visual-synth' && p.state === 'connected'),
         musicalOpen: outs.some((p) => p.id === MUSICAL_SYNTH_PORT_ID && p.state === 'connected') },
+      gimbal: (() => {
+        const g = gimbalDevice(), port = g?.ports?.find((p) => p.id === 'dji-osmo');
+        if (!g) return { bridge: 'off' as const };
+        return port?.state === 'connected' ? { bridge: 'connected' as const, name: port.name }
+          : { bridge: 'waiting' as const, howToConnect: process.env.CE_OSMO === 'web' ? 'Tell the wearer: on the Mac, open http://localhost:8799 in Chrome and click Connect, then pick the Osmo (switch it on; close the DJI Mimo app).' : 'Tell the wearer to switch the Osmo on and close the DJI Mimo app.' };
+      })(),
     };
   };
   const wireService = new WireService({

@@ -92,6 +92,9 @@ export class OsmoController {
       const key = `${p.cmdSet.toString(16).padStart(2, '0')}/${p.cmdId.toString(16).padStart(2, '0')}`;
       this.state.pushes[key] = (this.state.pushes[key] ?? 0) + 1;
       if (this.rx.length < 400) this.rx.push({ at: Date.now(), set: p.cmdSet, id: p.cmdId, hex: toHex(p.payload) });
+      // Learn what this gimbal says: the first packet of each kind, and every answer to a rotate command.
+      if (this.state.pushes[key] === 1) this.log(`[osmo] first ${key} packet from the gimbal (type ${p.cmdType.toString(16)}): ${toHex(p.payload).slice(0, 60)}`);
+      if (p.cmdSet === 0x04 && (p.cmdId === 0x14 || p.cmdId === 0x0c) && (p.cmdType & 0x80)) this.log(`[osmo] gimbal answered the rotate: ${toHex(p.payload).slice(0, 40)}${p.payload[0] === 0 ? ' (ok)' : ' (refused?)'}`);
       const r = decodeReport(p);
       if (r?.kind === 'attitude') this.state.reported = { ...r.attitude, at: Date.now() };
       else if (r?.kind === 'battery') this.state.battery = { percent: r.percent, charging: r.charging, at: Date.now() };
