@@ -14,6 +14,8 @@ import { glassPanel, horizonButton, isBrowser, LOOK } from '../hud/v2/look';
 
 /** Metres. The brief caps it at 22 cm. */
 export const BUBBLE_W = 0.22;
+/** Drawn at 75 % (about 16.5 cm wide) so it stays out of the way of the device and the demo. */
+const BUBBLE_SCALE = 0.75;
 /** Above the device card (30-31), the Buddy (31-32) and the palette (33); below the hands (101). It never overlaps them. */
 const RENDER = 34;
 const APPEAR_S = LOOK.motion.appearS;
@@ -168,7 +170,7 @@ export class TutorialBubble extends Group {
     if (this.phase === 'out' && p <= 0) { this.hideNow(); return; }
     // xrblocks VisibilityTransition feel: ease-out scale 0.9 → 1 with a fade; opacity is written only while it changes.
     const eased = 1 - (1 - p) ** 3;
-    this.scale.setScalar(0.9 + 0.1 * eased);
+    this.scale.setScalar(BUBBLE_SCALE * (0.9 + 0.1 * eased));
     p = Math.round(eased * 20) / 20;
     if (p !== this.opacityShown) {
       this.opacityShown = p;

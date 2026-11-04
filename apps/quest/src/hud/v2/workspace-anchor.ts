@@ -24,7 +24,8 @@ export class WorkspaceAnchor {
     this.right.set(1, 0, 0).applyQuaternion(head.quaternion).setY(0);
     if (this.right.lengthSq() < 1e-6) this.right.set(1, 0, 0);
     this.right.normalize();
-    this.pose.position.copy(center).addScaledVector(this.right, halfWidth + 0.36);
+    // A wide SAM box must not fling the card into the clutter: clamp the device half-width, keep a small gap.
+    this.pose.position.copy(center).addScaledVector(this.right, Math.min(0.2, Math.max(0.05, halfWidth)) + 0.26);
     // Pull 10 % toward the head so it reads as nearer than the device and stays reachable.
     this.pose.position.lerp(head.position, 0.1);
     this.matrix.lookAt(head.position.clone().setY(this.pose.position.y), this.pose.position, UP);

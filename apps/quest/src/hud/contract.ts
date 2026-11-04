@@ -94,7 +94,12 @@ export interface WireView {
   outgoing?: WireOutputStream;
   /** Muse's interactive XR visualization while it runs. */
   scene?: SceneFrameView;
+  /** A running hand program that reads the fingertip on the physical screen (e.g. touch the water): no AR controls,
+   *  only a small read-only live panel beside the device. `live` is shared by reference and updated every frame. */
+  screenProgram?: { live: WireLiveScreen; actions: import('@ce/protocol').WireAction[]; title?: string };
 }
+/** The fingertip on the screen while a screen program runs (u, v: 0..1 from the screen's top-left). */
+export interface WireLiveScreen { found: boolean; near: boolean; touching: boolean; u: number; v: number }
 export interface ProjectView {
   title: string; status: string; projectCount: number; actionCount: number; ready: boolean; running: boolean; engaged: boolean;
   action?: { label: string; kind: 'number' | 'trigger'; value: number };

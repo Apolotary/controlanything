@@ -3,6 +3,9 @@ import type { ShellFrame } from '../app/hud-contract';
 import { TutorialBubble } from './bubble';
 import { STEP_IDS, TUTORIAL_KEY, TutorialSteps, type StepId, type TutorialProbe } from './steps';
 
+/** A bubble stays up to 6 s; if its step is still not done it leaves, and may come back once, 20 s later. */
+const SHOW_MS = 6000, RETURN_MS = 20000, MAX_SHOWS = 2;
+
 export interface TutorialHost {
   parent: Object3D;
   probe(): TutorialProbe;
@@ -20,6 +23,9 @@ export class TutorialController {
   private placedStep?: StepId;
   private stored = false;
   private readonly offset = new Vector3();
+  /** Per bubble (step + title): how often it has shown, and when it last appeared or left. */
+  private readonly seen = new Map<string, { shows: number; shownAt?: number; hiddenAt?: number }>();
+  private currentKey?: string;
 
   constructor(private readonly host: TutorialHost) {
     this.bubble = new TutorialBubble(() => this.skip());
@@ -29,6 +35,7 @@ export class TutorialController {
 
   replay(): void {
     this.steps.restart(); this.placedStep = undefined; this.lastProbeAt = -Infinity; this.stored = false;
+    this.seen.clear(); this.currentKey = undefined;
     this.bubble.hideNow();
   }
   skip(): void { this.steps.skip(); this.bubble.hideNow(); this.remember('skipped'); }
@@ -46,6 +53,7 @@ export class TutorialController {
       if (this.steps.finished) { this.bubble.hideNow(); this.remember('completed'); return; }
       const view = this.steps.view(this.probe, timeMs), step = this.steps.step;
       if (!view || !step) this.bubble.hideNow();
+      else if (!this.mayShow(`${step}|${view.title}`, timeMs)) this.bubble.hide();
       else {
         this.bubble.set({ ...view, counter: `${this.steps.index + 1}/${STEP_IDS.length}`, tail: step === 'pinch' ? 'right' : 'none' });
         if (step !== this.placedStep || !this.bubble.shown) this.place(step, frame);
@@ -53,6 +61,27 @@ export class TutorialController {
       }
     }
     this.bubble.update(Math.min(.1, Math.max(0, dtSec)) * 1000);
+  }
+
+  /** True while this bubble may be up: its first 6 s, then once more for 6 s after a 20 s rest. */
+  private mayShow(key: string, now: number): boolean {
+    if (key !== this.currentKey) {
+      const previous = this.currentKey === undefined ? undefined : this.seen.get(this.currentKey);
+      if (previous?.shownAt !== undefined) { previous.shownAt = undefined; previous.hiddenAt = now; }
+      this.currentKey = key;
+    }
+    let seen = this.seen.get(key);
+    if (!seen) this.seen.set(key, seen = { shows: 0 });
+    if (seen.shownAt !== undefined) {
+      if (now - seen.shownAt < SHOW_MS) return true;
+      seen.shownAt = undefined; seen.hiddenAt = now;
+      return false;
+    }
+    if (seen.shows === 0 || seen.shows < MAX_SHOWS && seen.hiddenAt !== undefined && now - seen.hiddenAt >= RETURN_MS) {
+      seen.shows++; seen.shownAt = now;
+      return true;
+    }
+    return false;
   }
 
   private place(step: StepId, frame: ShellFrame): void {

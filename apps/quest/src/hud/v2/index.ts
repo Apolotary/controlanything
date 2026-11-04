@@ -36,9 +36,12 @@ import { DialRig, type DialMode, type DialModel } from './radial-dial';
 import { KnobStrip } from './knob-strip';
 import type { DashboardView } from './wrist-dashboard';
 import { InstrumentPanel } from './instrument-panel';
+import { LivePanel, LIVE_PANEL } from './live-panel';
 import { SceneLayer } from './scene-layer';
 import { setupChecks, setupFraction } from './setup-ring';
 import { liveGesture } from '../../gestures/feedback';
+import { aimAt } from '../../scan/aim';
+import { CHIP_GAP_M } from './anchor-stability';
 export { whenSdfReady } from './text';
 export { THEME } from './theme';
 
@@ -82,6 +85,10 @@ function title(value: string, length = 36): string {
   return s === s.toUpperCase() ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
 }
 const UP_AXIS = new Vector3(0, 1, 0);
+/** Untag/Forget pills: half size, their bottom edge this far (m) above the object's top. Object name chips: a bit smaller. */
+const PILL_SCALE = 0.5, PILL_GAP = 0.035, NAME_SCALE = 0.85;
+/** Generated AR controls: scale and distance from the eyes (a comfortable reach, never over the device). */
+const CONTROLS_SCALE = 0.7, CONTROLS_REACH = 0.45;
 function visible(object: Object3D | null): boolean {
   for (let current = object; current; current = current.parent) if (!current.visible) return false;
   return true;
@@ -112,9 +119,13 @@ export class LeanHud implements Hud {
   private readonly captures = new Map<string, Capture>();
   /** HUD time (s) of the last control interaction; the wrist menu does not open for 1 s after it. */
   private lastControlAt = -Infinity;
-  /** When the non-menu hand started its current pinch (seconds, HUD clock). */
-  private otherPinchSince: number | null = null;
-  private menuHintAt = -Infinity;
+  /** Last time the non-menu hand was pinching (seconds, HUD clock): the menu does not open for 0.6 s after. */
+  private otherPinchAt = -Infinity;
+  /** "Why the menu did not open" hints already shown this session (each at most once). */
+  private readonly menuHints = new Set<string>();
+  /** The tagged object whose Untag/Forget pills show: selected, in Annotate, with the right hand pointing at it. */
+  private pillTarget: string | null = null;
+  private pillSeenAt = -Infinity;
   private readonly pressUntil = new Map<string, number>();
   private readonly cursors = [newCursor('left', 'left'), newCursor('right', 'right')];
   private devCursors: Cursor[] = [];
@@ -182,6 +193,15 @@ export class LeanHud implements Hud {
   /** Muse-generated AR controls (knobs/buttons) for the running wiring. */
   private readonly knobs = new KnobStrip();
   private readonly instrument = new InstrumentPanel();
+  /** A running screen program (touch the water): no AR controls, one small read-only panel beside the device. */
+  private readonly livePanel = new LivePanel();
+  private readonly liveGoal = new Vector3();
+  /** Generated controls are anchored once (beside/below the device) and only re-anchored after a real step. */
+  private readonly controlsHead = new Vector3();
+  private controlsPlacedKey = '';
+  private readonly controlsDir = new Vector3();
+  /** The code card's side of the device, chosen when it appears: 1 = wearer's right, -1 = left. */
+  private codeSide = 1;
   /** Muse's XR visualization (display list from the scene sandbox), in the room. */
   private readonly sceneLayer = new SceneLayer();
   private readonly knobAnchor = new Vector3();
@@ -330,7 +350,9 @@ export class LeanHud implements Hud {
     this.annotationLayer.add(this.boxes);
     this.root.add(this.annotationLayer, this.card, this.modalLayer, this.deck, this.deck.panel, this.coach, this.notice, this.reticles, this.tether);
     this.root.add(this.helperPairing);
-    this.root.add(this.codeCard, this.wireMarkers, this.requestReader, this.knobs, this.instrument, this.sceneLayer);
+    this.root.add(this.codeCard, this.wireMarkers, this.requestReader, this.knobs, this.instrument, this.livePanel, this.sceneLayer);
+    // Muse's AR controls at about 70 % of their designed size: a compact, reachable cluster beside the device.
+    this.knobs.scale.setScalar(CONTROLS_SCALE); this.instrument.scale.setScalar(CONTROLS_SCALE);
     this.instrument.onControl = (actionId, value, phase) => { if (this.locked) this.events.emit('wireControl', { targetId: this.locked, actionId, value, phase }); };
     this.instrument.onConsumed = hand => this.events.emit('consumed', { hand, widget: 'control' });
     this.knobs.onChange = (control, value, phase) => {
@@ -995,24 +1017,41 @@ export class LeanHud implements Hud {
     this.codeCard.set(wire?.code ? { ...wire.code, ...(this.inspectWireCode ? { mode: 'full' as const } : {}) } : null, wire?.calibration ?? null);
   }
   isReadingRequest(): boolean { return this.requestReader.visible; }
-  /** Place the code card beside the selected device (opposite the device card), the calibration markers in world space. */
+  /** Place the code card beside the selected device, Muse's controls beside/below it, the calibration markers in world space. */
   private updateWire(frame: HudFrame, dt: number, box: { center: Vector3; w: number; h: number } | undefined): void {
     const wire = this.wireView;
     const inspect = this.inspectWireCode && this.requestPanel === 'details';
+    // A screen program (touch the water) plays on the real screen: no code card, no AR controls, one small live panel.
+    const screenProgram = wire?.phase === 'running' ? wire.screenProgram : undefined;
     // Live writing/checks and the initial generated instructions remain visible.
     // Later code history is deliberate inspection; play has one passive cue.
-    const show = !!wire?.code && !!box && (inspect || !['idle', 'stopped', 'failed'].includes(wire.phase)
+    const show = !!wire?.code && !!box && (inspect || !screenProgram && !['idle', 'stopped', 'failed'].includes(wire.phase)
       && (wire.phase !== 'running' || wire.code.mode === 'full'));
-    if (box && show) {
-      const W = Math.max(LOOK.dial.minW, Math.min(LOOK.dial.maxW, box.w)), H = Math.max(LOOK.dial.minH, Math.min(LOOK.dial.maxH, box.h));
+    if (box) {
       const f = this.codeRight.set(box.center.x - this.head.x, 0, box.center.z - this.head.z);
       if (f.lengthSq() < 1e-6) f.set(0, 0, -1);
       f.normalize();
-      // wearer's right = forward x up; the device card spawns on that side, the code card goes to the other
+      // wearer's right = forward x up
       this.codeRight.set(-f.z, 0, f.x);
-      const cardW = this.codeCard.widthM;
-      this.wireGoal.copy(box.center).addScaledVector(this.codeRight, -(W / 2 + 0.14 + cardW / 2));
-      this.wireGoal.y = box.center.y + Math.min(H / 2, 0.2) + 0.04;
+    }
+    if (box && show) {
+      // Beside the device at its height, 18 cm clear of its edge, never over it. Right side unless that is out of view.
+      const half = Math.min(0.3, Math.max(0.09, box.w / 2)), cardW = this.codeCard.widthM;
+      const lateral = half + 0.18 + cardW / 2;
+      if (!this.codePlaced) {
+        this.controlsDir.set(0, 0, -1).applyQuaternion(this.headQuaternion).setY(0);
+        if (this.controlsDir.lengthSq() < 1e-6) this.controlsDir.set(0, 0, -1);
+        this.controlsDir.normalize();
+        const facing = (side: number) => {
+          this.wireGoal.copy(box.center).addScaledVector(this.codeRight, side * lateral).sub(this.head).setY(0);
+          return this.wireGoal.lengthSq() < 1e-6 ? 1 : this.wireGoal.normalize().dot(this.controlsDir);
+        };
+        // cos 38° ≈ 0.79: keep the right unless it would sit outside a comfortable view and the left would not.
+        this.codeSide = facing(1) >= 0.79 || facing(1) >= facing(-1) ? 1 : -1;
+      }
+      this.wireGoal.copy(box.center).addScaledVector(this.codeRight, this.codeSide * lateral);
+      // The card hangs from its top edge: centre it on the device's height.
+      this.wireGoal.y = box.center.y + Math.min(0.2, this.codeCard.heightM / 2);
       this.codeFace.setFromAxisAngle(UP_AXIS, Math.atan2(this.head.x - this.wireGoal.x, this.head.z - this.wireGoal.z));
       if (!this.codePlaced) { this.codePosition.copy(this.wireGoal); this.codeQuaternion.copy(this.codeFace); this.codePlaced = true; }
       else {
@@ -1024,24 +1063,38 @@ export class LeanHud implements Hud {
       this.codeCard.quaternion.copy(this.codeQuaternion);
     } else if (!show) this.codePlaced = false;
     this.codeCard.update(dt * 1000, show);
-    // Generated controls: a row of knobs between the device and the wearer, a little below the device's centre.
-    const instrumentVisible = wire?.phase === 'running' && !!box && !this.requestReader.visible;
+    // Generated controls: anchored once just under the device as the wearer sees it (beside it when that is too low),
+    // about 45 cm from the eyes. Never between the eyes and the device's screen.
+    const instrumentVisible = wire?.phase === 'running' && !!box && !this.requestReader.visible && !screenProgram;
     const controls = instrumentVisible ? wire?.controls ?? [] : null;
     this.knobs.set(wire?.ui ? null : controls);
     this.instrument.set(controls && wire?.ui ? wire.ui : null, wire?.visualizer);
-    if (controls && box) {
-      const H = Math.max(LOOK.dial.minH, Math.min(LOOK.dial.maxH, box.h));
-      this.knobAnchor.copy(box.center).lerp(this.head, 0.35);
-      const reach = this.knobAnchor.distanceTo(this.head);
-      if (reach > 0.75) this.knobAnchor.sub(this.head).setLength(0.75).add(this.head);
-      this.knobAnchor.y = Math.max(this.head.y - 0.32, Math.min(this.head.y - 0.12, box.center.y - Math.min(H / 2, 0.18) - 0.02));
+    if (controls && box && (controls.length || wire?.ui)) {
+      const key = `${wire?.code?.requestId}:${wire?.ui ? 'ui' : 'knobs'}`;
+      if (key !== this.controlsPlacedKey || this.head.distanceTo(this.controlsHead) > 0.35) {
+        this.controlsPlacedKey = key; this.controlsHead.copy(this.head);
+        this.placeControls(box, !!wire?.ui);
+      }
       this.knobs.place(this.knobAnchor, this.head, dt);
       this.instrument.place(this.knobAnchor, this.head);
-    }
+    } else if (!controls) this.controlsPlacedKey = '';
     this.knobs.update(dt);
     this.instrument.update(frame, this.camera, wire?.outgoing);
     this.root.userData.instrument = this.instrument.snapshot();
     this.root.userData.knobs = controls ? this.knobs.snapshot() : undefined;
+    // The live panel: right of the screen, a little lower, nearer the wearer; it never takes input.
+    const live = !!screenProgram && !!box && !this.requestReader.visible;
+    this.livePanel.set(live ? screenProgram : null, wire?.outgoing, wire?.touchHint);
+    if (live && box) {
+      const half = Math.min(0.3, Math.max(0.06, box.w / 2));
+      this.liveGoal.copy(box.center).addScaledVector(this.codeRight, half + 0.1 + LIVE_PANEL.width / 2);
+      this.liveGoal.y = box.center.y - Math.min(0.08, box.h / 4);
+      // Toward the eyes along the same sight line: same place in view, a little larger and easier to read.
+      this.liveGoal.lerp(this.head, 0.15);
+      this.livePanel.place(this.liveGoal, this.head, dt);
+    }
+    this.livePanel.update(dt);
+    this.root.userData.livePanel = this.livePanel.snapshot();
     if (this.requestReader.visible) {
       if (!this.readerPlaced) {
         this.readerForward.set(0, 0, -1).applyQuaternion(frame.head.quaternion); this.readerForward.y = 0;
@@ -1068,6 +1121,29 @@ export class LeanHud implements Hud {
     }
     this.wireOutlineKey = key;
     if (this.requestReader.visible) this.wireMarkers.hideAll();
+  }
+  /**
+   * Where Muse's controls go: just below the device's bottom edge as the wearer sees it, CONTROLS_REACH from the eyes,
+   * facing them. If that is too low to reach comfortably, beside the device on the left (the device card is on the right).
+   */
+  private placeControls(box: { center: Vector3; w: number; h: number }, ui: boolean): void {
+    const ext = ui ? this.instrument.extent : { top: 0.056, bottom: -0.076, half: 0.06 * Math.max(1, this.knobs.children.length) };
+    const top = ext.top * CONTROLS_SCALE, halfW = ext.half * CONTROLS_SCALE;
+    const d = this.controlsDir.copy(box.center).sub(this.head);
+    const horiz = Math.max(0.05, Math.hypot(d.x, d.z));
+    const yaw = Math.atan2(d.x, d.z);
+    const bottomPitch = Math.atan2(d.y - Math.min(box.h / 2, 0.35), horiz);
+    let pitch = bottomPitch - Math.atan2(top, CONTROLS_REACH) - 0.05;
+    let side = 0;
+    if (pitch < -1.0) {
+      // Too far down: beside the device instead, at its centre height, clear of its left edge.
+      const devHalf = Math.atan2(Math.min(0.3, Math.max(0.06, box.w / 2)), horiz);
+      side = devHalf + Math.atan2(halfW, CONTROLS_REACH) + 0.06;
+      pitch = Math.max(-0.9, Math.min(-0.15, Math.atan2(d.y, horiz)));
+    }
+    // yaw + side turns toward the wearer's left (x = sin(yaw), z = cos(yaw) with -z forward).
+    const a = yaw + side;
+    this.knobAnchor.set(Math.sin(a) * Math.cos(pitch), Math.sin(pitch), Math.cos(a) * Math.cos(pitch)).multiplyScalar(CONTROLS_REACH).add(this.head);
   }
   private wireCorners0?: Vector3;
   private wireCorners1?: Vector3;
@@ -1247,14 +1323,17 @@ export class LeanHud implements Hud {
     if (!label) { label = new Group(); label.name = `target-label:${t.id}`; this.labels.set(t.id, label); this.annotationLayer.add(label); }
     this.clear(label);
     // Untag only after an explicit selection: on hover the (distance-scaled) chip can cover the device, so a pinch aimed
-    // at the device would otherwise remove its tag by accident.
-    const removable = this.home.mode === 'annotate' && t.tagged && this.locked === t.id;
+    // at the device would otherwise remove its tag by accident. The small pills show only while the right hand points
+    // at the selected object (or at them), just above it, in Annotate.
+    const removable = this.home.mode === 'annotate' && t.tagged && this.locked === t.id && this.pillTarget === t.id;
+    label.userData.pills = removable;
     const state = this.deviceState?.targetId === t.id ? this.deviceState : null;
     const text = targetChipLabel({ ...t, ...(state ? { connection: state.connection, busy: state.busy } : {}) }, this.home.mode, !!removable || (!t.tagged && this.candidate === t.id));
     const width = Math.max(0.09, Math.ceil((text.length * THEME.font.label * 0.56 + THEME.box.labelPadding * 3) * 100) / 100);
     if (removable) {
-      this.button(label, `tag-remove:${t.id}`, text, width / 2, 0, width, 'handle', () => this.events.emit('tagRemove', { targetId: t.id }));
-      this.button(label, `forget:${t.id}`, 'Forget', width + 0.055, 0, 0.09, 'handle', () => this.events.emit('forget', { targetId: t.id }));
+      const pills = new Group(); pills.name = 'tag-pills'; pills.scale.setScalar(PILL_SCALE); label.add(pills);
+      this.button(pills, `tag-remove:${t.id}`, text, width / 2, 0, width, 'handle', () => this.events.emit('tagRemove', { targetId: t.id }));
+      this.button(pills, `forget:${t.id}`, 'Forget', width + 0.055, 0, 0.09, 'handle', () => this.events.emit('forget', { targetId: t.id }));
     }
     else {
       const pill = this.surfaces.create(width, THEME.box.labelHeight, t.tagged ? 'selected' : 'plate', true);
@@ -1275,14 +1354,38 @@ export class LeanHud implements Hud {
       }
     }
     // Registered object actions (e.g. "Use as controller") sit beside the selected object's label.
-    let x = width + 0.01;
+    let x = (removable ? (width + 0.1) * PILL_SCALE : width) + 0.01;
     if (this.locked === t.id || this.candidate === t.id) for (const action of this.objectActions) {
       if (action.visible && !action.visible(t.id)) continue;
       const w = Math.max(0.1, Math.ceil((action.label.length * THEME.font.label * 0.56 + THEME.box.labelPadding * 3) * 100) / 100);
       this.button(label, `object-action:${action.key}:${t.id}`, action.label, x + w / 2, 0, w, 'handle', () => action.onSelect(t.id));
       x += w + 0.01;
     }
-    this.boxes.registerLabel(t.id, label, width);
+    this.boxes.registerLabel(t.id, label, removable ? width * PILL_SCALE : width);
+  }
+  /**
+   * Untag/Forget show only while the right hand's ray or fingertip is on the selected tagged object (or on the pills
+   * themselves), in Annotate, and for 0.8 s after, so moving from the object up to a pill can land the pinch.
+   */
+  private updatePills(frame: HudFrame): void {
+    const id = this.home.mode === 'annotate' && this.locked && this.targets.get(this.locked)?.tagged ? this.locked : null;
+    const box = id ? this.boxes.boxes.get(id) : undefined;
+    let pointing = false;
+    if (id && box) {
+      const label = this.labels.get(id);
+      pointing = !!label?.getObjectByName(`tag-remove:${id}`)?.userData.hovered || !!label?.getObjectByName(`forget:${id}`)?.userData.hovered;
+      const hand = frame.hands.right;
+      if (!pointing && hand) {
+        const size = Math.max(box.w, box.h), tip = hand.controller ? undefined : hand.joints['index-finger-tip']?.position;
+        pointing = !!tip && tip.distanceTo(box.center) < size / 2 + 0.05
+          || hand.ray.dir.lengthSq() > 0.5 && !!aimAt(hand.ray.origin, hand.ray.dir, [{ id, position: box.center, size }], { marginDeg: 2, minDist: 0.2 });
+      }
+    }
+    if (pointing) this.pillSeenAt = this.time;
+    const show = id && (pointing || this.time - this.pillSeenAt < 0.8) ? id : null;
+    if (show === this.pillTarget) return;
+    const old = this.pillTarget; this.pillTarget = show;
+    for (const changed of [old, show]) if (changed && this.targets.has(changed)) this.refreshTargetLabel(this.targets.get(changed)!);
   }
   removeTarget(id: string): void {
     // A box leaving Annotate (filter switch, stale detection) fades out over 250 ms instead of popping.
@@ -1644,7 +1747,7 @@ export class LeanHud implements Hud {
     this.projectView = view; this.projectPanel.setState(view); this.place();
     for (const capture of this.captures.values()) if (capture.widget && !visible(capture.widget.group)) this.releaseDockCapture(capture);
   }
-  toast(text: string, _level?: 'info' | 'ok' | 'warn' | 'error'): void { setText(this.noticeText, text.slice(0, 72)); if (!this.notice.visible) this.noticePlacement.reset(); this.notice.visible = true; this.noticeUntil = this.time + 3; this.place(); }
+  toast(text: string, _level?: 'info' | 'ok' | 'warn' | 'error'): void { this.noticeText.scale.setScalar(1); setText(this.noticeText, text.slice(0, 72)); if (!this.notice.visible) this.noticePlacement.reset(); this.notice.visible = true; this.noticeUntil = this.time + 3; this.place(); }
   private face(object: Object3D): void {
     this.boxes.facingQuaternion(this.head, object.position, this.facing); object.quaternion.copy(this.facing);
   }
@@ -1698,7 +1801,10 @@ export class LeanHud implements Hud {
     const wire = this.wireView?.targetId === this.locked ? this.wireView : null;
     const automaticCode = !!wire?.code && !this.deviceState?.legacyPerform && !['idle', 'stopped', 'failed'].includes(wire.phase)
       && (wire.phase !== 'running' || wire.code.mode === 'full');
-    this.card.visible = !reading && !automaticCode && workspace && available && !this.assistant.visible;
+    // Touching the water must feel like magic: while a screen program runs, the device card steps away (the toast and
+    // the small live panel say what to do; both palms out still stops).
+    const screenProgram = wire?.phase === 'running' && !!wire.screenProgram && !this.deviceState?.legacyPerform;
+    this.card.visible = !reading && !automaticCode && !screenProgram && workspace && available && !this.assistant.visible;
     // Tag/use coaching is nonblocking: the wearer may keep finding devices before switching modes.
     // Only an actual foreground workspace/menu/dialog suppresses annotation targets.
     this.annotationLayer.visible = !reading && !this.deck.panel.visible && !this.modal.visible && !this.helperPairingView && !workspace && !selection && !this.projectView && !this.assistant.visible;
@@ -1774,7 +1880,9 @@ export class LeanHud implements Hud {
       : this.helperPairing.visible ? this.helperPairing : this.projectPanel.visible ? this.projectPanel
       : this.visualSelection.visible ? this.visualSelection : this.assistant.visible ? this.assistant
       : this.card.visible ? this.card : this.deck.visible ? this.deck : undefined;
-    this.edge.visible = !this.requestReader.visible && !!foreground && this.edgePlacement.update(this.head, this.headQuaternion, foreground.position);
+    // While Muse's wiring plays, the device card is only a passive cue: no "look right" pointer over the controls.
+    const playing = wire?.phase === 'running' && !this.deviceState?.legacyPerform && foreground === this.card;
+    this.edge.visible = !this.requestReader.visible && !screenProgram && !playing && !!foreground && this.edgePlacement.update(this.head, this.headQuaternion, foreground.position);
     if (this.edge.visible) {
       this.edge.position.copy(this.edgePlacement.position); this.edge.quaternion.copy(this.headQuaternion);
       this.edgeArrow.rotation.z = this.edgePlacement.angle;
@@ -2236,21 +2344,18 @@ export class LeanHud implements Hud {
     const menuHand = this.palette.anchor.nonDominant, otherHand = frame.hands[menuHand === 'left' ? 'right' : 'left'];
     const usingControl = this.instrument.interacting || this.knobs.interacting || [...this.captures.values()].some((c) => !!c.widget && !this.isPaletteWidget(c.widget));
     if (usingControl) this.lastControlAt = this.time;
-    // Only a fresh pinch of the other hand (about to select something) keeps the menu closed. A pinch held for
-    // longer is a hand holding an object or resting with curled fingers; it must not lock the menu away.
+    // Never open while the other hand pinches (tagging, hold-to-ask) or just let go, reaches into a control, or drives
+    // a running hand program near the screen (handsBusy).
     const otherPinching = !!otherHand?.pinching && !otherHand.controller;
-    if (!otherPinching) this.otherPinchSince = null;
-    else this.otherPinchSince ??= this.time;
-    const freshPinch = otherPinching && this.time - (this.otherPinchSince ?? this.time) < 1.2;
-    const blockedBy = usingControl || this.time - this.lastControlAt < 1 ? 'control' : freshPinch ? 'pinch' : this.handsBusy ? 'hands' : null;
+    if (otherPinching) this.otherPinchAt = this.time;
+    const nearControl = !this.palette.anchor.open && this.handBusy(menuHand === 'left' ? 'right' : 'left');
+    const blockedBy = usingControl || nearControl || this.time - this.lastControlAt < 1 ? 'control' : this.time - this.otherPinchAt < 0.6 ? 'pinch' : this.handsBusy ? 'hands' : null;
     this.palette.anchor.blockOpen = blockedBy !== null;
-    // Say why when a raised palm is refused for a while, instead of silently ignoring it.
-    const menuHandState = frame.hands[menuHand];
-    const menuWrist = menuHandState?.joints?.wrist?.position;
-    const raisedPalm = !!menuHandState?.palmUp && (menuHandState.palmUpMs ?? 0) > 900 && !!menuWrist && menuWrist.y >= this.head.y - 0.45;
-    if (blockedBy && raisedPalm && this.time - this.menuHintAt > 8) {
-      this.menuHintAt = this.time;
+    // Say why (once per session, in small text) when a deliberately raised palm is refused for a while.
+    if (blockedBy && !this.palette.anchor.open && this.palette.anchor.poseMs > 900 && !this.menuHints.has(blockedBy)) {
+      this.menuHints.add(blockedBy);
       this.toast(blockedBy === 'pinch' ? 'Relax your other hand to open the menu.' : blockedBy === 'hands' ? 'Your hands are controlling the device. Both palms out to stop, then open the menu.' : 'Let go of the control, then raise your palm again.', 'info');
+      this.noticeText.scale.setScalar(0.7);
     }
     this.frameHands = frame.hands;
     if (this.palette.needsRebuild()) this.rebuildPalette();
@@ -2269,9 +2374,13 @@ export class LeanHud implements Hud {
       else this.boxes.setOpacity(id, opacity);
     }
     this.boxes.update(frame.dt, this.head, frame, this.home.mode);
+    this.updatePills(frame);
     for (const [id, label] of this.labels) {
       const box = this.boxes.boxes.get(id); if (!box) continue;
       this.boxes.labelAnchor(box, this.head, label.position);
+      // Untag/Forget pills sit just above the object; name chips are drawn a little smaller.
+      if (label.userData.pills) label.position.y -= CHIP_GAP_M - PILL_GAP - THEME.control.buttonHeight * PILL_SCALE * label.scale.y / 2;
+      else label.scale.multiplyScalar(NAME_SCALE);
       this.boxes.labelQuaternion(this.head, label.position, label.quaternion);
     }
     this.place();
@@ -2328,7 +2437,7 @@ export class LeanHud implements Hud {
     this.projectPanel.disposeSpatial();
     this.root.traverse((o) => { if ('sync' in o && 'dispose' in o) (o as SdfText).dispose(); });
     this.helperPairing.dispose();
-    this.codeCard.dispose(); this.wireMarkers.dispose(); this.instrument.dispose(); this.sceneLayer.dispose();
+    this.codeCard.dispose(); this.wireMarkers.dispose(); this.instrument.dispose(); this.livePanel.dispose(); this.sceneLayer.dispose();
     this.boxes.dispose();
     this.checkGeometry.dispose(); this.arrowGeometry.dispose(); this.lockGeometry.dispose();
     this.screenGuideGeometry.dispose(); this.screenGuideMaterial.dispose();

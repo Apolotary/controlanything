@@ -14,7 +14,7 @@
 import { Vector3 } from 'three';
 import { newId, type WireControl, type WireProgressPayload, type WireReadyPayload, type WireStoppedPayload, type WireStopPayload } from '@ce/protocol';
 import type { ShellFrame } from '../app/hud-contract';
-import type { WireCalibrationView, WireCodeView, WirePhase, WireView, WireOutputStream } from '../hud/contract';
+import type { WireCalibrationView, WireCodeView, WirePhase, WireView, WireOutputStream, WireLiveScreen } from '../hud/contract';
 import { SignalTracker, SIGNAL_RANGE } from '../gestures/signals';
 import { ScreenCalibrator } from '../gestures/screen-calibration';
 import { clearPlane, loadPlane, planePoint, savePlane, type ScreenPlane } from '../gestures/screen-plane';
@@ -153,6 +153,8 @@ export class WiringController {
   private readonly corners: (Vector3 | null)[] = [null, null];
   /** Current measured contact, exposed only for tutorial/debug observation. */
   private screenTouching = false;
+  /** The fingertip on the screen for the HUD's small live panel (shared by reference, updated every frame). */
+  private readonly live: WireLiveScreen = { found: false, near: false, touching: false, u: 0.5, v: 0.5 };
 
   constructor(private readonly host: WiringHost) {
     this.runtime = host.runtime ?? new WiringRuntime({
@@ -505,6 +507,10 @@ export class WiringController {
         if (cur.needsScreen && this.runtime.running) this.findScreen(frame, timeMs);
         const sf = this.tracker.update(frame, timeMs, { plane: this.screenPending ? null : this.plane, tapBlocked: (hand) => this.host.tapBlocked(hand) });
         this.screenTouching = !!sf.signals.screen?.touching;
+        const screen = sf.signals.screen;
+        this.live.found = !this.screenPending && !!this.plane;
+        this.live.near = !!screen && screen.hover > 0; this.live.touching = this.screenTouching;
+        if (screen) { this.live.u = clamp(screen.u, 0, 1); this.live.v = clamp(screen.v, 0, 1); }
         // Both palms out stops, but not while the hands are playing AR controls (two flat hands on a pad look alike).
         // A scene invites pushing with open palms, so while one runs the palms must also be held still for a moment.
         let stopNow = false;
@@ -733,6 +739,7 @@ export class WiringController {
       ...(w?.controls && phase === 'running' ? { controls: w.controls } : {}),
       ...(w?.ui && phase === 'running' ? { ui: w.ui, visualizer: w.visualizer, outgoing: this.outgoing } : {}),
       ...(w?.scene && phase === 'running' ? { scene: this.scene.view } : {}),
+      ...(w?.needsScreen && w.program && phase === 'running' ? { screenProgram: { live: this.live, actions: w.program.actions, ...(w.title ? { title: w.title } : {}) }, outgoing: this.outgoing } : {}),
     };
   }
 

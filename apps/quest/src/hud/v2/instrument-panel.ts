@@ -1,5 +1,5 @@
 /** Muse's bounded instrument, using the existing gen3d renderer and input runtime. */
-import { BufferAttribute, BufferGeometry, Camera, Color, DynamicDrawUsage, Group, InstancedMesh, LineBasicMaterial, LineSegments, Matrix4, MeshBasicMaterial, RingGeometry, SphereGeometry, Vector3 } from 'three';
+import { Box3, BufferAttribute, BufferGeometry, Camera, Color, DynamicDrawUsage, Group, InstancedMesh, LineBasicMaterial, LineSegments, Matrix4, MeshBasicMaterial, RingGeometry, SphereGeometry, Vector3 } from 'three';
 import type { Gen3dSpec, ControlEvent } from '@ce/gen3d';
 import type { WireReadyPayload } from '@ce/protocol';
 import { SpecObject } from '../../gen3d/build';
@@ -36,6 +36,8 @@ class InstrumentTrace extends Group {
   private allowed: Set<string> | undefined;
   private kind = 'pulse';
   private spec?: Gen3dSpec;
+  /** Local y of the outgoing-stream ribbon: under the instrument, so nothing rises in front of the device. */
+  ribbonY = -0.2;
   constructor() {
     super();
     this.rings.instanceMatrix.setUsage(DynamicDrawUsage); this.notes.instanceMatrix.setUsage(DynamicDrawUsage);
@@ -105,11 +107,11 @@ class InstrumentTrace extends Group {
       this.color.setHSL(note ? .52 + (i % 4) * .035 : .54, .62, live ? .55 * (1 - age / effectLife) : 0);
       this.rings.setColorAt(i, this.color); this.notes.setColorAt(i, this.color);
       // A four-second ribbon of the actual outgoing stream, above the instrument.
-      const j = i * 6, px = historyLive ? .31 - age * .155 : 0, py = historyLive ? .30 + this.levels[i]! * .07 : 0;
+      const j = i * 6, px = historyLive ? .31 - age * .155 : 0, py = historyLive ? this.ribbonY + this.levels[i]! * .05 : 0;
       const prior = this.previous[i]!, priorAge = prior < 0 ? Infinity : time - this.times[prior]!;
       const connected = historyLive && prior !== i && priorAge >= age && priorAge < LIFE && this.actionIds[prior] === this.actionIds[i];
       this.vertices[j] = px; this.vertices[j + 1] = py; this.vertices[j + 2] = .02;
-      this.vertices[j + 3] = connected ? .31 - priorAge * .155 : historyLive ? px + .006 : 0; this.vertices[j + 4] = connected ? .30 + this.levels[prior]! * .07 : historyLive ? py + .006 : 0; this.vertices[j + 5] = historyLive ? .02 : 0;
+      this.vertices[j + 3] = connected ? .31 - priorAge * .155 : historyLive ? px + .006 : 0; this.vertices[j + 4] = connected ? this.ribbonY + this.levels[prior]! * .05 : historyLive ? py + .006 : 0; this.vertices[j + 5] = historyLive ? .02 : 0;
       if (live) active++;
     }
     this.rings.count = this.notes.count = Math.min(CAPACITY, this.cursor);
@@ -136,6 +138,8 @@ export class InstrumentPanel extends Group {
   private readonly look = new Vector3();
   private active = false;
   private directTouch = false;
+  /** Local extent of the built instrument (metres, before the HUD's scale): placement keeps it clear of the device. */
+  extent = { top: 0.15, bottom: -0.15, half: 0.3 };
   /** Faders/XY pads poked this frame and last frame, with the last value sent: the finger leaving sends one `end`. */
   private poked = new Map<string, import('@ce/gen3d').ControlValue>();
   private pokedBefore = new Map<string, import('@ce/gen3d').ControlValue>();
@@ -152,7 +156,12 @@ export class InstrumentPanel extends Group {
     if (!spec) return;
     this.object = new SpecObject(spec, { compact: true, clock: this.clock, audio: this.audio, sink: { control: e => this.control(e) } });
     this.object.emitter.on('consumed', e => this.onConsumed?.(e.hand));
+    // Measured before it is parented, so the bounds are in this panel's own frame.
+    this.object.updateMatrixWorld(true);
+    const bounds = new Box3().setFromObject(this.object);
+    if (!bounds.isEmpty()) this.extent = { top: Math.min(0.4, bounds.max.y), bottom: Math.max(-0.4, bounds.min.y), half: Math.min(0.6, Math.max(-bounds.min.x, bounds.max.x)) };
     this.add(this.object); this.trace.configure(spec, visualizer);
+    this.trace.ribbonY = this.extent.bottom - 0.07;
     this.debugSnapshot = { controls: spec.controls.map(c => ({ id: c.id, actionId: c.binding.action, kind: c.kind, label: c.label })), visualizerEvents: 0, visualizerActions: this.trace.userData.actionEvents, activeEffects: 0, drawCalls: 3 };
     this.trace.renderOrder = 90;
   }
@@ -170,7 +179,7 @@ export class InstrumentPanel extends Group {
   }
   place(anchor: Vector3, head: Vector3): void {
     if (this.interacting) return;
-    this.position.copy(anchor); this.look.set(head.x, this.position.y, head.z); this.lookAt(this.look);
+    this.position.copy(anchor); this.look.copy(head); this.lookAt(this.look);
   }
   private prepare(cursor: Cursor): void {
     if (!cursor.tracked || !this.object) return;

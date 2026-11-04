@@ -174,7 +174,12 @@ describe('Calm Glass HUD scene budget', () => {
     const card = hud.root.getObjectByName('device-card')!;
     expect(card.visible).toBe(false);
     expect(hud.root.getObjectByName('filter:electronics')).toBeTruthy();
+    // Untag/Forget show only while the right hand points at the selected tagged object.
+    expect(hud.root.getObjectByName('tag-remove:device')).toBeUndefined();
+    hud.update(frame({}));
     expect(hud.root.getObjectByName('tag-remove:device')).toBeTruthy();
+    hud.update(frame({ ray: { origin: new Vector3(), dir: new Vector3(1, 0, 0) } }, 900)); // pointing away
+    expect(hud.root.getObjectByName('tag-remove:device')).toBeUndefined();
     hud.renderSpec(spec(), { targetId: target.id });
     expect(hud.root.getObjectByName('control:action0')).toBeUndefined();
     hud.setHome?.({ mode: 'control', filter: 'electronics', tagged: 1, status: 'Choose a tagged device' });
@@ -971,7 +976,7 @@ describe('bounded card wording and stable home updates', () => {
   });
 
   it('renders the tag check, identification, untag-after-select and live setup status on the chip', () => {
-    const { hud } = setup('annotate');
+    const { hud, frame } = setup('annotate');
     const label = () => hud.root.getObjectByName('target-label:device')!;
     const text = () => label().getObjectByName('sdf') as Object3D & { text: string };
     hud.upsertTarget({ ...target, label: 'Ceiling light', tagged: false });
@@ -988,6 +993,8 @@ describe('bounded card wording and stable home updates', () => {
     expect(hud.root.getObjectByName('tag-remove:device')).toBeUndefined();
     hud.setCandidate(null);
     hud.setLocked(target.id);
+    expect(hud.root.getObjectByName('tag-remove:device')).toBeUndefined();
+    hud.update(frame({})); // the right hand's ray on the object
     expect(hud.root.getObjectByName('tag-remove:device')).toBeTruthy();
     hud.setLocked(null);
     expect(text().text).toBe('KOIZUMI ceiling l…');

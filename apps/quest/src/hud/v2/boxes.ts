@@ -224,8 +224,12 @@ export class BoxField extends Mesh<BufferGeometry, MeshBasicMaterial> {
     for (const b of this.boxes.values()) {
       if (!b.visible || b.opacity <= 0.001) continue;
       if (!b.tagged) this.writeBox(index++, b, head);
+      const scale = this.labelScale(b, head);
       this.anchor(b, this.chipPosition);
-      this.markers.write(this.chipPosition, head, this.labelScale(b, head), b.collapsed, b.center.y + b.h / 2, b.opacity);
+      // Lowered Untag/Forget pills (the HUD moves them just above the object): the stem ends under them.
+      const label = this.labelGroups.get(b.id);
+      if (label?.userData.pills) this.chipPosition.y = Math.min(this.chipPosition.y, label.position.y);
+      this.markers.write(this.chipPosition, head, scale, b.collapsed, b.center.y + b.h / 2, b.opacity);
     }
     this.markers.finish();
     this.setDrawCount(index);

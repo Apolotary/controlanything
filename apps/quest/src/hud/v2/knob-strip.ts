@@ -244,7 +244,8 @@ export class KnobStrip extends Group {
     this.desired.copy(anchor);
     if (!this.placed) { this.position.copy(this.desired); this.placed = true; }
     else this.position.lerp(this.desired, 1 - Math.exp(-6 * Math.min(0.1, dt)));
-    this.look.set(head.x, this.position.y, head.z);
+    // Face the eyes (tilted up toward them when the row sits below the device).
+    this.look.copy(head);
     this.lookAt(this.look);
   }
 

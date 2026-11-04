@@ -110,6 +110,27 @@ describe('HandDockAnchor', () => {
     f.update(1950); expect(f.anchor.open).toBe(true);
   });
 
+  it('ignores a relaxed palm-up hand below chest height and a hand still moving into place', () => {
+    const f = setup(); f.frame.hands.left = hand(-.2, true, 10_000);
+    moveHeight(f.frame.hands.left, -.1); // 40 cm below the eyes: waist/desk level
+    f.update(0); f.update(2000); expect(f.anchor.open).toBe(false);
+    moveHeight(f.frame.hands.left, .1); f.update(2016);
+    for (let t = 2032; t <= 2800; t += 16) { moveHeight(f.frame.hands.left, .004); f.update(t); } // still rising, 25 cm/s
+    expect(f.anchor.open).toBe(false);
+    f.update(3250); expect(f.anchor.open).toBe(true);
+  });
+
+  it('opens on a raised palm with a pinch held 250 ms, never while blocked, and only once per pinch', () => {
+    const f = setup(); const menuHand = f.frame.hands.left = hand(-.2, true, 10_000);
+    menuHand.pinching = menuHand.justPinched = true; f.anchor.blockOpen = true; f.update(0);
+    menuHand.justPinched = false; f.anchor.blockOpen = false; f.update(400); expect(f.anchor.open).toBe(false);
+    menuHand.pinching = false; f.update(420);
+    menuHand.pinching = menuHand.justPinched = true; f.update(440); menuHand.justPinched = false;
+    f.update(689); expect(f.anchor.open).toBe(false);
+    f.update(690); expect(f.anchor.open).toBe(true);
+    f.anchor.dismiss(700); f.update(1200); expect(f.anchor.open).toBe(false);
+  });
+
   it('freezes an open menu at its raised position and closes it after lowering even while the palm still faces the eyes', () => {
     const f = setup(); f.frame.hands.left = hand(-.2, true, 10_000);
     f.update(0); f.update(450); f.update(630); const position = f.dock.position.clone();

@@ -23,12 +23,19 @@ const REACH_MARGIN = 0.08;
 /** The menu hand often drops out for a moment when the other hand comes close; keep the menu meanwhile. */
 const LOST_GRACE_MS = 800;
 /**
- * Opening is deliberate: a flat, open hand raised in front of the face with the palm squarely toward the eyes, held
- * ~0.45 s. A relaxed hand resting while the other one works a dial must never open it.
+ * Opening is deliberate: a flat, open hand raised to at least chest height, the palm squarely toward the eyes (35°),
+ * held still ~0.45 s. A relaxed hand resting palm-up at the waist while the other one reaches for a device, or a hand
+ * swinging through view, must never open it.
  */
-const OPEN_DWELL_MS = 450, OPEN_FACING_COS = Math.cos(40 * Math.PI / 180), OPEN_MAX_DISTANCE = 0.65, OPEN_BELOW_HEAD = 0.45;
-/** Quest's own menu gesture: palm toward the eyes, then pinch. Pinching rolls the palm a little, so the cone is wider. */
-const PINCH_FACING_COS = Math.cos(55 * Math.PI / 180);
+const OPEN_DWELL_MS = 450, OPEN_FACING_COS = Math.cos(35 * Math.PI / 180), OPEN_MAX_DISTANCE = 0.65, OPEN_BELOW_HEAD = 0.32;
+/** "Held still": the dwell restarts whenever the wrist drifts this far (m) from where it began (jitter is ~1 cm). */
+const OPEN_STILL_M = 0.05;
+/** Quest's own menu gesture made deliberate: the same raised palm toward the eyes, then a pinch held 250 ms. */
+const PINCH_OPEN_MS = 250;
+/** Pinching rolls the palm a little, so the pinch cone is a touch wider than the flat-palm one. */
+const PINCH_FACING_COS = Math.cos(40 * Math.PI / 180);
+/** An open menu stays open while the palm still roughly faces the eyes (wider than any opening cone). */
+const KEEP_FACING_COS = Math.cos(55 * Math.PI / 180);
 /** Tip-to-knuckle distance over bone length: ~1 for a straight finger, ~0.8 relaxed, ~0.4 in a fist. */
 const OPEN_FINGER_STRAIGHTNESS = 0.88;
 const STRAIGHT_FINGERS = ['index-finger', 'middle-finger'] as const;
@@ -190,6 +197,13 @@ export class HandDockAnchor {
   blockOpen = false;
   /** A menu press requires leaving the raised flat-palm pose before another fresh dwell. */
   private dismissed = false;
+  /** How long (ms) the deliberate raised, still, flat-palm pose has been held, whether or not opening is blocked. */
+  poseMs = 0;
+  private poseSince: number | null = null;
+  private readonly stillAt = new Vector3();
+  private hasStillAt = false;
+  private pinchSince: number | null = null;
+  private pinchUsed = false;
   private readonly palmNormal = new Vector3();
   private readonly boneA = new Vector3();
   private readonly boneB = new Vector3();
@@ -262,10 +276,22 @@ export class HandDockAnchor {
     // using its last stable position while the menu hand lowers or rolls away.
     if (raised || !this.open && this.opacity <= .01) this.place(frame, hand, dock, wrist, firstPose, _width);
     const held = this.open && (this.reaching || raised && this.fingerNear(other, hand));
-    // Palm toward the eyes + pinch (the Quest system gesture) opens the menu at once, even right after a press.
-    const facing = raised && this.palmFacing(frame, hand, PINCH_FACING_COS);
-    const palmPinch = facing && hand.justPinched && !this.blockOpen;
-    if (palmPinch) { this.dismissed = false; this.eligibleSince = frame.time - OPEN_DWELL_MS; }
+    // Held still: a wrist that drifts away from where the pose began restarts every dwell.
+    const wristAt = hand.joints.wrist!.position;
+    if (!this.hasStillAt || wristAt.distanceTo(this.stillAt) > OPEN_STILL_M) {
+      this.stillAt.copy(wristAt); this.hasStillAt = true;
+      this.poseSince = this.eligibleSince = null;
+    }
+    if (eligible) this.poseSince ??= frame.time;
+    else this.poseSince = null;
+    this.poseMs = this.poseSince === null ? 0 : frame.time - this.poseSince;
+    // Palm toward the eyes + a pinch held 250 ms (the Quest system gesture, made deliberate) opens, even after a press.
+    const facing = raised && this.palmFacing(frame, hand, KEEP_FACING_COS);
+    const pinchFacing = raised && this.palmFacing(frame, hand, PINCH_FACING_COS);
+    if (!hand.pinching || !pinchFacing || this.blockOpen) { this.pinchSince = null; if (!hand.pinching) this.pinchUsed = false; }
+    else if (hand.justPinched && !this.pinchUsed) this.pinchSince = frame.time;
+    const palmPinch = !this.pinchUsed && this.pinchSince !== null && frame.time - this.pinchSince >= PINCH_OPEN_MS;
+    if (palmPinch) { this.pinchUsed = true; this.dismissed = false; this.eligibleSince = frame.time - OPEN_DWELL_MS; }
     if (!eligible && !palmPinch && !(this.open && facing)) this.dismissed = false;
     if (palmPinch) { /* opens below */ }
     else if (eligible && !this.blockOpen && !this.dismissed) this.eligibleSince ??= frame.time;
@@ -354,6 +380,9 @@ export class HandDockAnchor {
     this.reaching = false;
     this.dismissed = false;
     this.controllerPinned = this.controllerRaised = false;
+    this.poseSince = this.pinchSince = null;
+    this.poseMs = 0;
+    this.hasStillAt = this.pinchUsed = false;
   }
 
   /** The palm faces the eyes within the cone (no finger or pinch requirement). Without articulated joints, true. */
