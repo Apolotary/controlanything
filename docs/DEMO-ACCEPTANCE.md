@@ -2,7 +2,7 @@
 
 Hardware: **Meta Quest 3 + MacBook**, with the paired companion showing the silent visual synth. This checklist is a procedure, not a pass claim. The old dial/Perform measurements below are historical; the new route needs a fresh record.
 
-**Golden path:** Enter AR → SAM outline → pinch MacBook → setup → ask Muse → watch JavaScript stream → validate/dry-run/verify → calibrate two corners → touch the water → lift → Stop → Exit.
+**Golden path:** Enter AR → SAM outline → pinch MacBook → setup → ask Muse → watch JavaScript stream → validate/dry-run/verify → calibrate two corners → touch the water → lift → palms Stop → ask again → Stop all → hold Exit.
 
 ## Prepare once
 
@@ -25,7 +25,8 @@ Hardware: **Meta Quest 3 + MacBook**, with the paired companion showing the sile
 | W7 | Hold the fingertip still at highlighted top-left, then bottom-right corner | Each corner visibly progresses. Resting hands do not capture a corner by accident. No device touch output runs before calibration succeeds. Saved valid calibration may skip this step; capture one fresh calibration in the proof take. | Pending |
 | W8 | Touch the screen, draw a slow line/circle, lift and touch elsewhere | Splash starts at the real fingertip location; wake follows motion. X/Y/pressure use verified driver actions. Lift and missing tracking release pressure. No dial steals screen contact; no separate Perform step is required. | Pending |
 | W9 | Turn head, briefly hide the hand, return | No unrelated menu opens or target switch. Tracking loss stops interaction, and recovery is clear. Record latency and comfort separately from successful bytes. | Pending |
-| W10 | Show both palms out / choose Stop; then Exit | Program and queued commands stop, pressure releases, and controls do not restart on a delayed ready message. Exit returns cleanly. | Pending |
+| W10 | Show both palms out, then choose another request | Current wiring and queued commands stop; pressure/note releases. Selected checked device and Ask chips remain. A fresh request generates a new program without setup again; late old replies/outputs cannot restart it. | Pending |
+| W11 | Wrist menu → Stop all, then hold Exit | All controls disarm; sound locks. No automatic restart. Exit returns cleanly. Repeat Stop all in Annotate to confirm the same scope. | Pending |
 
 Record build, headset/browser version, source/model per artifact, card/driver/wiring IDs, verify label, measured timings and uncut clip path. Time **pinch → driver ready**, **ask → wire ready**, **calibration duration**, and **touch → visible splash** separately. A fast generation probe is not total setup latency. Label edits or speed-up in the submission video.
 
@@ -53,15 +54,17 @@ ControlAnything Synth is a browser instrument, not the physical OP-1 Field. Its 
 | M2 | The present user explicitly chooses Sound on on the Mac. The port becomes available; complete setup and confirm controls in Quest. In automation, master gain must remain zero. | Pending |
 | M3 | Ask Muse how the hands should play. Watch exact request, streamed source, checks and honest Live/FIXTURE/Template label. Setup alone must not install a hand mapping. | Pending |
 | M4 | Use the generated gesture. Verify scale-note and gate changes, analyser pitch/level, release and tracking-loss behavior. Hand-only wiring needs no screen calibration. Audible behavior is an additional attended check only with the user's explicit permission. | Pending |
-| M5 | Stop, close/hide the Mac panel, then disconnect/reconnect. Sound and delay tails stop; no old note resumes. A fresh Mac Sound on click and new accepted wiring are required before restarting interaction. | Pending |
+| M5 | Both palms stop the current wiring and release its note; ask again without setup or another sound unlock. Then use Stop all, close/hide the panel or disconnect: sound and delay tails stop and lock. No old note resumes; fresh Sound on is required after that full stop. | Pending |
 
 `apps/companion/e2e/musical-synth.mjs` exercises this software route with the real companion graph, fixture Muse and emulated hands. Its result must be recorded separately from a live Meta generation or real-headset/audio pass.
 
 ### Software checks — November 4
 
-The actual-pointer golden path passed in the emulator after these changes: no manual or hand interaction before asking, requested WIRE, fresh calibration, 41 fingertip touch operations on CC22/23/24, both-palms full Stop, and wrist Tutorial replay/Skip. Setup used labelled acknowledgement evidence after a fixture-camera miss; this is not a real display or headset acceptance.
+The latest actual-pointer golden path passed in the emulator: no manual or hand interaction before asking, requested WIRE, fresh calibration, 41 fingertip touch operations on CC22/23/24, scoped both-palms Stop, Ask again with the same checked driver and a fresh wiring, wrist Stop all, then menu reopen and Tutorial replay/Skip. Lowering the menu hand now freezes the closing menu instead of following it toward the desk; recalling it requires a fresh raised-palm dwell. Setup used labelled acknowledgement evidence after a fixture-camera miss; this is not a real display or headset acceptance.
 
-The musical browser check passed with the real companion Web Audio graph and emulated tracked hands: all ten capability checks, explicit muted unlock, requested Worker program, height/pitch, pinch/release, tracking loss and full Stop/relock. Master output remained zero. A separate single-call live `muse-spark-1.3` probe generated a program that passed bounded synthetic height/pinch/release/hand-loss checks; no device commands ran in that probe. Neither check establishes attended sound quality or a live real-Quest interaction.
+The latest musical browser check passed with the default tutorial, real companion Web Audio graph and emulated tracked hands: all ten capability checks, explicit muted unlock, requested Worker program, height/pitch, pinch/release, tracking loss, scoped Stop/Ask again and full Stop/relock. A 490-character simulated voice transcript remained readable in three pages, with read-only navigation and no restart. Requesting a connected physical OP-1 from the software card returned selection guidance with no model call, fallback or physical command. Master output remained zero. Autonomous Worker failure/release and superseded verification cleanup also passed focused regressions. These are software checks, not actual microphone, headset or physical-device acceptance.
+
+A separate single-call live `muse-spark-1.3` probe generated a program that passed bounded synthetic height/pinch/release/hand-loss checks; no device commands ran in that probe. Neither check establishes attended sound quality or a live real-Quest interaction.
 
 ## Failure/recovery
 
@@ -71,6 +74,8 @@ The musical browser check passed with the real companion Web Audio graph and emu
 - **Touching does nothing:** inspect current wiring/source, selected target, calibration and actual permitted actions. A dial or the old Perform demo is not a substitute for this acceptance step.
 - **Camera failed:** check single-session ownership and existing permission/retry state. Keep one Quest tab; reload only outside AR.
 - **Failed or cancelled wiring:** keep the error and source label visible. A labelled template can be demonstrated as a fallback, not represented as live Muse-written code.
+- **Long request:** after stopping, choose Read request and page through the full accepted transcript. Return must not restart a program or make a model call. An over-500-character request must explain the limit without replacing the active wiring.
+- **Physical OP-1 requested from a software card:** explain the wrong target and point to Annotate → select OP-1 → Correct device if needed. Do not create a visual substitute, switch targets silently or send hardware commands.
 
 ## Evidence boundary and next footage
 

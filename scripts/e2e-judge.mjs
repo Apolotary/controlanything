@@ -1,8 +1,8 @@
 /**
  * The judge path, automated: npm run build && npm run e2e:judge (system Chrome; no browser download).
  *
- *   Enter AR → pinch the MacBook's box → setup ring → armed arc dials → drag Warp → hands do nothing until Muse
- *   writes the wiring: "Touch the water" chip → code card → calibrate the screen → touch the water → both palms out = stop.
+ *   Enter AR → pinch the MacBook's box → setup ring → checked readouts. Hands/dials stay inert until the request:
+ *   Touch the water → code → calibration → touch → palms Stop → Ask again without setup → wrist Stop all.
  *
  * Runs its own muted FIXTURE server (CE_DEMO=1, CE_MAC_SILENT=1, fresh data dir) on PORT (default 8796,
  * HTTPS off), the sim room as the paired Mac (its laptop screen runs the visual synth) and the desktop Quest
@@ -253,7 +253,7 @@ async function run() {
     assert.equal(await quest.evaluate(() => window.__ce.hudKind), 'v2');
     await quest.evaluate(() => {
       window.__judge = { events: [], requests: [], ringSeen: false };
-      const types = new Set(['tags.state', 'device.card', 'agent.step', 'verify.result', 'ui.spec', 'arm.request', 'arm.result', 'panic']);
+      const types = new Set(['tags.state', 'device.card', 'agent.step', 'verify.result', 'ui.spec', 'arm.request', 'arm.result', 'wire.ready', 'wire.stopped', 'panic']);
       window.__ce.ws.tap('in', ({ type, payload }) => { if (types.has(type)) window.__judge.events.push({ type, payload }); });
       window.__ce.ws.tap('out', ({ type, payload }) => { if (type !== 'scan.frame') window.__judge.requests.push({ type, payload }); });
       const watch = () => {
@@ -354,7 +354,8 @@ async function run() {
     await pressChip('Touch the water');
     await waitQuest(() => window.__judge.requests.some((r) => r.type === 'wire.request'));
     const request = await quest.evaluate(() => window.__judge.requests.find((r) => r.type === 'wire.request').payload);
-    assert.deepEqual(request, { cardId: request.cardId, text: 'Touch the water', source: 'chip' });
+    assert.equal(typeof request.requestId, 'string', 'Every new ask has a client epoch');
+    assert.deepEqual(request, { cardId: request.cardId, text: 'Touch the water', source: 'chip', requestId: request.requestId });
     await until('Muse wrote the wiring and it needs the screen calibrated', () => quest.evaluate(() => window.__ce.wiring.phase === 'calibrating'), PIPELINE_TIMEOUT);
     const card = await quest.evaluate(() => window.__ce.hud.root.userData.wire.card);
     assert(/Touch the water/.test(card.header) && card.badge === 'FIXTURE', `the code card names the request and its source (${card.header} / ${card.badge})`);
@@ -389,15 +390,40 @@ async function run() {
 
   await phase('10-both-palms-stop', async () => {
     await hands({ left: { offset: [-0.22, -0.05, -0.45], pose: 'open', palm: 'out' }, right: { offset: [0.22, -0.05, -0.45], pose: 'open', palm: 'out' } });
-    await until('the wiring stopped', () => quest.evaluate(() => !window.__ce.wiring.running && ['idle', 'stopped'].includes(window.__ce.wiring.phase)), 5000);
-    await until('server disarmed after palms Stop', async () => !(await target()).armed);
+    await until('the current wiring stopped', () => quest.evaluate(() => !window.__ce.wiring.running && window.__ce.wiring.phase === 'stopped'), 5000);
+    await waitQuest(() => window.__judge.events.some(r => r.type === 'wire.stopped' && r.payload.ok && r.payload.releaseConfirmed));
+    assert.equal((await target()).armed, true, 'Palms Stop keeps the verified device ready for a new ask');
+    assert.equal(await quest.evaluate(() => window.__ce.canControl(window.__ce.modes.tags.get(window.__ce.lockedId)?.cardId)), true);
     await sim.waitForFunction(() => window.ceSimDebug.visualSynth.getState().touchPressure === 0);
-    assert(await quest.evaluate(() => window.__judge.requests.some(r => r.type === 'panic')), 'Palms Stop must revoke server wiring authority');
+    assert(await quest.evaluate(() => window.__judge.requests.some(r => r.type === 'wire.stop')), 'Palms Stop must revoke this request');
+    assert.equal(await quest.evaluate(() => window.__judge.requests.some(r => r.type === 'panic')), false, 'Palms Stop is distinct from Stop all');
     for (const page of [sim, quest]) for (const frame of page.frames()) {
       assert.equal(await frame.evaluate(() => window.__audioAttempts ?? 0), 0, 'No page may construct an audio graph');
     }
   });
+  await phase('10a-ask-again-without-setup', async () => {
+    const before = await target();
+    const old = await quest.evaluate(() => window.__judge.events.findLast(r => r.type === 'wire.ready').payload);
+    await hands({ left: { offset: [-.25,-.7,-.15], pose: 'default' }, right: { offset: [.2,-.7,-.15], pose: 'default' } }, 10);
+    await pressChip('Hands as knobs');
+    await until('new requested wiring runs', () => quest.evaluate(() => window.__ce.wiring.running), PIPELINE_TIMEOUT);
+    const next = await quest.evaluate(() => window.__judge.events.findLast(r => r.type === 'wire.ready').payload);
+    assert.notEqual(next.wiringId, old.wiringId); assert.notEqual(next.requestId, old.requestId);
+    const after = await target();
+    assert.equal(after.runId, before.runId, 'Another interaction must not require setup again');
+    assert.equal(after.driver.driverId, before.driver.driverId, 'The checked driver is preserved');
+    assert.equal(after.armed, true);
+  });
+  await phase('10b-wrist-stop-all', async () => {
+    await hands({ left: { offset: [-.18,-.12,-.32], pose: 'open', palm: 'toward' }, right: { offset: [.3,-.7,-.2], pose: 'default' } }, 50);
+    await waitQuest(() => { const p=window.__ce.hud.root.getObjectByName('wrist-palette'); return p?.visible && p.anchor.open; });
+    await click({ name: 'deck:panic' });
+    await until('Stop all disarms the server', async () => !(await target()).armed);
+    await waitQuest(() => !window.__ce.wiring.running);
+    assert(await quest.evaluate(() => window.__judge.requests.some(r => r.type === 'panic')));
+  });
   await phase('11-tutorial-menu-replay-and-skip', async () => {
+    await hands({ left: { offset: [-.25,-.7,-.15], pose: 'default' }, right: { offset: [.3,-.7,-.2], pose: 'default' } }, 12);
     await hands({ left: { offset: [-.18, -.12, -.32], pose: 'open', palm: 'toward' }, right: { offset: [.3, -.7, -.2], pose: 'default' } }, 50);
     await waitQuest(() => { const p=window.__ce.hud.root.getObjectByName('wrist-palette'); return p?.visible && p.anchor.open; });
     await click({ name: 'tutorial' });

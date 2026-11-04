@@ -58,7 +58,7 @@ A driver is data, not executable JavaScript. Its operations resolve to MIDI, sto
 
 Evidence labels distinguish **seen ✓** (camera), **renderer ✓** (the virtual renderer reports applied state), **acknowledged ✓** (transport acknowledgement only), and **not seen ✗**. An acknowledgement alone cannot demonstrate a physical lamp or instrument effect. Driver and interface provenance remain separate from the wiring source.
 
-Musical receipts use `applied.source: musical-synth`, raw parameters and an actual Web Audio analyser snapshot (RMS, peak and frequency), sampled before the master gain. These establish software graph activity, not that a person heard sound or a physical synthesizer reacted. `/companion/?mute=1` forces master gain to zero even after Sound on; `CE_MAC_SILENT` separately disables server-side Mac audio actions. Stop/panic, hiding, disconnect and close lock the instrument and discard its graph/delay tail; another Mac click is required. The note gate also has an eight-second held-note cap. Real-headset and audible acceptance remain pending.
+Musical receipts use `applied.source: musical-synth`, raw parameters and an actual Web Audio analyser snapshot (RMS, peak and frequency), sampled before the master gain. These establish software graph activity, not that a person heard sound or a physical synthesizer reacted. `/companion/?mute=1` forces master gain to zero even after Sound on; `CE_MAC_SILENT` separately disables server-side Mac audio actions. Both palms retire the current wiring and release its note while preserving the checked instrument and explicit sound permission for another ask. Stop all/panic, hiding, disconnect and close lock the instrument and discard its graph/delay tail; another Mac click is required. The note gate also has an eight-second held-note cap. Real-headset and audible acceptance remain pending.
 
 ## 4. WIRE: generated JavaScript
 
@@ -78,7 +78,9 @@ On the Quest, `apps/quest/src/wiring/runtime.ts` creates a dedicated blob Web Wo
 
 **Execution location:** normal generated-program execution is on the **Quest Worker**. The server evaluates it only for dry-run validation. The Mac companion never evaluates that program; it receives validated device operations.
 
-`wire.ready` supplies the verified program's action descriptions and required signal names. Touch programs request screen calibration before starting. Hand-only requests do not require a screen. A new request stops the old program while Muse writes its replacement. Both palms out and Stop cancel interaction; selection, session and connection boundaries must also withdraw execution. The acceptance run tests these boundaries rather than assuming a ready message proves them.
+`wire.ready` supplies the verified program's action descriptions and required signal names. Touch programs request screen calibration before starting. Hand-only requests do not require a screen. A new request stops the old program while Muse writes its replacement. Both palms out sends a request-scoped `wire.stop`: it revokes pending/current wiring and queued outputs, releases known browser pressure/note gates, and preserves the selected verified device for Ask again. Owner/request/wiring IDs reject stale stops, readiness and outputs; old verification cleanup cannot restore into a newer request. Wrist Stop all remains a full panic/disarm in either layer. Session and connection boundaries also withdraw execution. The acceptance run checks these boundaries rather than assuming a ready message proves them.
+
+The current Quest supplies a fresh request ID on every ask and includes its request/wiring IDs with Worker outputs. The protocol still accepts older epochless clients; the new output-epoch guarantee applies to correlated requests, not those compatibility clients. Physical devices do not receive speculative release CCs: scoped release is defined only for the authored browser instruments. Use full Stop all and the reviewed hardware procedure for a physical instrument.
 
 ## 5. Touch calibration and rendering
 
@@ -98,12 +100,13 @@ All WebSocket messages use `{v:1,type,id,ts,from,to?,payload}`. The hub authenti
 | `scan.frame`, `scan.result`, `tag.add`, `target.select` | Camera perception, tags and deliberate device selection. |
 | `control.setup`, `agent.step`, `driver.spec`, `driver.status`, `verify.result`, `ui.spec`, `arm.*` | Setup, source, evidence and control readiness. |
 | `visual.open`, `musical.open` | Server-addressed requests to show the selected Mac instrument. Musical open never grants sound permission. |
-| `wire.request {cardId,text,source}` | Explicit chip, voice transcript or text request. |
+| `wire.request {requestId,cardId,text,source}` | Explicit chip, voice transcript or text request with a fresh client epoch. |
 | `wire.progress` | Card/wiring IDs, phase, model, source, code append/replacement, title, explanation and issues. |
 | `wire.ready` | Accepted code, source/model, allowed action IDs/ranges/rates and needed signals. |
-| `control.event` with `widgetId: wire:<actionId>` | Worker output through the same verified action route as other controls. |
+| `wire.stop`, `wire.stopped` | Owner/epoch-scoped stop and release result, preserving the verified device for another ask. |
+| `control.event` with `widgetId: wire:<actionId>` | Worker output with its actual request/wiring IDs through the verified action route. |
 | `exec.command`, `exec.ack`, `sense.request`, `sense.result` | Execution and measured evidence. |
-| `panic`, `control.cancel` | Stop/cancellation. |
+| `panic`, `control.cancel` | Full Stop all/disarm or device setup cancellation. |
 
 Inspect `/api/health`, `/api/muse/calls`, `/api/agent/targets`, `/api/agent/steps` and `/api/agent/exec`. Match a demonstration to its actual card, driver, wiring, sources, verification and timestamps. Do not combine unrelated live logs and fixture footage as if they were one run.
 
