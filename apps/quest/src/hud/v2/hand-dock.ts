@@ -27,6 +27,8 @@ const LOST_GRACE_MS = 800;
  * ~0.45 s. A relaxed hand resting while the other one works a dial must never open it.
  */
 const OPEN_DWELL_MS = 450, OPEN_FACING_COS = Math.cos(40 * Math.PI / 180), OPEN_MAX_DISTANCE = 0.65, OPEN_BELOW_HEAD = 0.45;
+/** Quest's own menu gesture: palm toward the eyes, then pinch. Pinching rolls the palm a little, so the cone is wider. */
+const PINCH_FACING_COS = Math.cos(55 * Math.PI / 180);
 /** Tip-to-knuckle distance over bone length: ~1 for a straight finger, ~0.8 relaxed, ~0.4 in a fist. */
 const OPEN_FINGER_STRAIGHTNESS = 0.88;
 const STRAIGHT_FINGERS = ['index-finger', 'middle-finger'] as const;
@@ -260,14 +262,19 @@ export class HandDockAnchor {
     // using its last stable position while the menu hand lowers or rolls away.
     if (raised || !this.open && this.opacity <= .01) this.place(frame, hand, dock, wrist, firstPose, _width);
     const held = this.open && (this.reaching || raised && this.fingerNear(other, hand));
-    if (!eligible) this.dismissed = false;
-    if (eligible && !this.blockOpen && !this.dismissed) this.eligibleSince ??= frame.time;
+    // Palm toward the eyes + pinch (the Quest system gesture) opens the menu at once, even right after a press.
+    const facing = raised && this.palmFacing(frame, hand, PINCH_FACING_COS);
+    const palmPinch = facing && hand.justPinched && !this.blockOpen;
+    if (palmPinch) { this.dismissed = false; this.eligibleSince = frame.time - OPEN_DWELL_MS; }
+    if (!eligible && !palmPinch && !(this.open && facing)) this.dismissed = false;
+    if (palmPinch) { /* opens below */ }
+    else if (eligible && !this.blockOpen && !this.dismissed) this.eligibleSince ??= frame.time;
     else this.eligibleSince = null;
     const palmReady = this.eligibleSince !== null && frame.time - this.eligibleSince >= OPEN_DWELL_MS;
     let nextOpen = this.open;
     if (this.dismissed) {
       nextOpen = false;
-    } else if (palmReady || this.open && (eligible || held)) {
+    } else if (palmPinch || palmReady || this.open && (eligible || held || facing)) {
       nextOpen = true;
       this.awaySince = null;
     } else if (this.open) {
@@ -349,19 +356,26 @@ export class HandDockAnchor {
     this.controllerPinned = this.controllerRaised = false;
   }
 
-  /** A deliberate "show me the menu" pose (see OPEN_*). Without articulated joints, palm-up alone decides. */
-  private deliberate(frame: HudFrame, hand: HandState): boolean {
+  /** The palm faces the eyes within the cone (no finger or pinch requirement). Without articulated joints, true. */
+  private palmFacing(frame: HudFrame, hand: HandState, cos: number): boolean {
     const joints = hand.joints, wrist = joints.wrist, index = joints['index-finger-phalanx-proximal'], pinky = joints['pinky-finger-phalanx-proximal'];
-    if (!wrist || hand.pinching) return false;
-    const head = frame.head.position;
-    if (!index || !pinky) return true;
+    if (!wrist) return false;
+    if (!index || !pinky) return !!hand.palmUp;
     // Palm normal from joint positions (same construction as app/input.ts): left = pinky × index, right = index × pinky.
     this.boneA.subVectors(index.position, wrist.position);
     this.boneB.subVectors(pinky.position, wrist.position);
     if (this.nonDominant === 'left') this.palmNormal.crossVectors(this.boneB, this.boneA);
     else this.palmNormal.crossVectors(this.boneA, this.boneB);
-    this.direction.subVectors(head, wrist.position).normalize();
-    if (this.palmNormal.normalize().dot(this.direction) < OPEN_FACING_COS) return false;
+    this.direction.subVectors(frame.head.position, wrist.position).normalize();
+    return this.palmNormal.normalize().dot(this.direction) >= cos;
+  }
+
+  /** A deliberate "show me the menu" pose (see OPEN_*). Without articulated joints, palm-up alone decides. */
+  private deliberate(frame: HudFrame, hand: HandState): boolean {
+    const joints = hand.joints, wrist = joints.wrist, index = joints['index-finger-phalanx-proximal'], pinky = joints['pinky-finger-phalanx-proximal'];
+    if (!wrist || hand.pinching) return false;
+    if (!index || !pinky) return true;
+    if (!this.palmFacing(frame, hand, OPEN_FACING_COS)) return false;
     for (const finger of STRAIGHT_FINGERS) {
       const base = joints[`${finger}-phalanx-proximal`], mid = joints[`${finger}-phalanx-intermediate`];
       const end = joints[`${finger}-phalanx-distal`], tip = joints[`${finger}-tip`];
