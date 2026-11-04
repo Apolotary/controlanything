@@ -10,7 +10,7 @@ Hardware: **Meta Quest 3 + MacBook**, with the paired companion showing the sile
 2. Keep the existing paired data. Open the companion in Chrome, with one executor-leading tab. **Open visuals** must visibly open the instrument or explain why it cannot; bring the Mac screen into the wearer's view. Record driver and wiring provenance separately.
 3. Connect Quest over USB and establish `adb reverse tcp:8787 tcp:8787`. Use the existing single app tab at `http://localhost:8787/quest/`. Reload with `scripts/quest-reload.mjs` only while AR is inactive; do not open a second tab with a new launch command.
 4. Use `scripts/deploy-live.sh quest` / `companion` / `sim` for live asset updates. Do not empty a dist directory that an open AR session still needs for lazy-loaded chunks. Server/protocol changes require a coordinated server restart.
-5. Sit 0.6–1m from the Mac with its display and both hands visible. Test a five-second Quest compositor recording and play it back: it must contain passthrough **and** AR panels. The app's Record take is a separate video/pose artifact and does not capture the rendered AR UI.
+5. Sit 0.6–1m from the Mac with its display and both hands visible. Test a five-second Quest compositor recording and review it muted: it must contain passthrough **and** AR panels. The app's Record take is a separate video/pose artifact and does not capture the rendered AR UI.
 
 ## One continuous real-headset take
 
@@ -42,6 +42,26 @@ PORT=8796 node scripts/e2e-judge.mjs
 ```
 
 The integrated browser check must cover chip → streamed source → calibration → actual Worker outputs (`wire:cc22`, `wire:cc23`, `wire:cc24`) reaching the simulated Mac → Stop. For Mac source display, use `apps/companion/e2e/wiring-view.mjs`. Fixture replay remains visibly FIXTURE, even when the original recorded model was live.
+
+## Optional musical route: separate acceptance
+
+ControlAnything Synth is a browser instrument, not the physical OP-1 Field. Its authored sound engine supplies capabilities; Muse must write the requested note/gate and parameter mapping after the wearer asks. These checks remain pending until observed. Keep output muted for automation (`/companion/?mute=1` and Chrome's mute-audio flag); an analyser receipt measures the graph before that mute, not audible playback. `CE_MAC_SILENT=1` alone does not mute this browser instrument.
+
+| Step | Action and required observation | Current run |
+|---|---|---|
+| M1 | Choose Musical synth in Quest. Its Mac panel opens automatically, sound remains locked and no verification note or hand interaction starts. | Pending |
+| M2 | The present user explicitly chooses Sound on on the Mac. The port becomes available; complete setup and confirm controls in Quest. In automation, master gain must remain zero. | Pending |
+| M3 | Ask Muse how the hands should play. Watch exact request, streamed source, checks and honest Live/FIXTURE/Template label. Setup alone must not install a hand mapping. | Pending |
+| M4 | Use the generated gesture. Verify scale-note and gate changes, analyser pitch/level, release and tracking-loss behavior. Hand-only wiring needs no screen calibration. Audible behavior is an additional attended check only with the user's explicit permission. | Pending |
+| M5 | Stop, close/hide the Mac panel, then disconnect/reconnect. Sound and delay tails stop; no old note resumes. A fresh Mac Sound on click and new accepted wiring are required before restarting interaction. | Pending |
+
+`apps/companion/e2e/musical-synth.mjs` exercises this software route with the real companion graph, fixture Muse and emulated hands. Its result must be recorded separately from a live Meta generation or real-headset/audio pass.
+
+### Software checks — November 4
+
+The actual-pointer golden path passed in the emulator after these changes: no manual or hand interaction before asking, requested WIRE, fresh calibration, 41 fingertip touch operations on CC22/23/24, both-palms full Stop, and wrist Tutorial replay/Skip. Setup used labelled acknowledgement evidence after a fixture-camera miss; this is not a real display or headset acceptance.
+
+The musical browser check passed with the real companion Web Audio graph and emulated tracked hands: all ten capability checks, explicit muted unlock, requested Worker program, height/pitch, pinch/release, tracking loss and full Stop/relock. Master output remained zero. A separate single-call live `muse-spark-1.3` probe generated a program that passed bounded synthetic height/pinch/release/hand-loss checks; no device commands ran in that probe. Neither check establishes attended sound quality or a live real-Quest interaction.
 
 ## Failure/recovery
 

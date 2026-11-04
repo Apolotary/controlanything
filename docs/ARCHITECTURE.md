@@ -8,6 +8,8 @@ The current demo is **select → ask → Muse writes → validate/dry-run → ca
 
 **Control:** the selected device is bound to an executor. For the visual synth, the companion opens a visible WebGL renderer and advertises its presence. The server obtains device knowledge, asks Muse for a declarative driver, checks effects and prepares controls. In `CE_DEMO=1`, the verified reversible silent visual target can arm without a separate Enable modal. Other targets retain their setup and confirmation gates.
 
+**Musical option:** ControlAnything Synth is a second, separate software device (`ce-musical-synth`). A server-addressed `musical.open` request opens its Mac panel but cannot unlock audio. Only the Mac's **Sound on** button creates/resumes its Web Audio graph; the virtual port is available only while the panel is visible, unlocked, connected and in the executor-leading tab. Its setup retains explicit confirmation. Muse reads the authored capability manifest and writes the requested scale-note/gate and effect wiring through the same WIRE pipeline. No physical Web MIDI route or authored hand preset substitutes for that program.
+
 Arming a driver is not hand wiring. The device card asks **What should your hands do?** The wearer chooses a chip or speaks. Only then does `wire.request` start generation. `CE_PREFETCH` is off by default; `CE_PREFETCH=1` permits driver/interface preparation for an explicitly disclosed rehearsal. It does not replace the per-request WIRE step.
 
 ## 2. Runtime boundaries
@@ -32,6 +34,7 @@ Server <─exec.ack──────────────── applied rend
 | Quest | `apps/quest` | WebXR camera and joints, AR selection/menu/card, code view, signal computation, screen calibration and generated-program Worker. Meta `@iwsdk/xr-input` handles pointing/poke/pinch; IWER supplies desktop emulation. |
 | Mac companion | `apps/companion` | Pairing/status, full-screen visual instrument, shared wiring-source display and Web MIDI/Serial executors. One tab executes through Web Locks. It renders and dispatches device actions; it does not evaluate the generated wiring program. |
 | Visual synth | `packages/vsynth` | Authored silent WebGL renderer and capability manifest. CC22/23/24 are touch X/Y/pressure; contact spawns a splash, motion leaves a wake, low pressure gives hover feedback. The effect engine is infrastructure, not Muse-generated shader code. |
+| Musical synth | `packages/vsynth/src/musical*`, companion `musicalSynth.ts` | Authored monophonic Web Audio graph/manifest: scale CC16, gate CC17, cutoff CC74, resonance CC71, attack CC73, release CC72, delay CC91, programs 0–2. Muse generates the hand mapping after a request. |
 | Gen3d | `packages/gen3d` | Declarative control format, validators, deterministic compiler and lower-level spatial renderer. Current main HUD uses a bounded established layout, rather than evaluating arbitrary scene code. |
 | Sim | `apps/sim` | Virtual Mac/executors and camera/audio stand-ins for software checks. Its receipts cannot establish real Quest comfort or physical-device behavior. |
 
@@ -54,6 +57,8 @@ The setup chain is `LINK → RESEARCH → DRIVE → VERIFY ∥ FORGE → ARM`. A
 A driver is data, not executable JavaScript. Its operations resolve to MIDI, stored/learned IR, local or supported bridge operations. No arbitrary network driver or undeclared CC is created by accepting prose.
 
 Evidence labels distinguish **seen ✓** (camera), **renderer ✓** (the virtual renderer reports applied state), **acknowledged ✓** (transport acknowledgement only), and **not seen ✗**. An acknowledgement alone cannot demonstrate a physical lamp or instrument effect. Driver and interface provenance remain separate from the wiring source.
+
+Musical receipts use `applied.source: musical-synth`, raw parameters and an actual Web Audio analyser snapshot (RMS, peak and frequency), sampled before the master gain. These establish software graph activity, not that a person heard sound or a physical synthesizer reacted. `/companion/?mute=1` forces master gain to zero even after Sound on; `CE_MAC_SILENT` separately disables server-side Mac audio actions. Stop/panic, hiding, disconnect and close lock the instrument and discard its graph/delay tail; another Mac click is required. The note gate also has an eight-second held-note cap. Real-headset and audible acceptance remain pending.
 
 ## 4. WIRE: generated JavaScript
 
@@ -92,6 +97,7 @@ All WebSocket messages use `{v:1,type,id,ts,from,to?,payload}`. The hub authenti
 | `hello`, `welcome`, `presence`, session-claim/supersession | Authenticated clients and a single active headset owner. A duplicate tab must release its camera and stop sending controls. |
 | `scan.frame`, `scan.result`, `tag.add`, `target.select` | Camera perception, tags and deliberate device selection. |
 | `control.setup`, `agent.step`, `driver.spec`, `driver.status`, `verify.result`, `ui.spec`, `arm.*` | Setup, source, evidence and control readiness. |
+| `visual.open`, `musical.open` | Server-addressed requests to show the selected Mac instrument. Musical open never grants sound permission. |
 | `wire.request {cardId,text,source}` | Explicit chip, voice transcript or text request. |
 | `wire.progress` | Card/wiring IDs, phase, model, source, code append/replacement, title, explanation and issues. |
 | `wire.ready` | Accepted code, source/model, allowed action IDs/ranges/rates and needed signals. |
