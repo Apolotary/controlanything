@@ -86,6 +86,8 @@ async function shutdown(signal: string): Promise<void> {
   stopConsole();
   remo?.stop();
   osmo?.stop();
+  await agent.coding.close();
+  agent.close();
   await servers.close();
   process.exit(0);
 }

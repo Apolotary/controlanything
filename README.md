@@ -40,7 +40,7 @@ For a longer request, choose **Details → Read request** after stopping the wir
 | Meta model | What it does here |
 |---|---|
 | **SAM 3.1** (`sam-3.1`) | Finds and outlines the devices and objects in passthrough frames: every box you see comes from it. During verification it finds the same outline again on the before and after frames. |
-| **Muse Spark** (`muse-spark-1.3`) | Identifies the pinched device from a crop and the whole frame. Writes the driver from the device's capability manifest or MIDI chart. Writes the per-request JavaScript wiring and control descriptions, with repair when checks fail. Also writes the Muse buddy’s text: it reacts to each object you show it and judges whether the object meets the quest. |
+| **Muse Spark** (`muse-spark-1.3`) | Identifies the pinched device from a crop and the whole frame. Writes the driver from the device's capability manifest or MIDI chart. Writes the per-request JavaScript wiring and control descriptions, with repair when checks fail. Native Muse Code uses it to develop connector project code with file and terminal tools. Also writes the Muse buddy’s text: it reacts to each object you show it and judges whether the object meets the quest. |
 | **Muse Wonder** (`muse-wonder-1.0`) | Guarded fallback for driver generation and older experimental paths. The normal gesture-program harness is pinned to Muse Spark; only count Wonder as used when a call actually occurred. |
 | **Muse Image** (`muse-image-1.0`) | Paints the buddy's stickers. Optionally paints a device-inspired panel texture, which never delays the controls. |
 | **Muse Voice Transcribe** (`muse-voice-transcribe-1.0`) | Transcribes the device card’s hold-to-talk wiring request, plus the older lab assistant and spoken verification clips. |

@@ -16,6 +16,8 @@ Task files, logs and worktrees persist on disk. The workshop's latest-job index 
 
 The Meta key enters the host through stdin, not command arguments or the child tool environment. Muse settings/data are isolated without changing the user's Hermes or personal Muse profile. The host is pinned to Meta/Muse Spark, sandboxing stays on, and reminder agents, foreign personal context, web tools, session messaging and subagents are excluded from this coding toolset. Jobs are bounded and serialized. No-sound/no-hardware-actuation is an explicit job policy; this is not a claim that arbitrary terminal code is intrinsically incapable of calling Mac APIs. Physical MIDI effects still require the attended device check.
 
+## Fast gesture-programming lane
+
 ```text
 Quest: select object + explicit voice/chip request
     → Mac bridge: driver setup + Muse tool loop ↔ Meta API
@@ -26,7 +28,7 @@ Quest: select object + explicit voice/chip request
 
 The model does not process every hand frame. WebXR provides the Quest signals; generated code maps them in its sandboxed Worker. The Mac server authorizes, clamps and rate-limits outputs to the selected connector. Driver generation remains the existing Muse step, using the manifest or reviewed MIDI chart; the new tool loop replaces wiring generation. General questions, object research and experimental Canvas remain separate Muse paths.
 
-## What the agent can do
+### Gesture tools
 
 | Tool | Actual operation |
 |---|---|
@@ -35,7 +37,7 @@ The model does not process every hand frame. WebXR provides the Quest signals; g
 | `check_program` | Accepts generated JavaScript, validates it and dry-runs synthetic hand/screen traces. Returns real errors for repair or an artifact hash after success. Sends no device command. |
 | `finish_program` | Returns only the exact successful checked artifact by hash, after both inspections. It does not authorize a device or prove a physical effect. |
 
-The existing bridge then verifies the actions and publishes `wire.ready`. A model saying “done” cannot replace those checks. Program generation uses only `muse-spark-1.3`; an unexpected response model is rejected before its tools execute. No generic shell, arbitrary network, sound-unlock or unreviewed hardware tool is exposed. No implicit template is installed after failure.
+The existing bridge then verifies the actions and publishes `wire.ready`. A model saying “done” cannot replace those checks. Program generation uses only `muse-spark-1.3`; an unexpected response model is rejected before its tools execute. The gesture harness exposes no generic shell, arbitrary network, sound-unlock or unreviewed hardware tool. No implicit template is installed after failure.
 
 The loop is bounded to eight model turns, sixteen tool calls, ninety seconds and a reported token budget. Stop, replacement and disconnect cancel the job; retired results cannot publish readiness. There is no new runtime model in the hand-frame path.
 
