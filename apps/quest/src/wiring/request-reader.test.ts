@@ -34,10 +34,10 @@ describe('reading a wiring request without controlling the device', () => {
     reader.disposeUi(); surfaces.dispose();
   });
 
-  it('fits normal and worst-width requests at the larger reading size without changing other readers', () => {
+  it('keeps requests in short, spacious chunks without changing other readers', () => {
     const longRequest = ('Play like a theremin. ' + Array.from({ length: 9 }, (_, i) =>
       `Part ${i + 1}: let hand height choose notes and pinch play them. `).join('')).slice(0, 465) + ' Last words stay visible.';
-    expect(requestReadingPages(longRequest)).toHaveLength(2);
+    expect(requestReadingPages(longRequest)).toHaveLength(3);
     const advances = new Map(readerFont.chars.map(g => [g.id, g.xadvance / readerFont.info.size]));
     for (const text of [longRequest, 'W'.repeat(500), '日本語の本'.repeat(100), '👩‍🚀'.repeat(90), 'Right hand → ripples, left hand → colour.']) {
       const pages = requestReadingPages(text);

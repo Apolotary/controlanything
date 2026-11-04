@@ -8,7 +8,9 @@ import readerFont from '../../public/fonts/muse-reader-inter.json';
 
 export const REQUEST_READING = {
   width: .68, height: .52, contentWidth: .60, contentHeight: .34,
-  fontSizeMm: 26, lineHeight: 1.35, paddingMm: 12, linesPerPage: 8,
+  // A short reading chunk leaves room to breathe; preserve words by paging,
+  // rather than filling the panel with a dense paragraph or shrinking type.
+  fontSizeMm: 28, lineHeight: 1.5, paddingMm: 18, linesPerPage: 5,
   buttonWidth: .18, buttonHeight: .064,
 } as const;
 

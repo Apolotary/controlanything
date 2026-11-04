@@ -5,6 +5,7 @@ import type { HandState, HomeState, HudFrame, HudTarget, WireView } from '../con
 import { HandFeedback } from '../../app/hand-feedback';
 import { createHud, THEME } from './index';
 import { BoxField } from './boxes';
+import type { WristPalette } from './wrist-palette';
 
 const target: HudTarget = { id: 'device', tagged: true, connection: 'ready', label: 'Laptop', source: 'yolo', status: 'scanned', position: [0, 1.4, -1], facing: [0, 0, 1], confirmed: false, sizeM: [0.3, 0.2, 0.05] };
 const spec = (armed = true): Gen3dSpec => ({
@@ -1100,6 +1101,47 @@ describe('gesture-first device workspace', () => {
     chips: ['Touch the water', 'Hands as knobs', 'Surprise me'], mic: 'idle', canRecalibrate: true,
     code: { wiringId: 'wire-reading', requestId: 'ask-reading', phase, model: 'fixture', source: 'fixture',
       request: 'Let my fingertip touch the water and make ripples as it moves across the screen.', code: 'out.set("cc24", 0);', phaseLine: phase, mode: 'full' } });
+
+  it('keeps wrist menu hit regions distinct across primary and utility pages', () => {
+    const f = setup('annotate');
+    const palette = f.hud.root.getObjectByName('wrist-palette') as WristPalette;
+    palette.register({ key: 'buddy', label: 'Buddy', order: 10, onSelect() {} });
+    palette.register({ key: 'tutorial', label: 'Tutorial', order: 85, onSelect() {} });
+    const internal = f.hud as unknown as {
+      widgets: { group: Object3D; w: number; h: number }[];
+      bindHit(widget: { group: Object3D; w: number; h: number }): Mesh;
+    };
+    const check = () => {
+      f.hud.update(f.frame(undefined, 200));
+      const hits = palette.buttons.map(button => {
+        const widget = internal.widgets.find(item => item.group === button)!;
+        return { name: button.name, hit: internal.bindHit(widget) };
+      });
+      f.hud.root.updateMatrixWorld(true);
+      const rectangles = hits.map(({ name, hit }) => {
+        const corners = [[-.5, -.5], [-.5, .5], [.5, -.5], [.5, .5]].map(([x, y]) =>
+          palette.worldToLocal(hit.localToWorld(new Vector3(x, y, 0))));
+        return { name, left: Math.min(...corners.map(p => p.x)), right: Math.max(...corners.map(p => p.x)),
+          bottom: Math.min(...corners.map(p => p.y)), top: Math.max(...corners.map(p => p.y)) };
+      });
+      for (let i = 0; i < rectangles.length; i++) for (let j = i + 1; j < rectangles.length; j++) {
+        const a = rectangles[i]!, b = rectangles[j]!;
+        const overlapX = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+        const overlapY = Math.min(a.top, b.top) - Math.max(a.bottom, b.bottom);
+        expect(overlapX <= 1e-8 || overlapY <= 1e-8, `${a.name} overlaps ${b.name}`).toBe(true);
+      }
+      return rectangles.map(rect => rect.name);
+    };
+    try {
+      expect(check()).toContain('find-objects');
+      palette.item('palette-more')!.onSelect();
+      const utilities = check();
+      expect(utilities).toContain('layer:annotate');
+      expect(utilities).toContain('track:electronics');
+      expect(utilities).toContain('buddy');
+      expect(utilities).toContain('exit-ar');
+    } finally { f.hud.dispose(); }
+  });
 
   it('yields the hand menu only to a changed explicit device selection', () => {
     const f = setup(); f.hud.upsertTarget(target); f.hud.update(f.frame(undefined, 200));
