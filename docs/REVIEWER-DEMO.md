@@ -1,6 +1,6 @@
 # Camera, phone and mobile WebXR demo
 
-Open **`/quest/reviewer.html`** on the same ControlAnything server. It works with touch or a mouse and does not need a Quest, USB device, Web MIDI permission, or a separate companion tab.
+Open **`/quest/reviewer.html?buddy=1`** on the same ControlAnything server (plain `/quest/reviewer.html` now opens the AR-first [hands demo](HANDS-DEMO.md)). It works with touch or a mouse and does not need a Quest, USB device, Web MIDI permission, or a separate companion tab.
 
 For a local laptop:
 
@@ -9,7 +9,7 @@ npm install
 npm run demo:sim              # builds what is missing; add -- --fixture to force FIXTURE replies
 ```
 
-After `npm run demo:sim`, open `http://localhost:8787/quest/reviewer.html`. The manual alternative is `npm run build` (only when a live session is not using `dist`) and then `MODEL_MODE=fixture CE_DEMO=1 npm start`. Without an API key the server returns clearly labelled **FIXTURE** recordings/scripted connector output; these are examples, not live recognition or generation. To use Muse Spark live, configure `MODEL_API_KEY` in your private `.env` and start the normal server. Never put a key into the webpage or URL. Keep sound on for the demo; `?mute=1` is available for unattended browser checks.
+After `npm run demo:sim`, open `http://localhost:8787/quest/reviewer.html?buddy=1`. The manual alternative is `npm run build` (only when a live session is not using `dist`) and then `MODEL_MODE=fixture CE_DEMO=1 npm start`. Without an API key the server returns clearly labelled **FIXTURE** recordings/scripted connector output; these are examples, not live recognition or generation. To use Muse Spark live, configure `MODEL_API_KEY` in your private `.env` and start the normal server. Never put a key into the webpage or URL. Keep sound on for the demo; `?mute=1` is available for unattended browser checks.
 
 For webcam hand tracking with particle visuals and the same Muse ask flow, see the separate [hands demo](HANDS-DEMO.md) (`/quest/hands.html`).
 
