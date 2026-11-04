@@ -15,6 +15,19 @@ describe('SseDecoder', () => {
 });
 
 describe('StreamClient', () => {
+  it('distinguishes the requested model from actual streamed model metadata', async () => {
+    const f = mockFetch([
+      () => sseResponse([{ choices: [{ delta: { content: 'hello' }, finish_reason: 'stop' }] }]),
+      () => sseResponse([{ model: 'muse-spark-1.3', choices: [{ delta: { content: 'hello' }, finish_reason: 'stop' }] }]),
+    ]);
+    const client = new StreamClient({ apiKey: 'test', fetchImpl: f.impl });
+    const request = { model: 'requested-only', messages: [{ role: 'user' as const, content: 'hello' }] };
+    const omitted = await client.stream(request);
+    expect(omitted.model).toBe('requested-only'); expect(omitted.reportedModel).toBeUndefined();
+    const reported = await client.stream(request);
+    expect(reported.reportedModel).toBe('muse-spark-1.3');
+  });
+
   it('posts a streamed chat/completions body (no temperature) and accumulates content + usage', async () => {
     const f = mockFetch([() => sseResponse(contentEvents('{"hello": "world"}', 4))]);
     const c = new StreamClient({ apiKey: 'sk-test', fetchImpl: f.impl });
@@ -42,12 +55,17 @@ describe('StreamClient', () => {
         ]),
     ]);
     const done: string[] = [];
-    const r = await new StreamClient({ apiKey: 'k', fetchImpl: f.impl }).stream({ model: 'm', messages: [{ role: 'user', content: 'x' }], tools: [] }, { onToolCall: (t) => done.push(t.name) });
+    const partial: string[] = [];
+    const r = await new StreamClient({ apiKey: 'k', fetchImpl: f.impl }).stream({ model: 'm', messages: [{ role: 'user', content: 'x' }], tools: [] }, {
+      onToolCall: (t) => done.push(t.name), onToolCallDelta: (t) => partial.push(t.arguments),
+    });
     expect(r.toolCalls.map((t) => [t.id, t.name, t.arguments])).toEqual([
       ['call_a', 'add_control', '{"id":"cutoff"}'],
       ['call_b', 'bind', '{"id":"cutoff"}'],
     ]);
     expect(done).toEqual(['add_control', 'bind']);
+    expect(partial).toContain('{"id":"cut');
+    expect(partial).toContain('{"id":"cutoff"}');
     expect(r.finishReason).toBe('tool_calls');
   });
 

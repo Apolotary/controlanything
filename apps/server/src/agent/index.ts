@@ -43,6 +43,7 @@ import { validateDriver } from '../devices/validate';
 import { verifyDriver } from './verify';
 import { releaseWireOutputs } from './wire-stop';
 import { libraryDriverNote, WireService } from './wire';
+import { MuseBridgeHarness } from './muse-harness';
 import { fixtureWireDraft } from './wire-fixture';
 import { CANCELLED_GUIDANCE, type TimedPhase } from './guidance';
 import { subscribeForge } from './forgeBridge';
@@ -60,11 +61,14 @@ import { TagStore, evaluateConnection, isLaptopTarget, tagCapability, tagSnapsho
 import { interactionReferences } from './interaction-references';
 import { helperPairUrls } from '../net';
 import type { Target, TargetDetection } from './types';
+import type { WireReadyPayload } from '@ce/protocol';
 
 // Derive from the payload map so newly added protocol schemas participate in narrowing.
 type AgentMessage = { [K in MessageType]: { type: K; payload: PayloadOf<K> } }[MessageType];
 
 export interface Agent {
+  harness: MuseBridgeHarness;
+  wireReady(cardId: string): WireReadyPayload | undefined;
   targets: TargetStore;
   steps: StepLog;
   dispatcher: Dispatcher;
@@ -1275,8 +1279,11 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     return ids.filter((id) => t.verification[id] !== 'pass');
   };
   const streamClient = muse.mode === 'live' ? new StreamClient({ apiKey: ctx.config.muse.apiKey, baseUrl: ctx.config.muse.baseUrl }) : undefined;
+  const harness = new MuseBridgeHarness({ model: muse.model, mode: muse.mode, callLog: ctx.calls, log,
+    ...(streamClient ? { stream: { model: muse.model, stream: streamClient.stream.bind(streamClient) } } : {}),
+  });
   const wireService = new WireService({
-    hub, targets, spark: muse, wonder, log, callLog: ctx.calls,
+    hub, targets, spark: muse, wonder, log, callLog: ctx.calls, harness,
     ...(streamClient ? { stream: { model: muse.model, stream: streamClient.stream.bind(streamClient) } } : {}),
     chunkDelayMs: Number.isFinite(Number(process.env.CE_WIRE_CHUNK_MS)) && process.env.CE_WIRE_CHUNK_MS !== undefined ? Number(process.env.CE_WIRE_CHUNK_MS) : 70,
     ensureDriver: ensureWireDriver, prepareDriver: prepareWireDriver, verifyActions: verifyWireActions,
@@ -1431,6 +1438,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const unsubscribe = hub.onMessage(onMessage);
 
   return {
+    harness,
+    wireReady: (cardId: string) => wireService.readyFor(cardId),
     targets,
     steps,
     dispatcher,

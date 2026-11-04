@@ -98,6 +98,8 @@ export interface WireInput {
   deviceName: string;
   request: string;
   driver: Pick<Driver, 'actions' | 'executor' | 'transport'>;
+  /** Selected-object frame, not a claim that a fresh/live camera frame exists. */
+  observation?: { jpeg: string; capturedAt: number; width: number; height: number; label?: string };
 }
 
 /** What each action does, as far as the device's own capability manifest says (the visual synth publishes one). */
@@ -228,6 +230,8 @@ export interface WireDeps {
   wonder?: MuseChat;
   /** live Spark with token streaming (omit in fixture mode: the code is replayed in chunks) */
   stream?: { model: string; stream: StreamClient['stream'] };
+  /** The normal Mac bridge uses the bounded native Muse tool loop. */
+  harness?: { write(input: WireInput, emit: WireEmit, opts?: { signal?: AbortSignal; budgetMs?: number; wiringTag?: string }): Promise<WireWritten> };
   callLog?: CallLog;
   log?: (line: string) => void;
   /** pause between replayed chunks */
@@ -263,6 +267,7 @@ const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve) 
 });
 
 export async function writeWiring(deps: WireDeps, input: WireInput, emit: WireEmit, opts: { signal?: AbortSignal; budgetMs?: number; wiringTag?: string } = {}): Promise<WireWritten> {
+  if (deps.harness) return deps.harness.write(input, emit, opts);
   const log = deps.log ?? (() => {});
   const started = Date.now();
   const job = opts.signal;
@@ -534,7 +539,11 @@ export class WireService {
       if (ready.note) send('writing', { note: ready.note });
       const driver = this.d.prepareDriver(target);
 
-      const written = await writeWiring(this.d, { cardId, deviceName: target.card?.name ?? cardId, request: p.text, driver }, send, { signal: abort.signal, wiringTag: cardId });
+      const detection = target.detection;
+      const written = await writeWiring(this.d, { cardId, deviceName: target.card?.name ?? cardId, request: p.text, driver,
+        ...(detection ? { observation: { jpeg: detection.jpeg, capturedAt: detection.capturedAt, width: detection.width,
+          height: detection.height, label: detection.label } } : {}),
+      }, send, { signal: abort.signal, wiringTag: wiringId });
       if (abort.signal.aborted) return;
       if (!written.ok) return fail('Muse could not write a working wiring this time. Ask again, in other words.', written.issues);
 

@@ -271,7 +271,7 @@ async function main(): Promise<void> {
   quest.send('wire.request', { cardId, text: 'Hands as knobs', source: 'voice' });
   const third = await until('wire.ready after the re-selection', () => quest.of('wire.ready').find((m) => m.payload.wiringId !== second.payload.wiringId && m.payload.wiringId !== ready.payload.wiringId), 60_000);
   const prog3 = quest.of('wire.progress').filter((m) => m.payload.wiringId === third.payload.wiringId).map((m) => m.payload);
-  check(prog3.some((p) => /driver from your library, written by/.test(p.note ?? '')), 'the reused driver is labelled "from your library"', prog3.map((p) => p.note).filter(Boolean));
+  check(prog3.some((p) => /driver from your library · model fixture · source fixture/.test(p.note ?? '')), 'the reused driver is labelled with its actual fixture source', prog3.map((p) => p.note).filter(Boolean));
   const knob3 = third.payload.actions.find((a) => a.kind === 'set')!;
   const b9 = execs.length;
   quest.send('control.event', { widgetId: `wire:${knob3.actionId}`, value: 77, ts: Date.now(), phase: 'move', specId });

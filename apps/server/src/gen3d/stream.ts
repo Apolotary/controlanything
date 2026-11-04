@@ -63,6 +63,8 @@ export interface StreamResult {
   finishReason?: string;
   usage?: StreamUsage;
   model: string;
+  /** Actual response metadata; absent when the server did not identify its model. */
+  reportedModel?: string;
   /** first visible token (content or tool call) */
   ttftMs?: number;
   latencyMs: number;
@@ -72,6 +74,8 @@ export interface StreamResult {
 export interface StreamHandlers {
   onContent?: (delta: string, soFar: string) => void;
   onToolCall?: (call: StreamedToolCall) => void;
+  /** Presentation only: arguments are incomplete and must never execute here. */
+  onToolCallDelta?: (call: StreamedToolCall) => void;
 }
 
 export interface StreamClientOptions {
@@ -200,7 +204,7 @@ export class StreamClient {
         }
         if (j?.error) throw new ModelCallError(`Meta Model API stream error: ${snippet(JSON.stringify(j.error))}`, num(j.error?.status) || undefined);
         out.chunks++;
-        if (typeof j.model === 'string') out.model = j.model;
+        if (typeof j.model === 'string') { out.model = j.model; out.reportedModel = j.model; }
         if (j.usage) out.usage = parseStreamUsage(j.usage);
         const choice = j.choices?.[0];
         if (!choice) return;
@@ -224,6 +228,7 @@ export class StreamClient {
             if (tc.id) c.id = tc.id;
             if (tc.function?.name) c.name += tc.function.name;
             if (typeof tc.function?.arguments === 'string') c.arguments += tc.function.arguments;
+            handlers.onToolCallDelta?.({ ...c });
           }
         }
         if (choice.finish_reason) out.finishReason = choice.finish_reason;

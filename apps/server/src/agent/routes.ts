@@ -37,6 +37,32 @@ export function agentRouter(ctx: ServerContext): express.Router {
     return { device, local, canApprove: Boolean(device?.canApprove) || local };
   };
 
+  // Code/tool receipts belong to the owner, not an unauthenticated LAN debug view.
+  const harnessAccess = (req: Request, res: express.Response): boolean => {
+    if (caller(req).canApprove) return true;
+    res.status(403).json({ error: 'forbidden', message: 'Agent receipts need an owner token or localhost.' });
+    return false;
+  };
+  r.get('/harness', (req, res) => {
+    if (!harnessAccess(req, res)) return;
+    res.json({ backend: 'muse-bridge', framework: 'ControlAnything native Meta tool harness',
+      model: ctx.muse.mode === 'fixture' ? 'fixture' : ctx.muse.model, source: ctx.muse.mode,
+      agentHost: 'Mac bridge server', programHost: 'Quest sandboxed Worker',
+      tools: ['inspect_selected_device', 'inspect_gesture_signals', 'check_program', 'finish_program'],
+      createsProgramsOnlyAfterRequest: true, implicitTemplateFallback: false,
+      runs: agent.harness.list().map(run => ({ ...run,
+        currentlyAuthorized: agent.wireReady(run.cardId)?.wiringId === run.runId,
+        effectEvidence: 'A checked program is not proof of a physical effect. Inspect device verification and executor receipts separately.',
+      })),
+    });
+  });
+  r.get('/harness/runs/:runId', (req, res) => {
+    if (!harnessAccess(req, res)) return;
+    const run = agent.harness.get(String(req.params.runId));
+    if (!run) { res.status(404).json({ error: 'not_found', message: 'No agent receipt with that run ID.' }); return; }
+    res.json({ ...run, currentlyAuthorized: agent.wireReady(run.cardId)?.wiringId === run.runId });
+  });
+
   r.get('/targets', (_req, res) => {
     res.json({ targets: agent.targets.list().map((t) => agent.targets.summary(t)) });
   });
