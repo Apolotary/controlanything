@@ -12,7 +12,7 @@ This is a procedure and evidence ledger, not a blanket pass claim. The current r
 | OP-1 notes and CCs | Real Quest and physical instrument, after the user enabled MIDI receive on the OP-1. |
 | OM 4 small pan/tilt/recenter | Physical Bluetooth commands through the direct test route; Muse-driven end-to-end hardware path still pending. |
 | Palm + pinch wrist menu | Deployed before this work; wearer confirmation pending. |
-| New instrument UI, reviewer camera demo and revised Buddy | Require fresh software receipts below and separate attended headset/phone/laptop checks. |
+| New instrument UI, reviewer camera demo and revised Buddy | Fixture/browser checks passed on this branch; new physical headset/phone/webcam acceptance remains separate. |
 
 Do not combine unrelated probe times, screenshots or fixture receipts into one claimed continuous live run.
 
@@ -66,7 +66,7 @@ npx tsc -p packages/protocol/tsconfig.json
 (cd apps/quest && npx vite build --outDir /tmp/ce-stage-quest --emptyOutDir)
 CE_QUEST_DIST=/tmp/ce-stage-quest node scripts/e2e-muse-agent.mjs
 npx vitest run apps/server/src/devices/osmo/bridge.test.ts
-node scripts/audit-public-repo.mjs
+node scripts/audit-public.mjs
 ```
 
 Record actual result and screenshot paths in the task's completion receipt. A scripted fixture is no-credit software validation; it does not prove a new live model decision, real microphone transcription, device sound or Quest frame timing. Target headset rendering: p95 frame time ≤13.9ms (72fps), missed frames <5%, draws ≤120. Desktop renderer counters are useful, but cannot establish a Quest frame budget.
@@ -82,3 +82,15 @@ Record actual result and screenshot paths in the task's completion receipt. A sc
 - Set up / Enable instructions apply only when deliberately testing `CE_AGENT=0`; they are not prerequisites for the current Muse-agent route.
 
 Historical pre-agent dial/Perform measurements are retained in local research/handoff archives. They must not be represented as acceptance of newly expanded UI or reviewer modes. Publishing, pushing, deleting data and public visibility changes require the user's approval; development verification does not authorize them.
+
+## Branch verification — November 4
+
+On `codex/reviewer-demos-and-hardening`, all workspace typechecks and staged Quest/companion builds passed. The final focused regression run passed **352 tests in 24 files**. The known unrelated assistant-panel test was outside that scope; this is not a whole-suite claim.
+
+The instrument browser check passed an actual emulated key press → acknowledged note, both XY coordinates → outgoing feedback, visual CC21, mock gimbal pan and Stop. The cancellation check passed Stop Muse during generation. Whole emulator scenes measured **112 / 84 / 56 draw calls** for OP-1 / visual synth / mock gimbal, with at most three feedback draws. These are desktop rendering counters, not measured Quest frame time.
+
+The camera reviewer check passed exact-preview JPEG sharing only after Show, Retake, camera-off, virtual objects, both generated software instruments, a 390px touch layout, cancellation across page hide and silent Buddy teardown. With a fake physical OP-1 Mac and mock gimbal present, reviewer work reached neither hardware route and preserved the canonical headset tag. Browser runtime errors: zero. The companion Details check passed running entry/actions/logs and Stop retiring the process.
+
+One live **muse-spark-1.3** scratch run generated validated encoders, keys and a note visualizer in **30.4 seconds**, using a fake MIDI sink with no hardware or speech. All other new browser evidence is labelled fixture/synthetic. Actual mobile native AR, real webcam quality and comfort/frame timing of the new Quest UI still need attended checks.
+
+Local screenshots and receipts are under `research/screens/2026-11-04-instruments/`, `research/screens/reviewer-2026-11-04/` and `research/screens/reviewer-companion/` (intentionally not public assets). See [generated instruments](GENERATED-INSTRUMENTS.md), [reviewer guide](REVIEWER-DEMO.md) and [publication review](SECURITY-REVIEW.md). The live server, headset tab and Osmo browser were not changed or reloaded. Nothing was pushed or published.
