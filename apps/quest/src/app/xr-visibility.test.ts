@@ -50,11 +50,10 @@ async function setup() {
 afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
 describe('device controls across XR visibility changes', () => {
-  it('cancels hands without needing another frame and needs a fresh, still pickup after resume', async () => {
+  it('cancels Perform without needing another frame and requires explicit Perform after resume', async () => {
     const f = await setup();
-    // Hands start by themselves for the armed selection; the raised hand settles, then plays.
-    f.step(0); f.step(50); f.step(120);
-    moveHand(f.frame.hands.right!, 0.2, 1.4, -0.4); f.step(150);
+    f.app.setHandControl('target', true); f.step(0); f.step(50);
+    moveHand(f.frame.hands.right!, 0.2, 1.4, -0.4); f.step(100);
     expect(f.sent.length).toBeGreaterThan(0);
     const before = f.sent.length;
 
@@ -63,14 +62,12 @@ describe('device controls across XR visibility changes', () => {
     expect(f.app.hud.cancelInteractions).toHaveBeenCalledOnce();
     expect(f.app.projects.pauseForNavigation).toHaveBeenCalledOnce();
     f.visibility('visible');
-    // Hands come back on their own, but a moving hand never continues the old take: it must settle first.
-    f.step(5000); moveHand(f.frame.hands.right!, 0.2, 1.5, -0.4); f.step(5050);
-    moveHand(f.frame.hands.right!, 0.2, 1.6, -0.4); f.step(5100);
+    f.step(5000); f.step(5050);
+    moveHand(f.frame.hands.right!, 0.2, 1.5, -0.4); f.step(5100);
     expect(f.sent).toHaveLength(before);
-    expect(f.app.handMapping).toBeDefined();
-    f.step(5150); f.step(5250); f.step(5300); f.step(5400);
-    expect(f.sent).toHaveLength(before);
-    moveHand(f.frame.hands.right!, 0.2, 1.45, -0.4); f.step(5450);
+
+    f.app.setHandControl('target', true); f.step(5150); f.step(5200);
+    moveHand(f.frame.hands.right!, 0.2, 1.6, -0.4); f.step(5250);
     expect(f.sent.length).toBeGreaterThan(before);
   });
 

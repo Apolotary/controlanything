@@ -20,7 +20,8 @@ export interface PttEvents extends Record<string, unknown> {
   error: string;
 }
 
-type VoiceContext = { cardId?: string; specId?: string; workspace?: WorkspaceContext };
+/** `local`: transcribe over HTTP only and hand the text to the listener; nothing is routed by the server (wiring requests). */
+type VoiceContext = { cardId?: string; specId?: string; workspace?: WorkspaceContext; local?: boolean };
 
 export class PushToTalk extends Emitter<PttEvents> {
   private current?: { id: string; seq: number; chunks: Int16Array[]; startedAt: number; context: VoiceContext };
@@ -111,16 +112,18 @@ export class PushToTalk extends Emitter<PttEvents> {
       this.emit('error', 'Too short. Tap Ask Muse, speak, then tap Send.');
       return;
     }
-    const payload: Record<string, unknown> = { utteranceId: u.id, seq: u.seq++, sampleRate: TARGET_RATE, pcm16: toBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)) };
-    if (final) payload.final = true;
-    if (u.context.cardId) payload.cardId = u.context.cardId;
-    if (u.context.specId) payload.specId = u.context.specId;
-    if (u.context.workspace) payload.workspace = u.context.workspace;
-    this.ws.send('voice.audio', payload, { to: 'server' });
+    if (!u.context.local) {
+      const payload: Record<string, unknown> = { utteranceId: u.id, seq: u.seq++, sampleRate: TARGET_RATE, pcm16: toBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)) };
+      if (final) payload.final = true;
+      if (u.context.cardId) payload.cardId = u.context.cardId;
+      if (u.context.specId) payload.specId = u.context.specId;
+      if (u.context.workspace) payload.workspace = u.context.workspace;
+      this.ws.send('voice.audio', payload, { to: 'server' });
+    }
     if (final) {
       this.current = undefined;
       this.emit('listening', { listening: false, utteranceId: u.id });
-      const timer = setTimeout(() => void this.fallback(u.id), this.fallbackMs);
+      const timer = setTimeout(() => void this.fallback(u.id), u.context.local ? 0 : this.fallbackMs);
       this.awaiting.set(u.id, { chunks: u.chunks, timer, context: u.context });
     }
   }
@@ -147,7 +150,7 @@ export class PushToTalk extends Emitter<PttEvents> {
         return;
       }
       this.emit('text', { utteranceId, text, final: true, modelId: r.model, ...a.context, via: 'http' });
-      if (text) {
+      if (text && !a.context.local) {
         const payload: Record<string, unknown> = { utteranceId, text, final: true };
         if (a.context.cardId) payload.cardId = a.context.cardId;
         if (a.context.specId) payload.specId = a.context.specId;

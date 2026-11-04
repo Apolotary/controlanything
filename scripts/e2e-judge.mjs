@@ -1,9 +1,8 @@
 /**
  * The judge path, automated: npm run build && npm run e2e:judge (system Chrome; no browser download).
  *
- *   Enter AR → pinch the MacBook's box → setup ring → armed arc dials → drag Warp → hands take over by
- *   themselves (no Perform press; first-use hint) → right hand up/down = Warp, push/pull = Ripples → right
- *   pinch-tap = next pattern → both palms out = Stop.
+ *   Enter AR → pinch the MacBook's box → setup ring → armed arc dials → drag Warp → Perform (left fist,
+ *   right hand up) → both palms out = Stop.
  *
  * Runs its own muted FIXTURE server (CE_DEMO=1, CE_MAC_SILENT=1, fresh data dir) on PORT (default 8796,
  * HTTPS off), the sim room as the paired Mac (its laptop screen runs the visual synth) and the desktop Quest
@@ -188,10 +187,8 @@ const hands = (poses, wait = 20) => quest.evaluate(async ({ poses, wait }) => {
   for (const [side, { offset, pose, palm }] of Object.entries(poses)) {
     const device = `hand-${side}`;
     const position = head.position.clone().add(head.position.clone().fromArray(offset).applyQuaternion(head.quaternion));
-    const forward = head.position.clone().set(0, 0, -1).applyQuaternion(head.quaternion);
-    const palmDir = palm === 'out' ? forward.clone() : palm === 'down' ? head.position.clone().set(0, -1, 0) : head.position.clone().sub(position).normalize();
-    // A palm-down hand points its fingers forward; otherwise the fingers point up.
-    const fingers = palm === 'down' ? forward.clone().setY(0).normalize() : head.position.clone().set(0, 1, 0).applyQuaternion(head.quaternion);
+    const palmDir = palm === 'out' ? head.position.clone().set(0, 0, -1).applyQuaternion(head.quaternion) : head.position.clone().sub(position).normalize();
+    const fingers = head.position.clone().set(0, 1, 0).applyQuaternion(head.quaternion);
     fingers.addScaledVector(palmDir, -fingers.dot(palmDir)).normalize();
     await remote.dispatch('set_connected', { device, connected: true });
     await remote.dispatch('set_select_value', { device, value: 0 });
@@ -311,54 +308,22 @@ async function run() {
     console.log(`  CC${sent.op.number} → the sim Mac's screen changed`);
   });
 
-  await phase('07-hands-first', async () => {
-    // No Perform press: the armed visual synth hands control to the hands by itself (after the arc drag above).
-    await waitQuest(() => !!window.__ce['handMapping'], undefined, 5000);
-    const hint = await quest.evaluate(() => ({ visible: !!window.__ce['gestureFeedback']?.hintVisible,
-      text: (() => { let t = ''; window.__ce.scene.traverse((o) => { if (o.name === 'gesture-hint') t = o.text; }); return t; })() }));
-    assert(hint.visible && /pinch/i.test(hint.text), `The first-use hint shows when hands start (${JSON.stringify(hint)})`);
-    console.log(`  hint: ${hint.text.replace(/\n/g, ' | ')}`);
-    await screenshot('07a-hint');
-    // Tracked hands: the left rests low (no clutch); the right is raised in front, still for a moment, then moves.
-    const left = { offset: [-0.25, -0.7, -0.15], pose: 'default' };
-    const right = (y, z = -0.4) => ({ offset: [0.2, y, z], pose: 'open', palm: 'down' });
-    await hands({ left, right: right(-0.3) }, 30);
-    let since = Date.now();
-    for (let i = 1; i <= 15; i++) await hands({ left, right: right(-0.3 + i * 0.012) }, 4);
-    const warp = await until('right hand height sends Warp (CC71)', async () => { const l = (await exec(since)).filter((e) => e.op?.number === 71); return l.length ? l : null; });
-    since = Date.now();
-    for (let i = 1; i <= 15; i++) await hands({ left, right: right(-0.12, -0.4 - i * 0.012) }, 4);
-    const ripples = await until('push/pull sends Ripples (CC21)', async () => { const l = (await exec(since)).filter((e) => e.op?.number === 21); return l.length ? l : null; });
-    const ui = await quest.evaluate(() => {
-      const app = window.__ce, p = app.hud.root.getObjectByName('wrist-palette');
-      return { live: app.handMapping?.live, menu: !!(p?.visible && p.anchor.open && p.anchor.source === 'hand'), locked: app.lockedId, mode: app.modes.mode };
-    });
-    assert(ui.live, 'The raised right hand is playing');
-    assert(!ui.menu, 'The wrist menu stays closed while the hands play');
-    console.log(`  ${warp.length} Warp + ${ripples.length} Ripples changes from the right hand alone; menu closed; selection ${ui.locked}`);
-    await screenshot('07b-playing');
-  });
-
-  await phase('07c-pinch-tap-pattern', async () => {
-    const left = { offset: [-0.25, -0.7, -0.15], pose: 'default' };
-    const right = { offset: [0.2, -0.12, -0.52], pose: 'open', palm: 'down' };
-    const pattern = async () => JSON.parse(await visualState()).pattern;
-    const locked = await quest.evaluate(() => window.__ce.lockedId);
-    const before = await pattern(), since = Date.now();
-    await hands({ left, right }, 20);
-    // A quick pinch (≈130 ms) and release, without moving the hand.
-    await quest.evaluate(async () => {
-      const remote = window.__ce.emulator.device.remote;
-      await remote.dispatch('set_select_value', { device: 'hand-right', value: 1 });
-      await new Promise((r) => setTimeout(r, 130));
-      await remote.dispatch('set_select_value', { device: 'hand-right', value: 0 });
-    });
-    const pc = await until('the pinch-tap sends a program change', async () => (await exec(since)).find((e) => e.op?.msg === 'pc'));
-    await sim.waitForFunction((b) => JSON.parse(JSON.stringify(window.ceSimDebug.visualSynth.getState())).pattern !== b, before);
-    const after = await pattern();
-    assert.equal(await quest.evaluate(() => window.__ce.lockedId), locked, 'The pinch-tap selects nothing else');
-    const flash = await quest.evaluate(() => { let t = ''; window.__ce.scene.traverse((o) => { if (o.name === 'gesture-live' && o.visible) t = o.text; }); return t; });
-    console.log(`  pattern ${before} → ${after} (PC ${pc.op.number}); label "${flash}"`);
+  await phase('07-perform', async () => {
+    // Perform is the card's round toggle (a uikit button); the emulator mouse is the pinching hand (a held press).
+    for (let attempt = 0; attempt < 3 && !await quest.evaluate(() => !!window.__ce['handMapping']); attempt++) {
+      const p = await screenPoint({ name: 'hand-control' });
+      await quest.mouse.move(p.x - 6, p.y - 6); await frames(4);
+      await quest.mouse.move(p.x, p.y); await frames(6);
+      await quest.mouse.down(); await frames(2); await quest.mouse.up(); await frames(10);
+    }
+    await waitQuest(() => !!window.__ce['handMapping']);
+    // Tracked hands: left fist = clutch, right hand rises.
+    const since = Date.now(), left = { offset: [-0.2, -0.25, -0.4], pose: 'fist' };
+    await hands({ left: { ...left, pose: 'open' }, right: { offset: [0.2, -0.25, -0.4], pose: 'open' } });
+    await hands({ left, right: { offset: [0.2, -0.25, -0.4], pose: 'open' } });
+    for (let i = 1; i <= 15; i++) await hands({ left, right: { offset: [0.2, -0.25 + i * 0.016, -0.4], pose: 'open' } }, 4);
+    await until('hand movement sends control changes', async () => (await exec(since)).length > 0);
+    console.log(`  ${(await exec(since)).length} control changes from the left-fist clutch + right hand`);
   });
 
   await phase('08-both-palms-stop', async () => {
