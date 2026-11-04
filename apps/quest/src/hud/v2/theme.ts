@@ -1,6 +1,7 @@
 /** All v2 appearance values live here. Distances are metres at a one-metre reading distance. */
 export const THEME = {
-  color: { line: '#F8FAFC', text: '#F8FAFC', muted: '#94A3B8', plate: '#0F141D', button: '#FFFFFF', stroke: '#FFFFFF', accent: '#38BDF8', disabled: '#94A3B8' },
+  // Horizon neutrals (LOOK): white text, secondary = white 64 % over the grayGlass plate (#A1A1A6), plate = its middle tone.
+  color: { line: '#F8FAFC', text: '#FFFFFF', muted: '#A1A1A6', plate: '#222229', button: '#FFFFFF', stroke: '#FFFFFF', accent: '#38BDF8', disabled: '#94A3B8' },
   opacity: { line: 0.8, plate: 0.84, stroke: 0.16, accentSoft: 0.18 },
   surface: { stroke: 0.0006, buttonOpacity: 0.08 },
   font: {

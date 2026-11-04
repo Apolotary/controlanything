@@ -38,20 +38,21 @@ describe('shared HUD resources', () => {
     surfaces.dispose();
   });
 
-  it('gives every idle action a white pill and the primary action an accent pill', () => {
+  it('paints idle actions as Horizon glass and the primary action as the white "on" pill', () => {
     const surfaces = new GlassSurfaces();
     const button = surfaces.material(0.112, 0.048, 'button', true).uniforms;
-    expect(button.fill!.value.getHexString()).toBe('ffffff');
-    expect(button.fillAlpha!.value).toBe(0.1);
-    expect(button.edge!.value.getHexString()).toBe('ffffff');
-    expect(button.edgeAlpha!.value).toBe(0.26);
+    expect(button.fill!.value.getHexString()).toBe('34343a');
+    expect(button.fillAlpha!.value).toBe(0.94);
+    expect(button.edgeAlpha!.value).toBe(0.1);
     expect(button.stroke!.value).toBe(THEME.surface.stroke);
     const primary = surfaces.material(0.168, 0.048, 'primary', true).uniforms;
-    expect(primary.fill!.value.getHexString()).toBe('38bdf8');
-    expect(primary.fillAlpha!.value).toBe(0.28);
-    expect(primary.edge!.value.getHexString()).toBe('38bdf8');
-    expect(primary.edgeAlpha!.value).toBe(1);
-    expect(primary.stroke!.value).toBe(THEME.surface.stroke * 1.5);
+    expect(primary.fill!.value.getHexString()).toBe('ffffff');
+    expect(primary.fillAlpha!.value).toBe(0.92);
+    expect(primary.edgeAlpha!.value).toBe(0);
+    const plate = surfaces.material(0.4, 0.3, 'plate').uniforms;
+    expect(plate.fill!.value.getHexString()).toBe('2f2f37');
+    expect(plate.fill2!.value.getHexString()).toBe('16161b');
+    expect(plate.radius!.value).toBeCloseTo(0.028);
     surfaces.dispose();
   });
 
