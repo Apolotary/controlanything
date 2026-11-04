@@ -45,7 +45,7 @@ export class UIKitReader extends Group {
   private systemTexture?: CanvasTexture;
   private systemContentHeight = 0;
 
-  constructor() {
+  constructor(options: { backgroundColor?: string } = {}) {
     super();
     this.name = 'object-info-detail';
     this.userData.fitWidth = this.maxWidth;
@@ -59,7 +59,7 @@ export class UIKitReader extends Group {
       sizeX: this.maxWidth, sizeY: this.maxHeight, pixelSize: 0.001,
       anchorX: 'left', anchorY: 'top', flexDirection: 'column',
       padding: 8, overflow: 'hidden', borderRadius: 8,
-      backgroundColor: '#14212F', opacity: 1,
+      backgroundColor: options.backgroundColor ?? '#14212F', opacity: 1,
       depthTest: false, depthWrite: false, renderOrder: THEME.render.text,
       pointerEvents: 'none', fontFamilies: readerFonts, fontFamily: 'muse',
     });

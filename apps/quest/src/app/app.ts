@@ -229,6 +229,7 @@ export class QuestApp {
   /** Muse writes the glue: the wiring flow for the selected device (ask, code card, calibration, sandboxed run). */
   wiring!: WiringController;
   tutorial?: TutorialController;
+  private tutorialStoppedRequestId?: string;
   assistant?: VoiceAssistant;
   controls!: ControlSender;
   emulator?: Emulator;
@@ -639,7 +640,7 @@ export class QuestApp {
       return { cardId, specId: cardId ? this.specByCard.get(cardId) : undefined };
     });
     this.wiring = new WiringController({
-      userStopped: () => this.onDeck('panic', 'press'),
+      userStopped: (reason, request) => this.stopWiringRequest(reason, request),
       selected: () => {
         const tag = this.modes.mode === 'control' && this.lockedId ? this.modes.tags.get(this.lockedId) : undefined;
         const target = tag ? this.targets.get(tag.targetId) : undefined;
@@ -651,7 +652,8 @@ export class QuestApp {
       sendControl: (cardId, event) => {
         if (!this.canControl(cardId)) return false;
         const specId = this.specByCard.get(cardId);
-        return !!this.ws.send('control.event', { widgetId: event.widgetId, value: event.value, ts: Date.now(), phase: event.phase, ...(specId ? { specId } : {}) });
+        return !!this.ws.send('control.event', { widgetId: event.widgetId, value: event.value, ts: Date.now(), phase: event.phase,
+          ...(event.requestId ? { requestId: event.requestId } : {}), ...(event.wiringId ? { wiringId: event.wiringId } : {}), ...(specId ? { specId } : {}) });
       },
       render: (view) => this.hud.setWire?.(view),
       setHandsBusy: (busy) => this.hud.setHandsBusy?.(busy),
@@ -660,13 +662,14 @@ export class QuestApp {
       voice: {
         error: () => !this.ws.open ? 'The server is disconnected. Reconnect and try again.'
           : this.params.get('mic') === '0' ? 'Microphone is disabled for this session. Enable it on the entry page before entering AR.'
-          : this.session && !this.mic.ready ? 'Exit AR, choose Camera + mic and allow microphone access, then enter AR again.' : undefined,
+          : this.session && !this.mic.ready ? 'Exit AR, allow microphone access in Quest Browser, then enter AR again.' : undefined,
         available: () => this.params.get('mic') !== '0',
         press: (cardId) => this.ptt.press({ cardId, local: true }),
         release: () => this.ptt.release(),
         cancel: () => this.ptt.cancel(),
       },
       tapBlocked: (hand) => (this.hud.handBusy?.(hand) ?? false) || (this.hud.handRayOnUi?.(hand) ?? false),
+      menuHand: this.nonDominant,
     });
     this.assistant = new VoiceAssistant({
       ptt: this.ptt,
@@ -704,7 +707,7 @@ export class QuestApp {
       identity: () => this.identity?.deviceId,
       microphoneError: () => !this.ws.open ? 'The server is disconnected. Reconnect and try again.'
         : this.params.get('mic') === '0' ? 'Microphone is disabled for this session. Enable it on the entry page before entering AR.'
-        : this.session && !this.mic.ready ? 'Exit AR, choose Camera + mic and allow microphone access, then enter AR again.' : undefined,
+        : this.session && !this.mic.ready ? 'Exit AR, allow microphone access in Quest Browser, then enter AR again.' : undefined,
       send: (type, payload) => !!this.ws.send(type, payload, { to: 'server' }),
       setup: (targetId) => {
         if (this.activeSetup && this.activeSetup === this.modes.tags.get(targetId)?.cardId) return true;
@@ -1681,6 +1684,7 @@ export class QuestApp {
     ws.on('sense.request', (m) => void this.onSenseRequest(m.payload as SenseRequestPayload));
     ws.on('wire.progress', (m) => { if (m.from === 'server') this.wiring.onProgress(m.payload as PayloadOf<'wire.progress'>); });
     ws.on('wire.ready', (m) => { if (m.from === 'server') this.wiring.onReady(m.payload as PayloadOf<'wire.ready'>); });
+    ws.on('wire.stopped', (m) => { if (m.from === 'server') this.wiring.onStopped(m.payload as PayloadOf<'wire.stopped'>); });
     ws.on('panic', (m) => {
       const p = m.payload as PayloadOf<'panic'>;
       this.stopControls();
@@ -2019,6 +2023,14 @@ export class QuestApp {
 
   // --- HUD events ----------------------------------------------------------------------------------
 
+  /** Both palms retire one request, while the selected, verified device stays ready for another ask. */
+  private stopWiringRequest(reason: string, request: Omit<PayloadOf<'wire.stop'>, 'reason'>): void {
+    this.controls.clear();
+    if (!this.ws.send('wire.stop', { ...request, reason }, { to: 'server' })) {
+      this.hud.toast('Wiring stopped locally. Reconnect before asking again.', 'warn');
+    }
+  }
+
   onDeck(key: string, phase: 'press' | 'release'): void {
     if (key === 'panic' && phase === 'press') {
       this.tangible?.release('stop'); this.cancelManualRegion(); this.projects?.pauseForNavigation();
@@ -2030,13 +2042,15 @@ export class QuestApp {
       void this.assistant?.toggle(this.lockedId);
       return;
     }
-    if (key !== 'panic' || phase !== 'press' || this.modes.mode !== 'control') return;
+    if (key !== 'panic' || phase !== 'press') return;
     this.stopControls();
     this.ws.send('panic', { reason: 'Stop from the home bar' }, { to: 'server' });
     this.hud.toast('Stopped', 'warn');
   }
 
   private stopControls(): void {
+    const stoppedRequestId = this.wiring?.snapshot?.()?.requestId;
+    if (typeof stoppedRequestId === 'string') this.tutorialStoppedRequestId = stoppedRequestId;
     this.setupProgress?.clear();
     for (const tag of this.modes.tags.values()) if (tag.cardId && (this.armedCards.has(tag.cardId) || this.activeSetup === tag.cardId)) {
       this.cancelledCards.add(tag.cardId);
@@ -2308,9 +2322,10 @@ export class QuestApp {
         const cardId = this.lockedId ? this.modes.tags.get(this.lockedId)?.cardId : undefined;
         const palette = (this.hud as Hud & { palette?: { visible: boolean; anchor: { open: boolean } } }).palette;
         return { inXr: !!this.session && !this.superseded && this.session.visibilityState !== 'hidden',
-          busy: !!this.onboarding?.visible || this.onboarding?.state === 'shown', boxes: this.visibleTargets.size,
+          busy: !!this.onboarding?.visible || this.onboarding?.state === 'shown' || !!this.hud.isReadingRequest?.(), boxes: this.visibleTargets.size,
           selected: !!this.lockedId || !!this.visualSynthIntent || !!this.virtualSelection,
-          controllable: !!cardId && this.canControl(cardId), cardId, instrument: cardId === 'musical-synth-mac' ? 'musical-synth' : undefined,
+          controllable: !!cardId && this.canControl(cardId), needsEnable: !!this.pendingArm, fullStopRequestId: this.tutorialStoppedRequestId,
+          cardId, instrument: cardId === 'musical-synth-mac' ? 'musical-synth' : undefined,
           wire: (this.wiring?.snapshot() ?? {}) as TutorialProbe['wire'],
           menuOpen: !!palette?.visible && palette.anchor.open,
           buddyOpen: !!(this as unknown as { buddy?: { isOpen(): boolean } }).buddy?.isOpen() };

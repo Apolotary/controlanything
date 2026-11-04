@@ -8,10 +8,10 @@
  * turns signals into control events, and only through the sandbox (wiring/runtime.ts).
  */
 import { Vector3 } from 'three';
-import type { WireProgressPayload, WireReadyPayload } from '@ce/protocol';
+import { newId, type WireProgressPayload, type WireReadyPayload, type WireStoppedPayload, type WireStopPayload } from '@ce/protocol';
 import type { ShellFrame } from '../app/hud-contract';
 import type { WireCalibrationView, WireCodeView, WirePhase, WireView } from '../hud/contract';
-import { SignalTracker } from '../gestures/signals';
+import { SignalTracker, SIGNAL_RANGE } from '../gestures/signals';
 import { ScreenCalibrator } from '../gestures/screen-calibration';
 import { clearPlane, loadPlane, planePoint, savePlane, type ScreenPlane } from '../gestures/screen-plane';
 import { WiringRuntime, type StopKind, type WireEmit, type WiringProgram } from './runtime';
@@ -34,13 +34,13 @@ export interface WiringHost {
   selected(): { cardId: string; targetId: string; anchor: Vector3; label: string; instrument?: 'visual-synth' | 'musical-synth' } | undefined;
   canControl(cardId: string): boolean;
   /** Send a client message to the server. */
-  send(type: 'wire.request', payload: { cardId: string; text: string; source: 'chip' | 'voice' | 'text' }): boolean;
+  send(type: 'wire.request', payload: { cardId: string; text: string; source: 'chip' | 'voice' | 'text'; requestId: string }): boolean;
   /** One program output as control.event on the card. */
   sendControl(cardId: string, event: WireEmit): boolean;
   render(view: WireView | null): void;
   setHandsBusy(busy: boolean): void;
-  /** The app's full Stop path also withdraws the server-side wiring authority. */
-  userStopped?(reason: string): void;
+  /** Withdraw only this request's wiring authority; preserve the verified device and selection. */
+  userStopped?(reason: string, request: Omit<WireStopPayload, 'reason'>): void;
   toast(text: string, level?: 'info' | 'ok' | 'warn' | 'error'): void;
   log(text: string, level?: 'info' | 'ok' | 'warn' | 'error'): void;
   /** hold-to-talk plumbing (voice/ptt.ts, local mode) */
@@ -55,6 +55,8 @@ export interface WiringHost {
   };
   /** the right/left hand is working UI right now (a pinch is a press, not a pinch-tap) */
   tapBlocked(hand: 'left' | 'right'): boolean;
+  /** The deliberate palm-recall hand remains available when the calibration fingertip withdraws. */
+  menuHand?: 'left' | 'right';
   now?(): number;
   /** tests: stand-in sandbox */
   runtime?: WiringRuntime;
@@ -63,6 +65,7 @@ export interface WiringHost {
 interface Wiring {
   cardId: string; targetId: string; label: string;
   request: string; source: 'chip' | 'voice' | 'text';
+  requestId: string;
   wiringId: string;
   phase: WirePhase;
   code: string; model: string; wireSource: 'live' | 'fixture' | 'template';
@@ -102,7 +105,9 @@ export class WiringController {
 
   constructor(private readonly host: WiringHost) {
     this.runtime = host.runtime ?? new WiringRuntime({
-      send: (event) => (this.w ? this.host.sendControl(this.w.cardId, event) : false),
+      send: (event, program) => this.host.sendControl(program.cardId, {
+        ...event, wiringId: program.wiringId, ...(program.requestId ? { requestId: program.requestId } : {}),
+      }),
       onStop: (reason, kind) => this.onRuntimeStop(reason, kind),
     });
   }
@@ -117,7 +122,7 @@ export class WiringController {
   /** Debug/test view of the whole thing. */
   snapshot(): Record<string, unknown> {
     const w = this.w;
-    return { phase: this.phase, request: w?.request, wiringId: w?.wiringId, title: w?.title, model: w?.model, source: w?.wireSource, codeChars: w?.code.length,
+    return { phase: this.phase, request: w?.request, requestId: w?.requestId, wiringId: w?.wiringId, title: w?.title, model: w?.model, source: w?.wireSource, codeChars: w?.code.length,
       running: this.running, calibrated: !!this.plane, needsScreen: w?.needsScreen ?? false,
       touching: this.running && this.screenTouching, mic: this.mic, stats: { ...this.runtime.stats }, step: this.calibrator.step };
   }
@@ -127,8 +132,12 @@ export class WiringController {
   /** A chip, a transcript or typed text. Nothing is wired until Muse answers and the program is running. */
   ask(text: string, source: 'chip' | 'voice' | 'text'): boolean {
     const sel = this.host.selected();
-    const request = text.trim().slice(0, 500);
+    const request = text.trim();
     if (!sel || !request) return false;
+    if (request.length > 500) {
+      this.host.toast('That request is too long. Ask in one or two sentences.', 'warn');
+      return false;
+    }
     if (!this.host.canControl(sel.cardId)) { this.host.toast('Set up this device first, then tell it what your hands should do', 'info'); return false; }
     this.cancelVoice();
     this.retireCurrent();
@@ -136,12 +145,13 @@ export class WiringController {
     // A new request replaces whatever was wired: the hands go quiet until the new program is ready and running.
     if (this.runtime.running) this.runtime.stop('asking Muse for something new', 'external', true);
     this.calibrator.reset(); this.corners[0] = this.corners[1] = null; this.calibrationOutline = undefined;
-    if (!this.host.send('wire.request', { cardId: sel.cardId, text: request, source })) {
+    const requestId = newId('wire-request');
+    if (!this.host.send('wire.request', { cardId: sel.cardId, text: request, source, requestId })) {
       this.host.toast('Not connected to the server. Try again in a moment.', 'warn');
       this.w = null; this.changed();
       return false;
     }
-    this.w = { cardId: sel.cardId, targetId: sel.targetId, label: sel.label, request, source, wiringId: '', phase: 'asked', code: '', model: '', wireSource: 'live', phaseLine: 'sent to Muse…',
+    this.w = { cardId: sel.cardId, targetId: sel.targetId, label: sel.label, request, requestId, source, wiringId: '', phase: 'asked', code: '', model: '', wireSource: 'live', phaseLine: 'sent to Muse…',
       needsScreen: false, stopped: false, askedAt: this.now() };
     this.host.log(`wire.request (${source}): "${request}" for ${sel.cardId}`, 'info');
     this.changed();
@@ -152,16 +162,11 @@ export class WiringController {
 
   onProgress(p: WireProgressPayload): void {
     const sel = this.host.selected();
-    if (!this.acceptServerWiring || this.retiredWirings.has(p.wiringId) || !sel || sel.cardId !== p.cardId || !this.host.canControl(p.cardId)) return;
-    let w = this.w;
+    const w = this.w;
+    if (!this.acceptServerWiring || !w || w.cardId !== p.cardId || p.requestId !== w.requestId || this.retiredWirings.has(p.wiringId) || !sel || sel.cardId !== p.cardId || !this.host.canControl(p.cardId)) return;
     // A response already on the socket when a new request was sent must not
     // replace that new request before its first progress message arrives.
     if (w?.phase === 'asked' && p.request && p.request !== w.request) return;
-    if (!w || w.cardId !== p.cardId) {
-      // Defensive recovery of the current explicitly requested stream.
-      w = this.w = { cardId: sel.cardId, targetId: sel.targetId, label: sel.label, request: p.request ?? 'your request', source: 'text', wiringId: p.wiringId, phase: 'writing', code: '',
-        model: p.model, wireSource: p.source, phaseLine: '', needsScreen: false, stopped: false, askedAt: this.now() };
-    }
     if (w.wiringId && p.wiringId !== w.wiringId && w.phase === 'running') this.runtime.stop('a new program is being written', 'external', true);
     if (w.wiringId !== p.wiringId) { w.wiringId = p.wiringId; w.code = ''; w.stopped = false; w.program = undefined; }
     if (p.request) w.request = p.request;
@@ -190,19 +195,15 @@ export class WiringController {
 
   onReady(p: WireReadyPayload): void {
     const sel = this.host.selected();
-    if (!this.acceptServerWiring || this.retiredWirings.has(p.wiringId) || !sel || sel.cardId !== p.cardId || !this.host.canControl(p.cardId)) return;
-    let w = this.w;
+    const w = this.w;
+    if (!this.acceptServerWiring || !w || w.cardId !== p.cardId || p.requestId !== w.requestId || this.retiredWirings.has(p.wiringId) || !sel || sel.cardId !== p.cardId || !this.host.canControl(p.cardId)) return;
     // Replayed readiness is a state snapshot, not another instruction to start
     // or recalibrate a program that already arrived.
     if (w?.program?.wiringId === p.wiringId) return;
-    if (!w || w.cardId !== p.cardId) {
-      w = this.w = { cardId: sel.cardId, targetId: sel.targetId, label: sel.label, request: 'your request', source: 'text', wiringId: p.wiringId, phase: 'ready', code: p.code,
-        model: p.model, wireSource: p.source, phaseLine: 'ready', needsScreen: false, stopped: false, askedAt: this.now() };
-    }
     if (w.wiringId && w.wiringId !== p.wiringId && this.runtime.running) this.runtime.stop('a new program arrived', 'external', true);
     w.wiringId = p.wiringId; w.code = p.code; w.model = p.model; w.wireSource = p.source; w.title = p.title; w.explanation = p.explanation;
     w.needsScreen = p.needs.includes('screen');
-    w.program = { wiringId: p.wiringId, cardId: p.cardId, code: p.code, title: p.title, explanation: p.explanation, model: p.model, source: p.source, actions: p.actions };
+    w.program = { wiringId: p.wiringId, requestId: w.requestId, cardId: p.cardId, code: p.code, title: p.title, explanation: p.explanation, model: p.model, source: p.source, actions: p.actions };
     w.stopped = false; w.phase = 'ready'; w.phaseLine = 'ready';
     this.host.log(`wire.ready "${p.title}" · ${p.model} · ${p.source} · ${p.actions.length} actions · needs ${p.needs.join(',') || 'hands'}`, 'ok');
     if (w.needsScreen) {
@@ -237,9 +238,23 @@ export class WiringController {
     this.retireCurrent();
     if (!w) return;
     if (w.phase === 'calibrating') { this.cancelCalibration(); w.phase = 'stopped'; w.stopped = true; this.changed(); }
-    else if (this.runtime.running) this.runtime.stop(reason, kind, true);
+    // The server releases this request's outputs. Terminate a user-stopped worker
+    // immediately so an asynchronous final result cannot leak into an ask-again.
+    else if (this.runtime.running) this.runtime.stop(reason, kind, kind !== 'user');
     else { w.phase = 'stopped'; w.stopped = true; w.phaseLine = reason; this.changed(); }
-    if (kind === 'user' && !alreadyStopped) this.host.userStopped?.(reason);
+    if (kind === 'user' && !alreadyStopped) this.host.userStopped?.(reason, {
+      cardId: w.cardId, requestId: w.requestId, ...(w.wiringId ? { wiringId: w.wiringId } : {}),
+    });
+  }
+
+  /** A scoped server receipt may explain release, but can never change a newer request. */
+  onStopped(p: WireStoppedPayload): void {
+    const w = this.w;
+    if (!w || w.phase !== 'stopped' && w.phase !== 'failed' || p.cardId !== w.cardId || p.requestId !== w.requestId
+      || p.wiringId && w.wiringId && p.wiringId !== w.wiringId) return;
+    if (!p.ok || p.releaseConfirmed === false) {
+      this.host.toast(p.reason || 'Wiring stopped locally; device release was not confirmed.', 'warn');
+    }
   }
 
   /** Disconnect, deselect, leaving Control: stop quietly and forget the card. */
@@ -269,9 +284,18 @@ export class WiringController {
     this.host.setHandsBusy(false); this.lastBusy = false;
     if (!w) return;
     if (reason === 'replaced' || kind === 'external') { if (w.phase === 'running') { w.phase = 'stopped'; w.stopped = true; } this.changed(); return; }
-    w.phase = kind === 'user' ? 'stopped' : kind === 'refused' || kind === 'unavailable' ? 'failed' : 'stopped';
+    w.phase = kind === 'user' ? 'stopped' : 'failed';
     w.stopped = true;
     w.phaseLine = kind === 'user' ? 'stopped' : reason;
+    // A failed sandbox cannot produce a reliable final lift. Revoke and release
+    // its exact request once, without turning a failure into a user Stop or
+    // disarming the selected device. External replacements/full Stop own their
+    // own server lifecycle and must never retire a newer request here.
+    if (kind !== 'user' && this.acceptServerWiring) {
+      this.acceptServerWiring = false;
+      this.retireCurrent();
+      this.host.userStopped?.(reason, { cardId: w.cardId, requestId: w.requestId, ...(w.wiringId ? { wiringId: w.wiringId } : {}) });
+    }
     if (kind === 'user') this.host.toast(`Wiring stopped · ${reason}`, 'info');
     else this.host.toast(`Muse's wiring stopped: ${reason}`, 'warn');
     this.host.log(`wiring stopped (${kind}): ${reason}`, kind === 'user' ? 'info' : 'warn');
@@ -285,7 +309,7 @@ export class WiringController {
     if (!w) return;
     this.calibrator.reset(); this.corners[0] = this.corners[1] = null; this.calibrationOutline = undefined;
     w.phase = 'calibrating'; w.phaseLine = 'calibrating…';
-    this.host.toast('Touch the top-left corner of your screen', 'info');
+    this.host.toast('Move your fingertip to the top-left corner, then hold still', 'info');
   }
 
   private cancelCalibration(): void {
@@ -309,7 +333,7 @@ export class WiringController {
     const step = this.calibrator.step;
     return {
       step, progress: this.calibrator.progress,
-      message: step === 'top-left' ? 'Touch the top-left corner of your screen' : 'Now touch the bottom-right corner',
+      message: step === 'top-left' ? 'Move your fingertip to the top-left corner, then hold still' : 'Now touch the bottom-right corner',
       corners: this.corners.map((c) => (c ? [c.x, c.y, c.z] as [number, number, number] : null)),
       ...(this.calibrator.hasTip ? { tip: [this.calibrator.tip.x, this.calibrator.tip.y, this.calibrator.tip.z] as [number, number, number] } : {}),
       ...(this.calibrationOutline ? { outline: this.calibrationOutline } : {}),
@@ -359,7 +383,20 @@ export class WiringController {
     const w = this.w!;
     const before = this.calibrator.step;
     const update = this.calibrator.update(frame, timeMs, anchor);
-    this.setBusy(false);
+    // Block accidental recall while a fingertip is doing corner work, but not
+    // merely because calibration is open. A withdrawn control hand plus the
+    // deliberate menu palm must still give the wearer a recovery/Exit route.
+    const menuHand = frame.hands[this.host.menuHand ?? 'left'];
+    const menuTip = menuHand?.joints['index-finger-tip']?.position;
+    const recallingMenu = !!menuHand?.palmUp && !!menuTip && menuTip.distanceToSquared(this.calibrator.tip) < 1e-8;
+    // Once the first corner is known, it stays a screen point even while the
+    // calibrator is looking elsewhere for the second corner.
+    const topLeft = this.calibrator.topLeft;
+    const nearCapturedCorner = !!topLeft && (['left', 'right'] as const).some(side => {
+      const hand = frame.hands[side], tip = hand && !hand.controller ? hand.joints['index-finger-tip']?.position : undefined;
+      return !!tip && tip.distanceTo(topLeft) < SIGNAL_RANGE.hoverRange;
+    });
+    this.setBusy(nearCapturedCorner || this.calibrator.hasTip && !recallingMenu);
     if (update.kind === 'corner') {
       this.corners[0] = update.point;
       this.host.toast('Got it. Now touch the bottom-right corner', 'ok');
@@ -483,7 +520,7 @@ export class WiringController {
                 : phase === 'stopped' ? 'Stopped · ask again' : `${w.title || 'Wiring'} · ready`;
     const chips = busy ? [] : [...(sel.instrument === 'musical-synth' ? MUSICAL_WIRE_CHIPS : WIRE_CHIPS)];
     const code: WireCodeView | undefined = w ? {
-      wiringId: w.wiringId || 'pending', phase, model: w.model || 'Muse', source: w.wireSource, request: w.request, code: w.code, phaseLine: w.phaseLine,
+      wiringId: w.wiringId || 'pending', requestId: w.requestId, phase, model: w.model || 'Muse', source: w.wireSource, request: w.request, code: w.code, phaseLine: w.phaseLine,
       ...(w.title ? { title: w.title } : {}), ...(w.explanation ? { explanation: w.explanation } : {}),
       mode: (phase === 'running' && this.collapsed) || phase === 'stopped' ? 'pill' : 'full', stopped: w.stopped,
     } : undefined;

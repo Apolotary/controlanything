@@ -28,12 +28,12 @@ it('keeps Buddy and every existing wrist action reachable when Tutorial shares t
 function hand(x = -0.2, palmUp = true, palmUpMs = 450): HandState {
   return {
     joints: {
-      wrist: { position: new Vector3(x, 1.1, -0.4), quaternion: new Quaternion(), radius: 0.01 },
-      'middle-finger-phalanx-proximal': { position: new Vector3(x, 1.1, -0.48), quaternion: new Quaternion(), radius: 0.008 },
-      'thumb-tip': { position: new Vector3(x - 0.08, 1.1, -0.46), quaternion: new Quaternion(), radius: 0.008 },
-      'middle-finger-tip': { position: new Vector3(x, 1.1, -0.56), quaternion: new Quaternion(), radius: 0.008 },
-      'ring-finger-tip': { position: new Vector3(x + 0.04, 1.1, -0.54), quaternion: new Quaternion(), radius: 0.008 },
-      'pinky-finger-tip': { position: new Vector3(x + 0.08, 1.1, -0.51), quaternion: new Quaternion(), radius: 0.008 },
+      wrist: { position: new Vector3(x, 1.3, -0.4), quaternion: new Quaternion(), radius: 0.01 },
+      'middle-finger-phalanx-proximal': { position: new Vector3(x, 1.3, -0.48), quaternion: new Quaternion(), radius: 0.008 },
+      'thumb-tip': { position: new Vector3(x - 0.08, 1.3, -0.46), quaternion: new Quaternion(), radius: 0.008 },
+      'middle-finger-tip': { position: new Vector3(x, 1.3, -0.56), quaternion: new Quaternion(), radius: 0.008 },
+      'ring-finger-tip': { position: new Vector3(x + 0.04, 1.3, -0.54), quaternion: new Quaternion(), radius: 0.008 },
+      'pinky-finger-tip': { position: new Vector3(x + 0.08, 1.3, -0.51), quaternion: new Quaternion(), radius: 0.008 },
     },
     palmUp, palmUpMs, controller: false,
     pinching: false, justPinched: false, justReleased: false, pinchPoint: new Vector3(),
@@ -57,10 +57,44 @@ function controller(position = new Vector3(-0.18, 1.4, -0.4)): HandState {
 }
 
 describe('HandDockAnchor', () => {
+  const moveHeight = (menuHand: HandState, delta: number) => {
+    for (const joint of Object.values(menuHand.joints)) if (joint) joint.position.y += delta;
+  };
+
+  it('re-arms after a dismissed palm is lowered, requiring a fresh raised dwell without turning the palm away', () => {
+    const f = setup(); f.frame.hands.left = hand(-.2, true, 10_000);
+    f.update(0); f.update(450); expect(f.anchor.open).toBe(true);
+    f.anchor.dismiss(450); f.update(500); expect(f.anchor.open).toBe(false);
+    moveHeight(f.frame.hands.left, -.6); f.update(550);
+    moveHeight(f.frame.hands.left, .6); f.update(600); f.update(1049);
+    expect(f.anchor.open).toBe(false);
+    f.update(1050); expect(f.anchor.open).toBe(true);
+  });
+
+  it('does not reuse palm-facing time gathered while lowered or blocked as a raised opening dwell', () => {
+    const f = setup(); f.frame.hands.left = hand(-.2, true, 10_000);
+    moveHeight(f.frame.hands.left, -.6); f.update(0); f.update(1000);
+    moveHeight(f.frame.hands.left, .6); f.update(1016); expect(f.anchor.open).toBe(false);
+    f.update(1400); f.anchor.blockOpen = true; f.update(1401);
+    f.anchor.blockOpen = false; f.update(1500); f.update(1949);
+    expect(f.anchor.open).toBe(false);
+    f.update(1950); expect(f.anchor.open).toBe(true);
+  });
+
+  it('freezes an open menu at its raised position and closes it after lowering even while the palm still faces the eyes', () => {
+    const f = setup(); f.frame.hands.left = hand(-.2, true, 10_000);
+    f.update(0); f.update(450); f.update(630); const position = f.dock.position.clone();
+    moveHeight(f.frame.hands.left, -.6); f.update(700); f.update(999);
+    expect(f.anchor.open).toBe(true); expect(f.dock.position.distanceTo(position)).toBe(0);
+    f.update(1000); expect(f.anchor.open).toBe(false);
+    f.update(1180); expect(f.anchor.opacity).toBe(0);
+  });
+
   it.each(['left', 'right'] as const)('attaches to the %s non-dominant hand after its palm dwell', (side) => {
     const { anchor, dock, wrist, frame, update } = setup(side);
     const menuHand = hand(side === 'left' ? -0.2 : 0.2, true, 449);
     frame.hands = { left: hand(-0.2), right: hand(0.2), [side]: menuHand };
+    update(0);
     update(449);
     expect(anchor.tracked).toBe(true);
     expect(anchor.open).toBe(false);
@@ -87,18 +121,18 @@ describe('HandDockAnchor', () => {
   it('waits 300 ms after the palm turns away, then fades out over 180 ms', () => {
     const { anchor, wrist, frame, update } = setup();
     frame.hands.left = hand();
-    update(0); update(180);
+    update(0); update(450); update(630);
     frame.hands.left.palmUp = false;
-    update(200); update(499);
+    update(650); update(949);
     expect(anchor.open).toBe(true);
-    update(500);
+    update(950);
     expect(anchor.open).toBe(false);
     expect(anchor.opacity).toBe(1);
-    update(590);
+    update(1040);
     expect(anchor.opacity).toBeGreaterThan(0);
     expect(anchor.opacity).toBeLessThan(1);
     expect(wrist.visible).toBe(true);
-    update(680);
+    update(1130);
     expect(anchor.opacity).toBe(0);
     expect(anchor.wristOpacity).toBe(0.6);
   });
@@ -106,31 +140,31 @@ describe('HandDockAnchor', () => {
   it('holds an open menu near the other hand at a menu fingertip, then releases it', () => {
     const { anchor, dock, frame, update } = setup();
     frame.hands.left = hand();
-    update(0); update(180);
+    update(0); update(450); update(630);
     const other = hand(0.2);
     const menuTip = frame.hands.left.joints['pinky-finger-tip']!.position;
     const tip = { position: menuTip.clone().add(new Vector3(0.04, 0, 0.04)), quaternion: new Quaternion(), radius: 0.008 };
     other.joints['index-finger-tip'] = tip;
     frame.hands.right = other;
     frame.hands.left.palmUp = false;
-    update(200); update(1000);
+    update(650); update(1450);
     expect(anchor.open).toBe(true);
     tip.position.copy(menuTip).add(new Vector3(0.25, 0, 0));
-    update(1100); update(1400); update(1580);
+    update(1550); update(1850); update(2030);
     expect(anchor.open).toBe(false);
     expect(anchor.opacity).toBe(0);
     tip.position.copy(dock.position);
-    update(1800);
+    update(2250);
     expect(anchor.open).toBe(false);
   });
 
   it('does not keep itself open with the menu hand fingertip', () => {
     const { anchor, dock, frame, update } = setup();
     frame.hands.left = hand();
-    update(0); update(180);
+    update(0); update(450); update(630);
     frame.hands.left.palmUp = false;
     frame.hands.left.joints['index-finger-tip'] = { position: dock.position.clone(), quaternion: new Quaternion(), radius: 0.008 };
-    update(200); update(500);
+    update(650); update(950);
     expect(anchor.open).toBe(false);
   });
 
@@ -153,15 +187,15 @@ describe('HandDockAnchor', () => {
   it('hides immediately when only the dominant hand remains and requires a new palm dwell on return', () => {
     const { anchor, wrist, frame, update } = setup();
     frame.hands.left = hand(); frame.hands.right = hand(0.2);
-    update(0); update(180);
+    update(0); update(450); update(630);
     delete frame.hands.left;
-    update(200);
+    update(650);
     expect(anchor.tracked).toBe(true);
     expect(anchor.open).toBe(false);
     expect(anchor.opacity).toBe(0);
     expect(wrist.visible).toBe(false);
     frame.hands.left = hand(-0.2, true, 0);
-    update(300);
+    update(750);
     expect(anchor.open).toBe(false);
   });
 

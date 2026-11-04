@@ -191,6 +191,24 @@ describe('WiringRuntime', () => {
     expect(rt.ready).toBe(true);
     rt.stop('done', 'user', false);
   });
+
+  it('ignores already queued results from a worker retired before an ask-again', () => {
+    const workers: Worker[] = [], sent: WireEmit[] = [];
+    const rt = new WiringRuntime({ send: e => { sent.push(e); return true; }, onStop: () => {}, createWorker: () => {
+      const worker = { onmessage: null, onerror: null, postMessage: () => {}, terminate: () => {} } as unknown as Worker;
+      workers.push(worker); return worker;
+    } });
+    rt.start(program("out.set('a', 1);"));
+    const oldReply = workers[0]!.onmessage!;
+    rt.stop('both palms out', 'user', false);
+    rt.start(program("out.set('a', 2);"));
+    oldReply.call(workers[0]!, { data: { type: 'ready' } } as MessageEvent);
+    oldReply.call(workers[0]!, { data: { type: 'out', sets: { a: 127 }, trigs: [], ms: 0 } } as MessageEvent);
+    expect(rt.ready).toBe(false); expect(sent).toEqual([]);
+    workers[1]!.onmessage!.call(workers[1]!, { data: { type: 'ready' } } as MessageEvent);
+    expect(rt.ready).toBe(true);
+    rt.stop('done', 'external', false);
+  });
 });
 
 vi.setConfig({ testTimeout: 10_000 });

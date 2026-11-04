@@ -31,6 +31,7 @@ import { EdgePlacement } from './comfort';
 import { acceptsCommandResult, commandTimedOut, commandSubtitle, routeLabel, type CommandState } from './command-state';
 import { DeviceCard, type CardAction, type CardAgent, type CardAsk, type CardView } from './device-card';
 import { CalibrationMarkers, CodeCard } from '../../wiring/code-card';
+import { WireRequestReader } from '../../wiring/request-reader';
 import { DialRig, type DialMode, type DialModel } from './radial-dial';
 import { setupChecks, setupFraction } from './setup-ring';
 import { liveGesture } from '../../gestures/feedback';
@@ -169,6 +170,7 @@ export class LeanHud implements Hud {
   /** "Muse writes the glue": the selected device's wiring (ask chips on the card, code card beside the device). */
   private wireView: WireView | null = null;
   private readonly codeCard = new CodeCard();
+  private readonly requestReader = new WireRequestReader(this.surfaces);
   private readonly wireMarkers = new CalibrationMarkers();
   private readonly codePosition = new Vector3();
   private readonly wireGoal = new Vector3();
@@ -250,7 +252,7 @@ export class LeanHud implements Hud {
     // Not `primary`: a white pill reads as "selected/pressed" next to the Annotate | Control segments.
     this.palette.register({ key: 'visual-synth', label: 'Visual synth', order: 0, onSelect: () => this.events.emit('visualSynth', {}) });
     this.palette.register({ key: 'musical-synth', label: 'Music synth', order: 1, compactWithPrevious: true, onSelect: () => this.events.emit('musicalSynth', {}) });
-    this.palette.register({ key: 'deck:panic', label: 'Stop', order: 80, onSelect: () => {
+    this.palette.register({ key: 'deck:panic', label: 'Stop all', order: 80, onSelect: () => {
       this.events.emit('deck', { key: 'panic', phase: 'press' }); this.events.emit('deck', { key: 'panic', phase: 'release' });
     } });
     this.palette.register({ key: 'exit-ar', label: 'Exit', order: 90, hold: true, onSelect: () => this.events.emit('exit', {}) });
@@ -301,7 +303,15 @@ export class LeanHud implements Hud {
     this.annotationLayer.add(this.boxes);
     this.root.add(this.annotationLayer, this.card, this.modalLayer, this.deck, this.deck.panel, this.coach, this.notice, this.reticles, this.tether);
     this.root.add(this.helperPairing);
-    this.root.add(this.codeCard, this.wireMarkers);
+    this.root.add(this.codeCard, this.wireMarkers, this.requestReader);
+    this.widgets.push({ group: this.requestReader.hitArea, w: this.requestReader.width, h: this.requestReader.height,
+      kind: 'handle', start: () => {}, lastMove: 0 });
+    for (const [group, action] of [
+      [this.requestReader.previous, () => this.requestReader.previousPage()],
+      [this.requestReader.next, () => this.requestReader.nextPage()],
+      [this.requestReader.closeButton, () => this.requestReader.close()],
+    ] as const) this.widgets.push({ group, w: this.requestReader.buttonWidth, h: this.requestReader.buttonHeight,
+      kind: 'handle', button: true, lastMove: 0, start: action });
     this.root.add(this.assistant);
     this.root.add(this.projectPanel);
     this.widgets.push({ group: this.projectPanel.hitArea, w: this.projectPanel.width, h: this.projectPanel.height, kind: 'handle', start: () => {}, lastMove: 0 });
@@ -638,6 +648,15 @@ export class LeanHud implements Hud {
   private lookAction(id: string): void {
     const target = this.selected(), m = this.mounted();
     if (!target) return;
+    if (id === 'wire-read-request') {
+      if (this.wireView?.targetId !== target.id || !this.requestReader.available) return;
+      if (!this.requestReader.open()) this.toast(this.wireView.phase === 'running'
+        ? 'Show both palms to stop the wiring, then choose Read request.'
+        : this.wireView.phase === 'calibrating'
+          ? 'Finish calibration, show both palms to stop, then Read request.'
+          : 'After it finishes, show both palms to stop, then Read request.', 'info');
+      return;
+    }
     if ((id.startsWith('control:') || id.startsWith('action:')) && !this.manualLookReady()) return;
     if (id === 'control-setup') this.events.emit('setup', { targetId: target.id });
     else if (id === 'musical-retry') this.events.emit('musicalSynth', {});
@@ -772,6 +791,9 @@ export class LeanHud implements Hud {
       ask = { chips, mic: wire.mic };
       if (!this.manualLookReady()) actions.length = 0;
     }
+    if (wire?.targetId === this.locked && this.requestReader.available) {
+      actions.unshift({ id: 'wire-read-request', label: 'Read request' });
+    }
     return { title: name, subtitle, toggle, actions: actions.slice(0, 3), agent: this.lookAgent(working), ask };
   }
   private refreshLook(): void {
@@ -817,13 +839,15 @@ export class LeanHud implements Hud {
     const mine = view && view.targetId === this.locked ? view : null;
     const previous = this.wireView;
     this.wireView = mine;
-    const askChanged = JSON.stringify([previous?.prompt, previous?.chips, previous?.activeChip, previous?.mic, previous?.canRecalibrate, previous?.phase])
-      !== JSON.stringify([mine?.prompt, mine?.chips, mine?.activeChip, mine?.mic, mine?.canRecalibrate, mine?.phase]);
+    this.requestReader.set(mine);
+    const askChanged = JSON.stringify([previous?.prompt, previous?.chips, previous?.activeChip, previous?.mic, previous?.canRecalibrate, previous?.phase, previous?.code?.requestId, previous?.code?.request])
+      !== JSON.stringify([mine?.prompt, mine?.chips, mine?.activeChip, mine?.mic, mine?.canRecalibrate, mine?.phase, mine?.code?.requestId, mine?.code?.request]);
     if (askChanged) this.refreshLook();
     this.codeCard.set(mine?.code ?? null, mine?.calibration ?? null);
     this.root.userData.wire = mine ? { phase: mine.phase, prompt: mine.prompt, chips: mine.chips, mic: mine.mic, card: this.codeCard.state } : undefined;
   }
   setHandsBusy(busy: boolean): void { this.handsBusy = busy; }
+  isReadingRequest(): boolean { return this.requestReader.visible; }
   /** Place the code card beside the selected device (opposite the device card), the calibration markers in world space. */
   private updateWire(frame: HudFrame, dt: number, box: { center: Vector3; w: number; h: number } | undefined): void {
     const wire = this.wireView;
@@ -849,6 +873,10 @@ export class LeanHud implements Hud {
       this.codeCard.quaternion.copy(this.codeQuaternion);
     } else if (!show) this.codePlaced = false;
     this.codeCard.update(dt * 1000, show);
+    this.requestReader.position.copy(this.codePosition);
+    this.requestReader.quaternion.copy(this.codeQuaternion);
+    if (this.requestReader.visible) this.codeCard.visible = false;
+    this.requestReader.updateUi(dt * 1000);
     const cal = this.wireView?.calibration;
     this.wireCorners[0] = cal?.corners[0] ? (this.wireCorners0 ??= new Vector3()).fromArray(cal.corners[0]) : null;
     this.wireCorners[1] = cal?.corners[1] ? (this.wireCorners1 ??= new Vector3()).fromArray(cal.corners[1]) : null;
@@ -1082,7 +1110,7 @@ export class LeanHud implements Hud {
     else { this.fading.delete(id); this.boxes.remove(id); }
     this.targets.delete(id);
     const label = this.labels.get(id); if (label) { label.removeFromParent(); this.clear(label); this.labels.delete(id); }
-    if (this.locked === id) { this.locked = null; this.setAssistant(null); this.setSetupProgress(null); this.setCanvas(null); this.pinned = false; this.card.userData.pinned = false; this.refreshCard(); }
+    if (this.locked === id) { this.requestReader.close(); this.locked = null; this.setAssistant(null); this.setSetupProgress(null); this.setCanvas(null); this.pinned = false; this.card.userData.pinned = false; this.refreshCard(); }
   }
   clearTargets(): void { for (const id of this.targets.keys()) this.removeTarget(id); }
   setCandidate(id: string | null): void {
@@ -1092,7 +1120,7 @@ export class LeanHud implements Hud {
     if (id && this.targets.has(id)) this.refreshTargetLabel(this.targets.get(id)!);
   }
   setLocked(id: string | null): void {
-    if (id !== this.locked) { this.setAssistant(null); this.setSetupProgress(null); this.setCanvas(null); }
+    if (id !== this.locked) { this.requestReader.close(); this.setAssistant(null); this.setSetupProgress(null); this.setCanvas(null); }
     if (id !== this.locked && this.codeEntry && this.codeTarget !== HELPER_PAIRING_TARGET) this.closePairCode();
     const old = this.locked; this.locked = id;
     if (old !== id) { this.pinned = false; this.card.userData.pinned = false; this.evidence = null; this.upload = null; this.selectedAction = null; this.unfoldStarted = this.time; }
@@ -1535,7 +1563,7 @@ export class LeanHud implements Hud {
         && (id === this.candidate || id === this.locked || !!this.targets.get(id)?.tagged);
     }
     this.helperPairing.visible = !!this.helperPairingView && !this.modal.visible && !this.deck.panel.visible;
-    this.coach.visible = !!this.onboarding && !this.assistant.visible && !this.helperPairingView && !this.modal.visible && !this.deck.panel.visible && !this.projectView;
+    this.coach.visible = !!this.onboarding && !this.requestReader.visible && !this.assistant.visible && !this.helperPairingView && !this.modal.visible && !this.deck.panel.visible && !this.projectView;
     this.helperPairing.update({ head: this.headPose, time: this.time * 1000 });
     this.workspaceAnchor.place(this.helperPairing);
     const unfold = target ? unfoldEase((this.time - this.unfoldStarted) / THEME.motion.duration) : 1;
@@ -1557,7 +1585,7 @@ export class LeanHud implements Hud {
       : this.helperPairing.visible ? this.helperPairing : this.projectPanel.visible ? this.projectPanel
       : this.visualSelection.visible ? this.visualSelection : this.assistant.visible ? this.assistant
       : this.card.visible ? this.card : this.deck.visible ? this.deck : undefined;
-    this.edge.visible = !!foreground && this.edgePlacement.update(this.head, this.headQuaternion, foreground.position);
+    this.edge.visible = !this.requestReader.visible && !!foreground && this.edgePlacement.update(this.head, this.headQuaternion, foreground.position);
     if (this.edge.visible) {
       this.edge.position.copy(this.edgePlacement.position); this.edge.quaternion.copy(this.headQuaternion);
       this.edgeArrow.rotation.z = this.edgePlacement.angle;
@@ -2084,6 +2112,7 @@ export class LeanHud implements Hud {
   }
   dispose(): void {
     this.assistant.disposeUi();
+    this.requestReader.disposeUi();
     this.projectPanel.disposeSpatial();
     this.root.traverse((o) => { if ('sync' in o && 'dispose' in o) (o as SdfText).dispose(); });
     this.helperPairing.dispose();

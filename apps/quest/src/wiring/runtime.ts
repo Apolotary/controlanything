@@ -34,9 +34,10 @@ export const WIRING_LIMITS = {
 export type StopKind = 'user' | 'external' | 'error' | 'overrun' | 'watchdog' | 'refused' | 'unavailable';
 export interface WiringProgram {
   wiringId: string; cardId: string; code: string; title: string; explanation: string; model: string;
+  requestId?: string;
   source: 'live' | 'fixture' | 'template'; actions: WireAction[];
 }
-export interface WireEmit { widgetId: string; value: number | boolean; phase: 'move' | 'end' }
+export interface WireEmit { widgetId: string; value: number | boolean; phase: 'move' | 'end'; requestId?: string; wiringId?: string }
 
 // --- static check (defence in depth: the server validator enforces the same list before wire.ready) ---------------------
 
@@ -166,7 +167,7 @@ export const WORKER_SOURCE = String.raw`(function () {
 
 export interface RuntimeDeps {
   /** Send one output as control.event; false = not sent (disconnected). */
-  send(event: WireEmit): boolean;
+  send(event: WireEmit, program: WiringProgram): boolean;
   /** The program stopped (or was stopped). Fired once. */
   onStop(reason: string, kind: StopKind): void;
   /** Tests inject a stand-in Worker. */
@@ -217,8 +218,9 @@ export class WiringRuntime {
     this.gate = new OutputGate(program.actions);
     this.state = 'starting'; this.inFlight = false; this.strikes = this.clean = 0; this.reason = ''; this.lastSignals = null;
     Object.assign(this.stats, { ticks: 0, sent: 0, avgMs: 0, maxMs: 0, strikes: 0, dropped: 0 });
-    this.worker.onmessage = (e: MessageEvent) => this.onMessage(e.data as Record<string, unknown>);
-    this.worker.onerror = (e: ErrorEvent) => { e.preventDefault?.(); this.fail(`worker error: ${e.message || 'unknown'}`, 'error'); };
+    const worker = this.worker;
+    this.worker.onmessage = (e: MessageEvent) => { if (this.worker === worker) this.onMessage(e.data as Record<string, unknown>); };
+    this.worker.onerror = (e: ErrorEvent) => { if (this.worker !== worker) return; e.preventDefault?.(); this.fail(`worker error: ${e.message || 'unknown'}`, 'error'); };
     this.worker.postMessage({ type: 'init', code: program.code, actions: program.actions.map((a) => a.actionId) });
     this.startTimer = setTimeout(() => { if (this.state === 'starting') this.fail('the sandbox did not start', 'unavailable'); }, WIRING_LIMITS.startMs);
     return null;
@@ -331,7 +333,8 @@ export class WiringRuntime {
   }
 
   private emit(e: WireEmit): void {
-    if (this.d.send(e)) this.stats.sent++;
+    const program = this.program;
+    if (program && this.d.send(e, program)) this.stats.sent++;
   }
 
   /** For tests and the debug HUD. */

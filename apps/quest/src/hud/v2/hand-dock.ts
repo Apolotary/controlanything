@@ -170,6 +170,7 @@ export class HandDockAnchor {
   private fadeStarted = 0;
   private fadeFrom = 0;
   private raisedSince: number | null = null;
+  private eligibleSince: number | null = null;
   private controllerPinned = false;
   private controllerRaised = false;
   private readonly destination = new Vector3();
@@ -185,7 +186,7 @@ export class HandDockAnchor {
   reaching = false;
   /** Set by the HUD while a control is in use (or was just used): a closed menu must not open then. */
   blockOpen = false;
-  /** After a menu button fires, the menu closes and stays closed until the palm turns away (or the hand is lost). */
+  /** A menu press requires leaving the raised flat-palm pose before another fresh dwell. */
   private dismissed = false;
   private readonly palmNormal = new Vector3();
   private readonly boneA = new Vector3();
@@ -253,16 +254,20 @@ export class HandDockAnchor {
     const firstPose = !this.attached;
     if (firstPose) this.closeImmediately();
     this.attached = true;
-    this.place(frame, hand, dock, wrist, firstPose, _width);
-
-    const held = this.open && (this.reaching || this.fingerNear(other, hand));
-    if (this.dismissed && !hand.palmUp) this.dismissed = false;
-    const palmReady = !this.blockOpen && !this.dismissed && hand.palmUp && (hand.palmUpMs ?? 0) >= OPEN_DWELL_MS
-      && this.inReach(frame, hand) && this.deliberate(frame, hand);
+    const raised = this.raisedHand(frame, hand);
+    const eligible = !!hand.palmUp && raised && this.deliberate(frame, hand);
+    // Do not drag a closing menu under the desk. A reaching finger can keep
+    // using its last stable position while the menu hand lowers or rolls away.
+    if (raised || !this.open && this.opacity <= .01) this.place(frame, hand, dock, wrist, firstPose, _width);
+    const held = this.open && (this.reaching || raised && this.fingerNear(other, hand));
+    if (!eligible) this.dismissed = false;
+    if (eligible && !this.blockOpen && !this.dismissed) this.eligibleSince ??= frame.time;
+    else this.eligibleSince = null;
+    const palmReady = this.eligibleSince !== null && frame.time - this.eligibleSince >= OPEN_DWELL_MS;
     let nextOpen = this.open;
     if (this.dismissed) {
       nextOpen = false;
-    } else if (palmReady || (this.open && (hand.palmUp || held))) {
+    } else if (palmReady || this.open && (eligible || held)) {
       nextOpen = true;
       this.awaySince = null;
     } else if (this.open) {
@@ -274,10 +279,11 @@ export class HandDockAnchor {
     wrist.visible = this.wristOpacity > 0.001;
   }
 
-  /** Close now (a menu button fired) and stay closed until the palm turns away and back. */
+  /** Close after a press; lowering or turning the palm away re-arms a fresh raised dwell. */
   dismiss(time: number): void {
     if (this.source !== 'hand') return;
     this.dismissed = true;
+    this.eligibleSince = null;
     this.awaySince = null;
     this.fade(false, time);
   }
@@ -336,6 +342,7 @@ export class HandDockAnchor {
     this.attached = false;
     this.awaySince = null;
     this.raisedSince = null;
+    this.eligibleSince = null;
     this.lostSince = null;
     this.reaching = false;
     this.dismissed = false;
@@ -345,10 +352,9 @@ export class HandDockAnchor {
   /** A deliberate "show me the menu" pose (see OPEN_*). Without articulated joints, palm-up alone decides. */
   private deliberate(frame: HudFrame, hand: HandState): boolean {
     const joints = hand.joints, wrist = joints.wrist, index = joints['index-finger-phalanx-proximal'], pinky = joints['pinky-finger-phalanx-proximal'];
-    if (!wrist || !index || !pinky) return true;
-    if (hand.pinching) return false;
+    if (!wrist || hand.pinching) return false;
     const head = frame.head.position;
-    if (wrist.position.y < head.y - OPEN_BELOW_HEAD || wrist.position.distanceTo(head) > OPEN_MAX_DISTANCE) return false;
+    if (!index || !pinky) return true;
     // Palm normal from joint positions (same construction as app/input.ts): left = pinky × index, right = index × pinky.
     this.boneA.subVectors(index.position, wrist.position);
     this.boneB.subVectors(pinky.position, wrist.position);
@@ -364,6 +370,12 @@ export class HandDockAnchor {
       if (bones > 0 && base.position.distanceTo(tip.position) / bones < OPEN_FINGER_STRAIGHTNESS) return false;
     }
     return true;
+  }
+
+  private raisedHand(frame: HudFrame, hand: HandState): boolean {
+    const wrist = hand.joints.wrist;
+    return !!wrist && wrist.position.y >= frame.head.position.y - OPEN_BELOW_HEAD
+      && wrist.position.distanceTo(frame.head.position) <= OPEN_MAX_DISTANCE && this.inReach(frame, hand);
   }
 
   /** The other hand's index tip is in front of (or just through) the open menu, within a margin around it. */

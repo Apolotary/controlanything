@@ -23,6 +23,8 @@ export interface CanvasView { targetId: string; state: CanvasStatePayload }
 export type WirePhase = 'idle' | 'asked' | 'writing' | 'validating' | 'dry-run' | 'verifying' | 'calibrating' | 'ready' | 'running' | 'stopped' | 'failed';
 export interface WireCodeView {
   wiringId: string;
+  /** Correlates a reading subview with one explicit ask, even before the first progress packet. */
+  requestId?: string;
   phase: WirePhase;
   model: string;
   /** live = a Meta model wrote it now; fixture = a recorded answer; template = no Meta model wrote it (always shown) */
@@ -266,6 +268,8 @@ export interface Hud {
   setDeviceState?(state: DeviceState | null): void;
   /** The selected device's wiring: the ask section of its card and the code card beside it. */
   setWire?(view: WireView | null): void;
+  /** Explicit local reading focus; coaching should wait until the reader returns. */
+  isReadingRequest?(): boolean;
   /** The wiring is running and the hands are working (right hand in the play zone, or a finger near the screen): the wrist menu stays shut. */
   setHandsBusy?(busy: boolean): void;
   /** Actual setup events and artifact previews for the selected card. */

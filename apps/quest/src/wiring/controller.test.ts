@@ -30,7 +30,10 @@ function setup(options: { micError?: string; instrument?: 'musical-synth' } = {}
   };
   const controller = holder.controller = new WiringController(host);
   const view = () => views.at(-1);
-  return { controller, sent, controls, toasts, views, view, voice, runtime, userStopped, busy: () => busy, setControl: (v: boolean) => { canControl = v; }, deselect: () => { selected = undefined; } };
+  const requestId = () => (sent.findLast(e => e.type === 'wire.request')?.payload as { requestId?: string } | undefined)?.requestId;
+  const receiveReady = (p: WireReadyPayload) => controller.onReady({ ...p, requestId: p.requestId ?? requestId() });
+  const receiveProgress = (p: WireProgressPayload) => controller.onProgress({ ...p, requestId: p.requestId ?? requestId() });
+  return { controller, requestId, receiveReady, receiveProgress, sent, controls, toasts, views, view, voice, runtime, userStopped, busy: () => busy, setControl: (v: boolean) => { canControl = v; }, deselect: () => { selected = undefined; } };
 }
 
 const base = { cardId: 'visual-synth-mac', wiringId: 'w1', model: 'muse-spark-1.3', source: 'fixture' as const };
@@ -55,7 +58,7 @@ describe('the wiring flow', () => {
     expect(t.view()?.chips).toEqual([...MUSICAL_WIRE_CHIPS]);
     expect(t.view()?.chips).not.toContain('Touch the water');
     expect(t.controller.ask('Play like a theremin', 'chip')).toBe(true);
-    expect(t.sent).toEqual([{ type: 'wire.request', payload: { cardId: 'musical-synth-mac', text: 'Play like a theremin', source: 'chip' } }]);
+    expect(t.sent).toEqual([{ type: 'wire.request', payload: { cardId: 'musical-synth-mac', text: 'Play like a theremin', source: 'chip', requestId: expect.any(String) } }]);
     expect(t.runtime.running).toBe(false); expect(t.controls).toEqual([]);
   });
   it('shows the ask prompt and chips, and the hands do nothing until a wiring runs', async () => {
@@ -66,28 +69,42 @@ describe('the wiring flow', () => {
     for (let i = 0; i < 30; i++) { t.controller.frame(finger(new Vector3(0, 1.4 + i * 0.005, -0.4)), clock += 16); await wait(1); }
     expect(t.controls).toEqual([]);
     expect(t.sent).toEqual([]);
-    t.controller.onProgress(progress({ phase: 'writing', code: CODE }));
-    t.controller.onReady(ready(['right']));
+    t.receiveProgress(progress({ phase: 'writing', code: CODE }));
+    t.receiveReady(ready(['right']));
     expect(t.runtime.running).toBe(false); // A broadcast from an older session is not a new ask.
     expect(t.controller.phase).toBe('idle');
+  });
+
+  it('rejects overlong requests without replacing a running program, and accepts all 500 characters at the boundary', async () => {
+    const t = setup(); t.controller.ask('Hands as knobs', 'chip'); t.receiveReady(ready(['right']));
+    await wait(5);
+    const current = t.controller.snapshot(), sent = t.sent.length;
+    expect(t.controller.ask('x'.repeat(501), 'voice')).toBe(false);
+    expect(t.sent).toHaveLength(sent); expect(t.controller.snapshot()).toEqual(current);
+    expect(t.controller.running).toBe(true);
+    expect(t.toasts).toContain('That request is too long. Ask in one or two sentences.');
+    const complete = 'x'.repeat(500);
+    expect(t.controller.ask(complete, 'text')).toBe(true);
+    expect(t.sent.at(-1)).toMatchObject({ type: 'wire.request', payload: { text: complete } });
+    t.controller.reset();
   });
 
   it('asks Muse, streams the code, calibrates the screen, runs, and stops on both palms out', async () => {
     const t = setup();
     expect(t.controller.ask('Touch the water', 'chip')).toBe(true);
-    expect(t.sent).toEqual([{ type: 'wire.request', payload: { cardId: 'visual-synth-mac', text: 'Touch the water', source: 'chip' } }]);
+    expect(t.sent).toEqual([{ type: 'wire.request', payload: { cardId: 'visual-synth-mac', text: 'Touch the water', source: 'chip', requestId: expect.any(String) } }]);
     t.controller.frame(finger(new Vector3(0, 1.4, -0.4)), clock += 16);
     expect(t.view()).toMatchObject({ phase: 'asked', chips: [] });
-    t.controller.onProgress(progress({ phase: 'writing', codeDelta: CODE.slice(0, 30), note: 'muse-spark-1.3 is writing…' }));
-    t.controller.onProgress(progress({ phase: 'writing', codeDelta: CODE.slice(30) }));
+    t.receiveProgress(progress({ phase: 'writing', codeDelta: CODE.slice(0, 30), note: 'muse-spark-1.3 is writing…' }));
+    t.receiveProgress(progress({ phase: 'writing', codeDelta: CODE.slice(30) }));
     clock += 100; t.controller.frame(finger(new Vector3(0, 1.4, -0.4)), clock);
     expect(t.view()!.code).toMatchObject({ phase: 'writing', code: CODE, source: 'fixture', model: 'muse-spark-1.3', request: 'Touch the water', mode: 'full' });
-    t.controller.onProgress(progress({ phase: 'validating', code: CODE, title: 'FIXTURE: Touch the water' }));
-    t.controller.onProgress(progress({ phase: 'dry-run', note: 'dry-run ✓ 120 frames · 2 actions' }));
+    t.receiveProgress(progress({ phase: 'validating', code: CODE, title: 'FIXTURE: Touch the water' }));
+    t.receiveProgress(progress({ phase: 'dry-run', note: 'dry-run ✓ 120 frames · 2 actions' }));
     clock += 100; t.controller.frame(finger(new Vector3(0, 1.4, -0.4)), clock);
     expect(t.view()!.code!.phaseLine).toContain('dry-run');
-    t.controller.onProgress(progress({ phase: 'ready' }));
-    t.controller.onReady(ready());
+    t.receiveProgress(progress({ phase: 'ready' }));
+    t.receiveReady(ready());
     expect(t.controller.phase).toBe('calibrating');
     expect(t.runtime.running).toBe(false);
     // touch the two corners of a screen at z = -0.6 (the hand comes in from the side, it is not resting there)
@@ -110,7 +127,7 @@ describe('the wiring flow', () => {
     expect(t.controls.filter((e) => e.widgetId === 'wire:p').at(-1)!.value).toBe(0);
     // stop
     t.controller.stop('both palms out', 'user');
-    expect(t.userStopped).toHaveBeenCalledExactlyOnceWith('both palms out');
+    expect(t.userStopped).toHaveBeenCalledExactlyOnceWith('both palms out', { cardId: 'visual-synth-mac', requestId: t.requestId(), wiringId: 'w1' });
     t.controller.stop('Stop', 'external');
     expect(t.userStopped).toHaveBeenCalledTimes(1);
     await wait(100);
@@ -129,8 +146,8 @@ describe('the wiring flow', () => {
   it('a wiring that does not need the screen starts at once; a new request silences the old one', async () => {
     const t = setup();
     t.controller.ask('Hands as knobs', 'chip');
-    t.controller.onProgress(progress({ phase: 'writing', code: CODE }));
-    t.controller.onReady(ready(['right']));
+    t.receiveProgress(progress({ phase: 'writing', code: CODE }));
+    t.receiveReady(ready(['right']));
     expect(t.controller.phase).toBe('running');
     await wait(10);
     t.controller.ask('Surprise me', 'chip');
@@ -139,24 +156,57 @@ describe('the wiring flow', () => {
     expect(t.runtime.running).toBe(false);
   });
 
+  it('blocks wrist recall during calibration fingertip work and allows recovery after the hand withdraws', () => {
+    const t = setup(); t.controller.ask('Touch the water', 'chip'); t.receiveReady(ready());
+    const start = finger(new Vector3(-.6, 1.5, -.35)); t.controller.frame(start, clock += 16);
+    const corner = finger(new Vector3(-.25, 1.62, -.6)); t.controller.frame(corner, clock += 16);
+    expect(t.controller.calibrator.hasTip).toBe(true); expect(t.busy()).toBe(true);
+    const withdrawn = finger(new Vector3(0, .8, -.2)); t.controller.frame(withdrawn, clock += 16);
+    expect(t.busy()).toBe(false);
+    // A deliberate menu palm is a recovery route, not another working fingertip.
+    const menu = makeGestureFrame('open_palm', 'point');
+    menu.head.position.set(0, 1.6, 0); menu.head.quaternion.copy(new Quaternion()); delete menu.hands.right;
+    moveHand(menu.hands.left!, -.2, 1.6, -.35); menu.hands.left!.palmUp = true;
+    t.controller.frame(menu, clock += 16); expect(t.busy()).toBe(false);
+    t.controller.reset();
+  });
+
+  it('keeps recall blocked while a fingertip stays at the captured top-left corner during the bottom-right prompt', async () => {
+    const t = setup(); t.controller.ask('Touch the water', 'chip'); t.receiveReady(ready());
+    await hold(t.controller, new Vector3(-.6, 1.5, -.35), 100);
+    const topLeft = new Vector3(-.25, 1.62, -.6);
+    await hold(t.controller, topLeft, 600);
+    expect(t.controller.calibrator.step).toBe('bottom-right');
+    const menuHand = makeGestureFrame('open_palm', 'point').hands.left!;
+    moveHand(menuHand, -.2, 1.6, -.2); menuHand.palmUp = true;
+    const touching = finger(topLeft); touching.hands.left = menuHand;
+    t.controller.frame(touching, clock += 16);
+    expect(t.controller.calibrator.hasTip).toBe(false); // Not a bottom-right candidate.
+    expect(t.busy()).toBe(true); // Still touching the known screen corner.
+    const withdrawn = finger(new Vector3(0, 1.57, -.1)); withdrawn.hands.left = menuHand;
+    t.controller.frame(withdrawn, clock += 16);
+    expect(t.controller.calibrator.hasTip).toBe(false); expect(t.busy()).toBe(false);
+    t.controller.reset();
+  });
+
   it('does not restart on duplicate readiness or on delayed readiness after Stop/reset', async () => {
     const t = setup();
     const start = vi.spyOn(t.runtime, 'start');
     t.controller.ask('Hands as knobs', 'chip');
-    t.controller.onReady(ready(['right']));
-    t.controller.onReady(ready(['right']));
+    t.receiveReady(ready(['right']));
+    t.receiveReady(ready(['right']));
     expect(start).toHaveBeenCalledTimes(1);
     t.controller.stop('Stop');
-    t.controller.onProgress(progress({ phase: 'writing', code: CODE }));
-    t.controller.onReady(ready(['right']));
+    t.receiveProgress(progress({ phase: 'writing', code: CODE }));
+    t.receiveReady(ready(['right']));
     expect(start).toHaveBeenCalledTimes(1);
     expect(t.controller.phase).toBe('stopped');
     t.controller.reset('XR hidden');
-    t.controller.onReady({ ...ready(['right']), wiringId: 'late-unknown-id' });
+    t.receiveReady({ ...ready(['right']), wiringId: 'late-unknown-id' });
     expect(t.controller.phase).toBe('idle');
     expect(start).toHaveBeenCalledTimes(1);
     t.controller.ask('Hands as knobs', 'chip');
-    t.controller.onReady({ ...ready(['right']), wiringId: 'fresh-id' });
+    t.receiveReady({ ...ready(['right']), wiringId: 'fresh-id' });
     expect(start).toHaveBeenCalledTimes(2);
     t.controller.reset();
     await wait(10);
@@ -166,19 +216,44 @@ describe('the wiring flow', () => {
     const t = setup();
     t.controller.ask('Hands as knobs', 'chip');
     t.controller.stop('Stop');
-    t.controller.onProgress(progress({ phase: 'writing', code: CODE }));
-    t.controller.onReady(ready(['right']));
+    t.receiveProgress(progress({ phase: 'writing', code: CODE }));
+    t.receiveReady(ready(['right']));
     expect(t.controller.phase).toBe('stopped');
     expect(t.runtime.running).toBe(false);
+  });
+
+  it('retires a stopped ask epoch even before progress, then accepts another identical ask without setup', async () => {
+    const t = setup();
+    t.controller.ask('Hands as knobs', 'chip');
+    const retiredRequest = t.requestId()!;
+    t.controller.stop('both palms out', 'user');
+    expect(t.userStopped).toHaveBeenLastCalledWith('both palms out', { cardId: 'visual-synth-mac', requestId: retiredRequest });
+    expect(t.controller.view('visual-synth-mac')).toMatchObject({ phase: 'stopped', prompt: 'Stopped · ask again', chips: [...WIRE_CHIPS] });
+    expect(t.controller.ask('Hands as knobs', 'chip')).toBe(true);
+    const nextRequest = t.requestId()!;
+    expect(nextRequest).not.toBe(retiredRequest);
+    // A formerly unknown wiring ID and the same natural-language text are still stale.
+    t.controller.onProgress({ ...progress({ phase: 'writing', request: 'Hands as knobs', code: CODE }), requestId: retiredRequest });
+    t.controller.onReady({ ...ready(['right']), requestId: retiredRequest });
+    t.controller.onStopped({ cardId: 'visual-synth-mac', requestId: retiredRequest, wiringId: 'w1', ok: false, reason: 'old receipt' });
+    expect(t.controller.phase).toBe('asked'); expect(t.runtime.running).toBe(false);
+    expect(t.toasts).not.toContain('old receipt');
+    // Missing correlation also cannot revive a historical broadcast.
+    t.controller.onReady({ ...ready(['right']), wiringId: 'uncorrelated' });
+    expect(t.runtime.running).toBe(false);
+    t.receiveReady({ ...ready(['right']), wiringId: 'new-request-wiring' });
+    await wait(5);
+    expect(t.controller.running).toBe(true);
+    t.controller.reset();
   });
 
   it('shows a template or fixture source honestly and failures with their reason', () => {
     const t = setup();
     t.controller.ask('Surprise me', 'chip');
-    t.controller.onProgress(progress({ phase: 'writing', code: '// x', model: 'template', source: 'template', note: 'template wiring: no Meta model wrote this' }));
+    t.receiveProgress(progress({ phase: 'writing', code: '// x', model: 'template', source: 'template', note: 'template wiring: no Meta model wrote this' }));
     t.controller.frame(finger(new Vector3(0, 1.4, -0.4)), clock += 200);
     expect(t.view()!.code).toMatchObject({ source: 'template', model: 'template' });
-    t.controller.onProgress(progress({ phase: 'failed', issues: ['uses fetch'] }));
+    t.receiveProgress(progress({ phase: 'failed', issues: ['uses fetch'] }));
     t.controller.frame(finger(new Vector3(0, 1.4, -0.4)), clock += 200);
     expect(t.view()).toMatchObject({ phase: 'failed', prompt: 'Could not wire that · try again' });
     expect(t.view()!.chips).toHaveLength(3);
@@ -188,15 +263,39 @@ describe('the wiring flow', () => {
   it('a program that is refused by the sandbox never runs and says why', () => {
     const t = setup();
     t.controller.ask('Touch the water', 'chip');
-    t.controller.onReady({ ...ready(['right']), code: "fetch('http://evil')" });
+    t.receiveReady({ ...ready(['right']), code: "fetch('http://evil')" });
     expect(t.controller.phase).toBe('failed');
     expect(t.toasts.some((m) => /Muse's wiring stopped: refused: uses fetch/.test(m))).toBe(true);
+  });
+
+  it('withdraws a failed Worker once, preserves the failure, and ignores old readiness or release receipts after another ask', async () => {
+    const t = setup(); t.controller.ask('Hands as knobs', 'chip'); const failedRequest = t.requestId()!;
+    t.receiveReady({ ...ready(['right']), code: "mem.n = (mem.n || 0) + 1; out.set('p', 127); if (mem.n > 1) throw new Error('held-output failure');" });
+    await wait(5);
+    for (let i = 0; i < 8 && t.controller.running; i++) {
+      t.controller.frame(finger(new Vector3(0, 1.4, -.4)), clock += 40); await wait(5);
+    }
+    expect(t.controls).toContainEqual(expect.objectContaining({ widgetId: 'wire:p', value: 127 }));
+    expect(t.controller.phase).toBe('failed');
+    expect(t.controller.running).toBe(false);
+    expect(t.userStopped).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('held-output failure'), {
+      cardId: 'visual-synth-mac', requestId: failedRequest, wiringId: 'w1',
+    });
+    t.controller.onReady({ ...ready(['right']), requestId: failedRequest, wiringId: 'late-after-failure' });
+    expect(t.controller.running).toBe(false);
+    t.controller.onStopped({ cardId: 'visual-synth-mac', requestId: failedRequest, wiringId: 'w1', ok: true, releaseConfirmed: false, reason: 'Release not confirmed' });
+    expect(t.toasts).toContain('Release not confirmed');
+    expect(t.controller.view('visual-synth-mac')?.code).toMatchObject({ phase: 'failed', phaseLine: expect.stringContaining('held-output failure') });
+    expect(t.controller.ask('Surprise me', 'chip')).toBe(true);
+    t.controller.onStopped({ cardId: 'visual-synth-mac', requestId: failedRequest, wiringId: 'w1', ok: false, reason: 'Retired receipt' });
+    expect(t.toasts).not.toContain('Retired receipt'); expect(t.controller.phase).toBe('asked');
+    t.controller.reset();
   });
 
   it('forgets the wiring when the device is deselected, not controllable or the server drops', async () => {
     const t = setup();
     t.controller.ask('Hands as knobs', 'chip');
-    t.controller.onReady(ready(['right']));
+    t.receiveReady(ready(['right']));
     expect(t.controller.phase).toBe('running');
     await wait(5);
     t.setControl(false);
@@ -218,7 +317,7 @@ describe('the wiring flow', () => {
     expect(t.voice.release).toHaveBeenCalledTimes(1);
     t.controller.onVoiceListening(true, 'u-1');
     t.controller.onVoiceText('make the water follow my finger', 'u-1', true);
-    expect(t.sent[0]).toEqual({ type: 'wire.request', payload: { cardId: 'visual-synth-mac', text: 'make the water follow my finger', source: 'voice' } });
+    expect(t.sent[0]).toEqual({ type: 'wire.request', payload: { cardId: 'visual-synth-mac', text: 'make the water follow my finger', source: 'voice', requestId: expect.any(String) } });
     t.controller.onVoiceText('stale', 'u-0', true);
     expect(t.sent).toHaveLength(1);
   });

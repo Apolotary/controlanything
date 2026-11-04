@@ -99,6 +99,7 @@ function clip(text: string, max: number): string {
 }
 
 export function headerText(view: Pick<WireCodeView, 'model' | 'source' | 'request' | 'title' | 'mode' | 'phase'>): string {
+  if (view.model === 'not-called') return 'Choose the device first';
   const what = clip(view.request, 40);
   const done = view.phase === 'calibrating' || view.phase === 'ready' || view.phase === 'running' || view.phase === 'stopped';
   // No Meta model wrote a template or a recorded fixture: say so instead of naming a model that did not write it.
@@ -172,7 +173,8 @@ export class CodeCard extends Group {
     this.phaseRow = new Container({ flexDirection: 'row', alignItems: 'center', gap: 6 });
     this.phaseCheck = new Container({ width: 16, height: 16, display: 'none', flexShrink: 0 });
     this.phaseCheck.add(icon('check', 16));
-    this.phaseText = new Text({ text: '', fontSize: 14, fontWeight: 'medium', color: LOOK.text.primary, whiteSpace: 'nowrap' } as never);
+    this.phaseText = new Text({ text: '', fontSize: 14, fontWeight: 'medium', color: LOOK.text.primary,
+      flexGrow: 1, flexShrink: 1, minWidth: 0, whiteSpace: 'normal', wordBreak: 'break-word' } as never);
     this.phaseRow.add(this.phaseCheck, this.phaseText);
     this.explain = new Text({ text: '', fontSize: 13, fontWeight: 'medium', color: LOOK.text.secondary, wordBreak: 'break-word', display: 'none' } as never);
     this.calibrate = new Container({ flexDirection: 'column', gap: 8, display: 'none' });

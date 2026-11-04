@@ -26,7 +26,7 @@ async function setup() {
   const tag = { targetId: 'target', cardId: 'card', connection: 'ready' };
   const controls = new ControlSender(event => { if (app.canControl('card')) sent.push(event); }, 30, () => 0);
   Object.assign(app, {
-    prepareMedia: vi.fn(), renderer: {}, scanner: { stop: vi.fn() }, hud: { setDeck: vi.fn(), cancelInteractions: vi.fn(), setArmed: vi.fn(), showConfirm: vi.fn() },
+    prepareMedia: vi.fn(), renderer: {}, scanner: { stop: vi.fn() }, hud: { setDeck: vi.fn(), cancelInteractions: vi.fn(), setArmed: vi.fn(), showConfirm: vi.fn(), toast: vi.fn() },
     release: vi.fn(), refreshTags: vi.fn(), clearAnnotations: vi.fn(), setMode: vi.fn(), refreshHome: vi.fn(), refreshHelper: vi.fn(), loadHelper: vi.fn(),
     roomAnchors: { begin: vi.fn(), end: vi.fn() }, identity: { deviceId: 'headset' }, params: new URLSearchParams(),
     targets: { targets: new Map(), get: () => ({ locating: false }) }, poses: { clear: vi.fn() },
@@ -50,6 +50,25 @@ async function setup() {
 afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
 describe('device controls across XR visibility changes', () => {
+  it('Stop all still disarms and sends panic in Annotate, without changing the layer', async () => {
+    const f = await setup(); f.app.modes.mode = 'annotate';
+    f.app.wiring = { snapshot: () => ({ requestId: 'current-request' }), stop: vi.fn() };
+    f.app.onDeck('panic', 'press');
+    expect(f.app.ws.send).toHaveBeenCalledWith('panic', { reason: 'Stop from the home bar' }, { to: 'server' });
+    expect(f.app.armedCards.size).toBe(0); expect(f.tag.connection).toBe('setup');
+    expect(f.app.modes.mode).toBe('annotate');
+    expect(f.app.tutorialStoppedRequestId).toBe('current-request');
+  });
+  it('both-palms wiring stop sends only its request and preserves the verified selected device', async () => {
+    const f = await setup();
+    const request = { cardId: 'card', requestId: 'ask-1', wiringId: 'wire-1' };
+    const stopControls = vi.spyOn(f.app, 'stopControls');
+    f.app.stopWiringRequest('both palms out', request);
+    expect(f.app.ws.send).toHaveBeenLastCalledWith('wire.stop', { ...request, reason: 'both palms out' }, { to: 'server' });
+    expect(stopControls).not.toHaveBeenCalled();
+    expect(f.app.armedCards.has('card')).toBe(true); expect(f.tag.connection).toBe('ready');
+    expect(f.app.lockedId).toBe('target'); expect(f.app.canControl('card')).toBe(true);
+  });
   it('uses full Stop for active WIRE on hidden XR and cannot resume its authority on visibility recovery', async () => {
     const f = await setup();
     f.app.wiring = { phase: 'running', stop: vi.fn(), reset: vi.fn() };
