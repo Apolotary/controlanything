@@ -25,6 +25,15 @@ export interface ReaderLayout {
   font: 'local-inter' | 'system-fallback';
 }
 
+export interface ReaderOptions {
+  backgroundColor?: string;
+  width?: number;
+  height?: number;
+  fontSizeMm?: number;
+  lineHeight?: number;
+  paddingMm?: number;
+}
+
 /**
  * A bounded, native spatial reading surface. Navigation belongs to LeanHud:
  * this component deliberately installs no pointer/session owner. The npm-bundled
@@ -32,8 +41,8 @@ export interface ReaderLayout {
  * outside that atlas uses the browser's system-font canvas, never a font CDN.
  */
 export class UIKitReader extends Group {
-  readonly maxWidth = 0.38;
-  readonly maxHeight = 0.28;
+  readonly maxWidth: number;
+  readonly maxHeight: number;
   text = '';
   private readonly panel?: Container;
   private readonly content?: Text;
@@ -44,28 +53,40 @@ export class UIKitReader extends Group {
   private systemText?: Mesh<PlaneGeometry, MeshBasicMaterial>;
   private systemTexture?: CanvasTexture;
   private systemContentHeight = 0;
+  private readonly fontSizeMm: number;
+  private readonly systemFontSizeMm: number;
+  private readonly lineHeight: number;
+  private readonly paddingMm: number;
 
-  constructor(options: { backgroundColor?: string } = {}) {
+  constructor(options: ReaderOptions = {}) {
     super();
+    this.maxWidth = options.width ?? .38;
+    this.maxHeight = options.height ?? .28;
+    this.fontSizeMm = options.fontSizeMm ?? 16.5;
+    // Preserve the older assistant's system-font size; focused readers opt in.
+    this.systemFontSizeMm = options.fontSizeMm ?? 15;
+    this.lineHeight = options.lineHeight ?? 1.25;
+    this.paddingMm = options.paddingMm ?? 8;
     this.name = 'object-info-detail';
     this.userData.fitWidth = this.maxWidth;
     this.userData.fitHeight = this.maxHeight;
     if (typeof document === 'undefined') {
-      this.fallback = makeText({ text: '', size: THEME.font.body, maxWidth: this.maxWidth, anchorY: 'top' });
+      this.fallback = makeText({ text: '', size: options.fontSizeMm === undefined ? THEME.font.body : this.fontSizeMm / 1000,
+        maxWidth: this.maxWidth, anchorY: 'top' });
       this.add(this.fallback);
       return;
     }
     this.panel = new Container({
       sizeX: this.maxWidth, sizeY: this.maxHeight, pixelSize: 0.001,
       anchorX: 'left', anchorY: 'top', flexDirection: 'column',
-      padding: 8, overflow: 'hidden', borderRadius: 8,
+      padding: this.paddingMm, overflow: 'hidden', borderRadius: 8,
       backgroundColor: options.backgroundColor ?? '#14212F', opacity: 1,
       depthTest: false, depthWrite: false, renderOrder: THEME.render.text,
       pointerEvents: 'none', fontFamilies: readerFonts, fontFamily: 'muse',
     });
     this.content = new Text({
       text: '', width: '100%', flexShrink: 0,
-      fontSize: 16.5, lineHeight: '125%', fontWeight: 'medium',
+      fontSize: this.fontSizeMm, lineHeight: `${this.lineHeight * 100}%`, fontWeight: 'medium',
       fontFamilies: readerFonts, fontFamily: 'muse',
       color: THEME.color.text, whiteSpace: 'pre-line', wordBreak: 'break-word',
       depthTest: false, depthWrite: false, pointerEvents: 'none',
@@ -88,10 +109,13 @@ export class UIKitReader extends Group {
 
   private drawSystemText(value: string): void {
     const canvas = this.systemCanvas ??= document.createElement('canvas');
-    canvas.width = 728; canvas.height = 528;
+    const innerWidth = this.maxWidth - this.paddingMm * .002;
+    const innerHeight = this.maxHeight - this.paddingMm * .002;
+    canvas.width = Math.round(innerWidth * 2000); canvas.height = Math.round(innerHeight * 2000);
     const context = canvas.getContext('2d');
     if (!context) return;
-    context.font = '30px sans-serif'; context.fillStyle = THEME.color.text; context.textBaseline = 'top';
+    const fontPx = this.systemFontSizeMm * 2, linePx = fontPx * this.lineHeight;
+    context.font = `${fontPx}px sans-serif`; context.fillStyle = THEME.color.text; context.textBaseline = 'top';
     const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
     const lines: string[] = [];
     for (const paragraph of value.split('\n')) {
@@ -102,12 +126,12 @@ export class UIKitReader extends Group {
       }
       lines.push(line);
     }
-    lines.forEach((line, index) => context.fillText(line, 0, index * 37.5));
-    this.systemContentHeight = lines.length * 37.5 / 2000;
+    lines.forEach((line, index) => context.fillText(line, 0, index * linePx));
+    this.systemContentHeight = lines.length * linePx / 2000;
     if (!this.systemText) {
       this.systemTexture = new CanvasTexture(canvas); this.systemTexture.colorSpace = SRGBColorSpace;
-      this.systemText = new Mesh(new PlaneGeometry(0.364, 0.264), new MeshBasicMaterial({ map: this.systemTexture, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }));
-      this.systemText.name = 'reader-system-font'; this.systemText.position.set(0.19, -0.14, 0.001);
+      this.systemText = new Mesh(new PlaneGeometry(innerWidth, innerHeight), new MeshBasicMaterial({ map: this.systemTexture, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }));
+      this.systemText.name = 'reader-system-font'; this.systemText.position.set(this.maxWidth / 2, -this.maxHeight / 2, 0.001);
       this.systemText.renderOrder = THEME.render.text + 1; this.systemText.raycast = () => {};
       this.add(this.systemText);
     }
@@ -137,7 +161,7 @@ export class UIKitReader extends Group {
       width: size ? size[0] * 0.001 : this.maxWidth,
       height: size ? size[1] * 0.001 : this.maxHeight,
       contentHeight,
-      overflow: contentHeight > this.maxHeight - 0.016 + 0.0001,
+      overflow: contentHeight > this.maxHeight - this.paddingMm * .002 + .0001,
       font: system ? 'system-fallback' : 'local-inter',
     };
   }

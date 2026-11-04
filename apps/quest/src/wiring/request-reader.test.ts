@@ -3,9 +3,10 @@ import { PerspectiveCamera, Scene, type WebGLRenderer } from 'three';
 import { EXAMPLES } from '@ce/gen3d';
 import type { HudTarget, WirePhase, WireView } from '../hud/contract';
 import { createHud } from '../hud/v2';
-import { readingPages } from '../hud/v2/assistant-panel';
 import { GlassSurfaces } from '../hud/v2/surface';
-import { WireRequestReader } from './request-reader';
+import { REQUEST_READING, requestReadingPages, WireRequestReader } from './request-reader';
+import { UIKitReader } from '../hud/v2/uikit-reader';
+import readerFont from '../../public/fonts/muse-reader-inter.json';
 
 const request = Array.from({ length: 55 }, (_, i) => `word${i}`).join(' ');
 const view = (phase: WirePhase = 'stopped', requestId = 'ask-1', text = request): WireView => ({
@@ -18,7 +19,7 @@ describe('reading a wiring request without controlling the device', () => {
     const surfaces = new GlassSurfaces(), reader = new WireRequestReader(surfaces);
     reader.set(view()); expect(reader.open()).toBe(true);
     expect(reader.previous.visible).toBe(false); expect(reader.next.visible).toBe(true);
-    const pages = readingPages(request), read: string[] = [];
+    const pages = requestReadingPages(request), read: string[] = [];
     for (let i = 0; i < pages.length; i++) {
       expect(reader.reader.text).toBe(pages[i]); expect(reader.reader.text).not.toContain('…');
       read.push(reader.reader.text);
@@ -31,6 +32,29 @@ describe('reading a wiring request without controlling the device', () => {
     reader.close(); expect(reader.visible).toBe(false);
     expect(reader.canOpen).toBe(true); // Closing is presentation only, never resume.
     reader.disposeUi(); surfaces.dispose();
+  });
+
+  it('fits normal and worst-width requests at the larger reading size without changing other readers', () => {
+    const longRequest = ('Play like a theremin. ' + Array.from({ length: 9 }, (_, i) =>
+      `Part ${i + 1}: let hand height choose notes and pinch play them. `).join('')).slice(0, 465) + ' Last words stay visible.';
+    expect(requestReadingPages(longRequest)).toHaveLength(2);
+    const advances = new Map(readerFont.chars.map(g => [g.id, g.xadvance / readerFont.info.size]));
+    for (const text of [longRequest, 'W'.repeat(500), '日本語の本'.repeat(100), '👩‍🚀'.repeat(90), 'Right hand → ripples, left hand → colour.']) {
+      const pages = requestReadingPages(text);
+      expect(pages.join('').replace(/\s/g, '')).toBe(text.replace(/\s/g, ''));
+      for (const page of pages) {
+        const lines = page.split('\n');
+        expect(lines.length * REQUEST_READING.fontSizeMm * REQUEST_READING.lineHeight)
+          .toBeLessThan((REQUEST_READING.contentHeight * 1000) - REQUEST_READING.paddingMm * 2);
+        for (const line of lines) {
+          const width = Array.from(line).reduce((sum, char) => sum + (advances.get(char.codePointAt(0)!) ?? 1.2) * REQUEST_READING.fontSizeMm, 0);
+          expect(width).toBeLessThan(REQUEST_READING.contentWidth * 1000 - REQUEST_READING.paddingMm * 2);
+        }
+      }
+    }
+    const legacy = new UIKitReader();
+    expect(legacy.layout.width).toBe(.38); expect(legacy.layout.height).toBe(.28);
+    legacy.disposeUi();
   });
 
   it('opens only long stopped/failed requests and never opens an active program or short chip', () => {
