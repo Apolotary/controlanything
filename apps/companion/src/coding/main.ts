@@ -9,6 +9,11 @@ interface CodingJob {
   lastEvent?: string; terminalReported?: string; operationsObserved?: string[]; modelSummary?: string;
 }
 interface CodingOverview { status: CodingStatus; jobs: CodingJob[] }
+interface ConnectorOverview {
+  generator: { available: boolean; active: boolean; model: string };
+  connectors: { cardId: string; connectorId: string; model: string; source: string; hash: string; gestureHash: string;
+    invocationCount: number; currentlyAuthorized: boolean; lastBytes?: number[]; lastPortId?: string; lastEncodedAt?: number }[];
+}
 const API = '/api/agent/coding';
 const terminal = new Set(['completed_unverified', 'failed', 'cancelled']);
 const descriptions: Record<string, string> = {
@@ -18,6 +23,7 @@ const descriptions: Record<string, string> = {
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 const task = $<HTMLTextAreaElement>('task'), start = $<HTMLButtonElement>('start'), cancel = $<HTMLButtonElement>('cancel');
 let overview: CodingOverview | undefined, selected: string | undefined, selectedDetail: CodingJob | undefined;
+let connectorOverview: ConnectorOverview | undefined;
 let pending = false, refreshing = false, statusAvailable = false, patchRequest = 0, refreshController: AbortController | undefined;
 let poll: ReturnType<typeof setTimeout> | undefined;
 
@@ -44,7 +50,7 @@ function currentJob(): CodingJob | undefined {
   return overview?.jobs.find(job => job.jobId === selected) ?? (selectedDetail?.jobId === selected ? selectedDetail : undefined);
 }
 function updateControls(): void {
-  start.disabled = pending || !statusAvailable || overview?.status.installed !== true || overview?.status.available === false || Boolean(overview?.jobs.some(isActive));
+  start.disabled = pending || !statusAvailable || overview?.status.installed !== true || overview?.status.available === false || Boolean(overview?.jobs.some(isActive)) || connectorOverview?.generator.active === true;
   cancel.disabled = pending;
   $<HTMLButtonElement>('refresh').disabled = refreshing;
 }
@@ -100,16 +106,51 @@ function draw(): void {
   }));
   drawJob(); updateControls();
 }
+function drawConnectors(): void {
+  if (!connectorOverview) return;
+  const { generator, connectors } = connectorOverview;
+  $('runtime-badge').textContent = generator.active ? 'Muse is writing' : generator.available ? 'Ready for your request' : 'Generation unavailable';
+  $('runtime-badge').dataset.state = generator.active ? 'running' : generator.available ? 'available' : 'failed';
+  $('runtime-message').textContent = generator.active
+    ? 'Muse Code is writing new connector and gesture files. Host checks must pass before they can load.'
+    : generator.available ? `Fresh generation uses ${generator.model}. No connector starts until you ask Muse in Quest.`
+    : 'Fresh generation needs the installed Muse Code host and Meta API access. No template is substituted.';
+  $('runtime-connectors').replaceChildren(...connectors.map(connector => {
+    const row = document.createElement('article'); row.className = 'runtime-connector';
+    const title = document.createElement('h3'); title.textContent = connector.cardId;
+    const status = document.createElement('p'); status.className = 'quiet';
+    status.textContent = `${connector.currentlyAuthorized ? 'Authorized for current wiring' : 'Not authorized to run'} · ${connector.model} · ${connector.source}`;
+    const facts = document.createElement('dl'); facts.className = 'job-facts';
+    const add = (label: string, value: string) => { const pair = document.createElement('div'), dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = label; dd.textContent = value; pair.append(dt, dd); facts.append(pair); };
+    add('Connector SHA-256', connector.hash); add('Hand program SHA-256', connector.gestureHash);
+    add('Actual generated encodings', String(connector.invocationCount));
+    add('Last encoded packet', connector.lastBytes?.map(byte => byte.toString(16).padStart(2, '0').toUpperCase()).join(' ') ?? 'None yet');
+    if (connector.lastPortId) add('Generated output binding', connector.lastPortId);
+    if (connector.lastEncodedAt) add('Last encoded', timestamp(connector.lastEncodedAt));
+    row.append(title, status, facts); return row;
+  }));
+}
 function schedule(): void {
   clearTimeout(poll); poll = undefined;
-  if (!document.hidden && overview?.jobs.some(isActive)) poll = setTimeout(() => { void refresh(); }, 2000);
+  if (!document.hidden && (overview?.jobs.some(isActive) || connectorOverview?.generator.active)) poll = setTimeout(() => { void refresh(); }, 2000);
 }
 async function refresh(): Promise<void> {
   if (document.hidden || refreshing) return;
   refreshing = true; refreshController = new AbortController(); updateControls();
   try {
-    const response = await request(API, undefined, AbortSignal.any([refreshController.signal, AbortSignal.timeout(10000)]));
-    overview = await response.json() as CodingOverview; statusAvailable = true; draw();
+    const signal = AbortSignal.any([refreshController.signal, AbortSignal.timeout(10000)]);
+    const [coding, connectors] = await Promise.allSettled([
+      request(API, undefined, signal).then(response => response.json() as Promise<CodingOverview>),
+      request('/api/agent/connectors', undefined, signal).then(response => response.json() as Promise<ConnectorOverview>),
+    ]);
+    if (connectors.status === 'fulfilled') { connectorOverview = connectors.value; drawConnectors(); }
+    else if (!document.hidden && !refreshController.signal.aborted) {
+      connectorOverview = undefined; $('runtime-badge').textContent = 'Status unavailable';
+      $('runtime-badge').dataset.state = 'failed'; $('runtime-message').textContent = (connectors.reason as Error).message;
+      $('runtime-connectors').replaceChildren();
+    }
+    if (coding.status === 'rejected') throw coding.reason;
+    overview = coding.value; statusAvailable = true; draw();
   } catch (error) {
     if (!document.hidden && !refreshController.signal.aborted) {
       statusAvailable = false;

@@ -17,8 +17,16 @@
         <section class="intro" aria-labelledby="page-title">
           <span class="eyebrow">Connector Workshop</span>
           <h1 id="page-title">Build a connector with Muse.</h1>
-          <p>Muse Code can read project files, edit a task branch and run terminal checks on this Mac. Review its patch and check results before bringing changes into the demo.</p>
-          <p class="quiet">This is code development. Connecting an instrument and verifying its physical response are separate steps.</p>
+          <p>Ask Muse in Quest to build a new MIDI connector and gesture program during the demo. For project debugging, the workshop below creates a separate patch for review.</p>
+          <p class="quiet">Opening this page starts nothing. Packet checks and an instrument’s physical response are separate evidence.</p>
+        </section>
+
+        <section class="runtime-status card" aria-labelledby="runtime-title">
+          <div class="section-head"><h2 id="runtime-title">Live demo connectors</h2><span id="runtime-badge" class="badge">Checking runtime</span></div>
+          <p id="runtime-message" class="runtime-message" role="status">Reading fresh connector status…</p>
+          <p class="quiet">In Quest, select the synth and ask: “Build a MIDI connector from scratch, then make forward and backward hand motion create ripples.” For OP-1 Field, first review its MIDI chart, then ask for the parameter and gesture you want.</p>
+          <div id="runtime-connectors" class="runtime-connectors"></div>
+          <p class="quiet">Counts below are generated encodings, not delivery acknowledgements or proof that a physical instrument reacted. Refresh reads the latest status without starting a job.</p>
         </section>
 
         <section class="host-status card" aria-label="Coding agent availability">
@@ -29,7 +37,7 @@
 
         <div class="workspace-grid">
           <section class="card composer" aria-labelledby="task-title">
-            <h2 id="task-title">What should Muse develop?</h2>
+            <h2 id="task-title">Debug project code</h2>
             <form id="task-form">
               <label for="task">Coding task</label>
               <textarea id="task" rows="9" maxlength="4000" placeholder="Debug the OP-1 Field USB-MIDI bridge. Inspect port routing, fix ambiguous output selection, and check it without sending real MIDI or playing sound." required></textarea>
