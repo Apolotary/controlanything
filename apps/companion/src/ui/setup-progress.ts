@@ -44,6 +44,9 @@ export class CompanionSetupProgress {
     return true;
   }
 
+  /** The room mode once it has settled (the workbench holds back a mode that flips straight back). */
+  setMode(mode: string): void { this.mode = mode; }
+
   get(): SetupProgressView | undefined {
     if (this.mode === 'annotate') return;
     const context = this.context();
@@ -69,7 +72,7 @@ export class SetupProgressPanel {
   constructor(private readonly host: HTMLElement) {}
 
   render(view?: SetupProgressView): void {
-    this.host.hidden = !view;
+    if (this.host.hidden !== !view) this.host.hidden = !view;
     const key = JSON.stringify(view) ?? '';
     if (key === this.previous) return;
     this.previous = key;

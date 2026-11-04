@@ -4,6 +4,8 @@
     "hello": "hello.json",
     "welcome": "welcome.json",
     "presence": "presence.json",
+    "session.claim": "session.claim.json",
+    "session.superseded": "session.superseded.json",
     "pair.start": "pair.start.json",
     "pair.status": "pair.status.json",
     "pair.approve": "pair.approve.json",

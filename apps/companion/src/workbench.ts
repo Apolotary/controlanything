@@ -117,6 +117,9 @@ let stopTarget: TargetStatusPayload | undefined;
 let serverDown = false;
 const presenter = createStatusPresenter();
 const setupProgress = new CompanionSetupProgress(() => ({ deviceId: identity?.deviceId, local: isLocalPage(), replay: replaying }));
+/** Messages already fed to the setup workspace since it was last cleared: a re-sent copy must not move it. */
+const fedProgress = new Set<string>();
+const clearProgress = (cardId?: string): void => { setupProgress.clear(cardId); fedProgress.clear(); };
 let homeWorkspace: SetupProgressPanel | undefined;
 let activityWorkspace: SetupProgressPanel | undefined;
 const objectCanvas = new CompanionCanvas((type, payload) => !replaying && !!conn?.send(type, payload, { to: 'server' }), () => render('canvas'));
@@ -134,6 +137,24 @@ let visualsOpenTimedOut = false;
 let visualsSeen = false;
 let visualsOpenTimer: ReturnType<typeof setTimeout> | undefined;
 const clearVisualsOpenTimer = (): void => { clearTimeout(visualsOpenTimer); visualsOpenTimer = undefined; };
+/**
+ * The server re-sends a device's whole state (card, link, driver, checks, spec) on every mode change, and two
+ * headset tabs can make it flip modes many times a second. A message that only repeats state this page
+ * already holds changes nothing: no re-render, no status line, no tab switch, no log line.
+ */
+const sameState = (a: unknown, b: unknown): boolean => a !== undefined && JSON.stringify(a) === JSON.stringify(b);
+const repeatedIds = new Set<string>();
+const repeated = (m: { id: string }): void => {
+  repeatedIds.add(m.id);
+  if (repeatedIds.size > 500) repeatedIds.delete(repeatedIds.values().next().value!);
+};
+/** The room mode this page shows; a mode that flips back within MODE_SETTLE_MS (a tab fight) is not shown. */
+const MODE_SETTLE_MS = 600;
+let shownMode: string | undefined;
+let pendingMode: string | undefined;
+let modeTimer: ReturnType<typeof setTimeout> | undefined;
+let lastTags = '';
+let lastPresence = '';
 
 const midi = new MidiBridge();
 const midiExec = new MidiExecutor(midi);
@@ -304,7 +325,7 @@ function clearIdentitySetup(cardId: string): void {
   const target = targets.get(cardId);
   // The correction's fresh identified status may arrive before its tag snapshot.
   if (target && (target.state !== 'identified' || target.driverId || target.specId)) targets.delete(cardId);
-  setupProgress.clear(cardId); presenter.reset(cardId);
+  clearProgress(cardId); presenter.reset(cardId);
 }
 
 function deviceName(deviceId?: string): string | undefined {
@@ -703,7 +724,7 @@ function setupCalm(): void {
     if (bridge.learning && bridge.learning.until > Date.now()) { bridge.stopLearning(); return; }
     if (!stopTarget) return;
     if (conn?.send('control.cancel', { cardId: stopTarget.cardId, ...(stopTarget.runId ? { runId: stopTarget.runId } : {}) }, { to: 'server' })) {
-      setupProgress.clear(stopTarget.cardId);
+      clearProgress(stopTarget.cardId);
       render('workspace');
       $('setup-activity-text').textContent = 'Stopping setup and controls…';
       $<HTMLButtonElement>('setup-stop').disabled = true;
@@ -1662,7 +1683,7 @@ function hello(): PayloadOf<'hello'> {
 
 function connect(): void {
   conn?.stop();
-  setupProgress.clear();
+  clearProgress();
   objectCanvas.connection(false, false);
   const c = new Connection(Connection.sameOrigin(), hello);
   conn = c;
@@ -1697,6 +1718,9 @@ function connect(): void {
     }).catch(() => {});
   });
   c.on('presence', (m) => {
+    const key = JSON.stringify(m.payload.devices);
+    if (key === lastPresence) { repeated(m); return; }
+    lastPresence = key;
     devices = m.payload.devices;
     ['calm', 'links'].forEach(render);
   });
@@ -1739,12 +1763,14 @@ function connect(): void {
     ['agent', 'code', 'top', 'calm'].forEach(render);
   });
   c.on('device.card', (m) => {
+    if (sameState(cards.get(m.payload.cardId), m.payload)) { repeated(m); return; }
     cards.set(m.payload.cardId, m.payload);
     setFocus(m.payload.cardId);
     ['calm', 'device', 'evidence', 'links', 'banners'].forEach(render);
   });
   c.on('target.status', (m) => {
     if (retiredSetupMessage(m)) return;
+    if (sameState(targets.get(m.payload.cardId), m.payload)) { repeated(m); return; }
     targets.delete(m.payload.cardId);
     targets.set(m.payload.cardId, m.payload);
     const card = cards.get(m.payload.cardId);
@@ -1753,6 +1779,9 @@ function connect(): void {
     render('calm');
   });
   c.on('tags.state', (m) => {
+    const tagsKey = JSON.stringify(m.payload);
+    if (tagsKey === lastTags) { repeated(m); return; }
+    lastTags = tagsKey;
     const accepted: TaggedDevice[] = [];
     let changedIdentity = false;
     for (const tag of m.payload.tags) {
@@ -1776,23 +1805,38 @@ function connect(): void {
   });
   c.on('canvas.state', (m) => { objectCanvas.receive(m); });
   c.on('mode.state', (m) => {
-    if (m.payload.mode === 'annotate') midiSetupCardId = undefined;
-    render('calm');
+    const mode = m.payload.mode;
+    clearTimeout(modeTimer);
+    if (mode === shownMode) { pendingMode = undefined; repeated(m); return; }
+    pendingMode = mode;
+    const apply = () => {
+      if (pendingMode !== mode) return;
+      pendingMode = undefined; shownMode = mode;
+      setupProgress.setMode(mode);
+      if (mode === 'annotate') midiSetupCardId = undefined;
+      ['calm', 'workspace'].forEach(render);
+    };
+    // The first mode shows at once; later changes show once they hold (not while two headset tabs fight).
+    if (shownMode === undefined) apply(); else modeTimer = setTimeout(apply, MODE_SETTLE_MS);
   });
   c.on('driver.spec', (m) => {
     if (retiredSetupMessage(m)) return;
+    const known = drivers.get(m.payload.driverId);
+    if (sameState(known, m.payload)) { repeated(m); return; }
     drivers.set(m.payload.driverId, m.payload);
     setFocus(m.payload.cardId);
-    if (!tabChosenByUser) setTab('code');
+    if (!tabChosenByUser && !known) setTab('code');
     ['code', 'device', 'evidence', 'calm'].forEach(render);
   });
   c.on('driver.status', (m) => {
     if (retiredSetupMessage(m)) return;
+    if (sameState(driverStatus.get(m.payload.driverId), m.payload)) { repeated(m); return; }
     driverStatus.set(m.payload.driverId, m.payload);
     render('evidence');
   });
   c.on('verify.result', (m) => {
     if (retiredSetupMessage(m)) return;
+    if (evidence.some((known) => sameState(known, m.payload))) { repeated(m); return; }
     evidence.push(m.payload);
     if (evidence.length > 100) evidence.shift();
     ['evidence', 'learn', 'tape'].forEach(render);
@@ -1805,6 +1849,7 @@ function connect(): void {
   });
   c.on('link.result', (m) => {
     if (retiredSetupMessage(m)) return;
+    if (sameState(linkResults.get(m.payload.cardId), m.payload)) { repeated(m); return; }
     linkResults.set(m.payload.cardId, m.payload);
     if (m.payload.verdict === 'mismatch') {
       refusals.push(m.payload);
@@ -1832,6 +1877,7 @@ function connect(): void {
   c.on('ui.spec', (m) => {
     if (retiredSetupMessage(m)) return;
     const key = m.payload.cardId ?? m.payload.specId;
+    if (sameState(specs.get(key), m.payload)) { repeated(m); return; }
     specs.set(key, m.payload);
     lastSpec = m.payload;
     setFocus(m.payload.cardId);
@@ -1839,8 +1885,14 @@ function connect(): void {
   });
   if (!replaying) executor.attach(c);
   c.onAny((m) => {
-    if (retiredSetupMessage(m)) return;
-    if (m.from === 'server' && isMessageType(m.type) && setupProgress.update(m as Message)) render('workspace');
+    if (retiredSetupMessage(m) || m.type === 'mode.state') return; // the mode is shown once it settles (above)
+    const fed = `${m.type}|${JSON.stringify(m.payload)}`;
+    if (m.from === 'server' && isMessageType(m.type) && !(repeatedIds.has(m.id) && fedProgress.has(fed))) {
+      fedProgress.add(fed);
+      if (fedProgress.size > 1000) fedProgress.delete(fedProgress.values().next().value!);
+      if (setupProgress.update(m as Message)) render('workspace');
+    }
+    if (repeatedIds.has(m.id)) return; // a repeat of known state never changes the status line
     const next = presenter.update(m);
     if (next) { activity = next; render('calm'); }
   });
@@ -1874,7 +1926,7 @@ function setupForms(): void {
   $<HTMLButtonElement>('panic').disabled = replaying;
   $('panic').addEventListener('click', () => {
     if (replaying) return;
-    setupProgress.clear();
+    clearProgress();
     render('workspace');
     void executor.panicLocal('button');
     conn?.send('panic', { reason: 'Stop all button on the Mac' }, { to: 'server' });
