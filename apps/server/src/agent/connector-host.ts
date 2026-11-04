@@ -11,7 +11,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import type { BleOp, MidiOp } from '@ce/protocol';
+import { BleOp, MidiOp } from '@ce/protocol';
 
 export interface ConnectorAction {
   id: string;
@@ -39,6 +39,8 @@ interface Running {
   failures: number;
   /** Log every acknowledgement until this time (tests); otherwise successes are sampled. */
   verboseUntil: number;
+  processGroup?: number;
+  terminating?: boolean;
 }
 
 const MAX_LOG_LINES = 200;
@@ -93,8 +95,10 @@ export class ConnectorHost {
    */
   async deploy(cardId: string, entry: string, cwd: string, actions: ConnectorAction[], settleMs = 1200): Promise<{ ok: boolean; pid?: number; output: string[]; reason?: string }> {
     this.stop(cardId, 'redeployed');
-    const child = spawn(process.execPath, [entry], { cwd, env: connectorEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
-    const run: Running = { cardId, entry, child, actions: new Map(actions.map((a) => [a.id, a])), logs: [], startedAt: Date.now(), ops: 0, failures: 0, verboseUntil: Date.now() + 5000 };
+    const grouped = process.platform !== 'win32';
+    const child = spawn(process.execPath, [entry], { cwd, env: connectorEnv(), detached: grouped, stdio: ['pipe', 'pipe', 'pipe'] });
+    const run: Running = { cardId, entry, child, actions: new Map(actions.map((a) => [a.id, a])), logs: [], startedAt: Date.now(), ops: 0, failures: 0, verboseUntil: Date.now() + 5000,
+      ...(grouped && child.pid ? { processGroup: child.pid } : {}) };
     this.running.set(cardId, run);
     const push = (line: string) => {
       run.logs.push(line.slice(0, 400));
@@ -105,6 +109,8 @@ export class ConnectorHost {
     child.stdin!.on('error', () => {});
     const exited = new Promise<void>((resolve) => child.once('exit', (code, signal) => {
       run.exited = { code, signal };
+      // A connector's own exit must not spare forked helpers from Stop.
+      this.terminate(run);
       push(`exited (${signal ?? `code ${code}`})`);
       this.o.log?.(`[connector] ${cardId} ${entry} exited (${signal ?? `code ${code}`})`);
       resolve();
@@ -122,21 +128,34 @@ export class ConnectorHost {
     if (!m || typeof m !== 'object') { push(line); return; }
     if (m.type === 'log') { push(String(m.text ?? '')); return; }
     if (m.type === 'ready') { run.ready = String(m.text ?? 'ready'); push(`ready ${run.ready}`); return; }
-    if (m.type === 'midi' && typeof m.port === 'string' && m.op && typeof m.op === 'object') {
-      const op = { kind: 'midi', ...m.op } as MidiOp;
+    if (m.type === 'midi') {
+      const parsed = MidiOp.safeParse({ ...m.op, kind: m.op?.kind ?? 'midi' });
+      if (typeof m.port !== 'string' || !m.port.trim() || m.port.length > 200 || !parsed.success
+        || parsed.data.value === '$value'
+        || (['cc', 'note', 'pc'].includes(parsed.data.msg) && parsed.data.number === undefined)
+        || (parsed.data.msg === 'cc' && typeof parsed.data.value !== 'number')) {
+        run.failures++; push('✗ invalid MIDI output from connector (check port, kind and numeric MIDI ranges)'); return;
+      }
+      const op = parsed.data;
       run.ops++;
       const what = describeMidi(op);
       this.o.send({ cardId: run.cardId, target: 'midi', port: m.port, op }, (ok, detail) => {
         if (!ok) run.failures++;
         // Keep the log readable at 30 Hz: every failure, and successes only now and then.
-        if (!ok || Date.now() < run.verboseUntil || run.ops % 15 === 1) push(`${ok ? '→' : '✗'} ${what} on ${m.port}${ok ? '' : `: ${detail ?? 'refused'}`}`);
+        if (!ok || op.msg === 'note' || Date.now() < run.verboseUntil || run.ops % 15 === 1) push(`${ok ? '→' : '✗'} ${what} on ${m.port}${ok ? '' : `: ${detail ?? 'refused'}`}`);
       });
       return;
     }
-    if (m.type === 'gimbal' && GIMBAL_OPS.has(m.op)) {
-      const op = { kind: 'ble', profile: 'dji-osmo', op: m.op, ...(m.arg !== undefined ? { arg: m.arg } : {}) } as BleOp;
+    if (m.type === 'gimbal') {
+      const parsed = BleOp.safeParse({ kind: 'ble', profile: 'dji-osmo', op: m.op, ...(m.arg !== undefined ? { arg: m.arg } : {}) });
+      if (!GIMBAL_OPS.has(m.op) || !parsed.success || parsed.data.arg === '$value'
+        || (['pan', 'tilt'].includes(m.op) && typeof parsed.data.arg !== 'number')
+        || (m.op === 'nudge' && (!parsed.data.arg || typeof parsed.data.arg !== 'object'))) {
+        run.failures++; push('✗ invalid gimbal output from connector (check operation and bounded numeric angles)'); return;
+      }
+      const op = parsed.data;
       run.ops++;
-      const what = `gimbal ${m.op}${typeof m.arg === 'number' ? ` ${Math.round(m.arg)}°` : m.arg && typeof m.arg === 'object' ? ` ${JSON.stringify(m.arg)}` : ''}`;
+      const what = `gimbal ${op.op}${typeof op.arg === 'number' ? ` ${Math.round(op.arg)}°` : op.arg && typeof op.arg === 'object' ? ` ${JSON.stringify(op.arg)}` : ''}`;
       this.o.send({ cardId: run.cardId, target: 'gimbal', op }, (ok, detail) => {
         if (!ok) run.failures++;
         if (!ok || Date.now() < run.verboseUntil || run.ops % 10 === 1) push(`${ok ? '→' : '✗'} ${what}${ok ? detail ? ` (${detail.slice(0, 80)})` : '' : `: ${detail ?? 'refused'}`}`);
@@ -168,12 +187,23 @@ export class ConnectorHost {
     this.running.delete(cardId);
     if (!r.exited) {
       try { r.child.stdin!.write(`${JSON.stringify({ type: 'stop', reason })}\n`); } catch { /* already closed */ }
-      const kill = setTimeout(() => { if (!r.exited) r.child.kill('SIGKILL'); }, 600);
-      kill.unref?.();
-      setTimeout(() => { if (!r.exited) r.child.kill('SIGTERM'); }, 250).unref?.();
     }
+    this.terminate(r);
     this.o.log?.(`[connector] ${cardId} stopped (${reason})`);
     return true;
+  }
+
+  private terminate(run: Running): void {
+    if (run.terminating) return;
+    run.terminating = true;
+    const signal = (name: NodeJS.Signals) => {
+      try {
+        if (run.processGroup) process.kill(-run.processGroup, name);
+        else if (!run.exited) run.child.kill(name);
+      } catch { /* The owned process group already ended. */ }
+    };
+    setTimeout(() => signal('SIGTERM'), 250).unref?.();
+    setTimeout(() => signal('SIGKILL'), 600).unref?.();
   }
 
   stopAll(reason = 'stopped'): void {
