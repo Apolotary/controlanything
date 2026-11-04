@@ -1,9 +1,11 @@
-import { Group, Matrix4, Mesh, Object3D, Vector3 } from 'three';
+import { Group, Matrix4, Object3D, Vector3 } from 'three';
+import { Container, Text, withOpacity } from '@pmndrs/uikit';
+import type { Panel } from '@pmndrs/uikit-horizon';
 import type { HudFrame } from '../contract';
-import { GlassSurfaces } from './surface';
+import type { GlassSurfaces } from './surface';
 import { DockHold, HandDockAnchor } from './hand-dock';
-import { makeText, setText, type SdfText } from './text';
-import { THEME } from './theme';
+import { FlatMaterial, glassPanel, isBrowser } from './look';
+import { LOOK, THEME } from './theme';
 
 /** One big wrist-palette button. Other lanes register theirs through `LeanHud.registerPaletteItem`. */
 export interface PaletteItem {
@@ -26,6 +28,17 @@ export interface PaletteItem {
 
 export const PALETTE_MAX_ITEMS = 6;
 const BUTTON_W = 0.15, BUTTON_H = 0.046, GAP = 0.01, SEGMENT_H = 0.036;
+/**
+ * Horizon look (look.ts, same as the device card and the Buddy): grayGlass plate, white = on, glass = off.
+ * px = mm (LOOK.pixelSize). The palette draws above the device card and the Buddy (31-32), below the hands (101).
+ */
+const UI = {
+  render: 33, padding: 10, border: 1.5, buttonFont: 16, segmentFont: 13,
+  on: { bg: withOpacity('#ffffff', 0.92), hover: '#d9d9d9', pressed: '#c0c0c0', text: '#272727' },
+  off: { bg: withOpacity('#ffffff', 0.08), hover: withOpacity('#ffffff', 0.16), pressed: withOpacity('#ffffff', 0.24), text: withOpacity('#ffffff', 0.92) },
+} as const;
+/** One uikit button face drawn under a LeanHud hit group (the group keeps the hit plane and the name). */
+interface Face { group: Group; box: Container; label: Text; state: number }
 
 /**
  * The wrist palette: turn the left palm toward your face and up to five big buttons appear beside the hand
@@ -40,7 +53,9 @@ export class WristPalette extends Group {
   buttons: Group[] = [];
   private items: PaletteItem[] = [];
   private shownKeys = '';
-  private readonly plate: Mesh;
+  /** One uikit root (one panel batch + one glyph batch) for the plate and every button face. */
+  private ui?: Panel;
+  private faces: Face[] = [];
   private readonly content = new Group();
   private readonly hold = new DockHold(600);
   private holdKey: string | null = null;
@@ -53,16 +68,14 @@ export class WristPalette extends Group {
   private dockPlaced = false;
   private suppressed = false;
 
-  constructor(private readonly surfaces: GlassSurfaces, nonDominant: 'left' | 'right' = 'left') {
+  constructor(_surfaces: GlassSurfaces, nonDominant: 'left' | 'right' = 'left') {
     super();
     this.name = 'wrist-palette';
     this.visible = false;
     // Beside the hand, never over it: the menu's near edge stays 3.5 cm past the knuckles so the pressing finger
     // does not crowd the menu hand (Quest loses hands that overlap).
     this.anchor = new HandDockAnchor(nonDominant, { lateral: nonDominant === 'left' ? 0.1 : -0.1, up: 0.03, toward: 0.03, clearance: 0.035 });
-    this.plate = surfaces.create(this.width, 0.1, 'plate');
-    this.plate.name = 'palette-plate';
-    this.add(this.plate, this.content);
+    this.add(this.content);
   }
 
   /** Add or replace an item (by key). Returns an unregister function. */
@@ -96,8 +109,7 @@ export class WristPalette extends Group {
     const rowWidth = Math.max(BUTTON_W, ...shown.map((item) => item.segments ? item.segments.reduce((a, seg) => a + seg.width, 0) + (item.segments.length - 1) * 0.004 : 0));
     this.width = rowWidth + 0.02;
     this.userData.height = height;
-    this.plate.scale.set(this.width, height, 1);
-    this.plate.material = this.surfaces.material(this.width, height, 'plate');
+    const ui = this.buildUi(height);
     const buttons: Group[] = [];
     let y = height / 2 - 0.01;
     shown.forEach((item, i) => {
@@ -112,10 +124,12 @@ export class WristPalette extends Group {
           group.position.set(x + seg.width / 2, 0, 0); x += seg.width + 0.004;
           group.userData.width = seg.width; group.userData.height = SEGMENT_H; group.userData.menuButton = true;
           group.userData.paletteKey = item.key; group.userData.segmentKey = seg.key;
-          const pill = this.surfaces.create(seg.width, SEGMENT_H, 'button', true); pill.name = 'button-plate';
-          const text = makeText({ text: seg.label, size: 0.0125, weight: 600, anchorX: 'center', maxWidth: seg.width - 0.006, singleLine: true });
-          text.position.z = THEME.panel.depth;
-          group.add(pill, text); row.add(group); buttons.push(group);
+          row.add(group); buttons.push(group);
+        }
+        if (ui) {
+          const faceRow = new Container({ flexDirection: 'row', gap: 4, height: SEGMENT_H * 1000, flexShrink: 0 });
+          item.segments.forEach((seg, k) => faceRow.add(this.face(buttons[buttons.length - item.segments!.length + k]!, seg.label, seg.width, SEGMENT_H, UI.segmentFont)));
+          ui.add(faceRow);
         }
         y -= rowH + GAP;
         return;
@@ -125,14 +139,60 @@ export class WristPalette extends Group {
       y -= BUTTON_H + GAP;
       group.userData.width = BUTTON_W; group.userData.height = BUTTON_H; group.userData.menuButton = true;
       group.userData.primary = !!item.primary; group.userData.paletteKey = item.key;
-      const button = this.surfaces.create(BUTTON_W, BUTTON_H, item.primary ? 'primary' : 'button', true);
-      button.name = 'button-plate';
-      const text = makeText({ text: item.hold ? `${item.label} · hold` : item.label, size: 0.017, weight: 600, anchorX: 'center', maxWidth: BUTTON_W - 0.016, singleLine: true });
-      text.name = 'palette-label'; text.position.z = THEME.panel.depth;
-      group.add(button, text); this.content.add(group); buttons.push(group);
+      this.content.add(group); buttons.push(group);
+      if (ui) ui.add(this.face(group, item.hold ? `${item.label} · hold` : item.label, BUTTON_W, BUTTON_H, UI.buttonFont));
     });
     this.buttons = buttons;
     return this.buttons;
+  }
+
+  /** The plate: a fresh uikit root per rebuild (rare: the visible item list changed), laid out exactly like the hit groups. */
+  private buildUi(height: number): Panel | undefined {
+    this.disposeUi();
+    if (!isBrowser) return undefined;
+    // padding + border = 10 mm, gap = GAP: the faces land on the hit groups' centres.
+    const ui = glassPanel({ width: this.width, height, anchorX: 'center', anchorY: 'center', padding: UI.padding - UI.border, gap: GAP * 1000,
+      alignItems: 'center', renderOrder: UI.render, pointerEvents: 'none' } as never);
+    ui.name = 'palette-plate';
+    this.ui = ui;
+    this.add(ui);
+    return ui;
+  }
+  private face(group: Group, text: string, w: number, h: number, fontSize: number): Container {
+    const box = new Container({ width: w * 1000, height: h * 1000, flexShrink: 0, borderRadius: 1000, alignItems: 'center', justifyContent: 'center',
+      paddingX: 8, backgroundColor: UI.off.bg, panelMaterialClass: FlatMaterial } as never);
+    const label = new Text({ text, fontSize, fontWeight: 'medium', color: UI.off.text, whiteSpace: 'nowrap' } as never);
+    box.add(label);
+    this.faces.push({ group, box, label, state: -1 });
+    return box;
+  }
+  /** Paint each face from LeanHud's button feedback (hovered/pressed/selected): only on change, never a relayout. */
+  private paintFaces(): void {
+    for (const face of this.faces) {
+      const d = face.group.userData;
+      const on = !!d.primary || !!d.selected, state = (on ? 4 : 0) + (d.pressed ? 2 : d.hovered ? 1 : 0);
+      if (state === face.state) continue;
+      face.state = state;
+      const tone = on ? UI.on : UI.off;
+      face.box.setProperties({ backgroundColor: d.pressed ? tone.pressed : d.hovered ? tone.hover : tone.bg, transformScale: d.pressed ? 0.94 : 1 } as never);
+      face.label.setProperties({ color: tone.text } as never);
+    }
+  }
+  private disposeUi(): void {
+    this.faces = [];
+    if (!this.ui) return;
+    const ui = this.ui; this.ui = undefined;
+    ui.removeFromParent();
+    // Collect first: disposing a component detaches it, which would break a live traverse.
+    const parts: { dispose(): void }[] = [];
+    ui.traverse((child) => { if (child !== ui && child instanceof Container) parts.push(child as { dispose(): void }); });
+    for (const part of parts.reverse()) part.dispose();
+    ui.dispose();
+  }
+  private holdLabel(key: string, text: string): void {
+    const group = this.content.getObjectByName(key);
+    const face = this.faces.find((f) => f.group === group);
+    if (face && face.label.properties.peek().text !== text) face.label.setProperties({ text } as never);
   }
 
   get contentGroup(): Group { return this.content; }
@@ -154,6 +214,7 @@ export class WristPalette extends Group {
     this.visible = show;
     // Appear: scale 0.92 → 1 with the anchor's eased opacity (xrblocks VisibilityTransition feel).
     this.scale.setScalar(0.92 + 0.08 * Math.min(1, this.anchor.opacity));
+    if (show && this.ui) { this.paintFaces(); this.ui.update(Math.min(100, Math.max(0, frame.dt * 1000))); }
   }
 
   private followDock(frame: HudFrame): void {
@@ -169,8 +230,8 @@ export class WristPalette extends Group {
   beginHold(key: string, time: number): void { this.holdKey = key; this.hold.begin(time); }
   cancelExitHold(): void {
     if (this.holdKey) {
-      const item = this.item(this.holdKey), label = this.content.getObjectByName(this.holdKey)?.getObjectByName('palette-label') as SdfText | undefined;
-      if (item && label) setText(label, `${item.label} · hold`);
+      const item = this.item(this.holdKey);
+      if (item) this.holdLabel(item.key, `${item.label} · hold`);
     }
     this.hold.cancel(); this.holdKey = null;
   }
@@ -178,8 +239,8 @@ export class WristPalette extends Group {
   updateHold(time: number): string | null {
     if (!this.holdKey) return null;
     const fired = this.hold.update(time);
-    const item = this.item(this.holdKey), label = this.content.getObjectByName(this.holdKey)?.getObjectByName('palette-label') as SdfText | undefined;
-    if (item && label && this.hold.progress > 0) setText(label, `${item.label} · ${Math.round(this.hold.progress * 100)}%`);
+    const item = this.item(this.holdKey);
+    if (item && this.hold.progress > 0) this.holdLabel(item.key, `${item.label} · ${Math.round(this.hold.progress * 100)}%`);
     return fired ? this.holdKey : null;
   }
 }
