@@ -212,6 +212,11 @@ export class LeanHud implements Hud {
   private spatial: SpatialInput | null = null;
   readonly palette: WristPalette;
   private readonly holds = new Map<number, PointerHold>();
+  /** HUD time (s) the right hand last played (hands-first control); dials and the menu wait a moment after it. */
+  private lastLiveAt = -Infinity;
+  private frameHands: HudFrame['hands'] = {};
+  private readonly nearLocal = new Vector3();
+  private readonly nearWorld = new Vector3();
   private readonly fading = new Map<string, number>();
   private readonly taps = new Map<number, Widget>();
   private readonly hitGeometry = new PlaneGeometry(1, 1);
@@ -488,8 +493,8 @@ export class LeanHud implements Hud {
         subtitle = `${state.performingLive ? 'Live · ' : ''}${state.performanceRoute ?? routeLabel(m.spec.device?.transport, target?.channel)}`;
       }
       if (state?.silentVisual && !m.command) subtitle = state.handControl
-        ? state.performingLive ? 'Live gestures · silent visuals' : 'Paused · hold left fist to engage'
-        : state.performAvailable ? 'Gestures ready · choose Perform' : 'Silent visuals · set up gestures first';
+        ? state.performingLive ? 'Live gestures · silent visuals' : 'Hands ready · raise your right hand'
+        : state.performAvailable ? 'Hands paused · tap Use hands' : 'Silent visuals · set up gestures first';
       if (state?.mappingSummary && state.performAvailable && !state.handControl && m.command?.phase !== 'sending' && m.command?.phase !== 'fail') {
         mappingStatus = true;
         const outcome = state.mappingOutcome;
@@ -498,7 +503,7 @@ export class LeanHud implements Hud {
             : outcome === 'failed' ? 'Latest result unconfirmed'
               : outcome === 'cancelled' ? 'Request cancelled; saved map shown'
                 : outcome === 'unchanged' ? 'Latest request not applied'
-                  : outcome === 'applied' ? 'Mapping applied; choose Perform' : state.silentVisual ? 'Choose Perform · silent visuals' : 'Choose Perform';
+                  : outcome === 'applied' ? 'Mapping applied; tap Use hands' : state.silentVisual ? 'Hands paused · silent visuals' : 'Hands paused · tap Use hands';
         subtitle = `${state.mappingSummary}\n${result}`;
       }
     }
@@ -697,8 +702,9 @@ export class LeanHud implements Hud {
       subtitle = failed ? 'Setup stopped' : 'Ready to set up';
       actions.push({ id: 'control-setup', label: failed ? 'Try again' : 'Set up', icon: failed ? 'retry' : 'setup', primary: true });
     } else {
-      if (m?.armed && state?.performAvailable) toggle = { on: !!state.handControl, label: state.handControl ? 'Stop' : 'Perform', name: 'hand-control' };
-      subtitle = state?.handControl ? state.performingLive ? `Live · ${route}` : 'Paused · hold left fist'
+      if (m?.armed && state?.performAvailable) toggle = { on: !!state.handControl, label: state.handControl ? 'Pause hands' : 'Use hands', name: 'hand-control', icon: 'hand' };
+      subtitle = state?.handControl ? state.performingLive ? `Playing · ${route}` : 'Hands ready · raise your right hand'
+        : m?.armed && state?.performAvailable && m?.command?.phase !== 'sending' && m?.command?.phase !== 'fail' ? `Hands paused · ${route}`
         : m?.command?.phase === 'sending' ? 'Sending…'
           : m?.command?.phase === 'fail' ? 'Not delivered · try again'
             : m?.armed ? `${m.power === false ? 'Off' : 'On'} · ${route}` : 'Confirm to enable controls';
@@ -735,6 +741,12 @@ export class LeanHud implements Hud {
     const ready = connection === 'ready' && !!m?.armed && !this.setupWorking() && !state?.busy;
     const mode: DialMode = !workspace || !box ? 'hidden' : ready ? state?.handControl ? 'perform' : 'armed' : 'setup';
     look.rig.setMode(mode);
+    // Hands-first: the arcs read out the hand's values and stay an optional fine control. They take input whenever
+    // the right hand is not playing (a short grace after, so a pinch-tap for the next pattern never grabs an arc).
+    if (mode === 'perform') {
+      const take = !state?.performingLive && this.time - this.lastLiveAt > 0.4;
+      for (const dial of look.rig.dials) if (dial.interactive !== (take && !!dial.model)) dial.setInteractive(take);
+    }
     if (box && mode !== 'hidden') {
       this.boxes.facingQuaternion(this.head, box.center, this.lookFacing, box.facing);
       look.rig.place(box.center, box.w, box.h, this.lookFacing, dt);
@@ -1556,7 +1568,7 @@ export class LeanHud implements Hud {
     if (this.isPaletteWidget(widget) && this.palette.anchor.source === 'hand' && hand === this.palette.anchor.nonDominant) return null;
     // Live Perform: hand gestures are gesture travel, not UI presses (controllers and the mouse still work).
     if (this.deviceState?.performingLive && (hand === 'left' || hand === 'right') && !this.isPaletteWidget(widget) && e.pointerType !== 'ray') return null;
-    if (this.deviceState?.handControl && e.pointerType === 'touch') return null;
+    if (this.deviceState?.performingLive && e.pointerType === 'touch') return null;
     if ([...this.holds.values()].some((hold) => hold.widget === widget)) return null;
     return hand;
   }
@@ -1833,6 +1845,34 @@ export class LeanHud implements Hud {
       }
     }
   }
+  /**
+   * Hands-first control asks this every frame: is this hand working UI right now? True while the wrist menu is open,
+   * while the hand holds/drags a panel or dial, while it touches or ray-pinches UI, or while its index tip is within
+   * reach of the device card or an arc (about to poke it). A ray merely resting on UI is not busy (handRayOnUi).
+   */
+  handBusy(hand: 'left' | 'right'): boolean {
+    const anchor = this.palette.anchor;
+    if (this.palette.visible && anchor.open && anchor.source === 'hand') return true;
+    for (const hold of this.holds.values()) if (hold.hand === hand) return true;
+    const state = this.frameHands[hand];
+    if (this.spatial?.uiOwns(hand) && (this.spatial.pointerKind(hand) !== 'ray' || !!state?.pinching)) return true;
+    const tip = state && !state.controller ? state.joints['index-finger-tip']?.position : undefined;
+    const look = this.look;
+    if (!tip || !look) return false;
+    if (visible(look.card) && this.card.visible) {
+      const local = look.card.worldToLocal(this.nearLocal.copy(tip));
+      if (Math.abs(local.x) < look.card.widthM / 2 + 0.06 && Math.abs(local.y) < look.card.heightM / 2 + 0.06 && Math.abs(local.z) < 0.1) return true;
+    }
+    for (const dial of look.rig.dials) {
+      if (!visible(dial)) continue;
+      const geometry = dial.hit.geometry;
+      if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+      const sphere = geometry.boundingSphere!;
+      if (this.nearWorld.copy(sphere.center).applyMatrix4(dial.hit.matrixWorld).distanceTo(tip) < sphere.radius + 0.06) return true;
+    }
+    return false;
+  }
+  handRayOnUi(hand: 'left' | 'right'): boolean { return !!this.spatial?.uiOwns(hand); }
   update(frame: HudFrame): void {
     this.time = frame.time / 1000;
     for (const m of this.specs.values()) if (commandTimedOut(m.command, frame.time)) {
@@ -1843,15 +1883,19 @@ export class LeanHud implements Hud {
     this.hasFrame = true;
     this.head.copy(frame.head.position); this.headQuaternion.copy(frame.head.quaternion);
     this.updateLook(frame);
-    // Wrist palette: palm toward the face (or the controller menu button) shows it; Perform hides it.
-    const performing = !!this.deviceState?.handControl || !!this.projectView?.running;
+    // Wrist palette: palm toward the face (or the controller menu button) shows it. Hands-first control stays
+    // available: the engine holds the right hand while the left palm raises the menu, and a playing hand blocks opening.
+    const performing = !!this.projectView?.running;
     const movingPanel = [...this.holds.values()].some((hold) => hold.widget.drag);
     this.palette.setSuppressed(performing || movingPanel || this.modal.visible);
     // Working a control (or just finished, or the other hand is pinching): a closed menu stays closed.
     const menuHand = this.palette.anchor.nonDominant, otherHand = frame.hands[menuHand === 'left' ? 'right' : 'left'];
     const usingControl = [...this.captures.values()].some((c) => !!c.widget && !this.isPaletteWidget(c.widget));
     if (usingControl) this.lastControlAt = this.time;
-    this.palette.anchor.blockOpen = usingControl || this.time - this.lastControlAt < 1 || (!!otherHand?.pinching && !otherHand.controller);
+    if (this.deviceState?.performingLive) this.lastLiveAt = this.time;
+    this.palette.anchor.blockOpen = usingControl || this.time - this.lastControlAt < 1 || (!!otherHand?.pinching && !otherHand.controller)
+      || this.time - this.lastLiveAt < 0.25;
+    this.frameHands = frame.hands;
     if (this.palette.needsRebuild()) this.rebuildPalette();
     this.palette.update(frame);
     const held = this.palette.updateHold(frame.time);
@@ -1886,7 +1930,7 @@ export class LeanHud implements Hud {
     this.cursors[1]!.canPoke &&= !frame.hands.right?.controller;
     // Gesture travel stays gesture travel through pickup/tracking pauses. A paused Perform session
     // still accepts deliberate ray pinches (including its off toggle and the recalled menu).
-    if (this.deviceState?.handControl || this.projectView?.running) for (const cursor of this.cursors) cursor.canPoke = false;
+    if (this.deviceState?.performingLive || this.projectView?.running) for (const cursor of this.cursors) cursor.canPoke = false;
     if (this.spatial) {
       // xr-input owns UI pointing. The legacy cursors only drive the box-aim reticles, and never over UI.
       this.syncHitMeshes();

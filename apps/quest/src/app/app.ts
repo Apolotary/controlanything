@@ -83,8 +83,8 @@ import type { AppMode, HudTarget, ObjectFilter } from '../hud/contract';
 import { annotationFadeMs, annotationRange, inAnnotationRange } from '../scan/policy';
 import { type Emulator, installEmulator } from './emulator';
 import { HandFeedback } from './hand-feedback';
-import { GestureSession } from '../gestures/session';
-import { GestureFeedback } from '../gestures/feedback';
+import { GestureSession, patternHacks } from '../gestures/session';
+import { GestureFeedback, gestureHintText } from '../gestures/feedback';
 import { routeLabel } from '../hud/v2/command-state';
 import { THEME as HUD_V2_THEME } from '../hud/v2/theme';
 import type { Handedness, Hud, ShellFrame } from './hud-contract';
@@ -202,6 +202,22 @@ export class QuestApp {
   private retiredUiSpecs = new Set<string>();
   private handMapping?: { targetId: string; session: GestureSession; live: boolean; controllerEngaged: boolean; route: string };
   private gestureFeedback?: GestureFeedback;
+  /**
+   * Hands-first: hands control the selected, armed device by default (no Perform press). The card's "Pause hands"
+   * puts a card here; re-arming or re-selecting the device clears it.
+   */
+  private get handsPaused(): Set<string> { return this.handsFirst.paused; }
+  /** Cards whose first-use hint was shown since they armed. */
+  private get handsHinted(): Set<string> { return this.handsFirst.hinted; }
+  /** Last pattern program each card showed (the pinch-tap goes to the next one). */
+  private get patternProgram(): Map<string, number> { return this.handsFirst.patterns; }
+  private handsFirstState?: { paused: Set<string>; hinted: Set<string>; patterns: Map<string, number> };
+  private get handsFirst(): { paused: Set<string>; hinted: Set<string>; patterns: Map<string, number> } {
+    return this.handsFirstState ??= { paused: new Set(), hinted: new Set(), patterns: new Map() };
+  }
+  /** An arc/button is in use (or was just used): hands restart after it is released. */
+  private handsWidgetActive = false;
+  private handsBlockedUntil = 0;
   readonly xrHit = new XrHitTester();
   readonly handheld = new HandheldTracker();
   readonly recorder = new Recorder();
@@ -634,7 +650,7 @@ export class QuestApp {
     hud.on('canvasRestore', (e) => this.canvasController()?.restore(e.targetId, e.revision, e.baseRevision));
     hud.on('canvasClose', (e) => { this.canvas?.close(e.targetId); this.refreshHome(); });
     hud.on('pairCode', (e) => this.submitPairCode(e.targetId, e.code));
-    hud.on('handControl', (e) => this.setHandControl(e.targetId, e.enabled));
+    hud.on('handControl', (e) => this.userHandControl(e.targetId, e.enabled));
     hud.on('assistantTalk', (e) => { this.clearHandControl(); void this.assistant?.toggle(e.targetId); });
     hud.on('assistantConfirm', (e) => this.assistant?.confirm(e.targetId, e.proposalId, e.accept));
     hud.on('assistantDismiss', () => this.assistant?.cancel());
@@ -1535,6 +1551,14 @@ export class QuestApp {
     this.hud.toast(this.pairCodeRequest ? 'Checking the code…' : 'Waiting for the server connection.', 'info');
   }
 
+  /** The card's hands toggle: "Pause hands" keeps them paused for this device until re-armed or re-selected. */
+  private userHandControl(targetId: string, enabled: boolean): void {
+    const cardId = this.modes.tags.get(targetId)?.cardId;
+    if (cardId) { if (enabled) this.handsPaused.delete(cardId); else this.handsPaused.add(cardId); }
+    if (!enabled) this.hud.toast('Hands paused · tap Use hands to play again', 'info');
+    this.setHandControl(targetId, enabled);
+  }
+
   private setHandControl(targetId: string, enabled: boolean): void {
     if (enabled) this.tangible?.yieldTo('Perform');
     this.clearHandControl();
@@ -1554,11 +1578,52 @@ export class QuestApp {
           lastMirror.set(controlId, now);
           this.hud.setControlValue(specId, controlId, value);
         }
-      });
-      this.handMapping = { targetId, session, live: false, controllerEngaged: !!(this.lastFrame?.hands.right?.controller || this.lastFrame?.hands.left?.controller),
+      }, { engage: 'zone' });
+      // Hands-first: a controller (or the desktop mouse) never plays by itself; it keeps working the UI.
+      this.handMapping = { targetId, session, live: false, controllerEngaged: false,
         route: routeLabel(spec.gen3d?.device?.transport, spec.hackset?.device.channel.type) };
+      // First-use hint, once per arming: what the hands do, in a few words, beside the right hand.
+      if (tag?.cardId && !this.handsHinted.has(tag.cardId)) {
+        this.handsHinted.add(tag.cardId);
+        this.gestureFeedback?.showHint?.(gestureHintText(spec.gestureMap.axes, patternHacks(spec).length > 1), this.lastFrame?.time ?? performance.now());
+      }
     }
     this.refreshHome();
+  }
+
+  /** The selected device hands should play right now (hands-first default), or undefined. Cheap: runs per frame. */
+  private autoHandsTarget(): string | undefined {
+    if (this.modes.mode !== 'control' || !this.lockedId) return;
+    const tag = this.modes.tags.get(this.lockedId), cardId = tag?.cardId;
+    if (!tag || !cardId) return;
+    // Disarmed (Stop, cancel, disconnect): the next arming starts hands again, with the hint.
+    if (!this.armedCards.has(cardId)) { this.handsPaused.delete(cardId); this.handsHinted.delete(cardId); return; }
+    if (this.handsPaused.has(cardId) || !this.gestureSpecs.get(cardId)?.gestureMap || !this.canControl(cardId)) return;
+    if (this.handsWidgetActive || performance.now() < this.handsBlockedUntil) return;
+    if (this.tangible && this.tangible.state !== 'idle') return;
+    const assistant = this.assistant?.view?.state;
+    if (assistant && assistant !== 'idle' && assistant !== 'applied') return;
+    if (this.projects?.open || this.canvas?.open || this.manualRegion?.active || this.onboarding?.visible) return;
+    return tag.targetId;
+  }
+
+  /** Pinch-tap: show the next pattern of the armed spec, through the card buttons' own control path. */
+  private nextPattern(targetId: string): void {
+    const t = this.targets.get(targetId), cardId = t?.cardId;
+    if (!cardId || !this.canControl(cardId) || this.lockedId !== targetId) return;
+    const patterns = patternHacks(this.gestureSpecs.get(cardId));
+    const now = this.lastFrame?.time ?? performance.now();
+    if (patterns.length < 2) { this.gestureFeedback?.flash?.('No patterns to switch', now); return; }
+    const current = patterns.findIndex((p) => p.program === (this.patternProgram.get(cardId) ?? 0));
+    const next = patterns[(current + 1) % patterns.length]!;
+    const specId = this.menuSpec.get(targetId) ?? this.specByCard.get(cardId);
+    const payload: PayloadOf<'control.event'> = { widgetId: next.id, value: true, ts: Date.now(), phase: 'end' };
+    if (specId) payload.specId = specId;
+    if (!this.ws.send('control.event', payload)) { this.gestureFeedback?.flash?.('Not connected', now); return; }
+    this.patternProgram.set(cardId, next.program);
+    this.gestureFeedback?.flash?.(next.name, now);
+    this.recorder.input('hack', { targetId, itemId: next.id, gesture: 'pinch-tap' });
+    this.page.log(`pinch-tap → pattern ${next.program} ${next.name} (${next.id})`, 'ok');
   }
 
   private clearHandControl(): void {
@@ -1569,12 +1634,16 @@ export class QuestApp {
   }
 
   private updateHandControl(frame: ShellFrame, time: number): void {
+    if (!this.handMapping) { const auto = this.autoHandsTarget(); if (auto) this.setHandControl(auto, true); }
     const mapping = this.handMapping;
     if (!mapping) { this.gestureFeedback?.update(frame, null); return; }
     const tag = this.modes.tags.get(mapping.targetId);
     if (!this.canControl(tag?.cardId)) { this.clearHandControl(); this.refreshHome(); return; }
-    const state = mapping.session.engine.update(frame, time, mapping.controllerEngaged);
+    // The right hand never moves values while it works UI or the wrist menu is open; a pinch aimed at UI is a press.
+    const busy = this.hud.handBusy?.('right') ?? false;
+    const state = mapping.session.engine.update(frame, time, mapping.controllerEngaged, busy, busy || (this.hud.handRayOnUi?.('right') ?? false));
     if (state.stopped) { this.onDeck('panic', 'press'); return; }
+    if (state.tapped) this.nextPattern(mapping.targetId);
     this.gestureFeedback?.update(frame, state);
     if (mapping.live !== state.engaged) { mapping.live = state.engaged; this.refreshHome(); }
   }
@@ -2068,6 +2137,9 @@ export class QuestApp {
     // the pinch IS the human confirmation: an action hack fires as {widgetId: hackId, value: true, phase: 'end'}
     const t = this.targets.get(e.targetId);
     if (!t?.cardId || !this.canControl(t.cardId) || this.lockedId !== t.id) return;
+    const pattern = patternHacks(this.gestureSpecs.get(t.cardId)).find((p) => p.id === e.itemId);
+    if (pattern) this.patternProgram.set(t.cardId, pattern.program);
+    this.handsBlockedUntil = performance.now() + 400;
     if (this.handMapping) { this.clearHandControl(); this.refreshHome(); }
     const specId = this.menuSpec.get(e.targetId) ?? (t?.cardId ? this.specByCard.get(t.cardId) : undefined);
     const payload: PayloadOf<'control.event'> = { widgetId: e.itemId, value: true, ts: e.ts ?? Date.now(), phase: 'end' };
@@ -2101,7 +2173,9 @@ export class QuestApp {
     const cardId = this.cardOfSpec.get(ui);
     const control = cardId ? this.generated.get(cardId)?.controls.find((c) => c.id === e.controlId) : undefined;
     if (!control || control.armed === false) return;
-    // Touching an ordinary control explicitly leaves Perform and picks up normal widget input.
+    // Touching an arc or button hands its value to that control; hands pick up again (from the new value) after release.
+    this.handsWidgetActive = e.phase !== 'end';
+    this.handsBlockedUntil = performance.now() + 600;
     if (this.handMapping) this.clearHandControl();
     const gestureSpec = cardId ? this.gestureSpecs.get(cardId) : undefined;
     if (gestureSpec?.gestureMap) for (const axis of gestureSpec.gestureMap.axes) this.controlValues.delete(`${ui}:gesture:${axis.axis}`);
@@ -2255,6 +2329,9 @@ export class QuestApp {
     }
     this.clearVirtualSelection();
     if (this.modes.mode === 'control' && !this.modes.tags.has(id)) return;
+    // Re-selecting a device starts its hands again (a "Pause hands" lasts until then).
+    const lockedCard = this.modes.tags.get(id)?.cardId;
+    if (lockedCard) this.handsPaused.delete(lockedCard);
     if (isLiveId(id)) {
       const claimed = this.live?.claimOf(id);
       if (claimed) return this.lock(claimed, how, opts);

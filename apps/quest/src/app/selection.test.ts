@@ -387,7 +387,7 @@ describe('explicit annotation and control', () => {
     expect(ws.send.mock.calls.some(([type]) => type === 'control.setup')).toBe(false);
   });
 
-  it('requires Perform and a live selected connection before synthetic hand frames can send gesture controls', () => {
+  it('starts hands by itself for the armed selection; a pause or a lost connection stops every gesture send', () => {
     const { app, target, connected, receive, ws, modes } = shell();
     connected('ready');
     const map = GestureMap.parse({ version: 1, clutchPosture: 'L_FIST', panicPosture: 'BOTH_PALMS_OUT', postures: [], axes: [{
@@ -398,23 +398,32 @@ describe('explicit annotation and control', () => {
     const frame = makeGestureFrame();
     const update = (time: number) => Reflect.get(app, 'updateHandControl').call(app, frame, time);
     const gestures = () => ws.send.mock.calls.filter(([type, payload]) => type === 'control.event' && (payload as { widgetId: string }).widgetId.startsWith('gesture:'));
-    update(0); update(50);
+    // No Perform press: the armed selection starts hands; the raised, still right hand picks up without a jump.
+    update(0); update(50); update(120);
+    expect(Reflect.get(app, 'handMapping')).toBeDefined();
     expect(gestures()).toHaveLength(0);
-    Reflect.get(app, 'setHandControl').call(app, target.id, true);
-    update(60); update(110);
     moveHand(frame.hands.right!, 0.2, 1.5, -0.4);
     update(150);
     expect(gestures()).toHaveLength(1);
     expect(gestures()[0]![1]).toMatchObject({ specId: 'ui', widgetId: 'gesture:right_height', phase: 'move' });
-    setPosture(frame.hands.left!, 'open_palm');
-    moveHand(frame.hands.right!, 0.2, 0.8, -0.4);
+    // A fist holds the value (no clutch to learn; the left hand is free).
+    setPosture(frame.hands.right!, 'fist');
+    moveHand(frame.hands.right!, 0.2, 1.35, -0.4);
     update(160); update(200);
     expect(gestures()).toHaveLength(1);
-    setPosture(frame.hands.left!, 'fist');
-    update(210); update(260);
+    setPosture(frame.hands.right!, 'open_palm');
+    // Pause hands: nothing is sent, and hands stay off for this device until the wearer resumes or re-selects it.
+    Reflect.get(app, 'userHandControl').call(app, target.id, false);
+    moveHand(frame.hands.right!, 0.2, 1.45, -0.4);
+    update(210); update(260); update(380);
+    expect(gestures()).toHaveLength(1);
+    expect(Reflect.get(app, 'handMapping')).toBeUndefined();
+    Reflect.get(app, 'userHandControl').call(app, target.id, true);
+    update(390); update(450); update(520);
+    expect(Reflect.get(app, 'handMapping')).toBeDefined();
     modes.tags.get(target.id)!.connection = 'offline';
     moveHand(frame.hands.right!, 0.2, 1.6, -0.4);
-    update(300);
+    update(560);
     expect(gestures()).toHaveLength(1);
     expect(Reflect.get(app, 'handMapping')).toBeUndefined();
   });

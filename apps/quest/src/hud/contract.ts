@@ -256,6 +256,10 @@ export interface Hud {
   setDeck(d: { open?: boolean; scanning?: boolean; daemons?: boolean; at?: [number, number, number] }): void;
   /** Discard captured input without firing release actions (for hidden/suspended XR). */
   cancelInteractions?(): void;
+  /** Hands-first control: this hand is working UI (touching/near a panel or dial, or holding one) or the wrist menu is open. */
+  handBusy?(hand: 'left' | 'right'): boolean;
+  /** This hand's ray rests on UI: a pinch now is a UI press, not a gesture. */
+  handRayOnUi?(hand: 'left' | 'right'): boolean;
   toast(text: string, level?: 'info' | 'ok' | 'warn' | 'error'): void;
 
   on<K extends keyof HudEvents>(k: K, fn: (e: HudEvents[K]) => void): () => void;

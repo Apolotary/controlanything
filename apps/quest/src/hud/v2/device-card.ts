@@ -18,7 +18,7 @@ export interface CardView {
   title: string;
   subtitle: string;
   /** The round toggle. `name` is kept for scripts that address the control by name ('hand-control'). */
-  toggle: { on: boolean; label: string; name: string } | null;
+  toggle: { on: boolean; label: string; name: string; icon?: CardIcon } | null;
   actions: CardAction[];
   agent: CardAgent | null;
 }
@@ -134,7 +134,7 @@ export class DeviceCard extends Group {
         ? { variant: 'primary', color: '#272727', backgroundColor: withOpacity('#ffffff', 0.92), hover: { backgroundColor: '#d9d9d9', color: '#272727' }, active: { backgroundColor: '#c0c0c0', color: '#272727' } }
         : { variant: 'secondary', color: withOpacity('#ffffff', 0.92), backgroundColor: withOpacity('#ffffff', 0.14), hover: { backgroundColor: withOpacity('#ffffff', 0.22), color: '#ffffff' }, active: { backgroundColor: withOpacity('#ffffff', 0.3), color: '#ffffff' } } as never);
       this.toggleLabel!.setProperties({ text: toggle.label });
-      this.setIcon(this.toggleIcon!, toggle.on ? 'stop' : 'hand', (kind) => { this.toggleIconKind = kind; }, this.toggleIconKind);
+      this.setIcon(this.toggleIcon!, toggle.icon ?? (toggle.on ? 'stop' : 'hand'), (kind) => { this.toggleIconKind = kind; }, this.toggleIconKind);
     }
     const actions = view.actions.slice(0, 3);
     this.actionsRow!.setProperties({ display: actions.length ? 'flex' : 'none' });
