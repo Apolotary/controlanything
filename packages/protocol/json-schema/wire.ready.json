@@ -1,0 +1,149 @@
+{
+  "title": "wire.ready",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts": {
+      "type": "number"
+    },
+    "from": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "type": {
+      "type": "string",
+      "const": "wire.ready"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "cardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "wiringId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "explanation": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "model": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "live",
+            "fixture",
+            "template"
+          ]
+        },
+        "actions": {
+          "minItems": 1,
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "actionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "set",
+                  "trigger",
+                  "toggle"
+                ]
+              },
+              "min": {
+                "type": "number"
+              },
+              "max": {
+                "type": "number"
+              },
+              "maxRateHz": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 120
+              }
+            },
+            "required": [
+              "actionId",
+              "label",
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "needs": {
+          "maxItems": 3,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "right",
+              "left",
+              "screen"
+            ]
+          }
+        }
+      },
+      "required": [
+        "cardId",
+        "wiringId",
+        "code",
+        "title",
+        "explanation",
+        "model",
+        "source",
+        "actions",
+        "needs"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "ts",
+    "from",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false
+}

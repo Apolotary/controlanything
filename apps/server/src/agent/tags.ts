@@ -93,7 +93,7 @@ export function evaluateConnection(t: Target, roster: Roster, label?: string): P
     const guidance = synthConnectionGuidance(companionOnline);
     offline = { connection: 'offline', hint: guidance.hint, ...(guidance.action ? { action: guidance.action } : {}) };
     if (virtualExecutor) offline = roster.devices().some((d) => d.deviceId === virtualExecutor && d.online)
-      ? { connection: 'offline', hint: 'Opening the Mac visuals…' }
+      ? { connection: 'offline', hint: roster.visualOpening?.(virtualExecutor) ? 'Opening the Mac visuals…' : 'Open visuals on the Mac (ControlAnything) to continue' }
       : { connection: 'offline', hint: 'Open the paired Mac companion and its visual synth.', action: 'open-companion' };
   }
   const wantsVisual = isVisualSynthPort(portId) || /visual[\s-]synth/i.test(`${t.card?.name ?? ''} ${t.detection?.label ?? ''}`);

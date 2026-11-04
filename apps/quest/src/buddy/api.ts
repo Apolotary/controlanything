@@ -47,7 +47,7 @@ async function post<T>(path: string, body: unknown, token: string | undefined, t
 }
 
 export const buddyApi = {
-  react: (jpeg: string, quest: string | undefined, seen: string[], via: 'hand' | 'yolo' | 'gaze' | 'photo', token?: string) =>
+  react: (jpeg: string, quest: string | undefined, seen: string[], via: 'hand' | 'gaze' | 'photo', token?: string) =>
     post<ReactResult>('/api/buddy/react', { jpeg, ...(quest ? { quest } : {}), seen: seen.slice(-8), via }, token, 30_000),
   sticker: (jpeg: string, object: string | undefined, token?: string) => post<StickerResult>('/api/buddy/sticker', { jpeg, ...(object ? { object } : {}) }, token, 60_000),
 };

@@ -76,7 +76,7 @@ const STATE = `(() => { const c = window.__ce; if (!c) return { error: 'window._
     armedCards: safe(() => c.armedCards ? [...(c.armedCards.keys?.() ?? c.armedCards)] : null),
     handMapping: safe(() => c.handMapping ? { active: c.handMapping.active ?? null, engaged: c.handMapping.engaged ?? null } : null),
     mac: safe(() => { const m = c.onboarding?.online; return m ? { name: m.name, online: m.online, visualPort: m.ports?.find((p) => p.id === 'ce-visual-synth')?.state ?? null } : null; }),
-    camera: safe(() => ({ state: c.cameraState ?? null, note: c.cameraNote ?? null })), yolo: safe(() => c.yoloStats ?? null),
+    camera: safe(() => ({ state: c.cameraState ?? null, note: c.cameraNote ?? null })), scan: safe(() => c.scanner?.stats ?? null),
     render: info ? { calls: info.render.calls, triangles: info.render.triangles, textures: info.memory.textures, geometries: info.memory.geometries, programs: info.programs?.length ?? null } : null,
     scene: { visibleObjects: objects, visibleDrawables: visibleMeshes, transparent },
     frameErrors: size(c.frameErrors), heapMB: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null }; })()`;

@@ -15,8 +15,8 @@ import { ProjectPanel } from './project-panel';
 import { targetChipLabel } from './target-chip';
 import { BoxField } from './boxes';
 import { makeText, setText, type SdfText } from './text';
-import { THEME } from './theme';
-import { GlassSurfaces } from './surface';
+import { LOOK, THEME } from './theme';
+import { GlassSurfaces, isOnStyle } from './surface';
 import { PinchReticles } from './reticle';
 import { unfoldEase } from './motion';
 import { TargetTether } from './tether';
@@ -111,6 +111,9 @@ export class LeanHud implements Hud {
   private readonly materials = {
     button: new MeshBasicMaterial({ color: THEME.color.muted, transparent: true, opacity: THEME.surface.buttonOpacity, depthWrite: false, toneMapped: false }),
     accent: new MeshBasicMaterial({ color: THEME.color.accent, transparent: true, depthWrite: false, toneMapped: false }),
+    /** Glyph-like marks on a white "on" pill (the tagged check) and on glass (the edge arrow): Horizon label colours. */
+    onLight: new MeshBasicMaterial({ color: LOOK.text.onLight, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }),
+    white: new MeshBasicMaterial({ color: LOOK.text.primary, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }),
   };
   private readonly surfaces = new GlassSurfaces();
   private readonly helperPairing = new HelperPairingCard(this.surfaces);
@@ -126,8 +129,9 @@ export class LeanHud implements Hud {
   private readonly canvasLaunch: Widget;
   private readonly inspectLaunch: Widget;
   private readonly visualSelection = new Group();
-  private readonly visualSelectionTitle = makeText({ text: 'Visual synth', size: THEME.font.title, weight: 600, maxWidth: 0.38 });
-  private readonly visualSelectionBody = makeText({ text: '', size: THEME.font.body, maxWidth: 0.38, maxHeight: 0.15, anchorY: 'top' });
+  /** A small Horizon card (24 × 16 cm): a title, a short status (≤ 3 lines) and Retry. */
+  private readonly visualSelectionTitle = makeText({ text: 'Visual synth', size: 0.02, weight: 600, maxWidth: 0.2, singleLine: true });
+  private readonly visualSelectionBody = makeText({ text: '', size: THEME.font.detail, color: THEME.color.muted, maxWidth: 0.2, maxHeight: 0.05, anchorY: 'top' });
   private readonly visualSelectionRetry: Widget;
   private readonly setupProgress = new SetupProgress(this.surfaces);
   private setupProgressView: SetupProgressView | null = null;
@@ -228,7 +232,8 @@ export class LeanHud implements Hud {
     // First child of the HUD root, so name lookups ('visual-synth', 'deck:panic', 'exit-ar') find the palette before
     // the hidden lab menu's same-named buttons (e2e scripts and the judge path use these names).
     this.root.add(this.palette);
-    this.palette.register({ key: 'visual-synth', label: 'Visual synth', order: 0, primary: true, onSelect: () => this.events.emit('visualSynth', {}) });
+    // Not `primary`: a white pill reads as "selected/pressed" next to the Annotate | Control segments.
+    this.palette.register({ key: 'visual-synth', label: 'Visual synth', order: 0, onSelect: () => this.events.emit('visualSynth', {}) });
     this.palette.register({ key: 'deck:panic', label: 'Stop', order: 80, onSelect: () => {
       this.events.emit('deck', { key: 'panic', phase: 'press' }); this.events.emit('deck', { key: 'panic', phase: 'release' });
     } });
@@ -248,7 +253,7 @@ export class LeanHud implements Hud {
     arrow.moveTo(-0.009, -0.002); arrow.lineTo(0.002, -0.002); arrow.lineTo(0.002, -0.007);
     arrow.lineTo(0.011, 0); arrow.lineTo(0.002, 0.007); arrow.lineTo(0.002, 0.002); arrow.lineTo(-0.009, 0.002);
     this.arrowGeometry = new ShapeGeometry(arrow);
-    this.edgeArrow = new Mesh(this.arrowGeometry, this.materials.accent);
+    this.edgeArrow = new Mesh(this.arrowGeometry, this.materials.white);
     this.edgeArrow.name = 'edge-direction'; this.edgeArrow.position.set(-0.132, 0, THEME.panel.depth);
     this.edgeText.name = 'workspace-recovery-label'; this.edgeText.position.set(-0.11, 0, THEME.panel.depth);
     this.edge.add(this.plate(0.31, 0.044), this.edgeText, this.edgeArrow);
@@ -287,12 +292,12 @@ export class LeanHud implements Hud {
       start: () => this.events.emit('projectsCommand', { command: group.userData.command as ProjectUiCommand,
         ...(typeof group.userData.actionId === 'string' ? { actionId: group.userData.actionId } : {}) }) });
     this.visualSelection.name = 'visual-synth-selection'; this.visualSelection.visible = false;
-    this.visualSelectionTitle.name = 'visual-synth-selection-title'; this.visualSelectionTitle.position.set(-0.19, 0.13, THEME.panel.depth);
-    this.visualSelectionBody.name = 'visual-synth-selection-message'; this.visualSelectionBody.position.set(-0.19, 0.075, THEME.panel.depth);
-    this.visualSelection.add(this.plate(0.44, 0.36), this.visualSelectionTitle, this.visualSelectionBody);
+    this.visualSelectionTitle.name = 'visual-synth-selection-title'; this.visualSelectionTitle.position.set(-0.1, 0.055, THEME.panel.depth);
+    this.visualSelectionBody.name = 'visual-synth-selection-message'; this.visualSelectionBody.position.set(-0.1, 0.037, THEME.panel.depth);
+    this.visualSelection.add(this.plate(0.24, 0.16), this.visualSelectionTitle, this.visualSelectionBody);
     this.root.add(this.visualSelection);
-    this.widgets.push({ group: this.visualSelection, w: 0.44, h: 0.36, kind: 'handle', start: () => {}, lastMove: 0 });
-    this.visualSelectionRetry = this.button(this.visualSelection, 'visual-synth-retry', 'Retry', 0, -0.12, 0.22, 'handle', () => this.events.emit('visualSynth', {}));
+    this.widgets.push({ group: this.visualSelection, w: 0.24, h: 0.16, kind: 'handle', start: () => {}, lastMove: 0 });
+    this.visualSelectionRetry = this.button(this.visualSelection, 'visual-synth-retry', 'Retry', 0, -0.045, 0.12, 'handle', () => this.events.emit('visualSynth', {}));
     this.widgets.push({ group: this.assistant, w: this.assistant.width, h: this.assistant.height, kind: 'handle', start: () => {}, lastMove: 0 });
     for (const group of [this.assistant.apply, this.assistant.dismiss]) this.widgets.push({
       group, w: this.assistant.buttonWidth, h: this.assistant.buttonHeight, kind: 'handle', button: true, lastMove: 0,
@@ -769,7 +774,7 @@ export class LeanHud implements Hud {
     group.userData.feedbackStyle = undefined;
     const plate = group.getObjectByName('button-plate') as Mesh | undefined;
     if (plate) plate.material = this.surfaces.material(width, THEME.control.buttonHeight, selected && !group.userData.action ? 'selected' : 'button', true);
-    for (const child of group.children) if ('sync' in child) setText(child as SdfText, (child as SdfText).text, selected ? THEME.color.accent : THEME.color.text);
+    for (const child of group.children) if ('sync' in child) setText(child as SdfText, (child as SdfText).text, THEME.color.text);
   }
   private refreshButtons(m: Mounted): void {
     for (const c of m.spec.controls) {
@@ -954,14 +959,15 @@ export class LeanHud implements Hud {
       pill.position.x = width / 2;
       // The bundled Latin font has no check glyph; share the Verified badge's vector check.
       const checkWidth = t.tagged ? 0.016 : 0;
-      const name = makeText({ text: text.replace(/^✓ /, ''), size: THEME.font.label, weight: 500, singleLine: true, maxWidth: width - THEME.box.labelPadding * 2 - checkWidth });
+      const name = makeText({ text: text.replace(/^✓ /, ''), size: THEME.font.label, weight: 500, singleLine: true, maxWidth: width - THEME.box.labelPadding * 2 - checkWidth,
+        ...(t.tagged ? { color: LOOK.text.onLight } : {}) });
       name.position.set(THEME.box.labelPadding + checkWidth, 0, THEME.panel.depth);
       label.add(pill, name);
       if (t.tagged) {
         label.userData.hitOffsetX = width / 2;
         this.widgets.push({ group: label, w: width, h: THEME.box.labelHeight, kind: 'handle', button: true, lastMove: 0,
           start: () => this.events.emit('selectTarget', { targetId: t.id }) });
-        const check = new Mesh(this.checkGeometry, this.materials.accent);
+        const check = new Mesh(this.checkGeometry, this.materials.onLight);
         check.name = 'tagged-check'; check.position.set(THEME.box.labelPadding + 0.005, 0, THEME.panel.depth);
         check.renderOrder = THEME.render.text; label.add(check);
       }
@@ -1397,7 +1403,7 @@ export class LeanHud implements Hud {
     this.workspaceAnchor.place(this.projectPanel);
     if (selection) {
       setText(this.visualSelectionTitle, selection.phase === 'pending' ? 'Opening Mac visuals' : 'Waiting for Mac visuals');
-      setText(this.visualSelectionBody, `${selection.message}\n\nThis synth changes the screen silently. Selection resumes when one visual screen is ready.`);
+      setText(this.visualSelectionBody, selection.message);
       this.visualSelectionRetry.group.visible = selection.phase === 'unavailable';
       this.workspaceAnchor.place(this.visualSelection);
     }
@@ -1508,7 +1514,9 @@ export class LeanHud implements Hud {
       const item = this.palette.item(group.userData.paletteKey ?? group.name)!;
       const segment = group.userData.segmentKey as string | undefined;
       this.widgets.push({ group, w: group.userData.width, h: group.userData.height, kind: 'deck', button: true, lastMove: 0,
-        start: () => { if (segment) item.onSegment?.(segment); else if (item.hold) this.palette.beginHold(item.key, this.time * 1000); else item.onSelect(); },
+        // A button does its job and the menu gets out of the way (it reopens after the palm turns away and back);
+        // segment rows (Annotate | Control, what to track) keep it open for a second choice.
+        start: () => { if (segment) item.onSegment?.(segment); else if (item.hold) this.palette.beginHold(item.key, this.time * 1000); else { item.onSelect(); this.palette.anchor.dismiss(this.time * 1000); } },
         end: item.hold ? () => this.palette.cancelExitHold() : undefined });
     }
   }
@@ -1534,9 +1542,11 @@ export class LeanHud implements Hud {
     const hit = new Mesh(this.hitGeometry, this.hitMaterial);
     hit.name = 'ui-hit';
     const palette = this.isPaletteWidget(widget);
-    // Segments of one row sit 4 mm apart: their hit planes keep their exact widths so neighbours never overlap.
-    const w = widget.group.userData.segmentKey ? widget.w : Math.max(THEME.control.minHitSize, widget.w) + THEME.control.hitPadding * 2;
-    const h = Math.max(THEME.control.minHitSize, widget.h) + THEME.control.hitPadding * 2;
+    // Segments of one row sit 4 mm apart and rows 10 mm apart: a segment's hit plane fills half of each gap (2 mm
+    // sideways, 5 mm up/down), so a press in a gap always lands on the nearer segment and planes never overlap.
+    const segment = !!widget.group.userData.segmentKey;
+    const w = segment ? widget.w + 0.004 : Math.max(THEME.control.minHitSize, widget.w) + THEME.control.hitPadding * 2;
+    const h = segment ? widget.h + 0.01 : Math.max(THEME.control.minHitSize, widget.h) + THEME.control.hitPadding * 2;
     hit.position.set(widget.group.userData.hitOffsetX ?? 0, 0, THEME.panel.depth * 2);
     hit.scale.set(w, h, 1);
     // Higher order wins over nearer surfaces: the palette, then buttons/controls/handles, then passive plates.
@@ -1839,9 +1849,11 @@ export class LeanHud implements Hud {
       if (!plate) continue;
       const command = this.mounted()?.command;
       const pending = command && command.controlId === group.userData.controlId ? command.phase : undefined;
-      const style = pending === 'fail' ? 'failed' : pressed ? 'pressed' : pending === 'sending' ? 'sending' : group.userData.primary ? 'primary' : hovered ? selected && !group.userData.action ? 'selected-hover' : 'hover' : selected && !group.userData.action ? 'selected' : 'button';
+      const on = !!group.userData.primary || selected && !group.userData.action;
+      const style = pending === 'fail' ? 'failed' : pressed ? on ? 'on-pressed' : 'pressed' : pending === 'sending' ? 'sending' : group.userData.primary ? 'primary' : hovered ? selected && !group.userData.action ? 'selected-hover' : 'hover' : selected && !group.userData.action ? 'selected' : 'button';
       if (group.userData.feedbackStyle !== style) {
         group.userData.feedbackStyle = style; plate.material = this.surfaces.material(widget.w, widget.h, style, true);
+        this.paintLabels(group, isOnStyle(style));
       }
     }
   }
@@ -1873,6 +1885,17 @@ export class LeanHud implements Hud {
     return false;
   }
   handRayOnUi(hand: 'left' | 'right'): boolean { return !!this.spatial?.uiOwns(hand); }
+  /** White = on: a white pill's labels turn dark (Horizon primary); glass restores each label's own colour. Only on a style change. */
+  private paintLabels(group: Group, on: boolean): void {
+    for (const child of group.children) {
+      if (!('sync' in child)) continue;
+      const text = child as SdfText;
+      if (on) {
+        if (text.color !== LOOK.text.onLight) text.userData.offColor = text.color;
+        setText(text, text.text, LOOK.text.onLight);
+      } else if (text.color === LOOK.text.onLight) setText(text, text.text, (text.userData.offColor as string | undefined) ?? THEME.color.text);
+    }
+  }
   update(frame: HudFrame): void {
     this.time = frame.time / 1000;
     for (const m of this.specs.values()) if (commandTimedOut(m.command, frame.time)) {
@@ -1899,7 +1922,7 @@ export class LeanHud implements Hud {
     if (this.palette.needsRebuild()) this.rebuildPalette();
     this.palette.update(frame);
     const held = this.palette.updateHold(frame.time);
-    if (held) { this.palette.cancelExitHold(); this.palette.item(held)?.onSelect(); }
+    if (held) { this.palette.cancelExitHold(); this.palette.item(held)?.onSelect(); this.palette.anchor.dismiss(frame.time); }
     for (const target of this.targets.values()) {
       if (this.home.mode === 'control' && !target.tagged) this.boxes.setOpacity(target.id, 0);
       else if (this.home.mode === 'annotate' && this.boxes.boxes.get(target.id)?.opacity === 0) this.boxes.setOpacity(target.id, 1);

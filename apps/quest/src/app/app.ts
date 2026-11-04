@@ -15,9 +15,7 @@
  *   hud=v2|v1|debug    compact HUD (default), original HUD, or shell debug HUD
  *   dominant=left      left-handed: the menu follows the RIGHT hand
  *   ws=<url>           WebSocket override
- *   yolo=0|1           live boxes from the on-device YOLOX-nano detector while scanning (default 1)
- *   yoloep=webgpu|wasm force the detector's execution provider (default: WebGPU when available)
- *   track=<category>   initial live-box category: everything|electronics|instruments|lights|remotes
+ *   track=<category>   initial annotation filter (SAM 3.1 prompts): electronics|objects|everything
  *   debug=1            in-headset hand tracking, rendering and detector diagnostics
  */
 import type { Channel, ControlEvent, Gen3dSpec, HackItem, HudStatus, ModelChip } from '@ce/gen3d';
@@ -65,10 +63,7 @@ import { cameraPoseFromHead, questIntrinsics, worldToPixel } from '../scan/proje
 import { Scanner } from '../scan/scanner';
 import { SyntheticCamera, VirtualRoom } from '../scan/synthetic';
 import { type Target, TargetStore, toHudTarget } from '../scan/targets';
-import { CATEGORIES, type Category } from '../scan/yolo/classes';
-import { categoryFromControl, CHIPS_SPEC_ID, chipsSpec } from '../scan/yolo/chips';
-import { isLiveId, LiveDetector } from '../scan/yolo/live';
-import { LiveReadout } from '../scan/yolo/readout';
+import { CATEGORIES, type Category } from '../scan/categories';
 import { Mic } from '../voice/mic';
 import { pairingApi } from '../io/api';
 import { PushToTalk } from '../voice/ptt';
@@ -83,6 +78,7 @@ import type { AppMode, HudTarget, ObjectFilter } from '../hud/contract';
 import { annotationFadeMs, annotationRange, inAnnotationRange } from '../scan/policy';
 import { type Emulator, installEmulator } from './emulator';
 import { HandFeedback } from './hand-feedback';
+import { ScanIndicator } from './scan-indicator';
 import { GestureSession, patternHacks } from '../gestures/session';
 import { GestureFeedback, gestureHintText } from '../gestures/feedback';
 import { routeLabel } from '../hud/v2/command-state';
@@ -245,10 +241,6 @@ export class QuestApp {
   assistant?: VoiceAssistant;
   controls!: ControlSender;
   emulator?: Emulator;
-  /** live boxes (on-device YOLOX-nano): responsiveness only; SAM 3.1 stays the source of truth */
-  live?: LiveDetector;
-  private readout?: LiveReadout;
-  private chipsShown = false;
   room?: VirtualRoom;
   fixture?: SamFixture;
   player?: TakePlayer;
@@ -289,6 +281,8 @@ export class QuestApp {
   private serverMode = '';
   private enteringXr = false;
   private handFeedback!: HandFeedback;
+  /** a quiet "looking…" while a SAM 3.1 scan is in flight */
+  private scanIndicator?: ScanIndicator;
   /** The single UI input owner (xr-input ray/poke/grab + forwarded mouse). */
   spatial?: SpatialInput;
   private readonly frameHooks: ((f: ShellFrame, dtSec: number, timeMs: number, xrFrame?: XRFrame) => void)[] = [];
@@ -323,10 +317,6 @@ export class QuestApp {
     await this.setupCamera();
     this.setupTangible();
     this.refreshHome();
-    if (this.live && this.params.get('debug') === '1') {
-      this.readout = new LiveReadout();
-      this.scene.add(this.readout);
-    }
     this.setupIo();
     this.setupUi();
     if (this.superseded) return;
@@ -493,87 +483,24 @@ export class QuestApp {
     this.setupLive();
   }
 
-  private readonly liveHands: Vector3[] = [];
-
+  /** Boxes come only from SAM 3.1 (Meta, via the server): `?track=` picks the starting filter. */
   private setupLive(): void {
-    if (this.params.get('yolo') === '0') {
-      this.page.log('live boxes off (?yolo=0): SAM 3.1 scan only');
-      return;
-    }
-    const ep = this.params.get('yoloep');
-    const live = new LiveDetector({
-      camera: () => this.camera,
-      poses: this.poses,
-      hud: () => this.hud,
-      samTargets: () => this.targets.list(),
-      depth: () => this.depthProviders(),
-      headPosition: () => this.lastFrame?.head.position ?? this.desktopCam.position,
-      handJoints: () => handJointPositions(this.lastFrame, this.liveHands),
-      log: (m, l) => this.page.log(m, l),
-      modelUrl: `${import.meta.env.BASE_URL}models/yolox_nano.onnx`,
-      ep: ep === 'wasm' || ep === 'webgpu' ? ep : 'auto',
-      onPickClaimed: (id) => {
-        if (isLiveId(this.lockedId)) this.lock(id, 'live box');
-      },
-    });
     const track = this.params.get('track');
     if (track === 'electronics' || track === 'objects' || track === 'lights' || track === 'everything') this.filter = track;
-    live.category = this.filter;
-    live.rangeM = annotationRange(this.params.get('range'));
     this.scanner.setCategory(this.filter);
-    this.live = live;
-    this.scanner.on('state', ({ on }) => {
-      if (on && this.modes.mode === 'annotate' && !this.manualScanPending && !this.manualRegion?.active) {
-        live.start();
-        this.showChips();
-      } else {
-        live.stop();
-        this.hideChips();
-      }
-    });
-    // The SAM target takes over the selected live box as soon as it covers the same object.
-    this.scanner.on('result', () => live.onSamTargets());
-    // load the model while the user is still on the 2D page, so the first scan has boxes at once
-    setTimeout(() => void live.load().catch(() => undefined), 1500);
-  }
-
-  private showChips(): void {
-    if (!this.live || this.hudKind === 'v2') return;
-    const note = this.live.category === 'lights' ? 'lights: SAM scan only' : undefined;
-    this.hud.renderSpec(chipsSpec(this.live.category, note), {});
-    this.chipsShown = true;
-  }
-
-  private hideChips(): void {
-    if (!this.chipsShown) return;
-    this.hud.removeSpec(CHIPS_SPEC_ID);
-    this.chipsShown = false;
+    this.scanIndicator = new ScanIndicator();
+    this.scene.add(this.scanIndicator);
   }
 
   setLiveCategory(c: Category): void {
     if (this.modes.mode !== 'annotate') return;
     this.filter = c === 'lights' || c === 'everything' || c === 'objects' ? c : 'electronics';
-    this.live?.setCategory(this.filter);
     this.scanner.setCategory(this.filter);
+    // A new filter means new SAM prompts: scan again now instead of after the current cadence.
+    this.scanner.scanSoon();
     this.refreshAnnotationFilter();
     this.refreshHome();
     this.recorder.input('track', { category: this.filter });
-  }
-
-  /** `y` key: live boxes on/off for this scan session. */
-  toggleLive(): void {
-    const l = this.live;
-    if (!l) return;
-    if (l.running) {
-      if (isLiveId(this.lockedId)) this.release();
-      l.stop();
-      this.hideChips();
-      this.page.log('live boxes paused');
-    } else if (this.scanner.active) {
-      l.start();
-      this.showChips();
-      this.page.log('live boxes on');
-    } else this.page.log('live boxes start with the next scan (s)');
   }
 
   private depthProviders(): DepthProvider[] {
@@ -638,7 +565,7 @@ export class QuestApp {
     hud.on('visualSynth', () => this.selectVisualSynth());
     hud.on('identifyArea', () => { void this.beginManualRegion(); });
     hud.on('menuOpened', () => { this.cancelManualRegion(); });
-    hud.on('askMuseGeneral', () => { this.cancelManualRegion(); this.clearHandControl(); this.projects?.close(); this.canvas?.close(); this.scanner.stop(); this.live?.stop(); void this.assistant?.toggleGeneral(); });
+    hud.on('askMuseGeneral', () => { this.cancelManualRegion(); this.clearHandControl(); this.projects?.close(); this.canvas?.close(); this.scanner.stop(); void this.assistant?.toggleGeneral(); });
     hud.on('projectsOpen', () => this.openProjects());
     hud.on('projectsCommand', ({ command, actionId }) => this.projects?.command(command, actionId));
     hud.on('projectsPause', () => this.projects?.pauseForNavigation());
@@ -680,7 +607,7 @@ export class QuestApp {
     if (this.openingCanvas) return;
     this.openingCanvas = true;
     this.cancelManualRegion(); this.clearHandControl(); this.controls.clear();
-    this.assistant?.cancel(); this.projects?.pauseForNavigation(); this.scanner.stop(); this.live?.stop();
+    this.assistant?.cancel(); this.projects?.pauseForNavigation(); this.scanner.stop();
     this.ws.send('panic', { reason: 'Opening the headset webpage' }, { to: 'server' });
     try {
       if (this.session) await this.session.end();
@@ -866,7 +793,6 @@ export class QuestApp {
       this.scanner.start();
     } else {
       this.scanner.stop();
-      this.live?.stop();
     }
     this.refreshAnnotations(true);
     this.refreshHome();
@@ -957,7 +883,7 @@ export class QuestApp {
 
   private async beginManualRegion(): Promise<void> {
     this.clearHandControl(); this.projects?.close(); this.canvas?.close(); this.assistant?.cancel();
-    this.setMode('annotate'); this.release(); this.scanner.stop(); this.live?.stop();
+    this.setMode('annotate'); this.release(); this.scanner.stop();
     this.onboarding?.leave();
     this.hud.setOnboarding?.(null);
     this.hud.setDeck({ open: false }); this.manualFocusIds = new Set();
@@ -989,7 +915,7 @@ export class QuestApp {
       if (request !== this.manualRequest) return;
       this.scanner.stop(); this.manualScanPending = false;
       this.hud.toast('Could not identify that area. Choose Identify here to retry.', 'warn');
-    } finally { if (request === this.manualRequest) this.live?.stop(); }
+    } finally { /* SAM-only: nothing else to stop */ }
   }
 
   private eraseAnnotation(id: string): void {
@@ -1024,7 +950,7 @@ export class QuestApp {
       // Removing the selected target also dismisses its controls. Its panel stays available while looking away.
       const selected = this.modes.mode === 'control' && this.lockedId === id;
       if (!observed || !selected && (!inAnnotationRange(observed.target.position, head, range) || !inFront(observed.target))) continue;
-      if (this.modes.mode === 'annotate' && !observed.target.confirmed && now - observed.at > annotationFadeMs(isLiveId(id))) continue;
+      if (this.modes.mode === 'annotate' && !observed.target.confirmed && now - observed.at > annotationFadeMs(false)) continue;
       show.add(id);
       if (force || !this.visibleTargets.has(id)) draw.push({ ...observed.target, tagged: true, connection: tag.connection,
         label: tag.name || tag.label, identifying: !tag.name?.trim(), busy: tag.busy });
@@ -1032,7 +958,7 @@ export class QuestApp {
     if (this.modes.mode === 'annotate') {
       const candidates = [...this.observed.values()].filter(({ target, at }) => !this.manualRegion?.active && !this.manualScanPending
         && (!this.manualFocusIds || this.manualFocusIds.has(target.id)) && !this.modes.tags.has(target.id)
-        && now - at <= annotationFadeMs(isLiveId(target.id)) && (target.score ?? 0) >= 0.5 && (this.manualFocusIds?.has(target.id) || this.annotationAllowed(target))
+        && now - at <= annotationFadeMs(false) && (target.score ?? 0) >= 0.5 && (this.manualFocusIds?.has(target.id) || this.annotationAllowed(target))
         && inAnnotationRange(target.position, head, range) && inFront(target));
       const rank = (target: HudTarget) => {
         const x = target.position[0] - head.x, y = target.position[1] - head.y, z = target.position[2] - head.z;
@@ -1322,7 +1248,7 @@ export class QuestApp {
     if (/\b(person|people|human)\b/.test(label)) return false;
     if (labEnabled() || target.tagged || target.cardId || this.filter === 'everything') return true;
     if (this.filter === 'objects') return this.objectLabels.has(label) || /\b(cup|mug|bottle|book|ball)s?\b/.test(label);
-    // SAM's generic "electronic device" prompt can claim the Mac's YOLO box; the sim's screen is "… Visual Synth".
+    // SAM 3.1's "laptop" prompt names the Mac; a generic "electronic device" box may be it too; the sim's screen is "… Visual Synth".
     return this.annotationLabels.has(label) || /^(laptop|macbook|monitor|tv|television|screen|display|computer|electronic device)\b|visual[\s-]?synth/.test(label);
   }
   /** A laptop/monitor/TV box is the Mac's screen: pinching it selects the visual synth (WP1 golden path). */
@@ -2160,12 +2086,6 @@ export class QuestApp {
   }
 
   private onControl(e: ControlEvent): void {
-    // the live-box category chips are a local spec: they filter boxes and never reach the server
-    if (e.specId === CHIPS_SPEC_ID) {
-      const c = categoryFromControl(e.controlId);
-      if (c && e.phase === 'start') this.setLiveCategory(c);
-      return;
-    }
     // only controls of specs the server sent drive devices; HUD-internal objects (hack menus, deck) never do
     const ui = this.uiSpecOfGen3d.get(e.specId);
     if (!ui || !this.canControl(this.cardOfSpec.get(ui))) return;
@@ -2230,17 +2150,7 @@ export class QuestApp {
       list.push(aim);
     }
     for (const id of this.aimTargets.keys()) if (!this.targets.get(id) && !this.visibleTargets.has(id)) this.aimTargets.delete(id);
-    if (this.modes.mode === 'annotate') this.live?.appendAimables(list);
-    for (let i = list.length - 1; i >= 0; i--) {
-      const source = list[i]!;
-      if (!this.visibleTargets.has(source.id)) { list.splice(i, 1); continue; }
-      if (isLiveId(source.id) && this.hud.getTargetAim) {
-        let aim = this.aimTargets.get(source.id);
-        if (!aim) { aim = { id: source.id, position: new Vector3(), size: source.size }; this.aimTargets.set(source.id, aim); }
-        if (this.hud.getTargetAim(source.id, aim)) list[i] = aim;
-        else list.splice(i, 1);
-      }
-    }
+    for (let i = list.length - 1; i >= 0; i--) if (!this.visibleTargets.has(list[i]!.id)) list.splice(i, 1);
     return list;
   }
 
@@ -2284,7 +2194,7 @@ export class QuestApp {
       const h = f.hands[hand];
       if (!h || this.consumed[hand]) { this.targetHistory[hand].reset(); continue; }
       const handAim = h.ray.dir.lengthSq() > 0.5 ? aimAt(h.ray.origin, h.ray.dir, list, HAND_AIM, this.handHit) : null;
-      if (handAim) this.handFeedback.setHover(hand, this.targets.get(handAim.id) ?? this.live?.hoverTarget(handAim.id));
+      if (handAim) this.handFeedback.setHover(hand, this.targets.get(handAim.id));
       // A hand ray on a box is a deliberate hover: next frame its pill label shows at once (gaze needs 250 ms).
       if (handAim) handAimId = handAim.id;
       const raw = h.rawRay ?? h.ray;
@@ -2316,31 +2226,16 @@ export class QuestApp {
       && ['chip', 'touch', 'ray', 'gaze'].includes(how)) return;
     // In Annotate, a pinch on the Mac's screen (tagged or not) opens the visual synth; in Control it is already selected.
     if (['chip', 'touch', 'ray', 'gaze'].includes(how) && (this.modes.mode === 'annotate' || !this.modes.tags.get(id)?.cardId?.startsWith('visual-synth'))) {
-      const live = isLiveId(id) ? this.live?.targetSnapshot(this.live?.claimOf(id) ?? id) : undefined;
       const t = this.targets.get(id);
-      const label = t?.label ?? live?.label;
-      // SAM may relabel the Mac's box "electronic device"; the on-device detector's own class (laptop/tv) still counts.
-      const detector = t && !isLiveId(id) ? this.live?.detectorLabelOf?.(id) : undefined;
-      if (this.isScreenBox(label) || this.isScreenBox(live?.rawLabel) || this.isScreenBox(detector)) {
-        const position = t ? t.position.clone() : live ? new Vector3().fromArray(live.position) : undefined;
-        this.selectVisualSynth(undefined, { label: (live?.rawLabel ?? (this.isScreenBox(detector) ? detector : label))!, frameId: t?.frameId, detId: t?.detId, position });
+      // SAM 3.1's "laptop" prompt (or a name like "MacBook") is the Mac: the first pinch opens its visual synth.
+      // A box still called "electronic device" is tagged; when Muse names it the Mac, the same pinch continues (eea4eca).
+      if (t && (this.isScreenBox(t.label) || this.isScreenBox(t.prompt))) {
+        this.selectVisualSynth(undefined, { label: this.isScreenBox(t.label) ? t.label : t.prompt!, frameId: t.frameId, detId: t.detId, position: t.position.clone() });
         return;
       }
     }
     this.clearVirtualSelection();
     if (this.modes.mode === 'control' && !this.modes.tags.has(id)) return;
-    // Re-selecting a device starts its hands again (a "Pause hands" lasts until then).
-    const lockedCard = this.modes.tags.get(id)?.cardId;
-    if (lockedCard) this.handsPaused.delete(lockedCard);
-    if (isLiveId(id)) {
-      const claimed = this.live?.claimOf(id);
-      if (claimed) return this.lock(claimed, how, opts);
-      const snapshot = this.live?.targetSnapshot(id);
-      if (!snapshot) return;
-      const target = this.materializeTarget(snapshot);
-      this.live?.onSamTargets();
-      id = target.id;
-    }
     const t = this.targets.get(id);
     if (!t) return;
     if (this.modes.mode === 'annotate' && !this.modes.tags.has(id)) {
@@ -2408,7 +2303,8 @@ export class QuestApp {
   private setupTangible(): void {
     let mirrorAt = 0;
     const t = this.tangible = new Tangible({ parent: this.scene, camera: () => this.camera, poses: this.poses, frame: () => this.lastFrame,
-      modelUrl: `${import.meta.env.BASE_URL}models/yolox_nano.onnx`, log: (m, l) => this.page.log(m, l), toast: (m, l) => this.hud.toast(m, l),
+      log: (m, l) => this.page.log(m, l), toast: (m, l) => this.hud.toast(m, l),
+      objects: () => this.targets.list().filter((x) => isTangibleLabel(x.label) && this.visibleTargets.has(x.id)),
       ensureCamera: () => { if (this.cameraState !== 'on') void this.startCamera(); }, stopPerform: () => this.clearHandControl(),
       resume: (d) => { if (d.cardId === 'visual-synth-mac' && !this.canControl(d.cardId)) this.selectVisualSynth(); else if (!this.canControl(d.cardId)) { this.setMode('control'); this.lock(d.targetId, 'api'); } },
       device: () => {
@@ -2427,7 +2323,7 @@ export class QuestApp {
       } });
     this.allowAnnotationLabels(['cup', 'bottle', 'book', 'phone', 'remote', 'mouse', 'ball']);
     this.addFrameHook((_f, dt, time) => t.tick(time, dt * 1000));
-    const seen = (id: string) => this.targets.get(id) ?? this.live?.targetSnapshot(id) ?? this.observed.get(id)?.target;
+    const seen = (id: string) => this.targets.get(id) ?? this.observed.get(id)?.target;
     this.registerObjectAction({ key: 'tangible', label: 'Use as controller', visible: (id) => isTangibleLabel(seen(id)?.label),
       onSelect: (id) => { const x = seen(id); if (x) t.useTarget(x); } });
     this.registerPaletteItem({ key: 'tangible:pick', label: 'Use an object', order: 60, visible: () => t.canPick(), onSelect: () => t.startPick() });
@@ -2542,10 +2438,8 @@ export class QuestApp {
       try { hook(f, f.dt, time, xrFrame); } catch (e) { if (this.frameErrors++ < 5) this.page.log(`frame hook error: ${(e as Error).message}`, 'error'); }
     }
     if (!this.onboarding?.visible) this.scanner.tick(time);
-    if (this.live) {
-      this.live.tick(time, f.dt * 1000);
-      if (this.readout) this.readout.update(cam as PerspectiveCamera, time, this.liveReadoutLines());
-    }
+    this.scanIndicator?.update(f, time, this.session !== undefined && this.modes.mode === 'annotate' && this.scanner.active && this.scanner.stats.inFlight > 0
+      && !this.onboarding?.visible, this.scanner.inFlightSince());
     this.renderer.render(this.scene, this.desktopCam);
     if (time - this.lastStatusAt > 300) {
       this.lastStatusAt = time;
@@ -2672,7 +2566,6 @@ export class QuestApp {
     quietly(() => this.clearHandControl());
     quietly(() => this.assistant?.cancel());
     quietly(() => this.scanner?.stop());
-    quietly(() => this.live?.stop());
     quietly(() => { this.camera?.stop(); this.cameraState = 'off'; });
     quietly(() => this.mic.close());
     quietly(() => { void this.session?.end().catch(() => undefined); });
@@ -2950,9 +2843,6 @@ export class QuestApp {
           // keyboard stand-in for pinch-and-hold (irreversible hacks: printing)
           if (this.pendingArm) this.answerConfirm(this.pendingArm, true, true);
           break;
-        case 'y':
-          this.toggleLive();
-          break;
         case 'm':
           this.setMode(this.modes.mode === 'annotate' ? 'control' : 'annotate');
           break;
@@ -2971,7 +2861,7 @@ export class QuestApp {
           break;
         case 'c':
           // cycle the object filter
-          if (this.live) this.setLiveCategory(CATEGORIES[(CATEGORIES.findIndex((x) => x.id === this.live!.category) + 1) % CATEGORIES.length]!.id);
+          this.setLiveCategory(CATEGORIES[(CATEGORIES.findIndex((x) => x.id === this.filter) + 1) % CATEGORIES.length]!.id);
           break;
       }
     });
@@ -2987,17 +2877,6 @@ export class QuestApp {
 
   private lastPreviewFrame = '';
 
-  private liveReadoutLines(): string[] {
-    const l = this.live;
-    if (!l) return [];
-    const s = l.stats;
-    if (s.state !== 'ready') return [`LIVE ${s.state.toUpperCase()}`, (s.lastError ?? '').slice(0, 60)];
-    return [
-      `LIVE yolox-nano · ${s.ep}${s.ep === 'wasm' ? `x${s.threads}` : ''} · ${l.running ? `${s.fps} fps` : 'idle'} · ${s.shown} box · ${l.category}`,
-      `infer ${Math.round(s.inferMs)} ms · lat ${Math.round(s.latencyMs)} ms · every ${s.intervalMs} ms · frame ${s.frameMs.toFixed(1)}/${s.baselineMs.toFixed(1)} ms`,
-    ];
-  }
-
   private updateStatus(): void {
     const s = this.scanner.stats;
     const head = this.lastFrame?.head.position;
@@ -3007,7 +2886,7 @@ export class QuestApp {
       xr: this.session ? `in session${this.emulator ? ' (IWER)' : ''}` : this.emulator ? 'emulator ready' : 'not in XR',
       camera: `${this.camera.kind} · ${this.cameraState}${this.cameraNote ? ` · ${this.cameraNote}` : ''}`,
       'camera fps': this.camera.kind === 'passthrough' ? `${this.camera.stats.fps}${this.camera.stats.captureTime ? ' · captureTime ✓' : ''}` : undefined,
-      'live boxes': this.live ? this.live.summary() : 'off (?yolo=0)',
+      filter: this.filter,
       scan: `${this.scanner.active ? 'ON' : 'off'} · sent ${s.sent} · results ${s.results} · in flight ${s.inFlight}${s.lastModelId ? ` · ${s.lastModelId} ${s.lastLatencyMs} ms` : ''}${this.fixture ? ' · FIXTURE' : ''}`,
       targets: this.targets.list().map((t) => `${t.label}${t.id === this.lockedId ? '🔒' : ''}`).join(', ') || 'none',
       head: head ? `${head.x.toFixed(2)} ${head.y.toFixed(2)} ${head.z.toFixed(2)}` : '',

@@ -4,9 +4,11 @@ import type { Hub } from '../hub';
 import type { Target } from './types';
 import { stateGuidance } from './guidance';
 
+export type TargetChange = 'state' | 'value';
+
 export class TargetStore {
   private readonly targets = new Map<string, Target>();
-  private readonly listeners = new Set<(t: Target) => void>();
+  private readonly listeners = new Set<(t: Target, kind: TargetChange) => void>();
   private statusProjection?: (target: Target, status: TargetStatusPayload) => TargetStatusPayload;
 
   constructor(
@@ -29,14 +31,17 @@ export class TargetStore {
     return this.targets.delete(cardId);
   }
 
-  onChange(fn: (t: Target) => void): () => void {
+  onChange(fn: (t: Target, kind: TargetChange) => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
   }
 
-  /** Notify durable observers after an acknowledged value changes without a state transition. */
-  changed(t: Target): void {
-    if (this.targets.get(t.cardId) === t) for (const fn of this.listeners) fn(t);
+  /**
+   * Notify durable observers. kind 'value': only an acknowledged control value changed (a dial, up to 20 Hz), so
+   * observers may batch it; 'state': anything else.
+   */
+  changed(t: Target, kind: TargetChange = 'state'): void {
+    if (this.targets.get(t.cardId) === t) for (const fn of this.listeners) fn(t, kind);
   }
 
   private counters = new Map<string, number>();

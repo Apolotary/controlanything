@@ -319,7 +319,7 @@ async function run() {
 
     quest = await context.newPage();
     watchPage(quest, 'quest');
-    await quest.goto(`${BASE}/quest/?emulate=1&camera=sim&mute=1&mic=0&hud=v2&yolo=0`, { waitUntil: 'domcontentloaded' });
+    await quest.goto(`${BASE}/quest/?emulate=1&camera=sim&mute=1&mic=0&hud=v2`, { waitUntil: 'domcontentloaded' });
     await waitQuest(() => window.__ce?.welcome && window.__ce.ws.open && window.__ce.room?.sim?.canvas);
     assert.equal(await quest.evaluate(() => window.__ce.welcome.mode), 'fixture');
     assert.equal(await quest.evaluate(() => window.__ce.hudKind), 'v2');

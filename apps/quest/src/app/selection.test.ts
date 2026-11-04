@@ -441,13 +441,13 @@ describe('explicit annotation and control', () => {
     expect(ws.send).toHaveBeenCalledTimes(1);
   });
 
-  it('tags a live box immediately with its world position before a SAM result', () => {
-    const { app, scanner, ws, modes } = shell();
-    app.lock('yolo_1');
-    expect(modes.tags.size).toBe(1);
-    expect(ws.send).toHaveBeenCalledWith('tag.add', expect.objectContaining({ label: 'Keyboard', position: { x: 0.5, y: 1.6, z: -1 } }), { to: 'server' });
-    expect(ws.send.mock.calls[0]![1]).not.toHaveProperty('frameId');
-    expect(scanner.stop).not.toHaveBeenCalled();
+  it('opens the visual synth on the first pinch of SAM 3.1\'s "laptop" box (no on-device detector)', () => {
+    const { app, target, ws, modes } = shell();
+    Object.assign(app, { session: {}, lastFrame: { head: { position: new Vector3(0, 1.6, 0), quaternion: new Quaternion() } }, visualSynthReadyKey: '', release: vi.fn(), refreshHome: vi.fn(), setMode: vi.fn() });
+    app.lock(target.id, 'ray');
+    expect(modes.tags.size).toBe(0);
+    expect(ws.send).toHaveBeenCalledWith('target.select', expect.objectContaining({ virtual: 'visual-synth', label: 'Laptop', frameId: 'sam-frame', detId: 'sam-device' }), { to: 'server' });
+    Reflect.get(app, 'clearVirtualSelection').call(app, false);
   });
 
   it('keeps the tag identifying until the server supplies its device name', () => {
@@ -460,13 +460,6 @@ describe('explicit annotation and control', () => {
     expect(observed()).toMatchObject({ label: 'Laptop', identifying: true });
     receive('onTagsState', { tags: [{ cardId: 'laptop', label: 'Laptop', name: 'MacBook Pro', connection: 'setup' }] });
     expect(observed()).toMatchObject({ label: 'MacBook Pro', identifying: false });
-  });
-
-  it('resolves an already claimed live box to the same tag', () => {
-    const { app, target, live, modes } = shell();
-    live.claimOf.mockReturnValue(target.id);
-    app.lock('yolo_1');
-    expect(modes.tags.has(target.id)).toBe(true);
   });
 
   it('keeps local tags while the server is offline', () => {

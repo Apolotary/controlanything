@@ -185,6 +185,8 @@ export class HandDockAnchor {
   reaching = false;
   /** Set by the HUD while a control is in use (or was just used): a closed menu must not open then. */
   blockOpen = false;
+  /** After a menu button fires, the menu closes and stays closed until the palm turns away (or the hand is lost). */
+  private dismissed = false;
   private readonly palmNormal = new Vector3();
   private readonly boneA = new Vector3();
   private readonly boneB = new Vector3();
@@ -254,10 +256,13 @@ export class HandDockAnchor {
     this.place(frame, hand, dock, wrist, firstPose, _width);
 
     const held = this.open && (this.reaching || this.fingerNear(other, hand));
-    const palmReady = !this.blockOpen && hand.palmUp && (hand.palmUpMs ?? 0) >= OPEN_DWELL_MS
+    if (this.dismissed && !hand.palmUp) this.dismissed = false;
+    const palmReady = !this.blockOpen && !this.dismissed && hand.palmUp && (hand.palmUpMs ?? 0) >= OPEN_DWELL_MS
       && this.inReach(frame, hand) && this.deliberate(frame, hand);
     let nextOpen = this.open;
-    if (palmReady || (this.open && (hand.palmUp || held))) {
+    if (this.dismissed) {
+      nextOpen = false;
+    } else if (palmReady || (this.open && (hand.palmUp || held))) {
       nextOpen = true;
       this.awaySince = null;
     } else if (this.open) {
@@ -267,6 +272,14 @@ export class HandDockAnchor {
     this.fade(nextOpen, frame.time);
     this.wristOpacity = 0.6;
     wrist.visible = this.wristOpacity > 0.001;
+  }
+
+  /** Close now (a menu button fired) and stay closed until the palm turns away and back. */
+  dismiss(time: number): void {
+    if (this.source !== 'hand') return;
+    this.dismissed = true;
+    this.awaySince = null;
+    this.fade(false, time);
   }
 
   private fade(nextOpen: boolean, time: number): void {
@@ -325,6 +338,7 @@ export class HandDockAnchor {
     this.raisedSince = null;
     this.lostSince = null;
     this.reaching = false;
+    this.dismissed = false;
     this.controllerPinned = this.controllerRaised = false;
   }
 

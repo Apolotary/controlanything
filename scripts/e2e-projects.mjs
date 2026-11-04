@@ -149,7 +149,7 @@ try {
   const questContext=await browser.newContext({viewport:{width:1440,height:1000}});
   questContext.setDefaultTimeout(30_000);
   quest=await questContext.newPage();
-  await quest.goto(`${BASE}/quest/?emulate=1&camera=sim&mute=1&mic=0&hud=v2&yolo=0`);
+  await quest.goto(`${BASE}/quest/?emulate=1&camera=sim&mute=1&mic=0&hud=v2`);
   await quest.waitForFunction(()=>window.__ce?.welcome&&window.__ce.ws.open);
   await quest.locator('#btn-enter').click();
   await quest.waitForFunction(()=>window.__ce.renderer.xr.isPresenting);

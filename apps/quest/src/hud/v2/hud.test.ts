@@ -1010,7 +1010,7 @@ describe('bounded card wording and stable home updates', () => {
     hud.setControlValue(light.specId, 'level', 80);
     const value = () => hud.root.getObjectByName('control-value') as Object3D & { text: string; color: string };
     pinch(buttons[1]!);
-    expect(value()).toMatchObject({ text: 'Off', color: '#94A3B8' });
+    expect(value()).toMatchObject({ text: 'Off', color: THEME.color.muted });
     expect(hud.root.getObjectByName('slider-fill')!.visible).toBe(false);
     hud.setControlValue(light.specId, 'level', 80);
     hud.setControlValue(light.specId, 'warm', 30);
@@ -1025,15 +1025,15 @@ describe('bounded card wording and stable home updates', () => {
     hud.dispose();
   });
 
-  it('keeps the ARM primary accent and requires two seconds for a risky device', () => {
+  it('keeps the ARM primary white (on) and requires two seconds for a risky device', () => {
     const { hud, frame, pinch } = setup();
     const approvals: boolean[] = []; hud.on('confirm', ({ approve }) => approvals.push(approve));
     hud.showConfirm({ id: 'arm', kind: 'arm', title: 'Device is ready', hold: true });
     const primary = hud.root.getObjectByName('confirm-yes')!;
     hud.update(frame());
     const material = (primary.getObjectByName('button-plate') as Mesh).material as ShaderMaterial;
-    expect(material.uniforms.fillAlpha!.value).toBe(0.28);
-    expect(material.uniforms.stroke!.value).toBe(THEME.surface.stroke * 1.5);
+    expect(material.uniforms.fill!.value.getHexString()).toBe('ffffff');
+    expect(material.uniforms.fillAlpha!.value).toBe(0.92);
     pinch(primary, 650); pinch(primary, 1900);
     expect(approvals).toEqual([]);
     pinch(primary, 2050);

@@ -7,6 +7,11 @@ export const VIRTUAL_SCREEN_GUIDANCE = 'Mac visuals open. Set up control to play
 export const VISUAL_SYNTH_CARD_ID = 'visual-synth-mac';
 /** A renderer or companion that disappears for less than this keeps its setup and controls. */
 export const VISUAL_PRESENCE_GRACE_MS = 15_000;
+/** Waiting for the Mac's screen after a selection: ask again (and say what to do) after this... */
+export const VISUAL_REMIND_MS = 6_000;
+/** ...and give up (with a retry) after this. */
+export const VISUAL_WAIT_MS = 60_000;
+export const VISUAL_PAUSED_HINT = 'Controls paused. On the Mac, click Open visuals in ControlAnything and keep it in front; they resume by themselves.';
 
 /** What the on-device detector calls the Mac (or its screen). */
 export function isLaptopLabel(label = ''): boolean {

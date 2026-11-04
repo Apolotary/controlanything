@@ -38,7 +38,9 @@ describe('project hub authorization', () => {
     expect(h.ctx.projects.service.snapshot(projectId)).toMatchObject({ document: { source: 'preset', presetId: 'chord-garden-v1' }, preview: { count: 0 } });
   });
   it('expires the rendering socket even while another tab with the same device identity stays connected', async () => {
-    const h = await setup(), owner = await h.connect(true), sameDevice = await h.connect(true, owner.record), viewer = await h.connect(true), unprivileged = await h.connect(false);
+    // Two companion tabs of one Mac stay connected together (a headset identity keeps only its newest tab: hub single instance).
+    const h = await setup(), mac = h.ctx.registry.add({ name: 'Mac', kind: 'mac', canApprove: true });
+    const owner = await h.connect(true, mac), sameDevice = await h.connect(true, mac), viewer = await h.connect(true), unprivileged = await h.connect(false);
     owner.send('project.request', { requestId: 'create', prompt: 'Make an orb' });
     await vi.waitFor(() => expect(h.ctx.projects.service.catalog().projects).toHaveLength(1));
     const projectId = h.ctx.projects.service.catalog().projects[0].projectId;

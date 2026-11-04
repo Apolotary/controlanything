@@ -1,8 +1,8 @@
 /**
  * TANGIBLE CONTROL: any everyday object (a mug, bottle, book, phone) becomes a controller for the selected
  * device. Pick it (Annotate: "Use as controller" on its label; or the wrist palette's "Use an object" while a
- * device is selected), and the object is tracked live (tangible/track.ts, on-device YOLOX + One Euro) with a
- * crisp ring that follows it. Lift/lower drives the device's first verified control (Warp on the visual synth),
+ * device is selected), and the object is tracked through the hand that holds it (tangible/track.ts: WebXR hand
+ * joints + One Euro, no detector model; SAM 3.1 placed it) with a crisp ring that follows it. Lift/lower drives the device's first verified control (Warp on the visual synth),
  * sliding it left/right the second (Water ripples). Values go out as ordinary control.events through the shell's
  * deterministic control path (ControlSender → server router, no model in the loop) and stop cleanly with a
  * phase 'end' when the object leaves view, the device is stopped, or the object is released.
@@ -12,10 +12,9 @@ import type { Control } from '@ce/gen3d';
 import type { HandState } from '../hud/contract';
 import type { CameraSource } from '../scan/camera';
 import type { PoseRing } from '../scan/poses';
-import type { YoloEp } from '../scan/yolo/protocol';
 import { chooseControls, MotionBinding, type TangibleAxis } from './binding';
 import { clsForLabel, isTangibleLabel, tangibleKind } from './objects';
-import { type FollowSeed, ObjectTracker, type SimPath } from './track';
+import { type FollowSeed, ObjectTracker, type SeenObject, type SimPath } from './track';
 import { type BoundView, TangibleVisuals } from './visuals';
 
 export { isTangibleLabel } from './objects';
@@ -41,9 +40,9 @@ export interface TangibleHost {
   camera: () => CameraSource | undefined;
   poses: PoseRing;
   frame: () => { head: { position: Vector3; quaternion: import('three').Quaternion }; hands: { left?: HandState; right?: HandState } } | undefined;
-  modelUrl: string;
-  ep?: YoloEp | 'auto';
   log: (msg: string, level?: 'info' | 'ok' | 'warn' | 'error') => void;
+  /** tangible objects SAM 3.1 has placed in view (pick mode candidates) */
+  objects?: () => readonly SeenObject[];
   toast: (msg: string, kind?: 'info' | 'ok' | 'warn') => void;
   device: () => TangibleDevice | null;
   /** push one control value through the deterministic control path */
@@ -80,10 +79,7 @@ export class Tangible {
   private cachedAt = -Infinity;
 
   constructor(private readonly h: TangibleHost) {
-    this.tracker = new ObjectTracker({
-      camera: h.camera, poses: h.poses, head: () => h.frame()?.head, hands: () => h.frame()?.hands,
-      modelUrl: h.modelUrl, ep: h.ep, log: h.log,
-    });
+    this.tracker = new ObjectTracker({ head: () => h.frame()?.head, hands: () => h.frame()?.hands, log: h.log, objects: h.objects });
     this.visuals = new TangibleVisuals((id) => this.pickCandidate(id));
     h.parent.add(this.visuals);
     this.publish();
@@ -102,7 +98,7 @@ export class Tangible {
     this.h.ensureCamera();
     this.state = 'picking';
     this.tracker.startPick();
-    this.h.toast('Look at a cup, bottle, book or phone, then pinch its ring.', 'info');
+    this.h.toast('Look at a cup, bottle or book (Objects or All), then pinch its ring.', 'info');
     this.publish();
   }
 
@@ -238,7 +234,7 @@ export class Tangible {
       const name = this.tracker.label;
       const detail = !deviceReady ? 'connecting…'
         : ts === 'lost' ? `show the ${name.toLowerCase()} again`
-        : ts === 'searching' ? 'finding it…'
+        : ts === 'searching' ? 'pick it up'
         : this.valueText();
       v.title = `${name} · ${detail}`;
       v.detail = detail;
@@ -315,7 +311,7 @@ export class Tangible {
   /** Debug readout line. */
   summary(): string {
     const t = this.tracker;
-    return `tangible · ${this.state}${this.state === 'bound' ? ` · ${t.label} ${t.state} · ${this.valueText()}` : ''} · ${t.stats.hz} Hz · infer ${Math.round(t.stats.inferMs)} ms${t.stats.sim ? ` · sim ${t.stats.sim}` : ''}`;
+    return `tangible · ${this.state}${this.state === 'bound' ? ` · ${t.label} ${t.state} · ${this.valueText()}` : ''} · via ${t.stats.sim ? `sim ${t.stats.sim}` : 'hand'}`;
   }
 
   dispose(): void { this.release('dispose'); this.tracker.dispose(); this.visuals.dispose(); }
