@@ -4,7 +4,7 @@ import type { WireProgressPayload, WireReadyPayload } from '@ce/protocol';
 import type { WireView } from '../hud/contract';
 import { makeGestureFrame, moveHand } from '../gestures/fixtures.test-support';
 import { fakeWorkerFactory } from './fake-worker.test-support';
-import { WiringController, WIRE_CHIPS, MUSICAL_WIRE_CHIPS, PHYSICAL_WIRE_CHIPS, type WiringHost } from './controller';
+import { WiringController, WIRE_CHIPS, MUSICAL_WIRE_CHIPS, PHYSICAL_WIRE_CHIPS, SCENE_CHIP, VISUAL_SCENE_CHIP, type WiringHost } from './controller';
 import { WiringRuntime, type WireEmit } from './runtime';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -75,7 +75,7 @@ describe('the wiring flow', () => {
   it('offers generic physical-device requests without water or music assumptions or an automatic request', () => {
     const t = setup({ instrument: null });
     t.controller.frame(finger(new Vector3(0, 1.4, -.4)), clock += 16);
-    expect(t.view()).toMatchObject({ phase: 'idle', chips: [...PHYSICAL_WIRE_CHIPS] });
+    expect(t.view()).toMatchObject({ phase: 'idle', chips: [...PHYSICAL_WIRE_CHIPS, SCENE_CHIP] });
     expect(t.view()?.chips).not.toContain('Touch the water');
     expect(t.view()?.chips).not.toContain('Play like a theremin');
     expect(t.controller.chipText(0)).toBe(PHYSICAL_WIRE_CHIPS[0]);
@@ -93,7 +93,7 @@ describe('the wiring flow', () => {
     expect(t.controller.ask('Play like a theremin', 'chip')).toBe(false);
     expect(t.sent).toEqual([]); expect(t.controls).toEqual([]);
     t.setControl(true); t.controller.frame(finger(new Vector3(0, 1.4, -.4)), clock += 16);
-    expect(t.view()?.chips).toEqual([...MUSICAL_WIRE_CHIPS]);
+    expect(t.view()?.chips).toEqual([...MUSICAL_WIRE_CHIPS, SCENE_CHIP]);
     expect(t.view()?.chips).not.toContain('Touch the water');
     expect(t.controller.ask('Play like a theremin', 'chip')).toBe(true);
     expect(t.sent).toEqual([{ type: 'wire.request', payload: { cardId: 'musical-synth-mac', text: 'Play like a theremin', source: 'chip', requestId: expect.any(String) } }]);
@@ -102,7 +102,7 @@ describe('the wiring flow', () => {
   it('shows the ask prompt and chips, and the hands do nothing until a wiring runs', async () => {
     const t = setup();
     t.controller.frame(finger(new Vector3(0, 1.4, -0.4)), clock += 16);
-    expect(t.view()).toMatchObject({ phase: 'idle', prompt: 'What should your hands do?', chips: [...WIRE_CHIPS], mic: 'idle' });
+    expect(t.view()).toMatchObject({ phase: 'idle', prompt: 'What should your hands do?', chips: [...WIRE_CHIPS, VISUAL_SCENE_CHIP], mic: 'idle' });
     expect(t.view()!.code).toBeUndefined();
     for (let i = 0; i < 30; i++) { t.controller.frame(finger(new Vector3(0, 1.4 + i * 0.005, -0.4)), clock += 16); await wait(1); }
     expect(t.controls).toEqual([]);
@@ -266,7 +266,7 @@ describe('the wiring flow', () => {
     const retiredRequest = t.requestId()!;
     t.controller.stop('both palms out', 'user');
     expect(t.userStopped).toHaveBeenLastCalledWith('both palms out', { cardId: 'visual-synth-mac', requestId: retiredRequest });
-    expect(t.controller.view('visual-synth-mac')).toMatchObject({ phase: 'stopped', prompt: 'Stopped · ask again', chips: [...WIRE_CHIPS] });
+    expect(t.controller.view('visual-synth-mac')).toMatchObject({ phase: 'stopped', prompt: 'Stopped · ask again', chips: [...WIRE_CHIPS, VISUAL_SCENE_CHIP] });
     expect(t.controller.ask('Hands as knobs', 'chip')).toBe(true);
     const nextRequest = t.requestId()!;
     expect(nextRequest).not.toBe(retiredRequest);
@@ -294,7 +294,7 @@ describe('the wiring flow', () => {
     t.receiveProgress(progress({ phase: 'failed', issues: ['uses fetch'] }));
     t.controller.frame(finger(new Vector3(0, 1.4, -0.4)), clock += 200);
     expect(t.view()).toMatchObject({ phase: 'failed', prompt: 'Could not wire that · try again' });
-    expect(t.view()!.chips).toHaveLength(3);
+    expect(t.view()!.chips).toHaveLength(4);
     expect(t.toasts.some((m) => /uses fetch/.test(m))).toBe(true);
   });
 

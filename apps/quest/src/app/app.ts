@@ -279,6 +279,8 @@ export class QuestApp {
   private handFeedback!: HandFeedback;
   /** a quiet "looking…" while a SAM 3.1 scan is in flight */
   private scanIndicator?: ScanIndicator;
+  /** What the wrist dashboard shows about the Mac side (from the server's presence broadcasts). */
+  private presenceStatus: { mac?: { name: string; online: boolean }; midi: string[]; gimbal?: string } = { midi: [] };
   /** The single UI input owner (xr-input ray/poke/grab + forwarded mouse). */
   spatial?: SpatialInput;
   private readonly frameHooks: ((f: ShellFrame, dtSec: number, timeMs: number, xrFrame?: XRFrame) => void)[] = [];
@@ -490,8 +492,12 @@ export class QuestApp {
     const track = this.params.get('track');
     if (track === 'electronics' || track === 'objects' || track === 'lights' || track === 'everything') this.filter = track;
     this.scanner.setCategory(this.filter);
-    this.scanIndicator = new ScanIndicator();
-    this.scene.add(this.scanIndicator);
+    // The head-locked "Looking…" spinner is off: SAM scans run back to back in Annotate, so it never went away and
+    // read as a stuck "Loading". Boxes appearing are the feedback. `?scanspinner=1` brings it back for debugging.
+    if (this.params.get('scanspinner') === '1') {
+      this.scanIndicator = new ScanIndicator();
+      this.scene.add(this.scanIndicator);
+    }
   }
 
   setLiveCategory(c: Category): void {
@@ -586,6 +592,7 @@ export class QuestApp {
     hud.on('wireTalk', (e) => { if (e.targetId === this.lockedId) { if (e.down) this.wiring?.micPress(); else this.wiring?.micLetGo(); } });
     hud.on('wireRecalibrate', (e) => { if (e.targetId === this.lockedId) this.wiring?.recalibrate(); });
     hud.on('wireControl', (e) => { if (e.targetId === this.lockedId) this.wiring?.control(e.actionId, e.value, e.phase); });
+    hud.setSystemStatus?.(() => ({ server: !!this.ws?.open, ...this.presenceStatus }));
     hud.on('wireCancel', (e) => { if (e.targetId === this.lockedId) { this.wiring?.stop('Stopped by you', 'user'); this.hud.toast('Muse stopped', 'info'); } });
     hud.on('assistantTalk', (e) => { this.clearHandControl(); void this.assistant?.toggle(e.targetId); });
     hud.on('assistantConfirm', (e) => this.assistant?.confirm(e.targetId, e.proposalId, e.accept));
@@ -1660,6 +1667,11 @@ export class QuestApp {
       this.onboarding.updateHelpers(helpers, performance.now());
       this.refreshHelper();
       this.updateVisualSynthPresence((m.payload as PayloadOf<'presence'>).devices);
+      const devices = (m.payload as PayloadOf<'presence'>).devices;
+      const mac = devices.find((d) => d.online && d.kind === 'mac' && d.role === 'companion') ?? devices.find((d) => d.online && d.kind === 'sim');
+      const midi = (mac?.ports ?? []).filter((p) => p.kind === 'midi-out' && p.state === 'connected' && p.id !== 'ce-visual-synth' && p.id !== 'ce-musical-synth').map((p) => p.name);
+      const gimbal = devices.flatMap((d) => (d.online ? d.ports ?? [] : [])).find((p) => p.id === 'dji-osmo' && p.state === 'connected');
+      this.presenceStatus = { ...(mac ? { mac: { name: mac.name, online: true } } : {}), midi, ...(gimbal ? { gimbal: gimbal.name } : {}) };
     });
     ws.on('mode.state', (m) => this.onModeState(m.payload as PayloadOf<'mode.state'>));
     ws.on('tags.state', (m) => this.onTagsState(m.payload as PayloadOf<'tags.state'>));
@@ -1680,6 +1692,8 @@ export class QuestApp {
       if (p.level === 'error' || p.level === 'warn') {
         this.page.log(`server: ${p.message}${p.issues?.length ? ` (${p.issues.slice(0, 3).join('; ')})` : ''}`, p.level === 'error' ? 'error' : 'warn');
       }
+      // A connector's key press was refused by macOS (Accessibility off): the wearer must see why swipes do nothing.
+      if (p.code === 'mac_keys_blocked') this.hud.toast(p.message, 'warn');
     });
     ws.on('scan.result', (m) => {
       const p = m.payload as ScanResultPayload;
@@ -2716,6 +2730,8 @@ export class QuestApp {
       this.roomAnchors.begin(s.session, this.identity?.deviceId ?? this.welcome?.deviceId ?? '', location.origin);
       this.setMode('annotate');
       this.onboarding.enter(performance.now());
+      // Every AR entry starts the short AR tutorial from the first step (Skip is always on the bubble).
+      this.tutorial?.replay();
       this.refreshHelper();
       void this.loadHelper();
       this.refSpace = s.refSpace;

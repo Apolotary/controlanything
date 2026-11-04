@@ -8,6 +8,7 @@ import type { CanvasActionPayload, CanvasStatePayload, ObjectInformation, Projec
 
 export type AppMode = 'annotate' | 'control';
 export type ObjectFilter = 'electronics' | 'objects' | 'lights' | 'everything';
+export interface SystemStatus { server: boolean; mac?: { name: string; online: boolean }; midi: string[]; gimbal?: string }
 export type DeviceConnection = 'ready' | 'setup' | 'offline' | 'unknown';
 export interface HomeState { mode: AppMode; filter: ObjectFilter; tagged: number; status: string; canStop?: boolean; visualSynthSelection?: { phase: 'pending' | 'unavailable'; message: string; instrument?: 'visual-synth' | 'musical-synth' } }
 export type MappingOutcome = 'working' | 'review' | 'applied' | 'unchanged' | 'failed' | 'cancelled';
@@ -52,6 +53,20 @@ export interface WireCalibrationView {
   outline?: [number, number, number][];
 }
 /** Fixed-size ring of accepted outgoing values; visual feedback never invents input. */
+/**
+ * One frame of Muse's XR scene (wiring/scene-runtime.ts), mutated in place by the runtime and read by the HUD each frame.
+ * `data` is the display list the sandbox returned (layout: SCENE_LAYOUT); positions are metres in the anchor's frame.
+ */
+export interface SceneFrameView {
+  active: boolean;
+  /** increments with every display list the sandbox returns */
+  seq: number;
+  /** world position and yaw of the scene origin (+z of the scene faces the wearer at start) */
+  anchor: [number, number, number]; yaw: number; placed: boolean;
+  data: Float32Array | null;
+  counts: { points: number; spheres: number; boxes: number; rings: number; lines: number };
+  texts: { x: number; y: number; z: number; text: string; color: number; size: number }[];
+}
 export interface WireOutputStream {
   seq: number;
   slots: { seq: number; actionId: string; value: number | boolean; at: number }[];
@@ -75,6 +90,8 @@ export interface WireView {
   ui?: import('@ce/protocol').WireReadyPayload['ui'];
   visualizer?: import('@ce/protocol').WireReadyPayload['visualizer'];
   outgoing?: WireOutputStream;
+  /** Muse's interactive XR visualization while it runs. */
+  scene?: SceneFrameView;
 }
 export interface ProjectView {
   title: string; status: string; projectCount: number; actionCount: number; ready: boolean; running: boolean; engaged: boolean;
@@ -281,6 +298,8 @@ export interface Hud {
   presentationSnapshot?(): { surface: 'menu' | 'device' | 'assistant' | 'project' | 'inspect'; stage: 'choose' | 'prepare' | 'building' | 'review' | 'ready' | 'perform' };
   update(f: HudFrame): void;
   setHome?(state: HomeState): void;
+  /** Live facts for the wrist dashboard (server link, Mac companion, its MIDI devices, the gimbal). */
+  setSystemStatus?(provider: () => SystemStatus): void;
   setDeviceState?(state: DeviceState | null): void;
   /** The selected device's wiring: the ask section of its card and the code card beside it. */
   setWire?(view: WireView | null): void;

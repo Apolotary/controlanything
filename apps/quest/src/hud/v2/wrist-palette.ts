@@ -6,6 +6,7 @@ import type { GlassSurfaces } from './surface';
 import { DockHold, HandDockAnchor } from './hand-dock';
 import { FlatMaterial, glassPanel, isBrowser } from './look';
 import { LOOK, THEME } from './theme';
+import { DASHBOARD_W, WristDashboard, type DashboardView } from './wrist-dashboard';
 
 /** One big wrist-palette button. Other lanes register theirs through `LeanHud.registerPaletteItem`. */
 export interface PaletteItem {
@@ -79,6 +80,11 @@ export class WristPalette extends Group {
   private readonly dockUp = new Vector3();
   private dockPlaced = false;
   private suppressed = false;
+  /** "What is going on" beside the menu, toward the middle of the view. */
+  readonly dashboard = new WristDashboard();
+  /** The HUD supplies the dashboard's current facts. */
+  dashboardView?: () => DashboardView | undefined;
+  private readonly dashboardSide: number;
 
   constructor(_surfaces: GlassSurfaces, nonDominant: 'left' | 'right' = 'left') {
     super();
@@ -89,6 +95,8 @@ export class WristPalette extends Group {
     // does not crowd the menu hand (Quest loses hands that overlap).
     this.anchor = new HandDockAnchor(nonDominant, { lateral: nonDominant === 'left' ? 0.1 : -0.1, up: 0.03, toward: 0.03, clearance: 0.035 });
     this.add(this.content);
+    this.dashboardSide = nonDominant === 'left' ? 1 : -1;
+    this.add(this.dashboard);
   }
 
   /** Add or replace an item (by key). Returns an unregister function. */
@@ -286,6 +294,15 @@ export class WristPalette extends Group {
     // Appear: scale 0.92 → 1 with the anchor's eased opacity (xrblocks VisibilityTransition feel).
     this.scale.setScalar(0.92 + 0.08 * Math.min(1, this.anchor.opacity));
     if (show && this.ui) { this.paintFaces(); this.ui.update(Math.min(100, Math.max(0, frame.dt * 1000))); }
+    this.dashboard.visible = show && !!this.dashboardView;
+    if (this.dashboard.visible) {
+      // Headset: beside the left-hand menu, toward the middle of the view. Desktop dock (always open, bottom-right):
+      // stacked above it in the corner, so it never covers the device or its controls.
+      const h = (this.userData.height as number ?? 0.2) / 2;
+      if (this.anchor.source === 'mouse') this.dashboard.position.set((DASHBOARD_W - this.width) / 2, h + 0.012 + this.dashboard.height, 0);
+      else this.dashboard.position.set(this.dashboardSide * (this.width / 2 + 0.012 + DASHBOARD_W / 2), h, 0);
+      this.dashboard.update(frame.dt * 1000, this.dashboardView!());
+    }
   }
 
   private followDock(frame: HudFrame): void {

@@ -215,7 +215,12 @@ export class CodeCard extends Group {
     // A new program starts the code over; a repair (`code` replaced) retypes from the first changed character.
     const newCode = view.code;
     if (!prev || prev.wiringId !== view.wiringId) { this.shown = 0; this.lastText = ''; }
-    else if (!newCode.startsWith(this.target.slice(0, this.shown))) this.shown = Math.min(this.shown, commonPrefix(this.target, newCode));
+    else if (!newCode.startsWith(this.target.slice(0, this.shown))) {
+      // The agent sends a sliding tail of its terminal: continue from where the old text's end now sits, not from 0.
+      const tail = this.target.slice(Math.max(0, this.shown - 160), this.shown);
+      const at = tail.length >= 40 ? newCode.lastIndexOf(tail) : -1;
+      this.shown = at >= 0 ? at + tail.length : Math.min(this.shown, commonPrefix(this.target, newCode));
+    }
     this.target = newCode;
     this.state.header = headerText(view);
     this.state.badge = BADGE[view.source].text;

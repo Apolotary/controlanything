@@ -71,8 +71,8 @@ describe('first-run wiring tutorial', () => {
     s.menuOpen = false; s.wire.requestId = 'water-1'; steps.update(s, 5700);
     expect(steps.view(s, 5700)?.title).toMatch(/Ask again/);
     s.menuOpen = true; steps.update(s, 5800); expect(steps.step).toBe('buddy');
-    steps.update(s, 100000); expect(steps.finished).toBe(false);
-    s.buddyOpen = true; steps.update(s, 100100); expect(steps.finished).toBe(true);
+    steps.update(s, 9000); expect(steps.finished).toBe(false); // Buddy is optional: the bubble stays a few seconds…
+    steps.update(s, 14000); expect(steps.finished).toBe(true);  // …then closes by itself.
   });
 
   it('names the Enable action and recovers stopped calibration without treating its old request as a new ask', () => {

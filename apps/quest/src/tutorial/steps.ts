@@ -33,11 +33,12 @@ export class TutorialSteps {
   private sawFullStop = false;
   private wired = false;
   private needsScreen = false;
+  private buddyAt: number | undefined;
 
   get step(): StepId | undefined { return this.finished ? undefined : STEP_IDS[this.index]; }
   restart(): void {
     this.index = 0; this.finished = false; this.boundCard = this.request = undefined;
-    this.sawTouch = this.sawMenu = this.sawStop = this.sawFullStop = this.wired = this.needsScreen = false; this.playAt = undefined;
+    this.sawTouch = this.sawMenu = this.sawStop = this.sawFullStop = this.wired = this.needsScreen = false; this.playAt = undefined; this.buddyAt = undefined;
   }
   skip(): void { this.finished = true; }
 
@@ -74,7 +75,8 @@ export class TutorialSteps {
               : this.step === 'calibrate' ? !this.needsScreen || s.wire.phase === 'running'
                 : this.step === 'touch' ? s.wire.phase === 'running' && (this.needsScreen ? this.sawTouch : (s.wire.stats?.sent ?? 0) > 1)
                   : this.step === 'menu' ? this.sawStop && this.sawMenu
-                    : this.step === 'buddy' ? s.buddyOpen : false;
+                    // Buddy is optional: the last bubble closes by itself after a short while.
+                    : this.step === 'buddy' ? s.buddyOpen || (this.buddyAt ??= now, now - this.buddyAt > 8000) : false;
       if (!done) break;
       if (this.step === 'touch') this.playAt = now;
       this.index++;
@@ -85,10 +87,10 @@ export class TutorialSteps {
   view(s: TutorialProbe, now: number): TutorialView | undefined {
     if (this.finished || !s.inXr || s.busy) return;
     switch (this.step) {
-      case 'look': return { title: 'Look at a device', detail: 'Choose Electronics in the wrist menu. SAM will outline the devices it sees.' };
+      case 'look': return { title: 'Look at a device', detail: 'SAM outlines the devices it sees. Wrist menu: turn your left palm toward you and pinch.' };
       case 'pinch': return { title: 'Pinch a device’s box', detail: 'Aim, then tap thumb to index to tag it. You stay in Annotate.', pinch: true };
       case 'ask': return s.mode === 'annotate'
-        ? { title: 'Switch to Control', detail: 'Your device is tagged. Open the wrist menu and choose Control.' }
+        ? { title: 'Switch to Control', detail: 'Your device is tagged. Open the wrist menu (left palm toward you, pinch) and choose Control.' }
         : s.needsBridge
         ? { title: 'Connect a companion', detail: 'Open the Mac companion and follow this device’s connection instructions.' }
         : s.needsSetup
@@ -112,8 +114,8 @@ export class TutorialSteps {
         ? now - (this.playAt ?? now) < 5000 ? undefined
           : { title: 'Stop just the wiring', detail: 'Show both palms outward. Your Mac stays ready for another request.' }
         : this.sawFullStop
-          ? { title: 'Everything is stopped', detail: 'Raise a flat left palm toward your eyes and hold to open the menu.' }
-          : { title: 'Ask again, or open the menu', detail: 'Lower your right hand. Raise a flat left palm toward your eyes and hold.' };
+          ? { title: 'Everything is stopped', detail: 'Turn your left palm toward you and pinch to open the menu.' }
+          : { title: 'Ask again, or open the menu', detail: 'Lower your right hand. Turn your left palm toward you and pinch.' };
       case 'buddy': return { title: 'Try Buddy', detail: 'Choose Buddy in the wrist menu. Hold an object in its frame.' };
     }
   }

@@ -312,7 +312,9 @@ export class MidiExecutor {
    */
   panic(port?: string): number {
     this.scheduler.clear();
-    const outs = port ? [resolvePort(this.io.outputs(), port).port].filter((p): p is MidiPortLike => Boolean(p)) : this.io.outputs().filter((p) => p.state !== 'disconnected');
+    // A named port that no longer resolves falls back to every output: a panic must never leave notes held.
+    const named = port ? [resolvePort(this.io.outputs(), port).port].filter((p): p is MidiPortLike => Boolean(p)) : [];
+    const outs = named.length ? named : this.io.outputs().filter((p) => p.state !== 'disconnected');
     const ids = new Set(outs.map((o) => o.id));
     const t0 = this.clock.now();
     let n = 0;

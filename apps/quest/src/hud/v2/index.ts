@@ -3,7 +3,7 @@ import { applyPatch, type Control, type ControlEvent, type Gen3dSpec, type HackI
 import type { SetupProgressView } from '@ce/protocol';
 import { Emitter } from '../../gen3d/events';
 import { handCursor, newCursor, type Cursor } from '../../gen3d/interact';
-import type { AgentStepLike, AssistantView, CanvasView, ConfirmRequest, DeviceState, HomeState, EvidenceState, HelperPairingView, OnboardingView, Hud, HudEvents, HudFrame, HudTarget, PingLine, UploadState, ProjectView, ProjectUiCommand, WireView } from '../contract';
+import type { AgentStepLike, AssistantView, CanvasView, ConfirmRequest, DeviceState, HomeState, EvidenceState, HelperPairingView, OnboardingView, Hud, HudEvents, HudFrame, HudTarget, PingLine, UploadState, ProjectView, ProjectUiCommand, SystemStatus, WireView } from '../contract';
 import { controlPower, isBrightness } from './control-state';
 import { cardControlShape, controlFraction, controlValue, DIAL_DIAMETER, LEVER_TRAVEL } from './control-shape';
 import { PairCodeEntry, PAIR_CODE_KEYS } from './pair-code';
@@ -34,7 +34,9 @@ import { CalibrationMarkers, CodeCard } from '../../wiring/code-card';
 import { WireRequestReader } from '../../wiring/request-reader';
 import { DialRig, type DialMode, type DialModel } from './radial-dial';
 import { KnobStrip } from './knob-strip';
+import type { DashboardView } from './wrist-dashboard';
 import { InstrumentPanel } from './instrument-panel';
+import { SceneLayer } from './scene-layer';
 import { setupChecks, setupFraction } from './setup-ring';
 import { liveGesture } from '../../gestures/feedback';
 export { whenSdfReady } from './text';
@@ -180,6 +182,8 @@ export class LeanHud implements Hud {
   /** Muse-generated AR controls (knobs/buttons) for the running wiring. */
   private readonly knobs = new KnobStrip();
   private readonly instrument = new InstrumentPanel();
+  /** Muse's XR visualization (display list from the scene sandbox), in the room. */
+  private readonly sceneLayer = new SceneLayer();
   private readonly knobAnchor = new Vector3();
   private readonly requestReader = new WireRequestReader(this.surfaces);
   private readonly wireMarkers = new CalibrationMarkers();
@@ -262,9 +266,11 @@ export class LeanHud implements Hud {
     // First child of the HUD root, so name lookups ('visual-synth', 'deck:panic', 'exit-ar') find the palette before
     // the hidden lab menu's same-named buttons (e2e scripts and the judge path use these names).
     this.root.add(this.palette);
+    this.palette.dashboardView = () => this.dashboardView();
     // Not `primary`: a white pill reads as "selected/pressed" next to the Annotate | Control segments.
-    this.palette.register({ key: 'visual-synth', label: 'Visual synth', order: 0, onSelect: () => this.events.emit('visualSynth', {}) });
-    this.palette.register({ key: 'musical-synth', label: 'Music synth', order: 1, compactWithPrevious: true, onSelect: () => this.events.emit('musicalSynth', {}) });
+    // Optional built-in demos: at the bottom of More, never the first thing offered (the user's own devices come first).
+    this.palette.register({ key: 'visual-synth', label: 'Demo: visual synth', order: 86, onSelect: () => this.events.emit('visualSynth', {}) });
+    this.palette.register({ key: 'musical-synth', label: 'Demo: music synth', order: 87, compactWithPrevious: true, onSelect: () => this.events.emit('musicalSynth', {}) });
     this.palette.register({ key: 'deck:panic', label: 'Stop all', order: 80, onSelect: () => {
       this.events.emit('deck', { key: 'panic', phase: 'press' }); this.events.emit('deck', { key: 'panic', phase: 'release' });
     } });
@@ -324,7 +330,7 @@ export class LeanHud implements Hud {
     this.annotationLayer.add(this.boxes);
     this.root.add(this.annotationLayer, this.card, this.modalLayer, this.deck, this.deck.panel, this.coach, this.notice, this.reticles, this.tether);
     this.root.add(this.helperPairing);
-    this.root.add(this.codeCard, this.wireMarkers, this.requestReader, this.knobs, this.instrument);
+    this.root.add(this.codeCard, this.wireMarkers, this.requestReader, this.knobs, this.instrument, this.sceneLayer);
     this.instrument.onControl = (actionId, value, phase) => { if (this.locked) this.events.emit('wireControl', { targetId: this.locked, actionId, value, phase }); };
     this.instrument.onConsumed = hand => this.events.emit('consumed', { hand, widget: 'control' });
     this.knobs.onChange = (control, value, phase) => {
@@ -509,6 +515,46 @@ export class LeanHud implements Hud {
     parent.clear();
   }
   private selected(): HudTarget | undefined { return this.locked ? this.targets.get(this.locked) : undefined; }
+  private systemStatus?: () => SystemStatus;
+  setSystemStatus(provider: () => SystemStatus): void { this.systemStatus = provider; }
+  /** The wrist dashboard: layer, object, devices, Muse and the next step, in plain words. */
+  private dashboardView(): DashboardView {
+    const sys = this.systemStatus?.();
+    const home = this.home;
+    const filter = ({ electronics: 'Electronics', objects: 'Objects', everything: 'All', lights: 'Lights' } as Record<string, string>)[home.filter] ?? home.filter;
+    const target = this.selected();
+    const state = this.deviceState?.targetId === this.locked ? this.deviceState : null;
+    const wire = this.wireView && this.wireView.targetId === this.locked ? this.wireView : null;
+    const phase = wire?.phase ?? 'idle';
+    const busy = ['asked', 'writing', 'validating', 'dry-run', 'verifying'].includes(phase);
+    const source = wire?.code?.source === 'fixture' ? 'FIXTURE' : wire?.code?.source === 'template' ? 'Template' : 'Live';
+    const devices = sys?.mac?.online ? ['Mac', ...sys.midi.slice(0, 2), ...(sys.gimbal ? ['gimbal'] : [])].join(' · ') : '';
+    const muse = !target || home.mode !== 'control' ? { value: 'idle', tone: 'off' as const }
+      : busy ? { value: `writing · ${wire?.code?.phaseLine || 'thinking'}`, tone: 'busy' as const }
+        : phase === 'calibrating' ? { value: 'calibrating the screen', tone: 'busy' as const }
+          : phase === 'running' || phase === 'ready' ? { value: `running · ${wire?.code?.title || 'controls'} · ${source}`, tone: 'ok' as const }
+            : phase === 'failed' ? { value: `failed · ${wire?.code?.phaseLine || 'try again'}`, tone: 'warn' as const }
+              : phase === 'stopped' ? { value: 'stopped', tone: 'off' as const } : { value: 'ready to ask', tone: 'off' as const };
+    const next = !sys?.server ? 'Reconnect: the Mac server is offline.'
+      : home.mode === 'annotate'
+        ? (home.tagged ? 'Choose Control above to use a tagged device.' : 'Look at a device and pinch its outline to tag it.')
+        : !target ? 'Pinch a tagged device to select it.'
+          : state?.connection === 'offline' && !sys?.mac?.online ? 'Open ControlAnything on the Mac and pair it (Connect Mac on the card).'
+            : busy ? 'Watch Muse write and test the code. Stop Muse on the card anytime.'
+              : phase === 'calibrating' ? 'Touch the top-left, then the bottom-right screen corner.'
+                : phase === 'running' || phase === 'ready' ? 'Use the controls. Both palms out to stop.'
+                  : phase === 'failed' || phase === 'stopped' ? 'Ask Muse again, in other words if needed.'
+                    : 'Ask Muse on the device card: tap an idea or hold the mic.';
+    return {
+      rows: [
+        { key: 'layer', label: 'Layer', value: home.mode === 'annotate' ? `Annotate · ${filter}` : 'Control', tone: 'ok' },
+        { key: 'object', label: 'Object', value: target ? target.label : home.tagged ? `${home.tagged} tagged · none selected` : 'none yet', tone: target ? 'ok' : 'off' },
+        { key: 'mac', label: 'Devices', value: !sys?.server ? 'server offline' : devices || 'Mac not connected', tone: !sys?.server || !devices ? 'warn' : 'ok' },
+        { key: 'muse', label: 'Muse', ...muse },
+      ],
+      next,
+    };
+  }
   private mounted(): Mounted | undefined {
     let last: Mounted | undefined;
     for (const m of this.specs.values()) {
@@ -852,7 +898,7 @@ export class LeanHud implements Hud {
         if (wire.phase === 'running') {
           const source = wire.code?.source === 'fixture' ? 'FIXTURE' : wire.code?.source === 'template' ? 'Template' : 'Live';
           return { title: wire.code?.title || name, subtitle: wire.code?.explanation || wire.prompt,
-            footer: `${name} · ${source} · Running\nBoth palms out to stop`, presentation: 'cue', toggle: null, actions: [], ask: null, agent: null };
+            footer: `${name} · ${source} · Running\n${wire.scene ? 'Hold both palms out still to stop' : 'Both palms out to stop'}`, presentation: 'cue', toggle: null, actions: [], ask: null, agent: null };
         }
         if (this.canOfferInvitation()) {
           if (this.requestPanel === 'details') {
@@ -1546,6 +1592,10 @@ export class LeanHud implements Hud {
       capture.wasPinching = true; capture.history.reset();
     }
     this.pressUntil.clear(); this.deck.cancelExitHold();
+    // Lost pointerups must not leave a knob "held" or a panel "moving" (both keep the wrist menu closed).
+    this.knobs.cancel();
+    for (const hold of this.holds.values()) (hold.widget as { end?: () => void }).end?.();
+    this.holds.clear();
   }
   private refreshHome(): void {
     this.deck.setState(this.home, this.canStop());
@@ -2142,7 +2192,7 @@ export class LeanHud implements Hud {
    * The wiring's pinch-tap uses it so a press on UI is never a gesture.
    */
   handBusy(hand: 'left' | 'right'): boolean {
-    if (this.instrument.interacting) return true;
+    if (this.instrument.interacting || this.knobs.interacting) return true;
     const anchor = this.palette.anchor;
     if (this.palette.visible && anchor.open && anchor.source === 'hand') return true;
     for (const hold of this.holds.values()) if (hold.hand === hand) return true;
@@ -2175,13 +2225,15 @@ export class LeanHud implements Hud {
     this.hasFrame = true;
     this.head.copy(frame.head.position); this.headQuaternion.copy(frame.head.quaternion);
     this.updateLook(frame);
+    this.sceneLayer.update(this.wireView?.targetId === this.locked ? this.wireView?.scene : null, this.head);
+    this.root.userData.scene = this.sceneLayer.snapshot();
     // Wrist palette: palm toward the face (or the controller menu button) shows it; Perform hides it.
     const performing = !!this.deviceState?.handControl || !!this.projectView?.running;
     const movingPanel = [...this.holds.values()].some((hold) => hold.widget.drag);
     this.palette.setSuppressed(performing || movingPanel || this.modal.visible);
     // Working a control (or just finished, or the other hand is pinching): a closed menu stays closed.
     const menuHand = this.palette.anchor.nonDominant, otherHand = frame.hands[menuHand === 'left' ? 'right' : 'left'];
-    const usingControl = this.instrument.interacting || [...this.captures.values()].some((c) => !!c.widget && !this.isPaletteWidget(c.widget));
+    const usingControl = this.instrument.interacting || this.knobs.interacting || [...this.captures.values()].some((c) => !!c.widget && !this.isPaletteWidget(c.widget));
     if (usingControl) this.lastControlAt = this.time;
     // Only a fresh pinch of the other hand (about to select something) keeps the menu closed. A pinch held for
     // longer is a hand holding an object or resting with curled fingers; it must not lock the menu away.
@@ -2275,7 +2327,7 @@ export class LeanHud implements Hud {
     this.projectPanel.disposeSpatial();
     this.root.traverse((o) => { if ('sync' in o && 'dispose' in o) (o as SdfText).dispose(); });
     this.helperPairing.dispose();
-    this.codeCard.dispose(); this.wireMarkers.dispose(); this.instrument.dispose();
+    this.codeCard.dispose(); this.wireMarkers.dispose(); this.instrument.dispose(); this.sceneLayer.dispose();
     this.boxes.dispose();
     this.checkGeometry.dispose(); this.arrowGeometry.dispose(); this.lockGeometry.dispose();
     this.screenGuideGeometry.dispose(); this.screenGuideMaterial.dispose();

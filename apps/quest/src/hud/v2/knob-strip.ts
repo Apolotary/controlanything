@@ -46,6 +46,8 @@ class Knob extends Group {
   private startY = 0;
   private twistRef: number | null = null;
   private lastEmit = 0;
+  /** HUD clock of the last pointer event while dragging (a lost pointerup must not leave the knob stuck). */
+  private lastPointerAt = 0;
   private clock = 0;
   private readonly local = new Vector3();
   private readonly right = new Vector3();
@@ -128,13 +130,14 @@ class Knob extends Group {
     e.stopPropagation?.();
     if (this.control.kind === 'button') { this.flash = 1; this.onChange?.(this.control, 1, 'end'); return; }
     if (this.control.kind === 'toggle') { this.fraction = this.fraction >= 0.5 ? 0 : 1; this.flash = 0.6; this.onChange?.(this.control, this.fraction, 'end'); return; }
-    this.pointerId = e.pointerId; this.dragging = true; this.twistRef = null; this.startFraction = this.fraction;
+    this.pointerId = e.pointerId; this.dragging = true; this.twistRef = null; this.startFraction = this.fraction; this.lastPointerAt = this.clock;
     this.startY = e.point ? this.worldToLocal(this.local.copy(e.point)).y : 0;
     try { (e.target ?? this.hit as Object3D as never as { setPointerCapture?: (id: number) => void }).setPointerCapture?.(e.pointerId); } catch { /* released */ }
     this.onChange?.(this.control, this.fraction, 'start');
   }
   private drag(e: PointerLike): void {
     if (!this.dragging || e.pointerId !== this.pointerId) return;
+    this.lastPointerAt = this.clock;
     this.apply(e, 'move');
   }
   private release(e: PointerLike): void {
@@ -161,7 +164,15 @@ class Knob extends Group {
     this.onChange?.(this.control, this.fraction, phase);
   }
 
+  /** End a drag whose pointerup never arrived (hand tracking lost mid-pinch). */
+  cancel(): void {
+    if (!this.dragging) return;
+    this.dragging = false; this.pointerId = null; this.twistRef = null;
+    this.onChange?.(this.control, this.fraction, 'end');
+  }
+
   update(dt: number, opacity: number): void {
+    if (this.dragging && this.clock - this.lastPointerAt > 3) this.cancel();
     this.clock += dt;
     const k = 1 - Math.exp(-18 * Math.min(0.1, dt));
     this.shown += (this.fraction - this.shown) * (this.dragging ? 1 : k);
@@ -220,8 +231,16 @@ export class KnobStrip extends Group {
     return this.knobs.map((k) => ({ id: k.control.id, actionId: k.control.actionId, label: k.control.label, fraction: Math.round(k.fraction * 1000) / 1000 }));
   }
 
+  /** A knob is being turned right now (the wrist menu and both-palms Stop stay out of the way). */
+  get interacting(): boolean { return this.knobs.some((k) => k.dragging); }
+
+  /** End every drag (input surface changed, session hidden). */
+  cancel(): void { for (const k of this.knobs) k.cancel(); }
+
   /** Beside/below the device: `anchor` is where the row should be centred, `head` is the wearer's eye position. */
   place(anchor: Vector3, head: Vector3, dt: number): void {
+    // Hold still while a knob is turned: moving the row under the hand would turn the drag into a jump.
+    if (this.interacting && this.placed) return;
     this.desired.copy(anchor);
     if (!this.placed) { this.position.copy(this.desired); this.placed = true; }
     else this.position.lerp(this.desired, 1 - Math.exp(-6 * Math.min(0.1, dt)));

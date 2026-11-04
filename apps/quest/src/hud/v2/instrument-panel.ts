@@ -136,6 +136,9 @@ export class InstrumentPanel extends Group {
   private readonly look = new Vector3();
   private active = false;
   private directTouch = false;
+  /** Faders/XY pads poked this frame and last frame, with the last value sent: the finger leaving sends one `end`. */
+  private poked = new Map<string, import('@ce/gen3d').ControlValue>();
+  private pokedBefore = new Map<string, import('@ce/gen3d').ControlValue>();
   onControl?: (actionId: string, value: number | boolean, phase: 'start' | 'move' | 'end') => void;
   onConsumed?: (hand: string) => void;
   constructor() { super(); this.name = 'muse-instrument'; this.visible = false; this.add(this.trace); (this as unknown as { pointerEvents: string }).pointerEvents = 'none'; }
@@ -200,14 +203,16 @@ export class InstrumentPanel extends Group {
         const length = p.params?.length ?? p.params?.size ?? .16;
         if (Math.abs(x) < .04 && Math.abs(y) < length / 2 + .01 && this.local.z >= -.02 && this.local.z <= .05) {
           const range = c.range ?? { min: 0, max: 1 };
-          this.object.setValue(c.id, range.min + Math.max(0, Math.min(1, y / length + .5)) * (range.max - range.min), { phase: 'move' });
+          const value = range.min + Math.max(0, Math.min(1, y / length + .5)) * (range.max - range.min);
+          this.object.setValue(c.id, value, { phase: 'move' }); this.poked.set(c.id, value);
           this.directTouch = true; this.onConsumed?.(cursor.hand);
         }
         continue;
       }
       if (Math.abs(x) > .09 || Math.abs(y) > .09 || this.local.z < -.03 || this.local.z > .04) continue;
       const xr = c.range ?? { min: 0, max: 1 }, yr = c.yRange ?? { min: 0, max: 1 };
-      this.object.setValue(c.id, { x: xr.min + Math.max(0, Math.min(1, x / .156 + .5)) * (xr.max - xr.min), y: yr.min + Math.max(0, Math.min(1, y / .156 + .5)) * (yr.max - yr.min) }, { phase: 'move' });
+      const value = { x: xr.min + Math.max(0, Math.min(1, x / .156 + .5)) * (xr.max - xr.min), y: yr.min + Math.max(0, Math.min(1, y / .156 + .5)) * (yr.max - yr.min) };
+      this.object.setValue(c.id, value, { phase: 'move' }); this.poked.set(c.id, value);
       this.directTouch = true; this.onConsumed?.(cursor.hand);
     }
   }
@@ -216,7 +221,10 @@ export class InstrumentPanel extends Group {
     this.updateMatrixWorld(true);
     this.directTouch = false;
     handCursor('left', frame.hands.left, this.cursors[0]!); handCursor('right', frame.hands.right, this.cursors[1]!);
+    [this.pokedBefore, this.poked] = [this.poked, this.pokedBefore]; this.poked.clear();
     for (const c of this.cursors) this.prepare(c);
+    // A fingertip that left a fader/XY pad ends that gesture once (e.g. releases a theremin note).
+    for (const [id, value] of this.pokedBefore) if (!this.poked.has(id)) this.object.setValue(id, value, { phase: 'end' });
     this.clock.tick(frame.time / 1000);
     this.object.update(frame.dt, frame.time / 1000, this.cursors, camera);
     this.trace.update(frame.time / 1000, stream);

@@ -19,7 +19,8 @@ export class AgentConnectorsPanel {
     host.append(this.status, this.refreshButton, this.list);
     this.refreshButton.disabled = options.replay;
     document.addEventListener('visibilitychange', () => this.setActive(this.active));
-    window.addEventListener('pagehide', () => this.setActive(false));
+    // Guarded: the companion's DOM-less test harness has no window (Chrome always does).
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener('pagehide', () => this.setActive(false));
   }
 
   setActive(active: boolean): void {
@@ -38,6 +39,8 @@ export class AgentConnectorsPanel {
     return response;
   }
 
+  private readonly stopping = new Set<string>();
+
   private async refresh(): Promise<void> {
     if (!this.active || document.hidden || this.pending || this.options.replay) return;
     clearTimeout(this.timer);
@@ -47,7 +50,7 @@ export class AgentConnectorsPanel {
       const response = await this.request('/api/agent/connectors', undefined, controller.signal);
       const data = await response.json() as { mode: string; connectors: Connector[] };
       if (controller.signal.aborted) return;
-      this.status.textContent = `${data.mode === 'fixture' ? 'FIXTURE · ' : ''}${data.connectors.filter(c => c.alive).length} running · Refreshes while Details is visible`;
+      if (!this.stopping.size) this.status.textContent = `${data.mode === 'fixture' ? 'FIXTURE · ' : ''}${data.connectors.filter(c => c.alive).length} running · Refreshes while Details is visible`;
       this.list.replaceChildren(...data.connectors.map(connector => this.row(connector)));
       if (!data.connectors.length) this.list.append(el('p', { className: 'small dim', text: 'No connectors. Select a device and ask Muse to create an interaction.' }));
     } catch (error) {
@@ -62,13 +65,14 @@ export class AgentConnectorsPanel {
   private row(connector: Connector): HTMLElement {
     const row = el('article', { className: 'agent-connector' });
     const stop = button('Stop', () => {
-      stop.disabled = true;
+      stop.disabled = true; this.stopping.add(connector.cardId);
       this.status.textContent = 'Stopping this connector…';
       void this.request('/api/agent/panic', { cardId: connector.cardId, reason: 'Stop connector on Mac Details' }).then(() => {
-        this.status.textContent = 'Connector stopped.'; void this.refresh();
-      }).catch((error: Error) => { this.status.textContent = error.message; stop.disabled = false; });
+        this.stopping.delete(connector.cardId); this.status.textContent = 'Connector stopped.'; void this.refresh();
+      }).catch((error: Error) => { this.stopping.delete(connector.cardId); this.status.textContent = error.message; stop.disabled = false; });
     }, 'ghost');
-    stop.disabled = !connector.alive;
+    // The 2.5 s refresh rebuilds rows: a stop in flight keeps its disabled button and status.
+    stop.disabled = !connector.alive || this.stopping.has(connector.cardId);
     const header = el('div', { className: 'row' }, el('strong', { text: connector.wiring?.title ?? connector.cardId }), stop);
     row.append(header,
       el('p', { className: 'small dim', text: `${connector.alive ? 'Running' : 'Exited'} · ${connector.ops} commands · ${connector.failures} failed` }),

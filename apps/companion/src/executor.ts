@@ -128,11 +128,15 @@ export class Executor {
   attach(conn: Connection): void {
     conn.on('exec.command', (m) => {
       if (!this.leader) return;
-      void this.exec(m.payload).then((ack) => conn.send('exec.ack', ack, { to: 'server' }));
+      // Always answer: a throwing executor must report a failure, not leave the server (and Muse) waiting.
+      void this.exec(m.payload).catch((e: unknown) => ({ execId: m.payload.execId, ok: false, sentAt: Date.now(), error: 'device_error' as const,
+        detail: `companion error: ${(e as Error)?.message ?? String(e)}`.slice(0, 300) }))
+        .then((ack) => conn.send('exec.ack', ack, { to: 'server' }));
     });
     conn.on('sense.request', (m) => {
       if (!this.leader) return;
-      void this.sense(m.payload).then((r) => conn.send('sense.result', r, { to: 'server' }));
+      void this.sense(m.payload).then((r) => conn.send('sense.result', r, { to: 'server' }))
+        .catch((e: unknown) => this.log('warn', `sense failed: ${(e as Error)?.message ?? e}`));
     });
     conn.on('panic', () => {
       if (this.leader) void this.panicLocal('server');

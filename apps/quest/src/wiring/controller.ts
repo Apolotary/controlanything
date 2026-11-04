@@ -15,12 +15,16 @@ import { SignalTracker, SIGNAL_RANGE } from '../gestures/signals';
 import { ScreenCalibrator } from '../gestures/screen-calibration';
 import { clearPlane, loadPlane, planePoint, savePlane, type ScreenPlane } from '../gestures/screen-plane';
 import { WiringRuntime, type StopKind, type WireEmit, type WiringProgram } from './runtime';
+import { SceneRuntime, SceneSignalBuilder } from './scene-runtime';
 
 export const WIRE_CHIPS = ['Touch the water', 'Give me knobs for the visuals', 'Hands as knobs'] as const;
 export const MUSICAL_WIRE_CHIPS = ['Play like a theremin', 'Pinch to play notes', 'Give me filter knobs'] as const;
 export const PHYSICAL_WIRE_CHIPS = ['Give me knobs for this', 'Play it with my hands', 'Surprise me'] as const;
 /** A laptop/Mac: Muse can drive the visual synth running on it. */
-export const LAPTOP_WIRE_CHIPS = ['Write a controller for the visual synth', 'Touch the water', 'Hands as knobs'] as const;
+export const LAPTOP_WIRE_CHIPS = ['Give me knobs for this', 'Swipe my hand to scroll Instagram Reels', 'Open the visual synth demo'] as const;
+/** One ask for an interactive XR visualization, offered with every chip set. */
+export const SCENE_CHIP = 'Visualize my hands in 3D';
+export const VISUAL_SCENE_CHIP = 'Show the ripples as a 3D field';
 const isLaptop = (label: string) => /\b(laptop|macbook|mac|computer|notebook|monitor|screen|display|visual synth)\b/i.test(label);
 export const WIRE_TIMING = {
   /** title + explanation stay up this long once the program runs, then the card collapses to a pill */
@@ -66,6 +70,8 @@ export interface WiringHost {
   now?(): number;
   /** tests: stand-in sandbox */
   runtime?: WiringRuntime;
+  /** tests: stand-in scene sandbox */
+  sceneRuntime?: SceneRuntime;
 }
 
 interface Wiring {
@@ -85,6 +91,8 @@ interface Wiring {
   controls?: WireControl[];
   ui?: WireReadyPayload['ui'];
   visualizer?: WireReadyPayload['visualizer'];
+  /** Muse's XR visualization for this wiring (runs in its own sandbox beside the hand program). */
+  scene?: WireReadyPayload['scene'];
 }
 
 const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
@@ -93,6 +101,13 @@ export class WiringController {
   readonly tracker = new SignalTracker();
   readonly calibrator = new ScreenCalibrator();
   readonly runtime: WiringRuntime;
+  /** Muse's XR scene sandbox and the hand/head signals it reads, in the scene's own frame. */
+  readonly scene: SceneRuntime;
+  private readonly sceneSignals = new SceneSignalBuilder();
+  /** Latest value sent per action (controls and hand program): what a scene reads as s.values. */
+  private values: Record<string, number> = {};
+  private palmsSince: number | undefined;
+  private readonly headForward = new Vector3();
   // Readiness broadcasts can belong to another/previous headset session. This
   // session starts accepting code only after its wearer explicitly asks.
   private acceptServerWiring = false;
@@ -104,6 +119,7 @@ export class WiringController {
   private recordOutput(actionId: string, value: number | boolean): void {
     const seq = ++this.outgoing.seq, e = this.outgoing.slots[(seq - 1) % this.outgoing.slots.length]!;
     e.seq = seq; e.actionId = actionId; e.value = value; e.at = this.now();
+    this.values[actionId] = typeof value === 'boolean' ? (value ? 1 : 0) : value;
   }
   private plane: ScreenPlane | null = null;
   private mic: 'idle' | 'listening' | 'busy' = 'idle';
@@ -129,6 +145,7 @@ export class WiringController {
       },
       onStop: (reason, kind) => this.onRuntimeStop(reason, kind),
     });
+    this.scene = host.sceneRuntime ?? new SceneRuntime({ onStop: (reason, kind) => this.onSceneStop(reason, kind) });
   }
 
   private now(): number { return this.host.now ? this.host.now() : performance.now(); }
@@ -144,7 +161,8 @@ export class WiringController {
     return { phase: this.phase, request: w?.request, requestId: w?.requestId, wiringId: w?.wiringId, title: w?.title, model: w?.model, source: w?.wireSource, codeChars: w?.code.length,
       running: this.running, calibrated: !!this.plane, needsScreen: w?.needsScreen ?? false,
       touching: this.running && this.screenTouching, mic: this.mic, stats: { ...this.runtime.stats, sent: (this.runtime.stats.sent ?? 0) + this.controlSends }, step: this.calibrator.step,
-      controls: w?.controls?.length ?? 0, instrument: w?.ui?.controls.length ?? 0, visualizerEvents: this.outgoing.seq };
+      controls: w?.controls?.length ?? 0, instrument: w?.ui?.controls.length ?? 0, visualizerEvents: this.outgoing.seq,
+      scene: w?.scene ? { title: w.scene.title, running: this.scene.running, ...this.scene.stats, counts: { ...this.scene.view.counts }, placed: this.scene.view.placed } : undefined };
   }
 
   // --- asking -----------------------------------------------------------------------------------------------------
@@ -164,6 +182,7 @@ export class WiringController {
     this.acceptServerWiring = true;
     // A new request replaces whatever was wired: the hands go quiet until the new program is ready and running.
     if (this.runtime.running) this.runtime.stop('asking Muse for something new', 'external', true);
+    if (this.scene.running) this.scene.stop('asking Muse for something new', 'external');
     this.calibrator.reset(); this.corners[0] = this.corners[1] = null; this.calibrationOutline = undefined;
     const requestId = newId('wire-request');
     if (!this.host.send('wire.request', { cardId: sel.cardId, text: request, source, requestId })) {
@@ -188,7 +207,7 @@ export class WiringController {
     // A response already on the socket when a new request was sent must not
     // replace that new request before its first progress message arrives.
     if (w?.phase === 'asked' && p.request && p.request !== w.request) return;
-    if (w.wiringId && p.wiringId !== w.wiringId && w.phase === 'running') this.runtime.stop('a new program is being written', 'external', true);
+    if (w.wiringId && p.wiringId !== w.wiringId && w.phase === 'running') { this.runtime.stop('a new program is being written', 'external', true); this.scene.stop('a new program is being written', 'external'); }
     if (w.wiringId !== p.wiringId) { w.wiringId = p.wiringId; w.code = ''; w.stopped = false; w.program = undefined; }
     if (p.request) w.request = p.request;
     w.model = p.model; w.wireSource = p.source;
@@ -228,14 +247,18 @@ export class WiringController {
     w.controls = p.controls?.length ? p.controls : undefined;
     w.ui = p.ui; w.visualizer = p.visualizer; this.outgoing.seq = 0;
     w.program = { wiringId: p.wiringId, requestId: w.requestId, cardId: p.cardId, code: p.code, title: p.title, explanation: p.explanation, model: p.model, source: p.source, actions: p.actions };
+    w.scene = p.scene; this.values = {};
     w.stopped = false; w.phase = 'ready'; w.phaseLine = 'ready';
+    // The scene starts with the wiring; it is placed in the room on the next frame.
+    if (p.scene) { this.sceneSignals.reset(); this.scene.start({ wiringId: p.wiringId, cardId: p.cardId, title: p.scene.title, code: p.scene.code }); }
+    else if (this.scene.running) this.scene.stop('a new program arrived', 'external');
     this.host.feedback?.('ready');
     this.host.log(`wire.ready "${p.title}" · ${p.model} · ${p.source} · ${p.actions.length} actions · ${p.controls?.length ?? 0} controls · needs ${p.needs.join(',') || 'hands'}`, 'ok');
     if (!p.code.trim()) {
       // AR controls only: nothing runs per frame; the knobs send their own values.
       this.collapsed = false;
       w.phase = 'running'; w.runStartedAt = this.now();
-      this.host.toast(`${p.title || 'Controls'} ready · ${p.ui ? 'touch or press to play' : 'pinch a knob and twist'}`, 'ok');
+      this.host.toast(p.scene && !p.ui && !p.controls?.length ? `${p.title || 'Scene'} · in 3D in front of you` : `${p.title || 'Controls'} ready · ${p.ui ? 'touch or press to play' : 'pinch a knob and twist'}`, 'ok');
       this.changed();
       return;
     }
@@ -281,6 +304,7 @@ export class WiringController {
     this.host.feedback?.(kind === 'user' && !alreadyStopped && w ? 'stop' : 'idle');
     this.acceptServerWiring = false;
     this.retireCurrent();
+    if (this.scene.running) this.scene.stop(reason, 'external');
     if (!w) return;
     if (w.phase === 'calibrating') { this.cancelCalibration(); w.phase = 'stopped'; w.stopped = true; this.changed(); }
     // The server releases this request's outputs. Terminate a user-stopped worker
@@ -315,6 +339,7 @@ export class WiringController {
     this.retireCurrent();
     this.cancelVoice();
     if (this.runtime.running) this.runtime.stop(reason, 'external', false);
+    if (this.scene.running) this.scene.stop(reason, 'external');
     this.cancelCalibration();
     this.w = null; this.host.setHandsBusy(false); this.lastBusy = false;
     this.changed();
@@ -326,12 +351,29 @@ export class WiringController {
     if (this.retiredWirings.size > 32) this.retiredWirings.delete(this.retiredWirings.values().next().value!);
   }
 
+  /** The scene sandbox stopped on its own (it threw, overran, hung): say so; a scene-only wiring is over. */
+  private onSceneStop(reason: string, kind: StopKind): void {
+    if (kind === 'external' || kind === 'user' || reason === 'replaced') return;
+    const w = this.w;
+    this.host.toast(`Muse's 3D scene stopped: ${reason}`, 'warn');
+    this.host.log(`scene stopped (${kind}): ${reason}`, 'warn');
+    if (w && w.phase === 'running' && !w.program?.code.trim() && !w.controls?.length && !w.ui && this.acceptServerWiring) {
+      w.phase = 'failed'; w.stopped = true; w.phaseLine = reason;
+      this.acceptServerWiring = false;
+      this.retireCurrent();
+      this.host.userStopped?.(reason, { cardId: w.cardId, requestId: w.requestId, ...(w.wiringId ? { wiringId: w.wiringId } : {}) });
+    }
+    this.changed();
+  }
+
   private onRuntimeStop(reason: string, kind: StopKind): void {
     this.host.feedback?.('idle');
     const w = this.w;
     this.host.setHandsBusy(false); this.lastBusy = false;
     if (!w) return;
     if (reason === 'replaced' || kind === 'external') { if (w.phase === 'running') { w.phase = 'stopped'; w.stopped = true; } this.changed(); return; }
+    // A failed hand program ends the whole wiring, scene included.
+    if (kind !== 'user' && this.scene.running) this.scene.stop(reason, 'external');
     w.phase = kind === 'user' ? 'stopped' : 'failed';
     w.stopped = true;
     w.phaseLine = kind === 'user' ? 'stopped' : reason;
@@ -399,6 +441,11 @@ export class WiringController {
     const controllable = !!sel && this.host.canControl(sel.cardId);
     if (controllable !== this.lastControllable) { this.lastControllable = controllable; this.dirty = true; this.lastRender = -Infinity; }
     if (!sel || !this.host.canControl(sel.cardId)) {
+      // Leaving Control (or deselecting) while Muse writes or the controls run must also stop the server side:
+      // otherwise the agent run and its connector keep going with no UI left to stop them.
+      if (w && this.acceptServerWiring && !['idle', 'stopped', 'failed'].includes(w.phase)) {
+        this.host.userStopped?.('left Control', { cardId: w.cardId, requestId: w.requestId, ...(w.wiringId ? { wiringId: w.wiringId } : {}) });
+      }
       if (w) this.reset('the device is not under control any more');
       this.setBusy(false);
       this.syncView(sel?.cardId);
@@ -415,8 +462,28 @@ export class WiringController {
       else if (cur.phase === 'running') {
         const sf = this.tracker.update(frame, timeMs, { plane: this.plane, tapBlocked: (hand) => this.host.tapBlocked(hand) });
         this.screenTouching = !!sf.signals.screen?.touching;
-        if (sf.stop) this.stop('both palms out', 'user');
-        else this.runtime.tick(sf.signals);
+        // Both palms out stops, but not while the hands are playing AR controls (two flat hands on a pad look alike).
+        // A scene invites pushing with open palms, so while one runs the palms must also be held still for a moment.
+        let stopNow = false;
+        const free = !this.host.tapBlocked('left') && !this.host.tapBlocked('right');
+        if (!this.scene.running) stopNow = sf.stop && free;
+        else if (free && !!sf.signals.right?.palmOut && !!sf.signals.left?.palmOut) {
+          const still = (sf.signals.right?.speed ?? 1) < 0.25 && (sf.signals.left?.speed ?? 1) < 0.25;
+          if (!still || this.palmsSince === undefined) this.palmsSince = this.now();
+          else stopNow = this.now() - this.palmsSince >= 900;
+        } else this.palmsSince = undefined;
+        if (stopNow) this.stop('both palms out', 'user');
+        else {
+          this.runtime.tick(sf.signals);
+          if (this.scene.running) {
+            if (!this.sceneSignals.placed) {
+              this.headForward.set(0, 0, -1).applyQuaternion(frame.head.quaternion);
+              this.sceneSignals.place(frame.head.position, this.headForward, sel.anchor, timeMs, !!cur.controls?.length || !!cur.ui);
+              this.scene.setAnchor(this.sceneSignals.anchor, this.sceneSignals.yaw);
+            }
+            this.scene.tick(this.sceneSignals.build(frame, sf.signals, this.values, sel.anchor, timeMs));
+          }
+        }
         this.setBusy(this.runtime.running && (sf.rightInZone || sf.hovering));
         if (cur.runStartedAt !== undefined && this.now() - cur.runStartedAt >= WIRE_TIMING.explainMs && !this.collapsed) { this.collapsed = true; this.changed(); }
       } else this.setBusy(false);
@@ -567,7 +634,8 @@ export class WiringController {
               : phase === 'failed' ? 'Could not wire that · try again'
                 : phase === 'stopped' ? 'Stopped · ask again' : `${w.title || 'Wiring'} · ready`;
     const chips = busy ? [] : [...(sel.instrument === 'musical-synth' ? MUSICAL_WIRE_CHIPS
-      : sel.instrument === 'visual-synth' ? WIRE_CHIPS : isLaptop(sel.label) ? LAPTOP_WIRE_CHIPS : PHYSICAL_WIRE_CHIPS)];
+      : sel.instrument === 'visual-synth' ? WIRE_CHIPS : isLaptop(sel.label) ? LAPTOP_WIRE_CHIPS : PHYSICAL_WIRE_CHIPS),
+    sel.instrument === 'visual-synth' ? VISUAL_SCENE_CHIP : SCENE_CHIP];
     const code: WireCodeView | undefined = w ? {
       wiringId: w.wiringId || 'pending', requestId: w.requestId, phase, model: w.model || 'Muse', source: w.wireSource, request: w.request, code: w.code, phaseLine: w.phaseLine,
       ...(w.title ? { title: w.title } : {}), ...(w.explanation ? { explanation: w.explanation } : {}),
@@ -584,6 +652,7 @@ export class WiringController {
       canRecalibrate: !!w?.needsScreen && !!w.program && (phase === 'running' || phase === 'stopped' || phase === 'ready'),
       ...(w?.controls && phase === 'running' ? { controls: w.controls } : {}),
       ...(w?.ui && phase === 'running' ? { ui: w.ui, visualizer: w.visualizer, outgoing: this.outgoing } : {}),
+      ...(w?.scene && phase === 'running' ? { scene: this.scene.view } : {}),
     };
   }
 
