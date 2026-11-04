@@ -47,6 +47,8 @@ import {
   WireRequestPayload,
   WireProgressPayload,
   WireReadyPayload,
+  WireStopPayload,
+  WireStoppedPayload,
   SessionSupersededPayload,
   SenseResultPayload,
   SnapshotPayload,
@@ -101,6 +103,8 @@ export const PayloadSchemas = {
   'session.claim': SessionClaimPayload,
   'session.superseded': SessionSupersededPayload,
   'wire.request': WireRequestPayload,
+  'wire.stop': WireStopPayload,
+  'wire.stopped': WireStoppedPayload,
   'wire.progress': WireProgressPayload,
   'wire.ready': WireReadyPayload,
   'pair.start': PairStartPayload,
@@ -205,6 +209,8 @@ export const MessageSchemas = {
   'session.claim': message('session.claim'),
   'session.superseded': message('session.superseded'),
   'wire.request': message('wire.request'),
+  'wire.stop': message('wire.stop'),
+  'wire.stopped': message('wire.stopped'),
   'wire.progress': message('wire.progress'),
   'wire.ready': message('wire.ready'),
   'pair.start': message('pair.start'),
@@ -289,6 +295,8 @@ export const Message = z.discriminatedUnion('type', [
   MessageSchemas['session.claim'],
   MessageSchemas['session.superseded'],
   MessageSchemas['wire.request'],
+  MessageSchemas['wire.stop'],
+  MessageSchemas['wire.stopped'],
   MessageSchemas['wire.progress'],
   MessageSchemas['wire.ready'],
   MessageSchemas['pair.start'],
@@ -378,6 +386,7 @@ export type AnyMessage = Message | ExperimentalMessage;
  * command to an executor come from the server, so nothing bypasses validation, allowlists and rate limits.
  */
 export const SERVER_ONLY_TYPES: readonly MessageType[] = [
+  'wire.stopped',
   'project.state',
   'project.catalog',
   'canvas.state',

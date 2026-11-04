@@ -7,6 +7,8 @@
     "session.claim": "session.claim.json",
     "session.superseded": "session.superseded.json",
     "wire.request": "wire.request.json",
+    "wire.stop": "wire.stop.json",
+    "wire.stopped": "wire.stopped.json",
     "wire.progress": "wire.progress.json",
     "wire.ready": "wire.ready.json",
     "pair.start": "pair.start.json",

@@ -31,6 +31,16 @@
     "payload": {
       "type": "object",
       "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "wiringId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
         "widgetId": {
           "type": "string",
           "minLength": 1,

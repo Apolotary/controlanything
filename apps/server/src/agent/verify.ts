@@ -65,6 +65,8 @@ export interface VerifyOptions {
   cameraDeadline?: number;
   /** visual synth: set after the first camera miss (too far, off-centre); later actions skip the camera, saying why */
   cameraSkip?: string;
+  /** A newer setup/request may retire an aborted verification's independent cleanup. */
+  cleanupAllowed?: () => boolean;
 }
 
 export interface VerifySummary {
@@ -413,8 +415,12 @@ async function observeMusical(deps: VerifyDeps, t: Target, driver: Driver, a: Dr
   const chosen = c ? c.cc === 17 ? 127 : Math.round(Math.max(a.range?.min ?? c.min, Math.min(a.range?.max ?? c.max, c.default + (c.default < (c.max - c.min) / 2 ? 8 : -8)))) : undefined;
   const op = resolveOp(a, chosen);
   const exec = driver.executor;
-  const send = (command: ExecOp, suffix: string, signal = o.signal) => deps.dispatcher.exec(exec.deviceId, command,
-    { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: `${a.actionId}:${suffix}`, waitForSlot: true, signal, timeoutMs: 4000 });
+  const send = (command: ExecOp, suffix: string, signal = o.signal) => {
+    if (suffix.startsWith('restore-') && o.cleanupAllowed && !o.cleanupAllowed()) return Promise.reject(new ExecError('Verification cleanup was superseded', 'refused'));
+    return deps.dispatcher.exec(exec.deviceId, command,
+      { port: exec.port, cardId: t.cardId, driverId: driver.driverId, actionId: `${a.actionId}:${suffix}`, waitForSlot: true, signal, timeoutMs: 4000,
+        ...(suffix.startsWith('restore-') && o.cleanupAllowed ? { stillCurrent: o.cleanupAllowed } : {}) });
+  };
   const cc = (number: number, value: number): ExecOp => ({ kind: 'midi', msg: 'cc', channel: 1, number, value });
   let initial: ExecAckPayload['applied'];
   let ack: ExecAckPayload | undefined;

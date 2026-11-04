@@ -1,6 +1,8 @@
 /** Explicit owner review for a connected instrument. A host card is never relabelled. */
 import { createHash } from 'node:crypto';
 import { newId, type DeviceCardPayload, type DeviceInfo } from '@ce/protocol';
+import { isVisualSynthPort } from '../devices/visualSynth';
+import { isMusicalSynthPort } from '../devices/musicalSynth';
 import type { Target } from './types';
 import { physicalOp1Outputs, type IdentityPortEvidence } from './identity-correction';
 
@@ -16,6 +18,25 @@ export function isConnectedPeripheralRequest(text: string, host?: { name: string
   const explicitHost = /\b(?:connected|plugged|attached)\b.{0,80}\b(?:mac|macbook|laptop|computer|paired|usb)\b/i.test(value);
   return explicitHost || (!host || host.identity?.category === 'computer' || /\b(?:macbook|laptop|computer)\b/i.test(host.name))
     && /\b(?:connect|control|gesture|play|synthesizer|instrument)\b/i.test(value);
+}
+
+/** A narrow wrong-target guard for the selected-device wiring path, not an automatic selection planner. */
+export function isDifferentConnectedOp1ControlRequest(text: string, selected: { name: string; category?: string; port?: string }): boolean {
+  const software = isVisualSynthPort(selected.port) || isMusicalSynthPort(selected.port);
+  if (!software && selected.category !== 'computer') return false;
+  if (!isConnectedPeripheralRequest(text, { name: selected.name, identity: { category: selected.category } })) return false;
+  const value = normalize(text);
+  // A named physical connection distinguishes this from an instrument-inspired browser scene.
+  if (!/\b(?:connected|plugged|attached)\b.{0,80}\b(?:mac|macbook|laptop|computer|paired|usb)\b/i.test(value)) return false;
+  const instrument = 'op[ -]?(?:1|one)(?:\\s*field)?';
+  if (new RegExp(`\\b${instrument}[- ]+(?:style|inspired|like)\\b|\\b(?:inspired by|style of|look like|sound like|emulate)\\s+(?:my |the |an? )?${instrument}\\b`, 'i').test(value)) return false;
+  const direct = new RegExp(`\\b(?:control|play|wire|connect)\\s+(?:(?:my|the|this|that|connected|physical|an?)\\s+){0,3}${instrument}\\b`, 'i').test(value);
+  if (direct) return true;
+  const named = op1.exec(value);
+  const after = named ? value.slice(named.index + named[0].length) : '';
+  if (/\bfor\s+(?:(?:my|the|this)\s+)?(?:visual(?:\s+synth)?|musical\s+synth|screen|water|ripples?)\b/i.test(after)) return false;
+  return /\b(?:create|build|make|write|program|set up)\b.{0,45}\b(?:gesture|hand)\s*(?:controls?|controller|mapping|wiring)\b/i.test(after)
+    || /\b(?:control|play|wire)\s+it\b|\bmake\s+it\s+react\b.{0,45}\b(?:hands?|gestures?)\b/i.test(after);
 }
 
 /** A positive host identity plus its peripheral is not a request to relabel that host. */

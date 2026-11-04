@@ -405,7 +405,7 @@ export async function runLoop(d: LoopDeps, t: Target, opts: { userText?: string;
           cameraDeviceId: camera?.deviceId,
           micDeviceId: mic?.deviceId,
           irCandidates: research.irLibrary?.candidates,
-          signal,
+          signal, cleanupAllowed: () => t.runId === base.runId,
           onStep: (title, detail) => !signal.aborted && d.steps.note('verify', title, { ...base, kind: 'proof', detail, ...verifyGuidance }),
           onEvidence: (e) => {
             if (signal.aborted) return;

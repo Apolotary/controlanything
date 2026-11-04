@@ -31,6 +31,11 @@
     "payload": {
       "type": "object",
       "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
         "cardId": {
           "type": "string",
           "minLength": 1,

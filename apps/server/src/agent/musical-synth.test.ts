@@ -68,6 +68,20 @@ describe('manifest-backed musical software instrument', () => {
       expect(result?.evidence.pass ?? false).toBe(false);
     }
   });
+  it('retires an old verification cleanup before it can restore over a newer request', async () => {
+    const d = graph(); let current = true;
+    const exec = d.dispatcher.exec.bind(d.dispatcher);
+    d.dispatcher.exec = (async (...args: Parameters<Dispatcher['exec']>) => {
+      if (args[2]?.actionId?.endsWith(':restore-release')) expect(args[2].stillCurrent?.()).toBe(true);
+      const ack = await exec(...args);
+      if (args[2]?.actionId?.endsWith(':restore-release')) { current = false; expect(args[2].stillCurrent?.()).toBe(false); }
+      return ack;
+    }) as Dispatcher['exec'];
+    const result = await verifyOnce({ dispatcher: d.dispatcher } as VerifyDeps, target, driver, driver.actions[0]!, 1, { cleanupAllowed: () => current });
+    expect(result.evidence.pass).toBe(true);
+    // The commanded pitch was sent; its old baseline is not restored after the request was retired.
+    expect(d.sent.filter(o => o.kind === 'midi' && o.msg === 'cc' && o.number === 16)).toEqual([expect.objectContaining({ value: 0 })]);
+  });
   it('rejects a sounding graph playing the wrong scale note', async () => {
     const d = graph('musical-synth', true, 0, 440);
     const result = await verifyOnce({ dispatcher: d.dispatcher } as VerifyDeps, target, driver, driver.actions[0]!, 1, {});

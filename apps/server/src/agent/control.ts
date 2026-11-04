@@ -52,7 +52,7 @@ export interface ControlDeps {
   /** room hacks (combos, daemons) are not fired here: the owner of the hook runs them */
   onRoomHack?: (hack: Hack, spec: UiSpecPayload, value: number | boolean, from?: string) => RouteResult;
   /** "wire:<actionId>" events (a wiring program running in the headset): the WIRE service says which hack and driver they mean */
-  wire?: (ev: Pick<ControlEventPayload, 'widgetId' | 'specId'>) => { target: Target; hack: Hack; driver: Driver } | { reason: string };
+  wire?: (ev: Pick<ControlEventPayload, 'widgetId' | 'specId' | 'requestId' | 'wiringId'>) => { target: Target; hack: Hack; driver: Driver } | { reason: string };
 }
 
 /** Gesture and wiring events are live performance: a missed send is dropped, never queued. */
@@ -117,7 +117,7 @@ export class ControlRouter {
   }
 
   /** Find the target + spec + hack a control event refers to. */
-  resolve(ev: Pick<ControlEventPayload, 'widgetId' | 'specId'>): { target: Target; spec?: UiSpecPayload; hack: Hack; driver: Driver } | { reason: string } {
+  resolve(ev: Pick<ControlEventPayload, 'widgetId' | 'specId' | 'requestId' | 'wiringId'>): { target: Target; spec?: UiSpecPayload; hack: Hack; driver: Driver } | { reason: string } {
     if (ev.widgetId.startsWith('wire:')) return this.d.wire ? this.d.wire(ev) : { reason: 'wiring programs are not enabled' };
     if (ev.widgetId.startsWith('gesture:') && !ev.specId) return { reason: 'gesture control requires a target spec' };
     const specs = ev.specId ? [this.d.specs.get(ev.specId)].filter(Boolean) : this.d.specs.list();

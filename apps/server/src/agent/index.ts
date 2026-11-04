@@ -30,7 +30,7 @@ import { ArmService } from './arm';
 import { BLACKOUT_ID, BREATHE_DAEMON_ID, BREATHE_ID, buildRoomSpec, ComboRunner, ROOM_CARD_ID, ROOM_SPEC_ID } from './combos';
 import { ControlRouter } from './control';
 import { DaemonRunner } from './daemons';
-import { Dispatcher } from './dispatch';
+import { Dispatcher, isNeutralSoftwareRelease } from './dispatch';
 import { hearBack } from './heard';
 import { fixtureDriverDraft, WONDER_MODEL } from './drive';
 import { macLocalInfo, type Roster } from './executors';
@@ -41,6 +41,7 @@ import { StreamClient } from '../gen3d/stream';
 import { VISUAL_SYNTH_MANIFEST } from '@ce/vsynth/manifest';
 import { validateDriver } from '../devices/validate';
 import { verifyDriver } from './verify';
+import { releaseWireOutputs } from './wire-stop';
 import { libraryDriverNote, WireService } from './wire';
 import { fixtureWireDraft } from './wire-fixture';
 import { CANCELLED_GUIDANCE, type TimedPhase } from './guidance';
@@ -235,9 +236,13 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const canControl = (t: Target) => midiPermissionsCurrent(t) && mode === 'control' && tags.has(t.cardId) && Boolean(t.specId && verifiedControlCount(deviceSpec(t.specId), t)) && evaluateConnection(t, roster).connection === 'ready';
   // Actions being verified for a wiring program while the card is armed (the setup-time gate below would refuse them).
   const wireVerifying = new Map<string, Set<string>>();
+  const wireReleasing = new Map<string, symbol>();
   const dispatcher = new Dispatcher({ hub, macLocal, log, canExec: (request) => {
     const t = request.cardId ? targets.get(request.cardId) : undefined;
     const verifying = request.cardId ? wireVerifying.get(request.cardId) : undefined;
+    if (t && wireReleasing.has(t.cardId) && request.priorityRelease && isNeutralSoftwareRelease(request)) {
+      return mode === 'control' && connected(t) && t.driver?.executor.deviceId === request.executorDeviceId && t.driver.executor.port === request.port;
+    }
     if (t && verifying && request.actionId && (verifying.has(request.actionId) || verifying.has(request.actionId.split(':')[0]!) || request.actionId === 'restore-visual-defaults')) {
       return mode === 'control' && connected(t) && t.driver?.executor.deviceId === request.executorDeviceId && (!request.port || t.driver.executor.port === request.port);
     }
@@ -1206,6 +1211,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     const t = targets.get(cardId);
     if (!t || !tags.has(cardId)) return { ok: false, reason: 'This device is not selected. Pinch it first.' };
     if (mode !== 'control') return { ok: false, reason: 'Switch to Control, pinch the device, then ask again.' };
+    // A retained, ready driver is reused for this ask even without a new re-arm/library restoration.
+    const readyDriverId = wireReady(cardId) ? t.driver?.driverId : undefined;
     const started = Date.now();
     if (!wireReady(cardId) && !setupRunning(cardId) && !visualIntent && !setup(cardId, from)) {
       return { ok: false, reason: t.hint ?? t.sentence ?? 'The device could not be set up. Pinch it again.' };
@@ -1221,7 +1228,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     }
     const lib = libraryDrivers.get(cardId);
     const driver = targets.get(cardId)!.driver!;
-    return { ok: true, ...(lib && lib.driverId === driver.driverId ? { note: libraryDriverNote(driver) } : {}) };
+    return { ok: true, ...(readyDriverId === driver.driverId || lib?.driverId === driver.driverId ? { note: libraryDriverNote(driver) } : {}) };
   };
   /** The visual synth's driver plus the manifest's touch inputs (Touch X / Y / pressure), unverified until a wiring uses them. */
   const prepareWireDriver = (t: Target): Driver => {
@@ -1245,10 +1252,11 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const verifyWireActions = async (t: Target, ids: string[], signal: AbortSignal): Promise<string[]> => {
     const driver = t.driver;
     if (!driver) return ids;
-    wireVerifying.set(t.cardId, new Set(ids));
+    const verifying = new Set(ids);
+    wireVerifying.set(t.cardId, verifying);
     try {
       const summary = await verifyDriver({ dispatcher, sam, silentSpeech, log, settleMs: () => 350 }, t, driver, {
-        actionIds: ids, signal, onEvidence: (e) => { t.evidence.push(e); hub.broadcast('verify.result', e); },
+        actionIds: ids, signal, cleanupAllowed: () => wireVerifying.get(t.cardId) === verifying, onEvidence: (e) => { t.evidence.push(e); hub.broadcast('verify.result', e); },
       });
       for (const id of ids) t.verification[id] = summary.verification[id] ?? 'untested';
       const cur = t.driver!;
@@ -1262,7 +1270,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
           .catch((err) => log(`[wire] could not restore visual defaults: ${(err as Error).message}`));
       }
     } finally {
-      wireVerifying.delete(t.cardId);
+      if (wireVerifying.get(t.cardId) === verifying) wireVerifying.delete(t.cardId);
     }
     return ids.filter((id) => t.verification[id] !== 'pass');
   };
@@ -1272,6 +1280,16 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     ...(streamClient ? { stream: { model: muse.model, stream: streamClient.stream.bind(streamClient) } } : {}),
     chunkDelayMs: Number.isFinite(Number(process.env.CE_WIRE_CHUNK_MS)) && process.env.CE_WIRE_CHUNK_MS !== undefined ? Number(process.env.CE_WIRE_CHUNK_MS) : 70,
     ensureDriver: ensureWireDriver, prepareDriver: prepareWireDriver, verifyActions: verifyWireActions,
+    stopOutputs: (target) => {
+      // Retire verification cleanup before neutral release: old restores cannot cross a new ask.
+      wireVerifying.delete(target.cardId);
+      if (setups.has(target.cardId)) {
+        target.abort?.abort(new Error('Wiring stopped')); arm.cancel(target, 'Wiring stopped'); setups.delete(target.cardId);
+      }
+      const release = Symbol('wire release'); wireReleasing.set(target.cardId, release);
+      return releaseWireOutputs(target, { dispatcher, cancelQueued: (t) => control.cancel(t, { preserveArmed: true }) })
+        .finally(() => { if (wireReleasing.get(target.cardId) === release) wireReleasing.delete(target.cardId); });
+    },
     cardOfSpec: (specId) => specs.get(specId)?.cardId,
   });
   let lastWireLog = 0;
@@ -1365,6 +1383,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         // the wearer asks (chip, voice or text); only an owner or local device may have Muse write anything
         if (!from.canApprove && !from.local) { hub.sendToDevice(from.deviceId, 'log', { level: 'error', code: 'forbidden', message: 'Only an owner may ask Muse to wire a device.' }); return; }
         wireService.request(m.payload, from);
+        return;
+      case 'wire.stop':
+        void wireService.stop(m.payload, from);
         return;
       case 'panic':
         panic(m.payload.reason ?? `panic from ${from.name}`, m.payload.cardId);

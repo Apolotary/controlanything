@@ -5,6 +5,8 @@
  */
 import { type ExecAckPayload, type ExecOp, newId, RATE_LIMITS, type SenseKind, type SenseRequestPayload, type SenseResultPayload } from '@ce/protocol';
 import type { Hub } from '../hub';
+import { isMusicalSynthPort } from '../devices/musicalSynth';
+import { isVisualSynthPort, touchRoleOfCc } from '../devices/visualSynth';
 import { MAC_LOCAL_ID, type MacLocalExecutor } from './maclocal';
 
 export class ExecError extends Error {
@@ -87,6 +89,15 @@ export interface ExecRequest {
   driverId?: string;
   actionId?: string;
   dryRun?: boolean;
+  /** Server-only release flag; never supplied by control.event or exec.command payloads. */
+  priorityRelease?: boolean;
+}
+
+/** The only nonpanic commands permitted to use the internal neutral-release priority. */
+export function isNeutralSoftwareRelease(request: Pick<ExecRequest, 'op' | 'port'>): boolean {
+  const { op, port } = request;
+  return op.kind === 'midi' && op.msg === 'cc' && op.channel === 1 && op.value === 0
+    && (isMusicalSynthPort(port) && op.number === 17 || isVisualSynthPort(port) && touchRoleOfCc(op.number) === 'pressure');
 }
 
 export type ExecResult = (ok: boolean, detail?: string) => void;
@@ -141,16 +152,20 @@ export class Dispatcher {
   async exec(
     executorDeviceId: string,
     op: ExecOp,
-    opts: { port?: string; dryRun?: boolean; cardId?: string; driverId?: string; actionId?: string; lightCap?: boolean; waitForSlot?: boolean; timeoutMs?: number; signal?: AbortSignal } = {},
+    opts: { port?: string; /** Only exact known software gate/pressure zero may bypass a saturated limiter. Authorization still applies. */ priorityRelease?: boolean; /** Server-only epoch guard, checked again after any limiter wait. */ stillCurrent?: () => boolean; dryRun?: boolean; cardId?: string; driverId?: string; actionId?: string; lightCap?: boolean; waitForSlot?: boolean; timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<ExecAckPayload> {
+    const checkCurrent = () => { if (opts.stillCurrent && !opts.stillCurrent()) throw new ExecError('Operation was superseded', 'refused'); };
     this.checkSignal(opts.signal);
+    checkCurrent();
     this.checkExec({ ...opts, executorDeviceId, op });
     const limiter = this.limiter(executorDeviceId, op, Boolean(opts.lightCap));
-    while (!limiter.take()) {
+    const neutral = opts.priorityRelease === true && isNeutralSoftwareRelease({ op, port: opts.port });
+    while (!neutral && !limiter.take()) {
       if (!opts.waitForSlot) throw new ExecError(`rate limit for ${executorDeviceId}:${op.kind}`, 'rate_limited');
       await this.waitForSlot(limiter.waitMs(), opts.signal);
     }
     this.checkSignal(opts.signal);
+    checkCurrent();
     this.checkExec({ ...opts, executorDeviceId, op });
     const execId = newId('x');
     const at = Date.now();

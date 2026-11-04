@@ -12,7 +12,7 @@
  * like dial events (range clamp, rate limit, latest wins, armed + verified only).
  */
 import { z } from 'zod';
-import { type ControlEventPayload, type Driver, type DriverAction, type Hack, museResponseFormat, newId, type WireAction, type WireProgressPayload, type WireReadyPayload, type WireRequestPayload } from '@ce/protocol';
+import { type ControlEventPayload, type Driver, type DriverAction, type Hack, museResponseFormat, newId, type WireAction, type WireProgressPayload, type WireReadyPayload, type WireRequestPayload, type WireStopPayload, type WireStoppedPayload } from '@ce/protocol';
 import { isMusicalSynthPort, MUSICAL_SYNTH_MANIFEST } from '../devices/musicalSynth';
 import { VISUAL_SYNTH_MANIFEST } from '@ce/vsynth/manifest';
 import { isVisualSynthPort, touchControls } from '../devices/visualSynth';
@@ -21,6 +21,7 @@ import type { Hub } from '../hub';
 import { type ChatMessage, ModelCallError, ModelOutputError, type MuseChat, parseModelJson } from '../muse/adapter';
 import type { CallLog } from '../muse/callLog';
 import { RequestCancelledError } from '../muse/cancellation';
+import { isDifferentConnectedOp1ControlRequest } from './connected-peripheral';
 import { SMOOTH_VISUAL_CCS } from './control';
 import { WONDER_MAX_TOKENS, WONDER_TIMEOUT_MS } from './drive';
 import type { TargetStore } from './targets';
@@ -440,6 +441,8 @@ export interface WireServiceDeps extends WireDeps {
   prepareDriver(target: Target): Driver;
   /** Verify the actions that have not passed yet; resolves with the ids that failed. */
   verifyActions(target: Target, ids: string[], signal: AbortSignal): Promise<string[]>;
+  /** Cancel queued commands and release known held outputs without revoking the verified connection. */
+  stopOutputs?(target: Target, reason: string): Promise<{ released: boolean; reason?: string }>;
   cardOfSpec(specId: string): string | undefined;
 }
 
@@ -448,6 +451,7 @@ export class WireService {
   private readonly active = new Map<string, ActiveWiring>();
   /** The latest explicit requester owns both its pending job and its published program. */
   private readonly owners = new Map<string, string>();
+  private readonly epochs = new Map<string, { requestId?: string; wiringId: string }>();
   private readonly log: (line: string) => void;
 
   constructor(private readonly d: WireServiceDeps) {
@@ -473,6 +477,7 @@ export class WireService {
   private async run(p: WireRequestPayload, from: { deviceId: string; name?: string }): Promise<void> {
     const { hub, targets } = this.d;
     const cardId = p.cardId;
+    const replacing = this.jobs.has(cardId) || this.active.has(cardId);
     this.jobs.get(cardId)?.abort();
     // Asking again withdraws the previous program immediately. A failed new
     // request must not leave the old hand mapping authorized on the server.
@@ -481,6 +486,7 @@ export class WireService {
     this.jobs.set(cardId, abort);
     this.owners.set(cardId, from.deviceId);
     const wiringId = newId('wire-');
+    this.epochs.set(cardId, { requestId: p.requestId, wiringId });
     const t0 = Date.now();
     const clip = (s: string | undefined, n: number) => (s === undefined ? undefined : s.length > n ? `${s.slice(0, n - 1)}…` : s);
     let model: string = this.d.spark.model;
@@ -490,7 +496,7 @@ export class WireService {
       model = extra.model ?? model;
       source = extra.source ?? source;
       hub.broadcast('wire.progress', {
-        cardId, wiringId, phase, request: clip(p.text, 500), model: clip(model, 64) ?? 'unknown', source,
+        cardId, wiringId, ...(p.requestId ? { requestId: p.requestId } : {}), phase, request: clip(p.text, 500), model: clip(model, 64) ?? 'unknown', source,
         ...(extra.codeDelta !== undefined ? { codeDelta: extra.codeDelta.slice(0, 8192) } : {}),
         ...(extra.code !== undefined ? { code: extra.code.slice(0, 8192) } : {}),
         ...(extra.title ? { title: clip(extra.title, 80) } : {}),
@@ -507,6 +513,17 @@ export class WireService {
     try {
       this.log(`[wire] ${cardId} request "${p.text.slice(0, 80)}" (${p.source}) from ${from.name ?? from.deviceId}`);
       const target0 = targets.get(cardId);
+      // Retiring authority must not strand a held note/pressure while the next model call runs.
+      if (replacing && target0) await this.d.stopOutputs?.(target0, 'A new wiring was requested');
+      if (abort.signal.aborted) return;
+      if (target0?.card && isDifferentConnectedOp1ControlRequest(p.text, { name: target0.card.name, category: target0.card.category, port: target0.driver?.executor.port })) {
+        const hint = 'Select the OP-1 in Annotate. Use Correct device if its label is wrong, then set it up.';
+        this.log(`[wire] ${cardId}: connected OP-1 request belongs to a different target; no model called`);
+        send('failed', { model: 'not-called', title: 'Choose the OP-1 first', note: `This card is not the connected OP-1. ${hint}`,
+          explanation: 'Use Correct device if its label is wrong. This card is not your connected OP-1.',
+          issues: ['Select the OP-1 in Annotate, then set it up.'] });
+        return;
+      }
       send('writing', { note: target0?.driver ? 'Getting ready to write…' : 'Setting the device up first (identify · link · driver)…' });
       const ready = await this.d.ensureDriver(cardId, from, abort.signal);
       if (abort.signal.aborted) return;
@@ -537,7 +554,7 @@ export class WireService {
 
       const actions = used.map((a) => toWireAction(current, a));
       if (!actions.length) return fail('The wiring drives no verified action.');
-      const payload: WireReadyPayload = { cardId, wiringId, code: written.code, title: written.title.slice(0, 80), explanation: written.explanation.slice(0, 300), model: written.model.slice(0, 64), source: written.source, actions, needs: written.needs };
+      const payload: WireReadyPayload = { cardId, wiringId, ...(p.requestId ? { requestId: p.requestId } : {}), code: written.code, title: written.title.slice(0, 80), explanation: written.explanation.slice(0, 300), model: written.model.slice(0, 64), source: written.source, actions, needs: written.needs };
       this.active.set(cardId, { cardId, wiringId, driverId: current.driverId, ready: payload, actions: new Map(actions.map((a) => [a.actionId, a])), at: Date.now() });
       send('ready', { code: written.code, title: payload.title, explanation: payload.explanation, model: written.model, source: written.source, latencyMs: Date.now() - t0, note: `${written.dry?.note ?? 'dry-run ✓'} · ready` });
       hub.broadcast('wire.ready', payload);
@@ -549,18 +566,19 @@ export class WireService {
     } finally {
       if (this.jobs.get(cardId) === abort) {
         this.jobs.delete(cardId);
-        if (!this.active.has(cardId)) this.owners.delete(cardId);
+        if (!this.active.has(cardId)) { this.owners.delete(cardId); this.epochs.delete(cardId); }
       }
     }
   }
 
   /** The ControlRouter asks this for a "wire:<actionId>" control.event: only actions of the current wire.ready for that card. */
-  resolve(ev: Pick<ControlEventPayload, 'widgetId' | 'specId'>): WireResolve {
+  resolve(ev: Pick<ControlEventPayload, 'widgetId' | 'specId' | 'requestId' | 'wiringId'>): WireResolve {
     const actionId = ev.widgetId.slice('wire:'.length);
     const fromSpec = ev.specId ? this.d.cardOfSpec(ev.specId) : undefined;
     const cardId = fromSpec && this.active.has(fromSpec) ? fromSpec : this.active.size === 1 ? this.active.keys().next().value : undefined;
     const entry = cardId ? this.active.get(cardId) : undefined;
     if (!entry) return { reason: 'no wiring is active: ask Muse to wire your hands first' };
+    if (entry.ready.requestId && (ev.requestId !== entry.ready.requestId || ev.wiringId !== entry.wiringId)) return { reason: 'this output belongs to a retired wiring request' };
     if (!entry.actions.has(actionId)) return { reason: `"${actionId}" is not part of the current wiring` };
     const target = this.d.targets.get(entry.cardId);
     const driver = target?.driver;
@@ -568,6 +586,29 @@ export class WireService {
     const action = driver.actions.find((a) => a.actionId === actionId);
     if (!action) return { reason: `"${actionId}" is not an action of this device` };
     return { target, driver, hack: wireHack(ev.widgetId, action, wireRateHz(driver, action)) };
+  }
+
+  /** User's both-palms Stop: retire only this epoch, without disarming the selected verified device. */
+  async stop(p: WireStopPayload, from: { deviceId: string }): Promise<WireStoppedPayload> {
+    const epoch = this.epochs.get(p.cardId);
+    const reply = (payload: WireStoppedPayload) => { this.d.hub.sendToDevice(from.deviceId, 'wire.stopped', payload); return payload; };
+    if (this.owners.get(p.cardId) !== from.deviceId || !epoch || epoch.requestId !== p.requestId || (p.wiringId && epoch.wiringId !== p.wiringId)) {
+      return reply({ cardId: p.cardId, requestId: p.requestId, ...(p.wiringId ? { wiringId: p.wiringId } : {}), ok: false,
+        reason: 'That request is no longer the current wiring owned by this headset.' });
+    }
+    const target = this.d.targets.get(p.cardId);
+    const executor = target?.driver?.executor.deviceId;
+    // Synchronous revocation precedes every await: no old event, queued output or late ready keeps authority.
+    this.clear(p.cardId);
+    let release: { released: boolean; reason?: string } | undefined;
+    try { if (target) release = await this.d.stopOutputs?.(target, p.reason ?? 'Both palms out'); }
+    catch (e) { this.log(`[wire] release ${p.cardId}: ${(e as Error).message}`); release = { released: false }; }
+    const payload: WireStoppedPayload = { cardId: p.cardId, requestId: p.requestId, wiringId: epoch.wiringId, ok: true,
+      ...(release ? { releaseConfirmed: release.released } : {}),
+      reason: (release?.released === false ? release.reason ?? 'Wiring stopped. Device release was not confirmed; use Stop everything if needed.' : 'Wiring stopped. Ask Muse for another wiring.').slice(0, 200) };
+    reply(payload);
+    if (executor && executor !== from.deviceId) this.d.hub.sendToDevice(executor, 'wire.stopped', payload);
+    return payload;
   }
 
   /** Revoke only the departing requester's current jobs/programs; a newer requester keeps its authority. */
@@ -584,6 +625,7 @@ export class WireService {
     for (const id of cardId ? [cardId] : new Set([...this.active.keys(), ...this.jobs.keys()])) {
       this.active.delete(id);
       this.owners.delete(id);
+      this.epochs.delete(id);
       this.jobs.get(id)?.abort();
       this.jobs.delete(id);
     }
@@ -599,6 +641,7 @@ export class WireService {
     this.jobs.clear();
     this.active.clear();
     this.owners.clear();
+    this.epochs.clear();
   }
 }
 

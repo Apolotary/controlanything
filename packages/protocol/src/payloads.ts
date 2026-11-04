@@ -96,6 +96,8 @@ export type SessionClaimPayload = z.infer<typeof SessionClaimPayload>;
  */
 /** C->S (hmd). "What should my hands do?" — a chip, transcribed speech or typed text, for one armed or selected card. */
 export const WireRequestPayload = z.object({
+  /** Client ask epoch; new clients always provide it, older request senders remain compatible. */
+  requestId: Id.optional(),
   cardId: z.string().min(1).max(128),
   text: z.string().min(1).max(500),
   source: z.enum(['chip', 'voice', 'text']),
@@ -118,6 +120,7 @@ export type WireAction = z.infer<typeof WireAction>;
  * `codeDelta` appends streamed source while phase = writing; `code` replaces it (repairs, final text).
  */
 export const WireProgressPayload = z.object({
+  requestId: Id.optional(),
   cardId: z.string().min(1).max(128),
   wiringId: z.string().min(1).max(64),
   phase: z.enum(['writing', 'validating', 'dry-run', 'verifying', 'ready', 'failed']),
@@ -143,6 +146,7 @@ export type WireProgressPayload = z.infer<typeof WireProgressPayload>;
  * `control.event` with widgetId `wire:<actionId>` on this card; the server dispatches it through the driver.
  */
 export const WireReadyPayload = z.object({
+  requestId: Id.optional(),
   cardId: z.string().min(1).max(128),
   wiringId: z.string().min(1).max(64),
   code: z.string().min(1).max(8192),
@@ -155,6 +159,24 @@ export const WireReadyPayload = z.object({
   needs: z.array(z.enum(['right', 'left', 'screen'])).max(3),
 });
 export type WireReadyPayload = z.infer<typeof WireReadyPayload>;
+
+/** C->S. Stop this request's wiring only; keep the verified device selected/armed for a new ask. */
+export const WireStopPayload = z.object({
+  cardId: z.string().min(1).max(128), requestId: Id,
+  /** Optional only while the first progress message has not supplied the server wiring ID yet. */
+  wiringId: z.string().min(1).max(64).optional(), reason: z.string().max(160).optional(),
+});
+export type WireStopPayload = z.infer<typeof WireStopPayload>;
+
+/** S->requester and its exact device executor on success; never a global Stop or automatic replay. */
+export const WireStoppedPayload = z.object({
+  cardId: z.string().min(1).max(128), requestId: Id,
+  wiringId: z.string().min(1).max(64).optional(), ok: z.boolean(),
+  /** ok describes revoked program authority; this separately confirms the known held-output release. */
+  releaseConfirmed: z.boolean().optional(), reason: z.string().max(200).optional(),
+});
+export type WireStoppedPayload = z.infer<typeof WireStoppedPayload>;
+
 
 /**
  * S->C. Another socket of the same headset identity claimed the session (Quest Browser opened the app in a
@@ -683,6 +705,8 @@ export type UiSpecPayload = z.infer<typeof UiSpecPayload>;
  * hack id for hack-bound controls; a 2D client fires an action hack with {widgetId: hackId, value: true, phase: "end"}.
  */
 export const ControlEventPayload = z.object({
+  /** Generated WIRE outputs carry their actual program epoch; legacy non-WIRE controls omit it. */
+  requestId: Id.optional(), wiringId: z.string().min(1).max(64).optional(),
   widgetId: z.string().min(1).max(64),
   value: ControlValue,
   /** when the gesture happened, sender clock, epoch ms */

@@ -10,8 +10,9 @@ import { Dispatcher } from './dispatch';
 import { ControlRouter } from './control';
 import { StepLog } from './steps';
 import { TargetStore } from './targets';
-import { chunkCode, libraryDriverNote, deviceHints, extractCodeSoFar, SIGNALS_API, WireService, wireHack, wireMessages, wireRateHz, writeWiring, type WireDeps, type WireEmit } from './wire';
+import { chunkCode, libraryDriverNote, deviceHints, extractCodeSoFar, SIGNALS_API, WireService, wireHack, wireMessages, wireRateHz, writeWiring, type WireDeps, type WireServiceDeps, type WireEmit } from './wire';
 import { buildWiring, fixtureWireDraft, parseBriefs, templateWiring, type WireDraftData } from './wire-fixture';
+import { isDifferentConnectedOp1ControlRequest } from './connected-peripheral';
 import { dryRun, validateWiring } from './wire-check';
 
 const set = (id: string, label: string, n: number): DriverAction => ({ actionId: id, label, kind: 'set', range: { min: 0, max: 127, step: 1 }, curve: 'linear', encode: { kind: 'midi', msg: 'cc', channel: 1, number: n, value: '$value' }, expect: { sense: 'camera', effect: 'any' } });
@@ -351,9 +352,9 @@ describe('rates and hacks', () => {
 });
 
 // --- the service: request -> progress -> ready -> control events -> exec ---------------------------------------------------------
-function service(over: { spark?: MuseChat; verifyFails?: string[]; driver?: Driver; ensure?: 'ok' | 'fail' } = {}) {
+function service(over: { spark?: MuseChat; verifyFails?: string[]; driver?: Driver; ensure?: 'ok' | 'fail'; stopOutputs?: WireServiceDeps['stopOutputs'] } = {}) {
   const sent: { type: string; payload: Record<string, unknown> }[] = [];
-  const hub = { broadcast: vi.fn((type: string, payload: Record<string, unknown>) => { sent.push({ type, payload }); return 1; }), sendToDevice: vi.fn(() => 1) };
+  const hub = { broadcast: vi.fn((type: string, payload: Record<string, unknown>) => { sent.push({ type, payload }); return 1; }), sendToDevice: vi.fn((_device: string, _type: string, _payload: Record<string, unknown>) => 1) };
   const targets = new TargetStore(hub as never);
   const t = targets.create({ cardId: 'visual-synth-mac', state: 'armed', armed: true, driver: over.driver ?? base,
     verification: { cc71: 'pass', cc21: 'pass', pattern0: 'pass' }, card: { cardId: 'visual-synth-mac', name: 'ControlAnything Visual Synth', maker: 'x', model: 'x', category: 'synthesizer', confidence: 1, protocols: ['midi'], evidence: [] } });
@@ -362,13 +363,120 @@ function service(over: { spark?: MuseChat; verifyFails?: string[]; driver?: Driv
     hub: hub as never, targets, spark: over.spark ?? fakeChat([draft(TOUCH)]), chunkDelayMs: 0, log: () => {},
     ensureDriver: async () => (over.ensure === 'fail' ? { ok: false, reason: 'Pinch the device first.' } : { ok: true, note: 'driver from your library, written by muse-spark-1.3' }),
     prepareDriver: (target) => { const e = extendWithTouch(target.driver!, MANIFEST.controls); target.driver = e.driver; return e.driver; },
-    verifyActions: verify as never, cardOfSpec: (id) => (id === 'spec-1' ? 'visual-synth-mac' : undefined),
+    verifyActions: verify as never, stopOutputs: over.stopOutputs, cardOfSpec: (id) => (id === 'spec-1' ? 'visual-synth-mac' : undefined),
   });
   const done = async (type: string, timeout = 3000) => { const end = Date.now() + timeout; while (Date.now() < end) { const m = sent.find((x) => x.type === type); if (m) return m; await new Promise((r) => setTimeout(r, 5)); } throw new Error(`no ${type}; got ${sent.map((s) => s.type + ':' + s.payload.phase).join(',')}`); };
   return { svc, sent, hub, targets, t, verify, done };
 }
 
 describe('WireService', () => {
+  it('declines a connected physical OP-1 request on the visual card before any model, template or action verification', async () => {
+    const spark = fakeChat([]); const { svc, sent, verify, t } = service({ spark });
+    svc.request({ cardId: t.cardId, requestId: 'op1-wrong-target', text: 'I have an OP-1 Field connected to this laptop. Can you create gesture control for it?', source: 'voice' }, { deviceId: 'quest' });
+    await vi.waitFor(() => expect(sent.some(m => m.payload.phase === 'failed')).toBe(true));
+    expect(spark.chatJson).not.toHaveBeenCalled(); expect(verify).not.toHaveBeenCalled(); expect(svc.activeCards()).toEqual([]);
+    const failed = sent.find(m => m.payload.phase === 'failed')!;
+    expect(failed.payload.model).toBe('not-called');
+    expect(String(failed.payload.note)).toContain('Select the OP-1 in Annotate. Use Correct device');
+    expect(sent.some(m => m.type === 'wire.ready' || m.payload.source === 'template' || m.payload.codeDelta)).toBe(false);
+  });
+
+  it('retires and releases an old visual program before declining a different physical target', async () => {
+    const spark = fakeChat([draft(TOUCH)]), stopOutputs = vi.fn(async () => ({ released: true }));
+    const { svc, done, sent, t } = service({ spark, stopOutputs });
+    svc.request({ cardId: t.cardId, requestId: 'visual-first', text: 'Touch the water', source: 'chip' }, { deviceId: 'quest' });
+    const ready = await done('wire.ready');
+    svc.request({ cardId: t.cardId, requestId: 'physical-next', text: 'Control my OP-1 Field connected to the paired Mac with my hands.', source: 'voice' }, { deviceId: 'quest' });
+    await vi.waitFor(() => expect(sent.some(m => m.payload.requestId === 'physical-next' && m.payload.phase === 'failed')).toBe(true));
+    expect(stopOutputs).toHaveBeenCalledTimes(1); expect(spark.chatJson).toHaveBeenCalledTimes(1);
+    expect(svc.activeCards()).toEqual([]); expect(t.armed).toBe(true);
+    expect(svc.resolve({ widgetId: 'wire:cc24', requestId: 'visual-first', wiringId: String(ready.payload.wiringId) })).toHaveProperty('reason');
+  });
+
+  it('preserves requests for OP-1-inspired visuals and for an actually selected OP-1', async () => {
+    const inspired = service({ spark: fakeChat([draft(TOUCH)]) });
+    inspired.svc.request({ cardId: inspired.t.cardId, text: 'Create OP-1-inspired gesture controls for this Visual Synth. My OP-1 Field is connected to this Mac.', source: 'voice' }, { deviceId: 'quest' });
+    await inspired.done('wire.ready'); expect(inspired.svc.activeCards()).toEqual([inspired.t.cardId]); inspired.svc.clear();
+    const physicalDriver: Driver = { ...base, executor: { deviceId: 'mac', port: 'OP-1 Field' }, actions: [{ ...set('cc50', 'Attack', 50), expect: { sense: 'audio', effect: 'any' } }] };
+    const physical = service({ driver: physicalDriver, spark: fakeChat([draft("if (s.right) out.set('cc50', s.right.height * 127);", { title: 'Hand attack', explanation: 'Hand height controls attack.', needs: ['right'] })]) });
+    physical.t.card = { ...physical.t.card!, name: 'OP-1 Field', maker: 'Teenage Engineering', model: 'OP-1 Field' };
+    physical.svc.request({ cardId: physical.t.cardId, text: 'I have an OP-1 Field connected to this Mac. Create gesture control for it.', source: 'voice' }, { deviceId: 'quest' });
+    await physical.done('wire.ready'); expect(physical.svc.activeCards()).toEqual([physical.t.cardId]); physical.svc.clear();
+  });
+
+  it('keeps the different-device guard narrow to an explicit physical destination through a selected host', () => {
+    const selected = { name: 'ControlAnything Visual Synth', category: 'synthesizer', port: 'ce-visual-synth' };
+    expect(isDifferentConnectedOp1ControlRequest('What is an OP-1 Field?', selected)).toBe(false);
+    expect(isDifferentConnectedOp1ControlRequest('Make water look like my OP-1 Field connected to my Mac.', selected)).toBe(false);
+    expect(isDifferentConnectedOp1ControlRequest('Create hand controls for this Visual Synth while my OP-1 Field is connected to my Mac.', selected)).toBe(false);
+    expect(isDifferentConnectedOp1ControlRequest('Control my OP-1 Field connected by USB to the Mac like a theremin.', selected)).toBe(true);
+  });
+
+  it('scoped stop preserves the driver/arm and sends only the matching requester/executor a stopped epoch', async () => {
+    const stopOutputs = vi.fn(async () => ({ released: true }));
+    const { svc, done, hub, sent, t } = service({ stopOutputs });
+    svc.request({ cardId: t.cardId, requestId: 'ask-1', text: 'Touch the water', source: 'chip' }, { deviceId: 'quest' });
+    const ready = await done('wire.ready');
+    const wiringId = String(ready.payload.wiringId);
+    expect(ready.payload.requestId).toBe('ask-1');
+    const driver = t.driver;
+    const result = await svc.stop({ cardId: t.cardId, requestId: 'ask-1', wiringId }, { deviceId: 'quest' });
+    expect(result).toMatchObject({ ok: true, requestId: 'ask-1', wiringId, releaseConfirmed: true });
+    expect(t.armed).toBe(true); expect(t.driver).toBe(driver); expect(stopOutputs).toHaveBeenCalledTimes(1);
+    expect(svc.readyFor(t.cardId)).toBeUndefined();
+    expect(svc.resolve({ widgetId: 'wire:cc24', requestId: 'ask-1', wiringId })).toHaveProperty('reason');
+    expect(hub.sendToDevice.mock.calls.filter(c => c[1] === 'wire.stopped').map(c => c[0])).toEqual(['quest', 'mac']);
+    expect(sent.some(m => m.type === 'wire.stopped' || m.type === 'panic')).toBe(false);
+    svc.replayTo('late-quest');
+    expect(hub.sendToDevice.mock.calls.some(c => c[0] === 'late-quest' && c[1] === 'wire.ready')).toBe(false);
+  });
+
+  it('rejects a foreign owner, stale request epoch or wrong wiring ID without cancelling the current program', async () => {
+    const stopOutputs = vi.fn(async () => ({ released: true }));
+    const { svc, done, t } = service({ stopOutputs });
+    svc.request({ cardId: t.cardId, requestId: 'ask-current', text: 'Touch the water', source: 'chip' }, { deviceId: 'quest' });
+    const ready = await done('wire.ready'); const wiringId = String(ready.payload.wiringId);
+    for (const [requestId, id, owner] of [['ask-current', wiringId, 'other-headset'], ['ask-old', wiringId, 'quest'], ['ask-current', 'old-wiring', 'quest']]) {
+      expect((await svc.stop({ cardId: t.cardId, requestId, wiringId: id }, { deviceId: owner })).ok).toBe(false);
+      expect(svc.readyFor(t.cardId)?.requestId).toBe('ask-current');
+    }
+    expect(stopOutputs).not.toHaveBeenCalled();
+    expect(svc.resolve({ widgetId: 'wire:cc24', requestId: 'ask-old', wiringId })).toHaveProperty('reason');
+    expect(svc.resolve({ widgetId: 'wire:cc24', requestId: 'ask-current', wiringId })).toHaveProperty('hack');
+    svc.clear();
+  });
+
+  it('stops a pending first request and cannot publish its late ready after Ask again', async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const spark = fakeChat([draft(TOUCH)]), reply = fakeChat([draft(TOUCH)]);
+    vi.mocked(spark.chatJson).mockImplementationOnce(async (...args) => { await waiting; return reply.chatJson(...args); });
+    const { svc, sent, t } = service({ spark });
+    svc.request({ cardId: t.cardId, requestId: 'pending-ask', text: 'Touch the water', source: 'chip' }, { deviceId: 'quest' });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    expect((await svc.stop({ cardId: t.cardId, requestId: 'pending-ask' }, { deviceId: 'quest' })).ok).toBe(true);
+    svc.request({ cardId: t.cardId, requestId: 'new-ask', text: 'Touch the water', source: 'chip' }, { deviceId: 'quest' });
+    await vi.waitFor(() => expect(svc.readyFor(t.cardId)?.requestId).toBe('new-ask'));
+    release(); await new Promise(resolve => setTimeout(resolve, 20));
+    expect(sent.filter(m => m.type === 'wire.ready').map(m => m.payload.requestId)).toEqual(['new-ask']);
+    expect(svc.resolve({ widgetId: 'wire:cc24', requestId: 'pending-ask', wiringId: String(sent.find(m => m.payload.requestId === 'pending-ask')?.payload.wiringId) })).toHaveProperty('reason');
+    svc.clear();
+  });
+
+  it('a delayed stopped acknowledgement cannot clear the next accepted request', async () => {
+    let finishRelease!: () => void;
+    const release = new Promise<void>(resolve => { finishRelease = resolve; });
+    const { svc, done, t } = service({ spark: fakeChat([draft(TOUCH), draft(TOUCH)]), stopOutputs: async () => { await release; return { released: true }; } });
+    svc.request({ cardId: t.cardId, requestId: 'first', text: 'Touch the water', source: 'chip' }, { deviceId: 'quest' });
+    const ready = await done('wire.ready');
+    const stopped = svc.stop({ cardId: t.cardId, requestId: 'first', wiringId: String(ready.payload.wiringId) }, { deviceId: 'quest' });
+    expect(svc.readyFor(t.cardId)).toBeUndefined();
+    svc.request({ cardId: t.cardId, requestId: 'second', text: 'Touch the water', source: 'chip' }, { deviceId: 'quest' });
+    await vi.waitFor(() => expect(svc.readyFor(t.cardId)?.requestId).toBe('second'));
+    finishRelease(); expect((await stopped).requestId).toBe('first');
+    expect(svc.readyFor(t.cardId)?.requestId).toBe('second'); svc.clear();
+  });
+
   it('a disconnected owner revokes its pending request before any late ready can arrive', async () => {
     let release!: () => void;
     const waiting = new Promise<void>(resolve => { release = resolve; });
