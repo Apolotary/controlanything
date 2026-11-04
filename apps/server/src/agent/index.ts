@@ -36,7 +36,7 @@ import { fixtureDriverDraft, WONDER_MODEL } from './drive';
 import { macLocalInfo, type Roster } from './executors';
 import { cropJpeg, fixtureDeviceCard, identify, type IdentifyResult } from './identify';
 import { decodeJpeg } from '../oracle/image';
-import { demoMode, prefetchVisualDriver, runLoop } from './loop';
+import { demoMode, prefetchEnabled, prefetchVisualDriver, runLoop } from './loop';
 import { CANCELLED_GUIDANCE, type TimedPhase } from './guidance';
 import { subscribeForge } from './forgeBridge';
 import { restoreSavedForge } from './restoreForge';
@@ -1097,8 +1097,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     enforcePresence();
     publishTags();
     continueVisualIntent();
-    // CE_DEMO: Muse writes the Mac visual synth's driver as soon as a Mac advertises it, so a pinch goes straight to verify.
-    if (demoMode() && process.env.CE_PREFETCH !== '0') for (const host of visualSynthHosts(hub.devices())) {
+    // Opt-in rehearsal only (CE_PREFETCH=1): Muse writes the Mac visual synth's driver as soon as a Mac advertises it. By default
+    // nothing is asked of Muse before the wearer pinches the Mac, and the hand-to-device wiring only after they ask (wire.request).
+    if (prefetchEnabled()) for (const host of visualSynthHosts(hub.devices())) {
       // Controls are prefetched only for a first setup: a saved, verified card keeps its own forge entry untouched.
       const saved = targets.get(VISUAL_SYNTH_CARD_ID);
       const running = setups.has(VISUAL_SYNTH_CARD_ID);

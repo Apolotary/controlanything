@@ -75,7 +75,10 @@ const LEARN_WINDOW_MS = 10_000;
 /** The second pass (after the library codes missed) gives a slower hand more time. */
 const LEARN_WINDOW_RETRY_MS = 15_000;
 
-/** CE_DEMO prefetch: the visual synth driver Muse writes as soon as a Mac advertises the renderer, used once. */
+/** CE_PREFETCH=1 (rehearsal only; never the default): Muse writes the visual synth driver as soon as a Mac advertises the renderer. */
+export const prefetchEnabled = (): boolean => process.env.CE_PREFETCH === '1';
+
+/** The prefetched visual synth driver (opt-in), used once. */
 type VisualDraft = { at: number; result: NonNullable<Awaited<ReturnType<typeof drive>>>; forged?: Promise<Awaited<ReturnType<Forge['generate']>> | undefined> };
 type DraftEntry = { at: number; done: boolean; ok?: boolean; used?: boolean; result: Promise<VisualDraft | undefined> };
 const visualDrafts = new Map<string, DraftEntry>();
