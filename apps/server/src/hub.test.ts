@@ -216,8 +216,8 @@ describe('pairing over WebSocket and relay', () => {
     expect(row.connections.map((c: { clientId: string; state: string }) => [c.clientId, c.state]).sort()).toEqual([[w1.clientId, 'superseded'], [w2.clientId, 'owner']].sort());
     expect(row.duplicateRoles).toEqual([]);
     expect(await oldTab.closed(3000)).toBe(4409);
-    // an explicit claim from another open socket of the same headset takes over again
-    const { c: third } = await connect(h, quest.deviceToken);
+    // a newer (visible) tab takes over again
+    const { c: third } = await connect(h, quest.deviceToken, { foreground: true });
     expect((await newTab.next('session.superseded')).payload.reason).toBe('newer-tab');
     expect(await newTab.closed(3000)).toBe(4409);
     report = await json(await fetch(`${h.base}/api/clients`));
@@ -255,6 +255,25 @@ describe('pairing over WebSocket and relay', () => {
     expect((await alone.next('session.superseded')).payload.reason).toBe('newer-tab');
     expect(front.has('session.superseded')).toBe(false);
   });
+
+  it('two tabs of an old headset build (no visibility, reconnect after 4409) settle on one owner instead of ping-ponging', async () => {
+    const h = await start();
+    const quest = await pairLocally(h, 'Quest 3', 'quest');
+    const { c: a } = await connect(h, quest.deviceToken);
+    const { c: b, welcome: wb } = await connect(h, quest.deviceToken);
+    expect((await a.next('session.superseded')).payload.reason).toBe('newer-tab');
+    expect(await a.closed(3000)).toBe(4409);
+    // the old build of tab A reconnects by itself: it must not kick B
+    for (let i = 0; i < 3; i++) {
+      const again = await Client.open(h.wsUrl);
+      again.send('hello', { deviceToken: quest.deviceToken });
+      expect((await again.next('session.superseded')).payload.reason).toBe('other-tab-active');
+      expect(await again.closed(3000)).toBe(4409);
+    }
+    expect(b.has('session.superseded')).toBe(false);
+    const owner = h.ctx.hub.clients().devices.find((d) => d.deviceId === quest.deviceId)!.connections.filter((r) => r.state === 'owner');
+    expect(owner.map((r) => r.clientId)).toEqual([wb.clientId]);
+  }, 20_000);
 
   it('refuses invalid, unauthenticated and server-only messages with log errors', async () => {
     const h = await start();

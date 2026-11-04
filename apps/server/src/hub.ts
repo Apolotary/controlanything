@@ -50,6 +50,11 @@ export const CLOSE_SUPERSEDED = 4409;
 export const SUPERSEDE_GRACE_MS = 500;
 /** Roles that run one live socket per deviceId (the newest claim wins). Companion tabs elect an executor themselves. */
 const SINGLE_INSTANCE_ROLES = new Set<Role>(['hmd']);
+/**
+ * Builds before single instance reconnect after a 4409 close and report no visibility. Such a hello within this long
+ * of the device's last supersede is that tab bouncing back, so it loses instead of kicking the tab in use (no ping-pong).
+ */
+const BOUNCE_MS = 15_000;
 
 export interface Connection {
   readonly clientId: string;
@@ -119,6 +124,8 @@ export class Hub {
   /** deviceId -> clientId of the socket that owns a single-instance (hmd) session */
   private readonly owners = new Map<string, string>();
   private readonly closeTimers = new Set<ReturnType<typeof setTimeout>>();
+  /** deviceId -> last supersede (and how many bounces were refused since the last log line) */
+  private readonly lastSupersede = new Map<string, { at: number; bounces: number; loggedAt: number; reason: string }>();
   dropped = 0;
   superseded = 0;
 
@@ -395,9 +402,12 @@ export class Hub {
     // Before welcome/presence: the presence this hello triggers already counts only the headset socket in use.
     if (this.singleInstance(c) && this.owners.get(device.deviceId) !== c.clientId) {
       const owner = this.ownerOf(device.deviceId);
-      // A hidden tab (or an older build, next to a tab that reports its visibility) does not take over a live session.
-      if (owner && owner !== c && (p.foreground === false || (p.foreground === undefined && owner.foreground === true))) {
-        this.supersede(c, owner, `hello (${p.foreground === false ? 'hidden tab' : 'no visibility reported'})`, 'other-tab-active');
+      // A hidden tab does not take over a live session; nor does an older build (no visibility reported) next to a tab
+      // that reports its visibility, or one that is reconnecting right after it was superseded.
+      const recent = this.lastSupersede.get(device.deviceId);
+      const bounce = p.foreground === undefined && !!recent && Date.now() - recent.at < BOUNCE_MS;
+      if (owner && owner !== c && (p.foreground === false || (p.foreground === undefined && (owner.foreground === true || bounce)))) {
+        this.supersede(c, owner, `hello (${p.foreground === false ? 'hidden tab' : bounce ? 'reconnect right after being superseded' : 'no visibility reported'})`, 'other-tab-active');
         return;
       }
       this.claim(c, 'hello');
@@ -467,7 +477,15 @@ export class Hub {
     old.superseded = at;
     this.superseded++;
     this.send(old, 'session.superseded', { reason, at, graceMs: SUPERSEDE_GRACE_MS });
-    this.log(`[hub] ${old.deviceId} ${old.role} socket ${old.clientId} (${((at - old.connectedAt) / 1000).toFixed(1)} s old) superseded (${reason}) by ${by.clientId} via ${via}; closing in ${SUPERSEDE_GRACE_MS} ms`);
+    const deviceId = old.deviceId!;
+    const prev = this.lastSupersede.get(deviceId);
+    // One line per refused reconnect would be one per second from an old tab's reconnect loop: log once per 30 s.
+    const quiet = reason === 'other-tab-active' && prev?.reason === reason && at - prev.loggedAt < 30_000;
+    this.lastSupersede.set(deviceId, { at, reason, bounces: quiet ? prev!.bounces + 1 : 0, loggedAt: quiet ? prev!.loggedAt : at });
+    if (!quiet) {
+      const extra = prev?.bounces ? ` (+${prev.bounces} more refused in the last 30 s: an old tab keeps reconnecting; close it)` : '';
+      this.log(`[hub] ${deviceId} ${old.role} socket ${old.clientId} (${((at - old.connectedAt) / 1000).toFixed(1)} s old) superseded (${reason}) by ${by.clientId} via ${via}; closing in ${SUPERSEDE_GRACE_MS} ms${extra}`);
+    }
     const close = setTimeout(() => {
       this.closeTimers.delete(close);
       if (old.ws.readyState === WebSocket.CLOSED) return;
