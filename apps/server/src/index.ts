@@ -7,6 +7,12 @@ import { getAgent } from './agent';
 import { resolveRemoConfig, startRemoBridge } from './devices/remo';
 import { resolveOsmoConfig, startOsmoBridge } from './devices/osmo/bridge';
 
+const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
+if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 12)) {
+  console.error(`ControlAnything needs Node 22.12 or newer (you have v${process.versions.node}). https://nodejs.org`);
+  process.exit(1);
+}
+
 const envFiles = loadDotEnv();
 const config = loadConfig(process.env);
 const ctx = createContext(config);

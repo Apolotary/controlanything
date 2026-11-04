@@ -187,6 +187,8 @@ export class BleakGimbalLink implements GimbalLink {
     return new Promise((resolve, reject) => {
       let settled = false;
       const proc = spawn(cmd, full, { stdio: ['pipe', 'pipe', 'pipe'] });
+      // A write racing the helper's exit must not raise an unhandled EPIPE and crash the server.
+      proc.stdin.on('error', () => {});
       this.proc = proc;
       const fail = (why: string) => {
         if (!settled) {
@@ -316,18 +318,25 @@ h1{font-size:18px;font-weight:600;margin:0 0 6px}p{color:#94a3b8;margin:0 0 18px
 <button id="b">Connect gimbal</button> <button id="a" style="background:transparent;color:#94a3b8;border:1px solid rgba(255,255,255,.16)">Show all devices</button><div id="s">idle</div></main><script>
 const S="${OSMO_SERVICE_UUID}",N="${OSMO_NOTIFY_UUID}",W="${OSMO_WRITE_UUID}";
 const s=document.getElementById('s');const say=t=>s.textContent=t;
-let ws,wc,q=Promise.resolve();
-function pipe(){ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+${JSON.stringify(wsPath)});ws.binaryType='arraybuffer';
-ws.onmessage=e=>{const d=new Uint8Array(e.data);q=q.then(async()=>{for(let i=0;i<d.length;i+=20){const c=d.slice(i,i+20);
+let ws,wc,q=Promise.resolve(),dev,retry=0;
+function pipe(name){const my=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+${JSON.stringify(wsPath)});ws=my;my.binaryType='arraybuffer';
+my.onmessage=e=>{const d=new Uint8Array(e.data);q=q.then(async()=>{for(let i=0;i<d.length;i+=20){const c=d.slice(i,i+20);
 if(wc.properties.writeWithoutResponse)await wc.writeValueWithoutResponse(c);else await wc.writeValue(c);}}).catch(x=>say('write failed: '+x.message));};
-ws.onclose=()=>say('server pipe closed; reload to reconnect');}
-const go=all=>async()=>{try{
-const dev=await navigator.bluetooth.requestDevice(all?{acceptAllDevices:true,optionalServices:[S]}:{filters:[{services:[S]},{namePrefix:'OM'},{namePrefix:'Osmo'},{namePrefix:'DJI'}],optionalServices:[S]});
-say('connecting to '+(dev.name||'gimbal')+'…');const g=await dev.gatt.connect();const sv=await g.getPrimaryService(S);
+my.onopen=()=>{my.send(JSON.stringify({hello:name}));say('connected: '+name+'\\nleave this tab open');};
+my.onclose=()=>{if(ws!==my||!dev||!dev.gatt.connected)return;say('server restarting · reconnecting…');setTimeout(()=>{if(ws===my&&dev&&dev.gatt.connected)pipe(name);},2000);};}
+async function attach(){const name=dev.name||'DJI gimbal';say('connecting to '+name+'…');
+const g=await dev.gatt.connect();const sv=await g.getPrimaryService(S);
 const nc=await sv.getCharacteristic(N);wc=await sv.getCharacteristic(W);await nc.startNotifications();
-pipe();ws.onopen=()=>{ws.send(JSON.stringify({hello:dev.name||'DJI gimbal'}));say('connected: '+(dev.name||'gimbal')+'\\nleave this tab open');};
-nc.addEventListener('characteristicvaluechanged',e=>{if(ws&&ws.readyState===1)ws.send(new Uint8Array(e.target.value.buffer));});
-dev.addEventListener('gattserverdisconnected',()=>{say('gimbal disconnected');ws&&ws.close();});
+nc.addEventListener('characteristicvaluechanged',e=>{const v=e.target.value;if(ws&&ws.readyState===1)ws.send(new Uint8Array(v.buffer,v.byteOffset,v.byteLength));});
+retry=0;pipe(name);}
+async function reconnect(){if(!dev)return;ws&&ws.close();
+for(retry=1;retry<=30&&dev&&!dev.gatt.connected;retry++){say('gimbal disconnected · reconnecting ('+retry+')…');
+await new Promise(r=>setTimeout(r,Math.min(10000,1500*retry)));try{await attach();return;}catch(x){}}
+if(dev&&!dev.gatt.connected)say('gimbal disconnected · switch it on, then press Connect gimbal');}
+const go=all=>async()=>{try{
+dev=await navigator.bluetooth.requestDevice(all?{acceptAllDevices:true,optionalServices:[S]}:{filters:[{services:[S]},{namePrefix:'OM'},{namePrefix:'Osmo'},{namePrefix:'DJI'}],optionalServices:[S]});
+dev.addEventListener('gattserverdisconnected',()=>{void reconnect();});
+await attach();
 }catch(x){say('not connected: '+x.message);}};
 document.getElementById('b').onclick=go(false);document.getElementById('a').onclick=go(true);
 </script></body></html>`;
@@ -415,9 +424,15 @@ export class WebBluetoothGimbalLink implements GimbalLink {
         for (const cb of this.closed) cb('the Chrome tab closed or the gimbal disconnected');
       });
     });
+    const server = this.server;
     return new Promise((resolve, reject) => {
-      this.server!.once('error', reject);
-      this.server!.listen(port, '127.0.0.1', () => resolve());
+      server.once('error', (e) => {
+        // A busy port must not leave a half-open server that the next retry mistakes for a listening one.
+        this.wss?.close(); this.wss = undefined;
+        server.close(); if (this.server === server) this.server = undefined;
+        reject(e);
+      });
+      server.listen(port, '127.0.0.1', () => resolve());
     });
   }
 

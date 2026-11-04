@@ -5,7 +5,13 @@ import type { ConnectorAction } from './connector-host';
 
 export const InstrumentDesign = z.object({
   style: z.object({ accent: z.string().regex(/^#[0-9a-fA-F]{6}$/), mood: z.enum(['calm', 'playful', 'electric']).optional() }),
-  widgets: z.array(z.object({
+  // Models sometimes name the binding actionId/action_id: accept those as `action` instead of silently dropping them.
+  widgets: z.array(z.preprocess((w) => {
+    if (!w || typeof w !== 'object') return w;
+    const o = w as Record<string, unknown>;
+    return o.action === undefined && o.actions === undefined && (typeof o.actionId === 'string' || typeof o.action_id === 'string')
+      ? { ...o, action: o.actionId ?? o.action_id } : o;
+  }, z.object({
     type: z.enum(['keys', 'pads', 'xy-orb', 'fader', 'knob', 'wheel', 'dimmer-ring', 'lever', 'button', 'toggle']),
     label: z.string().min(1).max(16),
     action: z.string().min(1).max(41).optional(),
@@ -13,7 +19,7 @@ export const InstrumentDesign = z.object({
     color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
     count: z.number().int().min(1).max(12).optional(),
     range: z.object({ min: z.number(), max: z.number() }).optional(),
-  })).min(1).max(8),
+  }))).min(1).max(8),
   visualizer: z.object({ kind: z.enum(['notes', 'trail', 'pulse', 'ripple']), actions: z.array(z.string().min(1).max(41)).min(1).max(16) }).optional(),
 });
 export type InstrumentDesign = z.infer<typeof InstrumentDesign>;
@@ -26,7 +32,7 @@ export function compileInstrument(design: InstrumentDesign, actions: ConnectorAc
   for (const [i, w] of design.widgets.entries()) {
     const ids = w.actions ?? (w.action ? [w.action] : []);
     const aa = ids.map(id => byId.get(id));
-    if (!ids.length || aa.some(a => !a)) { issues.push(`${w.label}: use deployed actions only (${ids.join(', ') || 'no action supplied'}).`); continue; }
+    if (!ids.length || aa.some(a => !a)) { issues.push(`${w.label}: ${ids.length ? `use deployed actions only (${ids.join(', ')})` : 'set "action" to a deployed action id'} (deployed: ${[...byId.keys()].join(', ')}).`); continue; }
     const a = aa[0]!;
     const xy = w.type === 'xy-orb', bank = w.type === 'keys' || w.type === 'pads';
     if (xy && (ids.length !== 2 || aa.some(a => a?.kind !== 'set'))) { issues.push(`${w.label}: xy-orb needs exactly two set actions.`); continue; }

@@ -15,7 +15,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright-core';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const SCREENS = join(ROOT, 'research/screens/2026-11-04-muse-agent');
+// LIVE=1 runs the same path against live Muse Spark with the key from .env (never printed); default is FIXTURE.
+const LIVE = process.env.LIVE === '1';
+const KEY = LIVE ? (await import('node:fs')).readFileSync(join(ROOT, '.env'), 'utf8').split('\n').find((l) => l.startsWith('MODEL_API_KEY='))?.slice(14).trim().replace(/^["']|["']$/g, '') ?? '' : '';
+const SCREENS = join(ROOT, LIVE ? 'research/screens/2026-11-05-live-agent' : 'research/screens/2026-11-04-muse-agent');
 const PORT = Number(process.env.PORT || 8798);
 const BASE = `http://127.0.0.1:${PORT}`;
 const ASK = process.env.ASK || 'Give me knobs for ripples, warp and zoom';
@@ -26,7 +29,7 @@ try {
   await mkdir(SCREENS, { recursive: true });
   const dataDir = await mkdtemp(join(tmpdir(), 'ce-e2e-agent-'));
   server = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], { cwd: join(ROOT, 'apps/server'), stdio: ['ignore', 'pipe', 'pipe'], env: {
-    ...process.env, HTTP_PORT: String(PORT), HTTPS_PORT: '0', HTTP_HOST: '127.0.0.1', PUBLIC_HOST: '127.0.0.1', CE_DATA_DIR: dataDir, CE_AGENT_WORKSPACE: join(dataDir, 'muse-agent'), MODEL_MODE: 'fixture', MODEL_API_KEY: '',
+    ...process.env, HTTP_PORT: String(PORT), HTTPS_PORT: '0', HTTP_HOST: '127.0.0.1', PUBLIC_HOST: '127.0.0.1', CE_DATA_DIR: dataDir, CE_AGENT_WORKSPACE: join(dataDir, 'muse-agent'), MODEL_MODE: LIVE ? 'live' : 'fixture', MODEL_API_KEY: KEY,
     CE_OSMO: 'mock', REMO_SEND: '0', CE_DEMO: '1', CE_MAC_SILENT: '1', CE_MAC_LOCAL: '0', CE_REMO: '0', REMO_HOST: '', CE_TRUST_FIRST_DEVICE: '1', CE_TRUST_LOOPBACK: '1', CE_CONSOLE_APPROVE: '0', MUSE_REPLAY: '1', GEN3D_SKIN: '0', VITEST: '' } });
   for (const s of [server.stdout, server.stderr]) s.on('data', (c) => { log = (log + c).slice(-200_000); });
   await until('server', () => log.includes('ControlAnything server '));

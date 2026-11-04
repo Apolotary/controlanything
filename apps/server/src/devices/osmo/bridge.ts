@@ -190,6 +190,8 @@ export class OsmoController {
     this.replies.delete(seq);
     const pkt = rotatePacket(to, 'absolute', durationMs, seq);
     this.seq = (this.seq + 1) & 0xffff || 1;
+    // Claim the send slot before the async write, so an aim arriving mid-write still waits its turn (10 Hz cap).
+    this.lastSendAt = Date.now();
     await this.link.write(pkt);
     this.lastSendAt = Date.now();
     this.move = { from, to: { ...to }, t0: this.lastSendAt, t1: this.lastSendAt + durationMs };
@@ -446,7 +448,16 @@ export async function startOsmoBridge(o: { config: OsmoConfig; serverBase: strin
   const controller = new OsmoController(link, { log });
   const bridge = new OsmoBridge({ serverBase: o.serverBase, register: o.register, controller, name: kind === 'mock' ? 'DJI Osmo Mobile (twin)' : 'DJI Osmo Mobile', tokenFile: join(o.dataDir, `osmo-bridge-${kind}.json`), log });
   await bridge.start();
+  // Reconnect for the whole server lifetime: a dropped link (gimbal asleep, BLE glitch, Chrome tab reloaded) is
+  // reopened, so pressing "Connect gimbal" again works without restarting the server.
+  let looping = false;
   const openLoop = async () => {
+    if (looping) return;
+    looping = true;
+    try { await openOnce(); } finally { looping = false; }
+  };
+  link.onClose(() => { setTimeout(() => void openLoop(), 1000); });
+  const openOnce = async () => {
     for (let attempt = 1; !controller.state.connected; attempt++) {
       try {
         await controller.open();

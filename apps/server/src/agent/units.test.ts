@@ -91,7 +91,7 @@ describe('rate limiter and dispatcher', () => {
   it('runs local ops through the Mac executor plan without a shell', async () => {
     expect(planLocal({ kind: 'local', op: 'volume', arg: 42 })).toEqual({ file: 'osascript', args: ['-e', 'set volume output volume 42'] });
     expect(planLocal({ kind: 'local', op: 'music', arg: 'next' })).toEqual({ file: 'osascript', args: ['-e', 'tell application "Music" to next track'] });
-    expect(planLocal({ kind: 'local', op: 'say', arg: 'hello; rm -rf /' })).toEqual({ file: 'say', args: ['hello; rm -rf /'] });
+    expect(planLocal({ kind: 'local', op: 'say', arg: 'hello; rm -rf /' })).toEqual({ file: 'say', args: ['--', 'hello; rm -rf /'] });
     expect(planLocal({ kind: 'local', op: 'torch', arg: true })).toMatchObject({ ok: false, error: 'unsupported' });
     const calls: string[][] = [];
     const mac = new MacLocalExecutor(async (f, a) => {
@@ -318,8 +318,8 @@ describe('say line, dry-run', () => {
   const line = 'make it brighter, but keep the note tail.';
 
   it('plans the exact say / volume / music commands without executing anything', () => {
-    expect(planLocal({ kind: 'local', op: 'say', arg: line })).toEqual({ file: 'say', args: [line] });
-    expect(planLocal({ kind: 'local', op: 'say', arg: { text: line, voice: 'ignored' } })).toEqual({ file: 'say', args: [line] });
+    expect(planLocal({ kind: 'local', op: 'say', arg: line })).toEqual({ file: 'say', args: ['--', line] });
+    expect(planLocal({ kind: 'local', op: 'say', arg: { text: line, voice: 'ignored' } })).toEqual({ file: 'say', args: ['--', line] });
     expect(planLocal({ kind: 'local', op: 'volume', arg: 0 })).toEqual({ file: 'osascript', args: ['-e', 'set volume output volume 0'] });
     expect(planLocal({ kind: 'local', op: 'volume', arg: 140 })).toEqual({ file: 'osascript', args: ['-e', 'set volume output volume 100'] });
     expect(planLocal({ kind: 'local', op: 'music', arg: 'pause' })).toEqual({ file: 'osascript', args: ['-e', 'tell application "Music" to pause'] });

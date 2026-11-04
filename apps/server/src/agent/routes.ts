@@ -68,7 +68,7 @@ export function agentRouter(ctx: ServerContext): express.Router {
   r.get('/connectors', (req, res) => {
     if (!harnessAccess(req, res)) return;
     const host = agent.connectorHost;
-    res.json({ agent: 'Muse coding agent (muse-spark-1.3 tools: bash, files, deploy, test)', mode: ctx.muse.mode, workspace: agent.agentWorkspace,
+    res.json({ agent: 'Muse coding agent (muse-spark-1.3 tools: bash, files, deploy, test)', engine: agent.agentEngine(), mode: ctx.muse.mode, workspace: agent.agentWorkspace,
       connectors: host.cards().map((cardId) => ({ cardId, ...host.info(cardId), actions: host.actions(cardId), logs: host.logs(cardId).slice(-40), wiring: agent.wireReady(cardId) ? { title: agent.wireReady(cardId)!.title, controls: agent.wireReady(cardId)!.controls ?? [] } : null })) });
   });
   /** Owner/localhost: one small, explicit gimbal move through the Osmo bridge (pan/tilt/nudge/recenter/stop). */

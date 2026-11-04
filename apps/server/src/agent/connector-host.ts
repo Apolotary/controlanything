@@ -76,6 +76,10 @@ export class ConnectorHost {
     /** Send one MIDI op through the companion; `done` gets the executor's ack. */
     send: (out: ConnectorOut, done: OpResult) => void;
     log?: (line: string) => void;
+    /** The card's live connector exited by itself (crash/exit), not through Stop or a redeploy. */
+    onExit?: (cardId: string, lastOutput: string) => void;
+    /** The connector acted on this Mac (mac.key/open/activate) and reported the result; failures reach the wearer. */
+    onMac?: (cardId: string, report: { what: string; ok: boolean; error?: string }) => void;
   }) {}
 
   /** Cards with a connector process (running or just exited). */
@@ -139,10 +143,13 @@ export class ConnectorHost {
     child.stdin!.on('error', () => {});
     const exited = new Promise<void>((resolve) => child.once('exit', (code, signal) => {
       run.exited = { code, signal };
+      // Died on its own while it was the card's live connector (not Stop/redeploy): tell the wiring.
+      const unexpected = this.running.get(cardId) === run && !run.terminating;
       // A connector's own exit must not spare forked helpers from Stop.
       this.terminate(run);
       push(`exited (${signal ?? `code ${code}`})`);
       this.o.log?.(`[connector] ${cardId} ${entry} exited (${signal ?? `code ${code}`})`);
+      if (unexpected) this.o.onExit?.(cardId, run.logs.slice(-3).join(' | ').slice(0, 160) || `exit ${signal ?? code}`);
       resolve();
     }));
     child.once('error', (e) => push(`spawn error: ${e.message}`));
@@ -161,6 +168,12 @@ export class ConnectorHost {
     if (!m || typeof m !== 'object') { push(line); return; }
     if (m.type === 'log') { push(String(m.text ?? '')); return; }
     if (m.type === 'ready') { run.ready = String(m.text ?? 'ready'); push(`ready ${run.ready}`); return; }
+    // The connector acted on the Mac itself (a key press, an opened page): its own report is the receipt.
+    if (m.type === 'mac') {
+      run.ops++; push(`${m.ok === false ? '✗' : '→'} mac ${String(m.what ?? '').slice(0, 120)}${m.ok === false && m.error ? `: ${String(m.error).slice(0, 200)}` : ''}`);
+      if (active) this.o.onMac?.(run.cardId, { what: String(m.what ?? '').slice(0, 120), ok: m.ok !== false, ...(m.ok === false && m.error ? { error: String(m.error).slice(0, 200) } : {}) });
+      return;
+    }
     if (m.type === 'midi') {
       const parsed = MidiOp.safeParse({ ...m.op, kind: m.op?.kind ?? 'midi' });
       if (typeof m.port !== 'string' || !m.port.trim() || m.port.length > 200 || !parsed.success
@@ -269,8 +282,11 @@ export class ConnectorHost {
     setTimeout(() => signal('SIGKILL'), 600).unref?.();
   }
 
-  stopAll(reason = 'stopped'): void {
+  stopAll(reason = 'stopped', immediate = false): void {
+    const runs = [...this.running.values()];
     for (const cardId of [...this.running.keys()]) this.stop(cardId, reason);
+    // Server shutdown: the delayed kill timers are unref'd and would never fire before exit.
+    if (immediate) for (const r of runs) { try { if (r.processGroup) process.kill(-r.processGroup, 'SIGKILL'); else r.child.kill('SIGKILL'); } catch { /* gone */ } }
   }
 }
 
@@ -288,23 +304,28 @@ export function describeMidi(op: MidiOp): string {
 export const CONNECTOR_SDK = `// ControlAnything connector runtime: the bridge between AR controls and your code.
 // The server runs your connector with \`node <entry>\` and talks to it over stdin/stdout (one JSON per line).
 import { createInterface } from 'node:readline';
+import { execFile } from 'node:child_process';
 const listeners = { set: [], trigger: [], stop: [] };
 const emit = (msg) => process.stdout.write(JSON.stringify(msg) + '\\n');
 export const log = (...a) => emit({ type: 'log', text: a.map(String).join(' ').slice(0, 500) });
 createInterface({ input: process.stdin }).on('line', (line) => {
   let m; try { m = JSON.parse(line); } catch { return; }
   for (const fn of listeners[m.type] ?? []) {
-    try { m.type === 'set' ? fn(m.id, m.value) : m.type === 'trigger' ? fn(m.id) : fn(); }
-    catch (e) { log('handler error: ' + (e && e.stack || e)); }
+    try {
+      const r = m.type === 'set' ? fn(m.id, m.value) : m.type === 'trigger' ? fn(m.id) : fn();
+      if (r && typeof r.then === 'function') r.catch((e) => log('handler error: ' + (e && e.stack || e)));
+    } catch (e) { log('handler error: ' + (e && e.stack || e)); }
   }
   if (m.type === 'stop') setTimeout(() => process.exit(0), 50);
 });
 /** A control moved: id is your action id, value is in the min..max range you declared for it. */
-export const onSet = (fn) => { listeners.set.push(fn); };
+// Each registrar takes a handler function, or a map like { next: () => ..., prev: () => ... } keyed by action id.
+const handler = (fn) => typeof fn === 'function' ? fn : fn && typeof fn === 'object' ? (id, v) => (typeof fn[id] === 'function' ? fn[id](v) : undefined) : () => {};
+export const onSet = (fn) => { listeners.set.push(handler(fn)); };
 /** A button was pressed. */
-export const onTrigger = (fn) => { listeners.trigger.push(fn); };
+export const onTrigger = (fn) => { listeners.trigger.push(handler(fn)); };
 /** Stop / disconnect: release held notes here. */
-export const onStop = (fn) => { listeners.stop.push(fn); };
+export const onStop = (fn) => { listeners.stop.push(typeof fn === 'function' ? fn : () => {}); };
 const b7 = (v) => Math.max(0, Math.min(127, Math.round(Number(v) || 0)));
 /** MIDI out through the paired Mac companion (Chrome Web MIDI: USB synths, the visual synth, the musical synth). */
 export const midi = {
@@ -325,7 +346,32 @@ export const gimbal = {
   recenter: () => emit({ type: 'gimbal', op: 'recenter' }),
   stop: () => emit({ type: 'gimbal', op: 'stop' }),
 };
+/**
+ * This Mac itself: press keys in the front app (scroll Instagram Reels, next slide, play/pause) and open pages/apps.
+ * Key presses need macOS Accessibility permission for the app that runs the ControlAnything server; without it they
+ * fail with a clear error (shown to Muse and the wearer). Opening a URL needs no permission.
+ */
+const KEY_CODES = { down: 125, up: 126, left: 123, right: 124, space: 49, return: 36, enter: 36, escape: 53, tab: 48, pagedown: 121, pageup: 116, home: 115, end: 119 };
+const osa = (script) => new Promise((done) => execFile('osascript', ['-e', script], { timeout: 4000 }, (e, _out, err) => done(e ? String(err || e.message).trim() : '')));
+export const mac = {
+  /** Press one key ('down', 'up', 'left', 'right', 'space', 'return', 'escape', 'pagedown', … or a single character). */
+  key: async (name) => {
+    const k = String(name).toLowerCase(), code = KEY_CODES[k];
+    const err = code !== undefined ? await osa('tell application "System Events" to key code ' + code)
+      : k.length === 1 ? await osa('tell application "System Events" to keystroke ' + JSON.stringify(k)) : 'unknown key ' + name;
+    emit({ type: 'mac', what: 'key ' + k, ok: !err, ...(err ? { error: /not allowed|1002|assistive/i.test(err) ? 'macOS blocked key presses: allow Accessibility for the app running ControlAnything (System Settings > Privacy & Security > Accessibility)' : err } : {}) });
+    return !err;
+  },
+  /** Open a URL (or file) on the Mac, optionally in a given app, e.g. mac.open('https://www.instagram.com/reels/', 'Google Chrome'). */
+  open: (target, app) => new Promise((done) => execFile('open', app ? ['-a', String(app), String(target)] : [String(target)], { timeout: 8000 }, (e) => {
+    emit({ type: 'mac', what: 'open ' + String(target).slice(0, 80), ok: !e, ...(e ? { error: e.message } : {}) }); done(!e);
+  })),
+  /** Bring an app to the front (so key presses go to it). */
+  activate: async (app) => { const err = await osa('tell application ' + JSON.stringify(String(app)) + ' to activate'); emit({ type: 'mac', what: 'activate ' + app, ok: !err, ...(err ? { error: err } : {}) }); return !err; },
+};
 /** Tell the server you are up (optional). */
 export const ready = (text = '') => emit({ type: 'ready', text: String(text).slice(0, 200) });
-process.on('uncaughtException', (e) => { log('crash: ' + (e && e.stack || e)); process.exit(1); });
+// Keep the connector alive through one bad callback: the wearer's controls stay usable and the log says why.
+process.on('uncaughtException', (e) => { log('error: ' + (e && e.stack || e)); });
+process.on('unhandledRejection', (e) => { log('async error: ' + (e && e.stack || e)); });
 `;

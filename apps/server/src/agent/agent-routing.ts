@@ -23,7 +23,7 @@ export function agentCompanion(devices: DeviceInfo[], target?: AgentTargetRoute)
   const bound = virtualAgentRoute(target)?.owner ?? target?.selection?.preferDeviceId ?? target?.driver?.executor.deviceId;
   // A missing selected browser must never silently fall back to another person's hardware.
   if (bound) return candidates.find(d => d.deviceId === bound);
-  const real = candidates.filter(d => d.kind !== 'sim' && !d.app?.startsWith('reviewer-software@'));
+  const real = candidates.filter(d => d.kind !== 'sim' && !/^(reviewer|hands)-software@/.test(d.app ?? ''));
   return real.find(d => d.ports?.some(p => p.kind === 'midi-out' && !['ce-visual-synth', MUSICAL_SYNTH_PORT_ID].includes(p.id)))
     ?? real[0] ?? candidates.find(d => d.kind === 'sim');
 }

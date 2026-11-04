@@ -35,7 +35,7 @@ export function virtualScreenExecutor(card?: Pick<DeviceCardPayload, 'notes'>): 
 }
 
 export function visualSynthCard(executor: DeviceInfo): DeviceCardPayload {
-  const reviewer = executor.app?.startsWith('reviewer-software@') === true;
+  const reviewer = /^(reviewer|hands)-software@/.test(executor.app ?? '');
   return { cardId: reviewer ? `visual-synth-reviewer-${executor.deviceId}` : VISUAL_SYNTH_CARD_ID, name: VISUAL_SYNTH_NAME, maker: 'ControlAnything', model: 'Visual Synth', category: 'synthesizer',
     confidence: 1, protocols: ['midi'], requires: ['midi'], source: executor.kind === 'sim' ? 'fixture' : 'live',
     notes: `${VIRTUAL_SCREEN_NOTE}${executor.deviceId}`,

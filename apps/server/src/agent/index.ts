@@ -7,6 +7,7 @@
  *   voice.audio / voice.text -> VoiceRelay · gen3d.generate / gen3d.edit -> the forge
  */
 import { dirname, join } from 'node:path';
+import { execFile } from 'node:child_process';
 import { type DeviceCardPayload, type DeviceInfo, type Driver, type Vec3, EXPERIMENTAL_TYPE, newId, type TargetCancelPayload, type TargetRetryPayload, type Hack, type MessageType, type PayloadOf, type TargetSelectPayload, type UiSpecPayload, type Mode, type TagAddPayload, type TagsStatePayload, type LibraryStatePayload, type RoomPlacement } from '@ce/protocol';
 import type { ServerContext } from '../context';
 import { REPO_ROOT } from '../config';
@@ -47,6 +48,7 @@ import { agentCompanion, agentPortAllowed, virtualAgentRoute } from './agent-rou
 import { libraryDriverNote, WireService } from './wire';
 import { ConnectorHost, isNeutralConnectorRelease } from './connector-host';
 import { MuseAgent, type AgentContext } from './muse-agent';
+import { MuseCodeEngine } from './muse-code-engine';
 import { MUSICAL_SYNTH_PORT_ID } from '../devices/musicalSynth';
 import { MuseBridgeHarness } from './muse-harness';
 import { CodingAgentService } from './coding-agent';
@@ -83,6 +85,8 @@ export interface Agent {
   harness: MuseBridgeHarness;
   /** The Muse coding agent and the connectors it deployed (one Node process per device). */
   museAgent: MuseAgent;
+  /** Which agent engine answers asks: the built-in loop, or Muse Code with our MCP device tools (CE_AGENT_ENGINE=muse-code). */
+  agentEngine(): { engine: 'built-in' | 'muse-code'; requested: string; fallbackReason?: string; lastRun?: unknown };
   connectorHost: ConnectorHost;
   agentWorkspace: string;
   wireReady(cardId: string): WireReadyPayload | undefined;
@@ -141,6 +145,10 @@ export interface AgentOptions {
 const agents = new WeakMap<ServerContext, Agent>();
 /** Value-only library.state / tags.state updates go out at most this often. */
 const PUBLISH_VALUES_MS = 500;
+/** AR toast (the HUD shows at most 72 characters) when macOS refuses a connector's key press. */
+const MAC_KEYS_BLOCKED_TOAST = 'Mac blocked key presses: allow Accessibility in System Settings';
+/** Requests whose connector will press keys on the Mac (Reels, Shorts, slides). */
+const MAC_KEY_REQUEST = /\b(reels?|instagram|tiktok|shorts|scroll|slides?|presentation|arrow keys?|key ?press(es)?)\b/i;
 
 export function getAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent {
   let a = agents.get(ctx);
@@ -973,7 +981,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   };
   /** Pick the paired Mac that hosts the visual synth: an open renderer first, else the only (or remembered) host. */
   const visualHost = (from: { deviceId: string }, deviceId?: string): { executor?: DeviceInfo; host?: DeviceInfo; reason?: string } => {
-    const eligible = hub.devices().filter(d => deviceId || !d.app?.startsWith('reviewer-software@'));
+    const eligible = hub.devices().filter(d => deviceId || !/^(reviewer|hands)-software@/.test(d.app ?? ''));
     const candidates = visualSynthCompanions(eligible);
     const executor = deviceId ? candidates.find((device) => device.deviceId === deviceId) : candidates.length === 1 ? candidates[0] : undefined;
     if (executor) return { executor, host: executor };
@@ -1086,7 +1094,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       if (p.requestId) hub.sendToDevice(from.deviceId, 'target.select.result', { requestId: p.requestId, ok, cardId, reason, ...(autoSetup ? { autoSetup } : {}) });
     };
     if (mode !== 'control') setMode('control');
-    const hosts = musicalSynthHosts(hub.devices()).filter(device => p.deviceId || !device.app?.startsWith('reviewer-software@'));
+    const hosts = musicalSynthHosts(hub.devices()).filter(device => p.deviceId || !/^(reviewer|hands)-software@/.test(device.app ?? ''));
     const selected = p.deviceId ?? musicalSynthExecutor(targets.list().find(t => musicalSynthExecutor(t.card))?.card);
     const host = selected ? hosts.find(d => d.deviceId === selected) : hosts.length === 1 ? hosts[0] : undefined;
     if (!host) { reply(false, undefined, hosts.length > 1 ? 'More than one Mac can host the synth. Keep the Mac companion you want connected.' : 'Open the paired Mac companion to use ControlAnything Synth.'); return; }
@@ -1300,7 +1308,23 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const companionDevice = (cardId?: string): DeviceInfo | undefined => agentCompanion(hub.devices(), cardId ? targets.get(cardId) : undefined);
   /** The DJI Osmo bridge's loopback device (CE_OSMO=web|ble|mock), when it is online. */
   const gimbalDevice = (): DeviceInfo | undefined => hub.devices().find((d) => d.online && d.capabilities.includes('ble') && d.ports?.some((p) => p.id === 'dji-osmo'));
+  const macKeyWarnedAt = new Map<string, number>();
   connectorHost = new ConnectorHost({ log,
+    // A connector that crashes after Muse finished must not leave dead controls on the headset.
+    onExit: (cardId, last) => wireService.connectorExited(cardId, last),
+    // A key press macOS refused (Accessibility off) must not fail silently while the wearer swipes: tell the headset
+    // (AR toast) and say it on the Mac, at most every 8 s per card.
+    onMac: (cardId, r) => {
+      if (r.ok || !/accessibility|not allowed|assistive|1002/i.test(r.error ?? '')) return;
+      macKeys = 'blocked';
+      const now = Date.now();
+      if (now - (macKeyWarnedAt.get(cardId) ?? 0) < 8000) return;
+      macKeyWarnedAt.set(cardId, now);
+      log(`[connector] ${cardId} ${r.what}: macOS blocked the key press (Accessibility)`);
+      const owner = wireService.ownerOf(cardId);
+      if (owner) hub.sendToDevice(owner, 'log', { level: 'warn', code: 'mac_keys_blocked', message: MAC_KEYS_BLOCKED_TOAST });
+      void macLocal.exec({ kind: 'local', op: 'say', arg: 'The Mac blocked the key press. Turn on Accessibility for the app running ControlAnything, in System Settings, Privacy and Security.' }).catch(() => {});
+    },
     send: (out, done) => {
       const actionId = `agent:${out.generation}:${out.release ? 'release' : 'run'}:${out.target}`;
       if (out.target === 'gimbal') {
@@ -1332,9 +1356,21 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       return `Asked ${mac.name} to open the visual synth.`;
     },
   });
-  void museAgent.init().catch((e) => log(`[muse-agent] workspace: ${(e as Error).message}`));
+  // The workspace is created on the first ask (build() calls init()), never at startup: a short-lived test server
+  // must not leave a muse-agent folder behind in its (already removed) data dir.
   log(`[muse-agent] ${muse.mode} · workspace ${agentWorkspace}`);
+  // CE_AGENT_ENGINE=muse-code: Meta's Muse Code CLI is the agent; the built-in loop stays the default and the fallback.
+  const museCode = process.env.CE_AGENT_ENGINE?.trim() === 'muse-code'
+    ? new MuseCodeEngine({ agent: museAgent, workspace: agentWorkspace, dataDir: ctx.config.dataDir, repoRoot: REPO_ROOT, apiKey: ctx.config.muse.apiKey, baseUrl: ctx.config.muse.baseUrl, log, callLog: ctx.calls })
+    : undefined;
+  if (museCode) { const s = museCode.status(); log(`[muse-agent] engine ${s.engine}${s.fallbackReason ? ` (Muse Code unavailable: ${s.fallbackReason})` : ' (Muse Code + ControlAnything MCP tools)'}`); }
   const agentEnabled = process.env.CE_AGENT !== '0';
+  // Can connectors press keys on this Mac (macOS Accessibility for the app running the server)? Read-only check,
+  // refreshed in the background so building the agent context never waits on osascript.
+  let macKeys: 'allowed' | 'blocked' | 'unknown' = 'unknown';
+  const checkMacKeys = () => execFile('osascript', ['-e', 'tell application "System Events" to get UI elements enabled'], { timeout: 4000 },
+    (e, out) => { macKeys = e ? 'unknown' : String(out).trim() === 'true' ? 'allowed' : 'blocked'; });
+  if (process.platform === 'darwin' && !process.env.VITEST) { checkMacKeys(); setInterval(checkMacKeys, 30_000).unref?.(); }
   const agentContext = (cardId: string): AgentContext => {
     const t = targets.get(cardId);
     const tag = tags.get(cardId) as unknown as { card?: DeviceCardPayload; label?: string } | undefined;
@@ -1348,6 +1384,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       companion: { online: !!mac, ...(mac ? { deviceId: mac.deviceId, name: mac.name, ...(mac.app ? { app: mac.app } : {}) } : {}),
         midiOutputs: outs.map((p) => p.name), visualsOpen: outs.some((p) => p.id === 'ce-visual-synth' && p.state === 'connected'),
         musicalOpen: outs.some((p) => p.id === MUSICAL_SYNTH_PORT_ID && p.state === 'connected') },
+      macKeys,
       gimbal: (() => {
         if (virtual) return { bridge: 'off' as const };
         const g = gimbalDevice(), port = g?.ports?.find((p) => p.id === 'dji-osmo');
@@ -1360,7 +1397,12 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const wireService = new WireService({
     ...(agentEnabled ? {
       agentBuild: async (cardId: string, request: string, emit: Parameters<MuseAgent['build']>[3], o: { signal: AbortSignal }) => {
-        const built = await museAgent.build(cardId, agentContext(cardId), request, emit, { signal: o.signal });
+        // Say up front when macOS will refuse the key presses this request needs (Muse is told too, in its context).
+        if (macKeys === 'blocked' && MAC_KEY_REQUEST.test(request)) {
+          const owner = wireService.ownerOf(cardId);
+          if (owner) hub.sendToDevice(owner, 'log', { level: 'warn', code: 'mac_keys_blocked', message: MAC_KEYS_BLOCKED_TOAST });
+        }
+        const built = await (museCode ?? museAgent).build(cardId, agentContext(cardId), request, emit, { signal: o.signal });
         const info = connectorHost!.info(cardId);
         return { ...built, ...(built.ok && info ? { connector: { entry: info.entry, ...(info.pid ? { pid: info.pid } : {}) } } : {}) };
       },
@@ -1490,7 +1532,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         arm.onConfirm(m.payload, from);
         return;
       case 'control.event': {
-        const agentRoute = wireService.routeAgent(m.payload);
+        const agentRoute = wireService.routeAgent(m.payload, from.deviceId);
         if (agentRoute) {
           if (!agentRoute.ok && Date.now() - lastWireLog > 2000) { lastWireLog = Date.now(); log(`[control] ${m.payload.widgetId}: ${agentRoute.reason}`); }
           return;
@@ -1559,6 +1601,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     connectors,
     harness,
     museAgent,
+    agentEngine: () => museCode?.status() ?? { engine: 'built-in', requested: process.env.CE_AGENT_ENGINE?.trim() || 'built-in' },
     connectorHost: connectorHost!,
     agentWorkspace,
     wireReady: (cardId: string) => wireService.readyFor(cardId),
@@ -1613,7 +1656,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       clearTimeout(publishTimer);
       clearVisualIntent();
       wireService.close();
-      connectorHost?.stopAll('server closing');
+      connectorHost?.stopAll('server closing', true);
       tags.flushPending();
       canvas.invalidate();
       voice.invalidate();

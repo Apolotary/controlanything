@@ -51,7 +51,8 @@ export function planLocal(op: LocalOp): { file: string; args: string[] } | Local
     case 'say': {
       const text = typeof op.arg === 'string' ? op.arg : typeof op.arg === 'object' && op.arg && 'text' in op.arg ? String((op.arg as Record<string, unknown>).text) : '';
       if (!text.trim()) return { ok: false, error: 'bad_args', detail: 'say needs text' };
-      return { file: 'say', args: [text.slice(0, 500)] };
+      // `--` ends options: model text starting with "-" (e.g. "-o file") is spoken, never parsed as a flag.
+      return { file: 'say', args: ['--', text.slice(0, 500)] };
     }
     default:
       return { ok: false, error: 'unsupported', detail: `the Mac cannot do "${op.op}" (volume, music, say)` };
@@ -109,7 +110,7 @@ export class MacLocalExecutor {
       let out: string;
       if (op.op === 'say' && master) {
         this.speaking++;
-        try { out = await this.run('osascript', ['-e', 'on run argv\nsay (item 1 of argv) volume ((item 2 of argv) as real) stopping current speech true\nend run', plan.args[0]!, String(Math.max(0, Math.min(1, master.volume)))]); }
+        try { out = await this.run('osascript', ['-e', 'on run argv\nsay (item 1 of argv) volume ((item 2 of argv) as real) stopping current speech true\nend run', plan.args[plan.args.length - 1]!, String(Math.max(0, Math.min(1, master.volume)))]); }
         finally { this.speaking--; }
       } else if (op.op === 'music' && master) {
         out = await this.run('osascript', ['-e', `tell application "Music" to set sound volume to ${Math.round(Math.max(0, Math.min(1, master.volume)) * 100)}`, ...plan.args]);

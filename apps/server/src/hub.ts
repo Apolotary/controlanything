@@ -117,6 +117,17 @@ export interface HubOptions {
   heartbeatMs?: number;
 }
 
+
+let secretValues: string[] | undefined;
+/** Never let a server secret (MODEL_API_KEY and friends) reach a client, whatever Muse prints, reads or writes. */
+export function redactSecrets(text: string): string {
+  secretValues ??= Object.entries(process.env)
+    .filter(([k, v]) => /KEY|TOKEN|SECRET|PASSWORD/i.test(k) && typeof v === 'string' && v.length >= 16)
+    .map(([, v]) => v as string);
+  for (const v of secretValues) if (text.includes(v)) text = text.split(v).join('[redacted]');
+  return text;
+}
+
 export class Hub {
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES, perMessageDeflate: false });
   private readonly conns = new Map<string, Connection>();
@@ -372,7 +383,9 @@ export class Hub {
           this.sendLog(c, { level: 'error', code: e.code, message: e.message, ref: k.id });
           return;
         }
-        throw e;
+        // Never let one bad pairing message throw out of the socket handler and take the demo server down.
+        this.sendLog(c, { level: 'error', code: 'bad_request', message: `Pairing failed: ${(e as Error).message}`.slice(0, 300), ref: k.id });
+        return;
       }
     }
 
@@ -637,6 +650,7 @@ export class Hub {
 
   private sendRaw(c: Connection, json: string, type: string): boolean {
     if (c.ws.readyState !== WebSocket.OPEN) return false;
+    json = redactSecrets(json);
     if (DROPPABLE.has(type) && c.ws.bufferedAmount > BACKPRESSURE_BYTES) {
       this.dropped++;
       return false;

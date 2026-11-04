@@ -451,6 +451,8 @@ export interface AgentBuilt {
   ok: boolean; title: string; explanation: string; code: string; needs: ('right' | 'left' | 'screen')[];
   actions: WireAction[]; controls: NonNullable<WireReadyPayload['controls']>; model: string; source: 'live' | 'fixture';
   ui?: WireReadyPayload['ui']; visualizer?: WireReadyPayload['visualizer'];
+  /** An XR visualization program for the headset (no connector needed when it is the only output). */
+  scene?: WireReadyPayload['scene'];
   connector?: { entry: string; pid?: number }; issues: string[];
 }
 
@@ -492,6 +494,11 @@ export class WireService {
 
   constructor(private readonly d: WireServiceDeps) {
     this.log = d.log ?? (() => {});
+  }
+
+  /** The headset that asked for this card's current wiring (it receives the card's runtime warnings). */
+  ownerOf(cardId: string): string | undefined {
+    return this.owners.get(cardId);
   }
 
   /** Cards with a wiring the headset may drive right now. */
@@ -581,10 +588,11 @@ export class WireService {
         if (!built.ok) { this.log(`[wire] ${cardId} agent failed after ${((Date.now() - t0) / 1000).toFixed(1)} s: ${built.issues[0] ?? ''}`); return; }
         const payload: WireReadyPayload = { cardId, wiringId, ...(p.requestId ? { requestId: p.requestId } : {}), code: built.code.slice(0, 8192),
           title: built.title.slice(0, 80), explanation: built.explanation.slice(0, 300), model: built.model.slice(0, 64), source: built.source,
-          actions: built.actions.slice(0, 16), needs: built.needs, controls: built.controls.slice(0, 8), ...(built.ui ? { ui: built.ui, visualizer: built.visualizer } : {}), ...(built.connector ? { connector: built.connector } : {}) };
+          actions: built.actions.slice(0, 16), needs: built.needs, controls: built.controls.slice(0, 8), ...(built.ui ? { ui: built.ui, visualizer: built.visualizer } : {}), ...(built.connector ? { connector: built.connector } : {}),
+          ...(built.scene ? { scene: { title: built.scene.title.slice(0, 80), code: built.scene.code.slice(0, 8192) } } : {}) };
         this.active.set(cardId, { cardId, wiringId, driverId: 'agent', ready: payload, actions: new Map(payload.actions.map((a) => [a.actionId, a])), at: Date.now(), agent: true });
         send('ready', { code: built.code || undefined, title: payload.title, explanation: payload.explanation, model: built.model, source: built.source, latencyMs: Date.now() - t0,
-          note: `ready · ${payload.controls?.length ?? 0} control${payload.controls?.length === 1 ? '' : 's'}${built.code ? ' + hand program' : ''}` });
+          note: `ready · ${payload.controls?.length ?? 0} control${payload.controls?.length === 1 ? '' : 's'}${built.code ? ' + hand program' : ''}${built.scene ? ' + 3D scene' : ''}` });
         hub.broadcast('wire.ready', payload);
         this.log(`[wire] ${cardId} ready ${wiringId} "${built.title}" by ${built.model} (${built.source}) · agent · ${payload.actions.map((a) => a.actionId).join(',')} · total ${((Date.now() - t0) / 1000).toFixed(1)} s`);
         return;
@@ -665,7 +673,7 @@ export class WireService {
    * A "wire:<actionId>" control.event for a Muse-agent wiring goes straight to its connector on the Mac.
    * Returns undefined when the event is not for an agent wiring (the ControlRouter handles it).
    */
-  routeAgent(ev: Pick<ControlEventPayload, 'widgetId' | 'specId' | 'requestId' | 'wiringId' | 'value'>): { ok: boolean; reason?: string } | undefined {
+  routeAgent(ev: Pick<ControlEventPayload, 'widgetId' | 'specId' | 'requestId' | 'wiringId' | 'value'>, fromDeviceId?: string): { ok: boolean; reason?: string } | undefined {
     if (!ev.widgetId.startsWith('wire:')) return undefined;
     const actionId = ev.widgetId.slice('wire:'.length);
     const agentEntries = [...this.active.values()].filter((a) => a.agent);
@@ -673,12 +681,28 @@ export class WireService {
     const entry = agentEntries.find((a) => a.wiringId === ev.wiringId) ?? (agentEntries.length === 1 && !ev.wiringId ? agentEntries[0] : undefined);
     if (!entry) return this.active.size > agentEntries.length ? undefined : { ok: false, reason: 'this output belongs to a retired wiring request' };
     if (entry.ready.requestId && ev.requestId && ev.requestId !== entry.ready.requestId) return { ok: false, reason: 'this output belongs to a retired wiring request' };
+    // Only the device that asked for this wiring may play it (wire.ready is broadcast to every paired device).
+    const owner = this.owners.get(entry.cardId);
+    if (fromDeviceId && owner && owner !== fromDeviceId) return { ok: false, reason: 'only the device that asked Muse may play this wiring' };
     const action = entry.actions.get(actionId);
     if (!action) return { ok: false, reason: `"${actionId}" is not part of the current wiring` };
     const raw = ev.value;
     const value = typeof raw === 'boolean' ? raw : typeof raw === 'number' ? Math.min(action.max ?? Infinity, Math.max(action.min ?? -Infinity, raw)) : undefined;
     if (value === undefined) return { ok: false, reason: 'unsupported control value' };
     return this.d.agentSet?.(entry.cardId, actionId, value) ?? { ok: false, reason: 'no connector host' };
+  }
+
+  /** The card's agent connector exited on its own: retire the wiring and tell its owner, so no dead controls stay up. */
+  connectorExited(cardId: string, lastOutput: string): void {
+    const entry = this.active.get(cardId);
+    if (!entry?.agent) return;
+    const owner = this.owners.get(cardId), epoch = this.epochs.get(cardId);
+    this.log(`[wire] ${cardId} connector exited while live: ${lastOutput}`);
+    this.clear(cardId);
+    if (owner && epoch?.requestId) this.d.hub.sendToDevice(owner, 'wire.stopped', {
+      cardId, requestId: epoch.requestId, wiringId: epoch.wiringId, ok: true, releaseConfirmed: false,
+      reason: `Muse's connector stopped (${lastOutput}). Ask Muse again.`.slice(0, 200),
+    } satisfies WireStoppedPayload);
   }
 
   /** User's both-palms Stop: retire only this epoch, without disarming the selected verified device. */

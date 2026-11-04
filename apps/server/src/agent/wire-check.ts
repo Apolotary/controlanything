@@ -25,7 +25,7 @@ export type WireNeed = 'right' | 'left' | 'screen';
 export const WIRE_NEEDS: readonly WireNeed[] = ['right', 'left', 'screen'];
 
 /** The wearer-facing reason is the message; the pattern is what the validator looks for (comments are ignored). */
-const FORBIDDEN: { token: string; re: RegExp }[] = [
+export const FORBIDDEN: { token: string; re: RegExp }[] = [
   ...['import', 'require', 'fetch', 'XMLHttpRequest', 'WebSocket', 'eval', 'Function', 'globalThis', 'self', 'postMessage',
     'setTimeout', 'setInterval', 'document', 'window', 'navigator', 'location', 'this', 'constructor', '__proto__', 'prototype',
     // not on the contract's list, but meaningless or dangerous in a per-frame wiring program

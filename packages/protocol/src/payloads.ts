@@ -170,7 +170,8 @@ export const WireReadyPayload = z.object({
   explanation: z.string().max(300),
   model: z.string().max(64),
   source: z.enum(['live', 'fixture', 'template']),
-  actions: z.array(WireAction).min(1).max(16),
+  /** Empty only for a pure XR visualization (`scene` without a connector). */
+  actions: z.array(WireAction).max(16),
   /** Signals the program reads (e.g. ["screen", "right"]); "screen" means the wearer must calibrate the screen first. */
   needs: z.array(z.enum(['right', 'left', 'screen'])).max(3),
   /** Generated AR controls (Muse agent); absent on older hand-program-only wirings. */
@@ -180,6 +181,12 @@ export const WireReadyPayload = z.object({
   visualizer: z.object({ kind: z.enum(['notes', 'trail', 'pulse', 'ripple']), actions: z.array(z.string().min(1).max(41)).max(16) }).optional(),
   /** Where the glue runs on the Mac (Muse agent): the connector entry file and its process. */
   connector: z.object({ entry: z.string().max(200), pid: z.number().int().optional() }).optional(),
+  /**
+   * An interactive XR visualization Muse wrote: the BODY of `scene(s, draw, mem)`, validated and dry-run on the server.
+   * The headset runs it in a sandboxed Worker each frame; it returns a display list (points, spheres, lines…) that the
+   * headset draws around the wearer. Older clients ignore it.
+   */
+  scene: z.object({ title: z.string().max(80), code: z.string().min(1).max(8192) }).optional(),
 });
 export type WireReadyPayload = z.infer<typeof WireReadyPayload>;
 

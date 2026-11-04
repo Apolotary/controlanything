@@ -327,7 +327,10 @@ describe('annotation and control mode boundary', () => {
   });
 
   it.each(['ready', 'writing'] as const)('retires %s wiring when its executor actually disconnects, without resuming on reconnect', async phase => {
+    // The older harness path (the Muse coding agent handles asks by default).
+    const prevAgent = process.env.CE_AGENT; process.env.CE_AGENT = '0';
     const s = setup({ devices: [remo] });
+    if (prevAgent === undefined) delete process.env.CE_AGENT; else process.env.CE_AGENT = prevAgent;
     const target = s.addKnown();
     Object.assign(target, { driver: lightDriver, specId: 'light-spec', verification: { off: 'pass' }, armed: true, state: 'armed' });
     s.specs.set('light-spec', { specId: 'light-spec', cardId: target.cardId, driverId: lightDriver.driverId, title: 'Light controls', widgets });

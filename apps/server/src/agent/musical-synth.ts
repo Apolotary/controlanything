@@ -11,7 +11,7 @@ export function musicalSynthHosts(devices: DeviceInfo[], ready = false): DeviceI
     && d.ports?.some(p => p.id === MUSICAL_SYNTH_PORT_ID && p.kind === 'midi-out' && (!ready || p.state === 'connected')));
 }
 export function musicalSynthCard(executor: DeviceInfo): DeviceCardPayload {
-  const reviewer = executor.app?.startsWith('reviewer-software@') === true;
+  const reviewer = /^(reviewer|hands)-software@/.test(executor.app ?? '');
   return { cardId: reviewer ? `musical-synth-reviewer-${executor.deviceId}` : MUSICAL_SYNTH_CARD_ID, name: MUSICAL_SYNTH_NAME, maker: 'ControlAnything', model: 'Synth', category: 'synthesizer',
     confidence: 1, protocols: ['midi'], requires: ['midi'], source: 'live', notes: `${MUSICAL_SYNTH_NOTE}${executor.deviceId}`,
     evidence: ['Authored browser software instrument selected explicitly, not a camera identification.',
