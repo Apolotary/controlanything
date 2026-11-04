@@ -43,8 +43,9 @@ import { VISUAL_SYNTH_MANIFEST } from '@ce/vsynth/manifest';
 import { validateDriver } from '../devices/validate';
 import { verifyDriver } from './verify';
 import { releaseWireOutputs } from './wire-stop';
+import { agentCompanion, agentPortAllowed, virtualAgentRoute } from './agent-routing';
 import { libraryDriverNote, WireService } from './wire';
-import { ConnectorHost } from './connector-host';
+import { ConnectorHost, isNeutralConnectorRelease } from './connector-host';
 import { MuseAgent, type AgentContext } from './muse-agent';
 import { MUSICAL_SYNTH_PORT_ID } from '../devices/musicalSynth';
 import { MuseBridgeHarness } from './muse-harness';
@@ -264,7 +265,12 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   // Connectors the Muse agent wrote and deployed (one background Node process per device card).
   let connectorHost: ConnectorHost | undefined;
   const dispatcher = new Dispatcher({ hub, macLocal, log, prepareMidi: request => connectors.encode(request), canExec: (request) => {
-    if (request.actionId?.startsWith('agent:') && request.cardId) return Boolean(connectorHost?.has(request.cardId));
+    if (request.actionId?.startsWith('agent:') && request.cardId) {
+      const match = /^agent:(\d+):(run|release):/.exec(request.actionId);
+      const release = match?.[2] === 'release';
+      return Boolean(match && connectorHost?.allows(request.cardId, Number(match[1]), release)
+        && (!release || isNeutralConnectorRelease(request)));
+    }
     // The owner's explicit "move the gimbal a little" check from the Mac (localhost route); BLE moves only.
     if (request.actionId === 'owner:gimbal-test') return request.op.kind === 'ble';
     const t = request.cardId ? targets.get(request.cardId) : undefined;
@@ -936,7 +942,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const bindVisualSynth = (executor: DeviceInfo, from: { deviceId: string }, position?: Vec3, label = 'Visual synth'): Target | undefined => {
     const card = visualSynthCard(executor);
     // Older builds keyed the card on the executor; keep one card in the room.
-    for (const tag of tags.list()) if (tag.cardId !== card.cardId && virtualScreenExecutor(tag.card)) removeTag(tag.cardId);
+    if (card.cardId === VISUAL_SYNTH_CARD_ID) for (const tag of tags.list()) {
+      if (tag.cardId !== card.cardId && !tag.cardId.startsWith('visual-synth-reviewer-') && virtualScreenExecutor(tag.card)) removeTag(tag.cardId);
+    }
     const saved = tags.get(card.cardId);
     if (!saved && tags.library().length >= 64) return undefined;
     let target = targets.get(card.cardId);
@@ -965,10 +973,11 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   };
   /** Pick the paired Mac that hosts the visual synth: an open renderer first, else the only (or remembered) host. */
   const visualHost = (from: { deviceId: string }, deviceId?: string): { executor?: DeviceInfo; host?: DeviceInfo; reason?: string } => {
-    const candidates = visualSynthCompanions(hub.devices());
+    const eligible = hub.devices().filter(d => deviceId || !d.app?.startsWith('reviewer-software@'));
+    const candidates = visualSynthCompanions(eligible);
     const executor = deviceId ? candidates.find((device) => device.deviceId === deviceId) : candidates.length === 1 ? candidates[0] : undefined;
     if (executor) return { executor, host: executor };
-    const hosts = visualSynthHosts(hub.devices());
+    const hosts = visualSynthHosts(eligible);
     const previousOwners = new Set(targets.list()
       .filter((target) => tags.has(target.cardId) && target.selectedBy === from.deviceId)
       .map((target) => virtualScreenExecutor(target.card)).filter((id) => hosts.some((host) => host.deviceId === id)));
@@ -1077,7 +1086,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       if (p.requestId) hub.sendToDevice(from.deviceId, 'target.select.result', { requestId: p.requestId, ok, cardId, reason, ...(autoSetup ? { autoSetup } : {}) });
     };
     if (mode !== 'control') setMode('control');
-    const hosts = musicalSynthHosts(hub.devices());
+    const hosts = musicalSynthHosts(hub.devices()).filter(device => p.deviceId || !device.app?.startsWith('reviewer-software@'));
     const selected = p.deviceId ?? musicalSynthExecutor(targets.list().find(t => musicalSynthExecutor(t.card))?.card);
     const host = selected ? hosts.find(d => d.deviceId === selected) : hosts.length === 1 ? hosts[0] : undefined;
     if (!host) { reply(false, undefined, hosts.length > 1 ? 'More than one Mac can host the synth. Keep the Mac companion you want connected.' : 'Open the paired Mac companion to use ControlAnything Synth.'); return; }
@@ -1288,25 +1297,27 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   const freshConnectors = new FreshConnectorGenerator({ dataDir: ctx.config.dataDir,
     apiKey: ctx.config.muse.apiKey, baseUrl: ctx.config.muse.baseUrl, log, callLog: ctx.calls });
   /** The paired Mac companion (the client app with the QR code): it runs Web MIDI, the visual and musical synths. */
-  const companionDevice = (): DeviceInfo | undefined => {
-    // The sim room stands in for the Mac in the no-hardware judge path (its laptop runs the visual synth).
-    const online = hub.devices().filter((d) => d.online && d.capabilities.includes('midi') && (d.role === 'companion' || d.kind === 'sim'));
-    const real = online.filter((d) => d.kind !== 'sim');
-    return real.find((d) => d.ports?.some((p) => p.kind === 'midi-out' && p.id !== 'ce-visual-synth' && p.id !== MUSICAL_SYNTH_PORT_ID)) ?? real[0] ?? online[0];
-  };
+  const companionDevice = (cardId?: string): DeviceInfo | undefined => agentCompanion(hub.devices(), cardId ? targets.get(cardId) : undefined);
   /** The DJI Osmo bridge's loopback device (CE_OSMO=web|ble|mock), when it is online. */
   const gimbalDevice = (): DeviceInfo | undefined => hub.devices().find((d) => d.online && d.capabilities.includes('ble') && d.ports?.some((p) => p.id === 'dji-osmo'));
   connectorHost = new ConnectorHost({ log,
     send: (out, done) => {
+      const actionId = `agent:${out.generation}:${out.release ? 'release' : 'run'}:${out.target}`;
       if (out.target === 'gimbal') {
+        if (virtualAgentRoute(targets.get(out.cardId))) { done(false, 'The selected software instrument cannot move physical hardware.'); return; }
         const g = gimbalDevice();
         if (!g) { done(false, 'no DJI gimbal is connected (Bluetooth bridge off or gimbal not paired)'); return; }
-        dispatcher.fire(g.deviceId, out.op, { port: 'dji-osmo', cardId: out.cardId, actionId: `agent:gimbal-${out.op.op}`, onResult: done });
+        dispatcher.fire(g.deviceId, out.op, { port: 'dji-osmo', cardId: out.cardId, actionId: `${actionId}-${out.op.op}`, onResult: done });
         return;
       }
-      const mac = companionDevice();
+      const target = targets.get(out.cardId);
+      if (!agentPortAllowed(target, out.port)) { done(false, 'The selected software instrument only permits its own virtual output.'); return; }
+      const mac = companionDevice(out.cardId);
       if (!mac) { done(false, 'the Mac companion is not connected'); return; }
-      dispatcher.fire(mac.deviceId, out.op, { port: out.port, cardId: out.cardId, actionId: `agent:${out.op.msg}`, onResult: done });
+      if (out.release && out.op.msg !== 'panic') {
+        void dispatcher.exec(mac.deviceId, out.op, { port: out.port, cardId: out.cardId, actionId: `${actionId}-${out.op.msg}`, priorityRelease: true,
+          waitForSlot: true, timeoutMs: 1400, signal: AbortSignal.timeout(1500) }).then(ack => done(ack.ok, ack.detail)).catch(error => done(false, (error as Error).message));
+      } else dispatcher.fire(mac.deviceId, out.op, { port: out.port, cardId: out.cardId, actionId: `${actionId}-${out.op.msg}:${out.op.channel}:${out.op.number ?? ''}`, onResult: done });
     },
   });
   const agentWorkspace = process.env.CE_AGENT_WORKSPACE?.trim() || join(ctx.config.dataDir, 'muse-agent');
@@ -1314,8 +1325,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     ...(streamClient ? { stream: { model: muse.model, stream: streamClient.stream.bind(streamClient) } } : {}),
     // Muse narrates its progress through macOS speech (an OS voice, not a model). CE_MAC_SILENT=1 mutes it.
     speak: (text) => { void macLocal.exec({ kind: 'local', op: 'say', arg: text.slice(0, 160) }).catch(() => {}); },
-    openVisuals: () => {
-      const mac = companionDevice();
+    openVisuals: (cardId) => {
+      const mac = companionDevice(cardId);
       if (!mac) return 'The Mac companion is not connected: open ControlAnything on the Mac first.';
       hub.sendToDevice(mac.deviceId, 'visual.open', { requestId: newId('visual-') });
       return `Asked ${mac.name} to open the visual synth.`;
@@ -1328,8 +1339,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     const t = targets.get(cardId);
     const tag = tags.get(cardId) as unknown as { card?: DeviceCardPayload; label?: string } | undefined;
     const card = t?.card ?? tag?.card;
-    const mac = companionDevice();
-    const outs = (mac?.ports ?? []).filter((p) => p.kind === 'midi-out');
+    const mac = companionDevice(cardId);
+    const virtual = virtualAgentRoute(t);
+    const outs = (mac?.ports ?? []).filter((p) => p.kind === 'midi-out' && (!virtual || p.id === virtual.portId));
     return {
       cardId, deviceName: card?.name ?? t?.detection?.label ?? tag?.label ?? cardId, ...(card ? { card } : {}),
       ...(t?.detection?.jpeg ? { observation: { jpeg: t.detection.jpeg, capturedAt: t.detection.capturedAt, label: t.detection.label } } : {}),
@@ -1337,6 +1349,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         midiOutputs: outs.map((p) => p.name), visualsOpen: outs.some((p) => p.id === 'ce-visual-synth' && p.state === 'connected'),
         musicalOpen: outs.some((p) => p.id === MUSICAL_SYNTH_PORT_ID && p.state === 'connected') },
       gimbal: (() => {
+        if (virtual) return { bridge: 'off' as const };
         const g = gimbalDevice(), port = g?.ports?.find((p) => p.id === 'dji-osmo');
         if (!g) return { bridge: 'off' as const };
         return port?.state === 'connected' ? { bridge: 'connected' as const, name: port.name }
@@ -1352,6 +1365,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         return { ...built, ...(built.ok && info ? { connector: { entry: info.entry, ...(info.pid ? { pid: info.pid } : {}) } } : {}) };
       },
       agentSet: (cardId: string, actionId: string, value: number | boolean) => connectorHost!.set(cardId, actionId, value),
+      agentRelease: (cardId: string) => connectorHost!.waitForRelease(cardId),
     } : {}),
     hub, targets, spark: muse, wonder, log, callLog: ctx.calls, harness,
     ...(streamClient ? { stream: { model: muse.model, stream: streamClient.stream.bind(streamClient) } } : {}),
