@@ -53,7 +53,7 @@ import { Recorder } from '../replay/recorder';
 import { TakeVideoRecorder } from '../replay/video';
 import { loadTake, type Take } from '../replay/take';
 import { type AimHit, type AimTarget, aimAt, touching } from '../scan/aim';
-import { type CameraSource, CameraError, LiveCamera } from '../scan/camera';
+import { type CameraSource, CameraError, isCameraBusy, LiveCamera } from '../scan/camera';
 import { FrameCapture } from '../scan/capture';
 import { JpegEncoder } from '../scan/encode';
 import { fixtureFromSimLayout, loadSamFixture, projectFixture, type SamFixture } from '../scan/fixture';
@@ -91,6 +91,7 @@ import type { Handedness, Hud, ShellFrame } from './hud-contract';
 import { type HudKind, loadHud } from './hud-loader';
 import { handJointPositions, InputSampler } from './input';
 import { createSpatialInput, type SpatialInput } from './spatial-input';
+import { CLAIM_MESSAGE, CLOSE_SUPERSEDED, type ClaimReason, showSupersededPage, SingleInstance, SUPERSEDED_MESSAGE, type SupersededBy } from './single-instance';
 import type { PaletteItem } from '../hud/v2/wrist-palette';
 import { labEnabled } from './lab';
 import { Page } from './page';
@@ -244,6 +245,12 @@ export class QuestApp {
   welcome?: PayloadOf<'welcome'>;
   cameraState: 'off' | 'starting' | 'on' | 'error' = 'off';
   cameraNote = '';
+  /** Busy camera (another tab/app holds it): retry with backoff; visibility → visible retries at once. */
+  private cameraRetry?: { attempt: number; timer?: ReturnType<typeof setTimeout> };
+  /** Single live tab per headset (newest visible claim wins). */
+  instance?: SingleInstance;
+  superseded = false;
+  private readonly claimIds = new Set<string>();
   private readonly nonDominant: Handedness;
   private candidate = { id: null as string | null, since: 0, shown: null as string | null };
   lockedId: string | null = null;
@@ -289,7 +296,7 @@ export class QuestApp {
       this.page.log(`desktop emulator: IWER ${this.emulator.device.version} (${this.emulator.device.name}${this.emulator.devui ? ', DevUI' : ''})`, 'ok');
     }
     await this.setupHud();
-    this.spatial = createSpatialInput(this.scene, this.desktopCam, this.renderer);
+    this.spatial = createSpatialInput(this.scene, this.desktopCam, this.renderer, { meshes: this.params.get('hands') !== '0' });
     (this.hud as Hud & { setSpatialInput?: (s: SpatialInput) => void }).setSpatialInput?.(this.spatial);
     // buddy: the Muse buddy mascot (src/buddy), wrist palette → Buddy; window.__ce.buddy for scripts; ?buddy=0 turns it off
     if (this.params.get('buddy') !== '0') {
@@ -306,8 +313,11 @@ export class QuestApp {
     }
     this.setupIo();
     this.setupUi();
+    if (this.superseded) return;
     this.renderer.setAnimationLoop((t, f) => this.frame(t, f));
     void this.connect();
+    // Back on a visible page (or out of a hidden XR session): a busy or lost camera retries at once.
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') this.retryCameraNow(); });
     const replay = this.params.get('replay');
     if (replay) await this.startReplay(replay, (this.params.get('replayMode') as ReplayMode) ?? 'playback');
     if (this.params.get('record') === '1') this.page.log('To record a take, prepare the camera and press Record take before entering AR.');
@@ -423,6 +433,7 @@ export class QuestApp {
     } else {
       this.camera = new LiveCamera({ eye: 'left' });
     }
+    this.camera.onEnded = (reason) => this.onCameraLost(reason);
     this.capture = new FrameCapture({ camera: this.camera, poses: this.poses, encoder: this.encoder, handJoints: () => handJointPositions(this.lastFrame) });
     this.scanner = new Scanner({
       capture: () => this.capture,
@@ -747,7 +758,13 @@ export class QuestApp {
         if (active) this.cancelControl(active.targetId);
         this.controls.clear(); this.clearHandControl(); this.modes.disconnected(); this.refreshHome(); this.refreshTags();
       }
-      if (s === 'closed' && info) this.page.log(`socket closed (${info.code}${info.reason ? ` ${info.reason}` : ''}); reconnecting`, 'warn');
+      if (s === 'closed' && info?.code === CLOSE_SUPERSEDED) {
+        // Final: reconnecting would kick the newer tab, which would kick this one back.
+        this.ws.stop();
+        if (this.instance) this.instance.supersede('server'); else this.suspendForOtherTab('server');
+        return;
+      }
+      if (s === 'closed' && info && !this.superseded) this.page.log(`socket closed (${info.code}${info.reason ? ` ${info.reason}` : ''}); reconnecting`, 'warn');
     };
     this.ws.onUnauthorized = () => {
       this.page.log('the server revoked this headset; pairing again', 'warn');
@@ -824,6 +841,7 @@ export class QuestApp {
       this.pendingPlacement = undefined; this.pendingForget = undefined;
     }
     this.modes.mode = mode;
+    this.assertedMode = undefined;
     if (send) {
       this.ws.send('mode.set', { mode }, { to: 'server' });
     }
@@ -1562,7 +1580,9 @@ export class QuestApp {
   }
 
   private helloPayload(): PayloadOf<'hello'> {
-    return { deviceToken: WsClient.allowsSavedToken(this.ws.url) || this.freshSocketIdentity ? this.identity?.deviceToken ?? '' : '', role: 'hmd', capabilities: ['camera', ...(this.mic.ready && this.params.get('mic') !== '0' ? ['mic' as const] : []), 'hands', 'display'], app: APP_VERSION };
+    // foreground: a hidden tab that reconnects (e.g. after a server restart) must not kick the tab the user is wearing.
+    const hello = { deviceToken: WsClient.allowsSavedToken(this.ws.url) || this.freshSocketIdentity ? this.identity?.deviceToken ?? '' : '', role: 'hmd' as const, capabilities: ['camera' as const, ...(this.mic.ready && this.params.get('mic') !== '0' ? ['mic' as const] : []), 'hands' as const, 'display' as const], app: APP_VERSION, foreground: typeof document === 'undefined' || document.visibilityState === 'visible' };
+    return hello as PayloadOf<'hello'>;
   }
 
   private async repairPairing(): Promise<void> {
@@ -1579,12 +1599,14 @@ export class QuestApp {
   }
 
   private async connect(): Promise<void> {
+    if (this.superseded) return;
     try {
       this.identity = await this.pairing.ensure();
     } catch (e) {
       this.page.log(`pairing stopped: ${(e as Error).message}`, 'error');
       return;
     }
+    if (this.superseded) return;
     this.ws.start();
   }
 
@@ -1603,6 +1625,7 @@ export class QuestApp {
         else this.fixture = undefined;
       }
       this.ws.send('mode.set', { mode: this.modes.mode }, { to: 'server' });
+      this.assertedMode = undefined;
       this.canvas?.syncSelection();
       for (const tag of this.modes.tags.values()) if (tag.pending) this.ws.send('tag.add', tag.pending, { to: 'server' });
       for (const cardId of this.modes.removals) this.ws.send('tag.remove', { cardId }, { to: 'server' });
@@ -1620,8 +1643,15 @@ export class QuestApp {
     ws.on('mode.state', (m) => this.onModeState(m.payload as PayloadOf<'mode.state'>));
     ws.on('tags.state', (m) => this.onTagsState(m.payload as PayloadOf<'tags.state'>));
     ws.on('library.state', (m) => this.onLibraryState(m.payload as PayloadOf<'library.state'>));
+    // Server-only type ({ reason: 'newer-tab' | 'other-tab-active', at, graceMs }); the 4409 close follows.
+    ws.on(SUPERSEDED_MESSAGE, () => {
+      this.ws.stop();
+      if (this.instance) this.instance.supersede('server'); else this.suspendForOtherTab('server');
+    });
     ws.on('log', (m) => {
       const p = m.payload as PayloadOf<'log'>;
+      // A server without `session.claim` yet drops it; hello on connect still claims there.
+      if (p.ref && this.claimIds.delete(p.ref)) return;
       if (this.pairCodeRequest && p.ref === this.pairCodeRequest) {
         this.pairCodeRequest = null;
         this.hud.toast('That code did not connect. Check the current code on your Mac.', 'warn');
@@ -1682,11 +1712,17 @@ export class QuestApp {
   private lastShown?: { frameId: string; dets: ReturnType<typeof normalizeDetections> };
 
   private onModeState({ mode }: PayloadOf<'mode.state'>): void {
-    // A room snapshot or another client's stale mode must never choose this user's mode.
-    if (mode !== this.modes.mode) {
-      this.ws.send('mode.set', { mode: this.modes.mode }, { to: 'server' });
-    }
+    // A room snapshot or another client's stale mode must never choose this user's mode. Re-assert it at most once
+    // per local mode (setMode and a new welcome reset this), and only from the tab the user is in: two tabs of one
+    // identity in different modes used to ping-pong mode.set at thousands of messages a second (the Mac flicker).
+    if (mode === this.modes.mode || this.superseded || this.assertedMode === this.modes.mode) return;
+    const owner = !!this.session || typeof document === 'undefined' || document.visibilityState === 'visible';
+    if (!owner) return;
+    this.assertedMode = this.modes.mode;
+    this.ws.send('mode.set', { mode: this.modes.mode }, { to: 'server' });
   }
+  /** The local mode already re-asserted once against a different server mode.state. */
+  private assertedMode?: AppMode;
 
   private targetForCard(cardId: string, hint: { frameId?: string; detId?: string } = {}): Target | undefined {
     let t = this.targets.byCard(cardId);
@@ -2457,7 +2493,7 @@ export class QuestApp {
 
   private cameraStartPromise?: Promise<void>;
   async startCamera(): Promise<void> {
-    if (this.cameraState === 'on') return;
+    if (this.cameraState === 'on' || this.superseded) return;
     if (this.cameraStartPromise) return this.cameraStartPromise;
     this.cameraStartPromise = this.openCamera();
     try { await this.cameraStartPromise; } finally { this.cameraStartPromise = undefined; }
@@ -2467,7 +2503,13 @@ export class QuestApp {
     this.cameraState = 'starting';
     try {
       const info = await this.camera.start();
+      if (this.superseded) { this.camera.stop(); this.cameraState = 'off'; return; }
       this.cameraState = 'on';
+      if (this.cameraRetry) {
+        if (this.cameraRetry.attempt > 0) this.hud.toast('Camera is back', 'ok');
+        clearTimeout(this.cameraRetry.timer);
+        this.cameraRetry = undefined;
+      }
       this.cameraNote = `${info.label || this.camera.kind} ${info.width}×${info.height}${info.frameRate ? ` @${Math.round(info.frameRate)}` : ''}`;
       this.page.log(`camera: ${this.cameraNote}`, 'ok');
       if (info.warning) this.page.log(info.warning, 'warn');
@@ -2476,10 +2518,90 @@ export class QuestApp {
     } catch (e) {
       this.cameraState = 'error';
       this.cameraNote = (e as Error).message;
+      if (this.superseded) return;
+      if (isCameraBusy(e)) {
+        this.scheduleCameraRetry((e as Error).message);
+        return;
+      }
       this.page.log(`camera failed: ${(e as Error).message}`, 'error');
       if (e instanceof CameraError) this.page.log(e.hint, 'warn');
       this.hud.toast('camera unavailable: see the 2D page log', 'error');
     }
+  }
+
+  /** 1 s, 2 s, 4 s, then every 8 s for about a minute and a half; a visible page or XR session retries at once. */
+  private static readonly CAMERA_RETRY_MS = [1000, 2000, 4000, 8000, 8000, 8000, 8000, 8000, 8000, 8000, 8000, 8000];
+
+  private scheduleCameraRetry(reason: string): void {
+    const retry = this.cameraRetry ?? (this.cameraRetry = { attempt: 0 });
+    clearTimeout(retry.timer);
+    const delay = QuestApp.CAMERA_RETRY_MS[retry.attempt];
+    if (delay === undefined) {
+      this.page.log(`camera still busy after ${retry.attempt} tries: ${reason}`, 'error');
+      this.hud.toast('Camera still busy. Close other tabs of this page, then reload', 'error');
+      this.cameraRetry = undefined;
+      return;
+    }
+    retry.attempt++;
+    this.page.log(`camera unavailable (${reason}); retry ${retry.attempt} in ${delay / 1000} s. Close other Quest Browser tabs of this page.`, 'warn');
+    this.hud.toast(`Camera busy · retrying in ${delay / 1000} s · close other tabs of this page`, 'warn');
+    retry.timer = setTimeout(() => { retry.timer = undefined; void this.startCamera(); }, delay);
+  }
+
+  /** The page or XR session became visible again: a busy or lost camera retries now instead of waiting. */
+  private retryCameraNow(): void {
+    if (this.superseded || this.cameraState === 'on' || this.cameraState === 'starting') return;
+    if (!this.cameraRetry && this.cameraState !== 'error') return;
+    clearTimeout(this.cameraRetry?.timer);
+    if (this.cameraRetry) this.cameraRetry.timer = undefined;
+    void this.startCamera();
+  }
+
+  /** The live track ended (another tab or app took the camera): restart it with the same backoff. */
+  private onCameraLost(reason: string): void {
+    if (this.superseded || this.cameraState !== 'on') return;
+    this.cameraState = 'error';
+    this.cameraNote = reason;
+    this.camera.stop();
+    this.scheduleCameraRetry(reason);
+  }
+
+  /** Make this tab the headset's live tab (BroadcastChannel to other tabs + `session.claim` to the server). */
+  claimInstance(reason: ClaimReason): void {
+    this.instance?.claim(reason);
+  }
+
+  /** `session.claim` on an already-open socket (a new socket's hello is its claim). */
+  sendClaim(reason: ClaimReason): void {
+    if (this.superseded || !this.ws.open) return;
+    // payload {} (the hub handles it and never relays it); the reason stays local
+    const id = this.ws.send(CLAIM_MESSAGE, {});
+    this.page.log(`claimed this tab (${reason})`);
+    if (id) { this.claimIds.add(id); if (this.claimIds.size > 20) this.claimIds.delete(this.claimIds.values().next().value!); }
+  }
+
+  /**
+   * Another tab (or the server) took over this Quest identity: stop sends first, then the camera, scanner, live boxes,
+   * mic and XR, and show the static "Opened in another tab" page. Its "Use this tab" reloads, which claims again.
+   */
+  suspendForOtherTab(by: SupersededBy): void {
+    if (this.superseded) return;
+    this.superseded = true;
+    const quietly = (fn: () => void) => { try { fn(); } catch { /* partly initialised */ } };
+    quietly(() => this.ws.stop());
+    clearTimeout(this.cameraRetry?.timer);
+    this.cameraRetry = undefined;
+    quietly(() => this.controls?.clear());
+    quietly(() => this.clearHandControl());
+    quietly(() => this.assistant?.cancel());
+    quietly(() => this.scanner?.stop());
+    quietly(() => this.live?.stop());
+    quietly(() => { this.camera?.stop(); this.cameraState = 'off'; });
+    quietly(() => this.mic.close());
+    quietly(() => { void this.session?.end().catch(() => undefined); });
+    quietly(() => this.renderer?.setAnimationLoop(null));
+    this.page.log(`superseded by a newer ${by === 'tab' ? 'tab' : 'connection (server)'}: camera, mic and sends stopped`, 'warn');
+    showSupersededPage();
   }
 
   async prepareMedia(): Promise<void> {
@@ -2495,15 +2617,18 @@ export class QuestApp {
   }
 
   async enterXr(): Promise<void> {
-    if (this.enteringXr) return;
+    if (this.enteringXr || this.superseded) return;
     if (this.session) {
       await this.session.end();
       return;
     }
     this.enteringXr = true;
     try {
+      // Entering AR always makes this the headset's live tab (an older tab releases the camera).
+      this.claimInstance('enter-ar');
       // permissions before the session, so no prompt interrupts it (research/04 §2)
       await this.prepareMedia();
+      if (this.superseded) return;
       const s = await startXr(this.renderer, { allowVr: Boolean(this.emulator) });
       this.session = s.session;
       this.scanner.stop();
@@ -2526,7 +2651,9 @@ export class QuestApp {
       this.recorder.input('xr', { on: true, mode: s.mode });
       this.recorder.spaceBoundary('xr-start');
       s.session.addEventListener('visibilitychange', () => {
-        if (this.session !== s.session || s.session.visibilityState !== 'hidden') return;
+        if (this.session !== s.session) return;
+        if (s.session.visibilityState === 'visible') { this.retryCameraNow(); return; }
+        if (s.session.visibilityState !== 'hidden') return;
         // Hidden sessions may stop delivering frames. Cancel immediately, so neither a queued
         // widget move nor a held clutch can resume control without the wearer's next action.
         this.cancelManualRegion(); this.projects?.pauseForNavigation(); this.assistant?.cancel(); this.clearVirtualSelection();
@@ -2836,6 +2963,10 @@ export class QuestApp {
 export async function startApp(params: URLSearchParams): Promise<QuestApp> {
   const app = new QuestApp(params);
   (window as unknown as { __ce: QuestApp }).__ce = app;
+  // Claim before anything opens the camera or socket, so an older tab of this page lets go first. ?single=0 opts out.
+  if (params.get('single') !== '0') {
+    app.instance = new SingleInstance({ onSuperseded: (by) => app.suspendForOtherTab(by), onClaim: (reason) => app.sendClaim(reason) }).start();
+  }
   await app.init();
   // keep the JPEGs we send for the preview
   app.ws.tap('out', (m) => {

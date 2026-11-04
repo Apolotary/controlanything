@@ -39,7 +39,7 @@ function shell() {
     candidate: { id: null, shown: null, since: 0 }, consumed: { left: false, right: false },
     targetHistory: { left: new PinchTargetHistory<string>(), right: new PinchTargetHistory<string>() }, annotationForward: new Vector3(),
     aimTargets: new Map(), aimBuffer: [], observed: new Map(), mountedTargets: new Set(), visibleTargets: new Set([target.id, liveBox.id]),
-    armedCards: new Set(), virtualCards: new Set(), cancelledCards: new Set(), generated: new Map(), gestureSpecs: new Map(), deferredSpecs: new Map(), controlValues: new Map(), specByCard: new Map(), specRevisions: new Map(), cardOfSpec: new Map(), uiSpecOfGen3d: new Map(), menuSpec: new Map(),
+    armedCards: new Set(), virtualCards: new Set(), cancelledCards: new Set(), generated: new Map(), gestureSpecs: new Map(), deferredSpecs: new Map(), controlValues: new Map(), specByCard: new Map(), specRevisions: new Map(), cardOfSpec: new Map(), uiSpecOfGen3d: new Map(), menuSpec: new Map(), macPinchUntil: new Map(),
     gazeHit: { id: '', angleDeg: 0, distance: 0 }, handHit: { id: '', angleDeg: 0, distance: 0 }, touchHit: { id: '', angleDeg: 0, distance: 0 },
   });
   const receive = (method: string, payload: unknown) => Reflect.get(app, method).call(app, payload);
@@ -354,6 +354,20 @@ describe('explicit annotation and control', () => {
     receive('onModeState', { mode: 'control' });
     expect(app.lockedId).toBeNull();
     expect(ws.send.mock.calls.some(([type]) => type === 'control.setup')).toBe(false);
+  });
+
+  it('re-asserts its mode once per local change instead of ping-ponging with another tab', () => {
+    const { app, receive, ws } = shell();
+    app.setMode('annotate');
+    ws.send.mockClear();
+    for (let i = 0; i < 5; i++) receive('onModeState', { mode: 'control' });
+    expect(ws.send.mock.calls.filter(([type]) => type === 'mode.set')).toHaveLength(1);
+    app.setMode('control'); ws.send.mockClear();
+    for (let i = 0; i < 5; i++) receive('onModeState', { mode: 'annotate' });
+    expect(ws.send.mock.calls.filter(([type]) => type === 'mode.set')).toHaveLength(1);
+    ws.send.mockClear(); Object.assign(app, { superseded: true }); app.setMode('annotate', false);
+    receive('onModeState', { mode: 'control' });
+    expect(ws.send).not.toHaveBeenCalled();
   });
 
   it('replayed tags and pipeline updates cannot restore a busy card or select a device', () => {

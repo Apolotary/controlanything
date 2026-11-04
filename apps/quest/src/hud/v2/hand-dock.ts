@@ -22,6 +22,14 @@ const FOLLOW_TAU = 0.08, REACH_TAU = 0.6;
 const REACH_MARGIN = 0.08;
 /** The menu hand often drops out for a moment when the other hand comes close; keep the menu meanwhile. */
 const LOST_GRACE_MS = 800;
+/**
+ * Opening is deliberate: a flat, open hand raised in front of the face with the palm squarely toward the eyes, held
+ * ~0.45 s. A relaxed hand resting while the other one works a dial must never open it.
+ */
+const OPEN_DWELL_MS = 450, OPEN_FACING_COS = Math.cos(40 * Math.PI / 180), OPEN_MAX_DISTANCE = 0.65, OPEN_BELOW_HEAD = 0.45;
+/** Tip-to-knuckle distance over bone length: ~1 for a straight finger, ~0.8 relaxed, ~0.4 in a fist. */
+const OPEN_FINGER_STRAIGHTNESS = 0.88;
+const STRAIGHT_FINGERS = ['index-finger', 'middle-finger'] as const;
 
 export interface FingerTouchState {
   finger: FingerMenuFinger | null;
@@ -172,13 +180,19 @@ export class HandDockAnchor {
   private readonly headForward = new Vector3();
   private readonly side = new Vector3();
   private readonly reachPoint = new Vector3();
-  private readonly offset: { lateral: number; up: number; toward: number };
+  private readonly offset: { lateral: number; up: number; toward: number; clearance?: number };
   /** The other hand's index is near the open menu (the menu holds still and stays open). */
   reaching = false;
+  /** Set by the HUD while a control is in use (or was just used): a closed menu must not open then. */
+  blockOpen = false;
+  private readonly palmNormal = new Vector3();
+  private readonly boneA = new Vector3();
+  private readonly boneB = new Vector3();
   private lostSince: number | null = null;
 
   /** `offset` (metres, head frame) moves the dock beside the hand so the other index can poke it. */
-  constructor(readonly nonDominant: 'left' | 'right' = 'left', offset: Partial<{ lateral: number; up: number; toward: number }> = {}) {
+  /** `clearance` (m), when set, keeps the dock's near edge that far beyond the knuckles, whatever its width. */
+  constructor(readonly nonDominant: 'left' | 'right' = 'left', offset: Partial<{ lateral: number; up: number; toward: number; clearance: number }> = {}) {
     this.offset = { lateral: 0, up: 0, toward: 0.06, ...offset };
   }
 
@@ -237,10 +251,11 @@ export class HandDockAnchor {
     const firstPose = !this.attached;
     if (firstPose) this.closeImmediately();
     this.attached = true;
-    this.place(frame, hand, dock, wrist, firstPose);
+    this.place(frame, hand, dock, wrist, firstPose, _width);
 
     const held = this.open && (this.reaching || this.fingerNear(other, hand));
-    const palmReady = hand.palmUp && (hand.palmUpMs ?? 0) >= DWELL_MS && this.inReach(frame, hand);
+    const palmReady = !this.blockOpen && hand.palmUp && (hand.palmUpMs ?? 0) >= OPEN_DWELL_MS
+      && this.inReach(frame, hand) && this.deliberate(frame, hand);
     let nextOpen = this.open;
     if (palmReady || (this.open && (hand.palmUp || held))) {
       nextOpen = true;
@@ -313,6 +328,30 @@ export class HandDockAnchor {
     this.controllerPinned = this.controllerRaised = false;
   }
 
+  /** A deliberate "show me the menu" pose (see OPEN_*). Without articulated joints, palm-up alone decides. */
+  private deliberate(frame: HudFrame, hand: HandState): boolean {
+    const joints = hand.joints, wrist = joints.wrist, index = joints['index-finger-phalanx-proximal'], pinky = joints['pinky-finger-phalanx-proximal'];
+    if (!wrist || !index || !pinky) return true;
+    if (hand.pinching) return false;
+    const head = frame.head.position;
+    if (wrist.position.y < head.y - OPEN_BELOW_HEAD || wrist.position.distanceTo(head) > OPEN_MAX_DISTANCE) return false;
+    // Palm normal from joint positions (same construction as app/input.ts): left = pinky × index, right = index × pinky.
+    this.boneA.subVectors(index.position, wrist.position);
+    this.boneB.subVectors(pinky.position, wrist.position);
+    if (this.nonDominant === 'left') this.palmNormal.crossVectors(this.boneB, this.boneA);
+    else this.palmNormal.crossVectors(this.boneA, this.boneB);
+    this.direction.subVectors(head, wrist.position).normalize();
+    if (this.palmNormal.normalize().dot(this.direction) < OPEN_FACING_COS) return false;
+    for (const finger of STRAIGHT_FINGERS) {
+      const base = joints[`${finger}-phalanx-proximal`], mid = joints[`${finger}-phalanx-intermediate`];
+      const end = joints[`${finger}-phalanx-distal`], tip = joints[`${finger}-tip`];
+      if (!base || !mid || !end || !tip) continue;
+      const bones = base.position.distanceTo(mid.position) + mid.position.distanceTo(end.position) + end.position.distanceTo(tip.position);
+      if (bones > 0 && base.position.distanceTo(tip.position) / bones < OPEN_FINGER_STRAIGHTNESS) return false;
+    }
+    return true;
+  }
+
   /** The other hand's index tip is in front of (or just through) the open menu, within a margin around it. */
   private reachingFor(dock: Object3D, other: HandState | undefined, width: number): boolean {
     const tip = other && !other.controller ? other.joints['index-finger-tip'] : undefined;
@@ -325,7 +364,7 @@ export class HandDockAnchor {
       && this.reachPoint.z > -0.06 && this.reachPoint.z < 0.15;
   }
 
-  private place(frame: HudFrame, hand: HandState, dock: Object3D, wrist: Object3D, first: boolean): void {
+  private place(frame: HudFrame, hand: HandState, dock: Object3D, wrist: Object3D, first: boolean, width: number): void {
     const joint = hand.joints.wrist!;
     this.destination.set(0, 0, 0);
     let count = 0;
@@ -339,7 +378,9 @@ export class HandDockAnchor {
     this.destination.addScaledVector(this.direction, this.offset.toward);
     // Beside the hand (toward the body centre) and slightly up, in the head's frame.
     this.side.set(1, 0, 0).applyQuaternion(frame.head.quaternion).setY(0).normalize();
-    this.destination.addScaledVector(this.side, this.offset.lateral);
+    const lateral = this.offset.clearance === undefined ? this.offset.lateral
+      : Math.sign(this.offset.lateral || 1) * (width / 2 + this.offset.clearance);
+    this.destination.addScaledVector(this.side, lateral);
     this.destination.y += this.offset.up;
     // A fixed up axis keeps the menu content level as the wrist rolls.
     this.matrix.lookAt(frame.head.position, this.destination, UP);

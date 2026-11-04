@@ -69,6 +69,8 @@ button.panic:hover:not(:disabled) { border-color: var(--status-danger-border); b
 .header-title h1 { font-size: 15px; letter-spacing: var(--tracking); }
 .header-title > .dim { font-size: 12.5px; }
 .header-title > .dim::before { content: '·'; margin-right: 8px; }
+.header-title .simple-back { align-self: center; padding: 6px 12px; border-radius: 16px; font-size: 13px; margin-left: -8px; }
+.header-title .simple-back:hover:not(:disabled) { background: var(--bg-surface-2, rgba(255,255,255,0.06)); }
 .home-view { width: 100%; max-width: 840px; display: flex; flex-direction: column; align-self: center; gap: 20px; padding: 24px 28px 40px; }
 .view-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .view-header h1 { font-size: 18px; }
@@ -412,3 +414,7 @@ body.stage .passcode { font-size: 32px; }
 .simple .simple-bar { display: flex; justify-content: center; gap: 8px; padding: 0 24px 32px; }
 .simple .simple-bar button { border-radius: 20px; padding: 8px 16px; }
 .simple .simple-bar .simple-stop { color: var(--status-danger); }
+/* Why Open visuals could not open in this tab, with one fix (Use this tab). */
+.simple-note { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px; margin: 0 auto; padding: 12px 24px; font-size: 14px; color: var(--text-secondary); text-align: center; }
+.simple .simple-note { margin-top: -20px; padding: 0 24px 32px; }
+.simple-note button { border-radius: 20px; padding: 6px 14px; }

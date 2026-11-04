@@ -93,3 +93,41 @@ describe('Executor', () => {
     expect(ex.tape.find((t) => t.execId === 'x4')?.verdict).toEqual({ pass: true, text: 'heard ✓' });
   });
 });
+
+/** Web Locks with Chrome's steal semantics: a stolen holder's request rejects; queued requests keep waiting. */
+class FakeLocks {
+  holder?: { reject: (e: Error) => void };
+  queue: (() => void)[] = [];
+  request(_name: string, options: { steal?: boolean } | (() => Promise<void>), cb?: () => Promise<void>): Promise<void> {
+    const steal = typeof options === 'object' && !!options.steal;
+    const callback = (cb ?? options) as () => Promise<void>;
+    return new Promise<void>((_resolve, reject) => {
+      const grant = () => { this.holder = { reject }; void callback(); };
+      if (steal && this.holder) { const old = this.holder; this.holder = undefined; old.reject(new DOMException('stolen', 'AbortError')); grant(); }
+      else if (!this.holder) grant();
+      else this.queue.push(grant);
+    });
+  }
+}
+
+describe('Executor leadership', () => {
+  it('lets the visible tab take over; the old tab goes to standby and queues to get the role back', async () => {
+    vi.stubGlobal('navigator', { locks: new FakeLocks() });
+    try {
+      const make = () => new Executor(new MidiExecutor(io, { clock: new FakeClock() }), { panic: async () => {} } as unknown as CardputerBridge, new AudioOracle());
+      const a = make(), b = make();
+      const aEvents: [boolean, boolean | undefined][] = [];
+      a.onLeader = (leader, takenOver) => aEvents.push([leader, takenOver]);
+      a.claim(); b.claim();
+      await tick();
+      expect([a.leader, b.leader]).toEqual([true, false]);
+      b.takeOver();
+      await tick();
+      expect([a.leader, a.standby, b.leader]).toEqual([false, true, true]);
+      expect(aEvents.at(-1)).toEqual([false, true]);
+      a.takeOver();
+      await tick();
+      expect([a.leader, b.leader, b.standby]).toEqual([true, false, true]);
+    } finally { vi.unstubAllGlobals(); }
+  });
+});

@@ -11,8 +11,16 @@
  * - an active touch hides that hand's ray.
  */
 import { ArrayCamera, type PerspectiveCamera, type Scene, type WebGLRenderer } from 'three';
-import { XRInputManager } from '@iwsdk/xr-input';
+import { DEFAULT_PROFILES_PATH, DefaultXRAssetLoader, XRInputManager } from '@iwsdk/xr-input';
 import { forwardHtmlEvents } from '@pmndrs/pointer-events';
+
+/** Vendored @webxr-input-profiles/assets (MIT) under public/xr-profiles: generic-hand and meta-quest-touch-plus. */
+export const LOCAL_PROFILES_PATH = `${import.meta.env?.BASE_URL ?? '/'}xr-profiles`;
+
+/** Rewrite a CDN input-profile asset URL to the copy this app serves. */
+export function localProfileAsset(path: string, local = LOCAL_PROFILES_PATH): string {
+  return path.startsWith(DEFAULT_PROFILES_PATH) ? `${local}${path.slice(DEFAULT_PROFILES_PATH.length)}` : path;
+}
 
 export type SpatialHand = 'left' | 'right';
 export type SpatialPointerKind = 'ray' | 'touch' | 'grab';
@@ -27,11 +35,14 @@ export class SpatialInput {
   private readonly pointerHands = new Map<number, SpatialHand>();
   frames = 0;
 
-  constructor(scene: Scene, private readonly camera: PerspectiveCamera, private readonly renderer: WebGLRenderer, opts: { mouse?: boolean } = {}) {
-    // Passthrough shows the real hands and controllers: skip the CDN meshes; pointers still work.
+  constructor(scene: Scene, private readonly camera: PerspectiveCamera, private readonly renderer: WebGLRenderer, opts: { mouse?: boolean; meshes?: boolean } = {}) {
+    // Hand outlines (and Touch Plus controllers) come from this app, not cdn.jsdelivr.net: the Quest on USB has no
+    // internet path. ?hands=0 turns the meshes off; pointers work either way.
     this.input = new XRInputManager({
       scene, camera,
-      assetLoader: { loadGLTF: () => Promise.reject(new Error('passthrough: no input mesh')) },
+      assetLoader: opts.meshes === false
+        ? { loadGLTF: () => Promise.reject(new Error('input meshes off (?hands=0)')) }
+        : { loadGLTF: (path: string) => DefaultXRAssetLoader.loadGLTF(localProfileAsset(path)) },
     });
     scene.add(this.input.xrOrigin);
     for (const hand of ['left', 'right'] as const) {
@@ -118,6 +129,6 @@ export function visibleXrCamera(xr: ArrayCamera): PerspectiveCamera | undefined 
   return xr.cameras.filter((c) => ((c as PerspectiveCamera & { viewport?: { z: number } }).viewport?.z ?? 0) > 0).length === 1 ? best : undefined;
 }
 
-export function createSpatialInput(scene: Scene, camera: PerspectiveCamera, renderer: WebGLRenderer, opts?: { mouse?: boolean }): SpatialInput {
+export function createSpatialInput(scene: Scene, camera: PerspectiveCamera, renderer: WebGLRenderer, opts?: { mouse?: boolean; meshes?: boolean }): SpatialInput {
   return new SpatialInput(scene, camera, renderer, opts);
 }

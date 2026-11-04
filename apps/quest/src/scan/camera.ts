@@ -65,16 +65,32 @@ export interface CameraSource {
   stop(): void;
   /** the most recent frame, or null when none is available yet */
   grab(opts?: GrabOptions): Promise<GrabbedFrame | null>;
+  /** The live track ended on its own (another tab or app took the camera): the app restarts it. */
+  onEnded?: (reason: string) => void;
 }
+
+/** busy: another tab/app holds the camera (NotReadableError "Could not start video source"); retrying helps. */
+export type CameraErrorCode = 'busy' | 'denied' | 'missing' | 'insecure';
 
 export class CameraError extends Error {
   constructor(
     message: string,
     readonly hint: string,
     cause?: unknown,
+    readonly code: CameraErrorCode = 'missing',
   ) {
     super(message, { cause });
   }
+}
+
+export const BUSY_HINT = 'Another Quest Browser tab or app is holding the passthrough camera. Close other tabs of this page; this tab keeps retrying.';
+
+/** NotReadableError / AbortError / TrackStartError: the device exists but is in use. */
+export function isCameraBusy(e: unknown): boolean {
+  if (e instanceof CameraError) return e.code === 'busy';
+  const name = (e as { name?: string } | null)?.name ?? '';
+  const message = (e as { message?: string } | null)?.message ?? '';
+  return name === 'NotReadableError' || name === 'AbortError' || name === 'TrackStartError' || /could not start video source|device in use|in use by another/i.test(message);
 }
 
 export const GRANT_HINT =
@@ -107,6 +123,7 @@ export class LiveCamera implements CameraSource {
   private running = false;
 
   private readonly ideal: { width: number; height: number };
+  onEnded?: (reason: string) => void;
 
   constructor(opts: { eye?: 'left' | 'right'; width?: number; height?: number } = {}) {
     this.eye = opts.eye ?? 'left';
@@ -121,7 +138,7 @@ export class LiveCamera implements CameraSource {
     if (this.running && this.info) return this.info;
     const md = navigator.mediaDevices;
     if (!md?.getUserMedia) {
-      throw new CameraError('getUserMedia is unavailable', 'The page needs a secure context: open it via adb reverse on http://localhost or over https.');
+      throw new CameraError('getUserMedia is unavailable', 'The page needs a secure context: open it via adb reverse on http://localhost or over https.', undefined, 'insecure');
     }
     const base: MediaTrackConstraints = { width: { ideal: this.ideal.width }, height: { ideal: this.ideal.height }, frameRate: { ideal: 30 } };
     let stream: MediaStream | undefined;
@@ -131,13 +148,19 @@ export class LiveCamera implements CameraSource {
     } catch (e) {
       const name = (e as DOMException)?.name ?? '';
       if (name === 'NotAllowedError' || name === 'SecurityError') {
-        throw new CameraError(`Camera permission denied (${name})`, 'Allow the camera for this page in Quest Browser, or run scripts/quest-grant-camera.sh.', e);
+        throw new CameraError(`Camera permission denied (${name})`, 'Allow the camera for this page in Quest Browser, or run scripts/quest-grant-camera.sh.', e, 'denied');
       }
+      if (isCameraBusy(e)) throw new CameraError(`Camera is busy (${name || 'Could not start video source'})`, BUSY_HINT, e, 'busy');
       // OverconstrainedError / NotFoundError: try any non-avatar camera by deviceId
       const devices = await this.listVideoInputs();
       const candidate = devices.find((d) => d.label && !AVATAR.test(d.label));
       if (candidate) {
-        stream = await md.getUserMedia({ video: { ...base, deviceId: { exact: candidate.deviceId } }, audio: false });
+        try {
+          stream = await md.getUserMedia({ video: { ...base, deviceId: { exact: candidate.deviceId } }, audio: false });
+        } catch (e2) {
+          if (isCameraBusy(e2)) throw new CameraError(`Camera is busy (${(e2 as DOMException)?.name || 'Could not start video source'})`, BUSY_HINT, e2, 'busy');
+          throw e2;
+        }
         warning = `facingMode environment failed (${name}); using "${candidate.label}"`;
       } else {
         throw new CameraError(`No passthrough camera (${name || 'unknown error'})`, GRANT_HINT, e);
@@ -157,6 +180,13 @@ export class LiveCamera implements CameraSource {
       }
     }
     this.stream = stream;
+    const live = stream;
+    // Another tab or app taking the camera ends this track: report it once so the app can restart with backoff.
+    track?.addEventListener('ended', () => {
+      if (this.stream !== live || !this.running) return;
+      this.running = false;
+      this.onEnded?.('the camera track ended');
+    }, { once: true });
     this.element.srcObject = stream;
     await this.element.play().catch(() => undefined);
     await this.waitForFirstFrame();

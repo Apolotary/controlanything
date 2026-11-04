@@ -48,6 +48,8 @@ export class VisualSynthLauncher {
   }) {}
 
   get opened(): boolean { return !!this.panel; }
+  /** The panel is up and its renderer started (not waiting on a retry after a graphics failure). */
+  get drawing(): boolean { return !!this.panel && this.ready; }
   /** Advertised to the room: a visible, ready screen of the paired owner on a live connection. */
   get available(): boolean { return this.ready && !!this.panel && !document.hidden && this.options.connected() && this.ownerId === this.options.owner(); }
 
@@ -155,6 +157,12 @@ export class VisualSynthLauncher {
     this.panel?.remove(); this.panel = undefined; this.canvas = undefined; this.output = undefined; this.retry = undefined; this.ownerId = undefined;
     this.readoutName = undefined; this.readoutValue = undefined; this.live = undefined; this.gauges.clear();
     if (hadPanel) this.options.onClosed?.();
+  }
+
+  /** Open visuals on a panel that is already up: show its buttons (Full screen, Back to companion) again. */
+  reveal(): void {
+    if (!this.panel) return;
+    this.showChrome();
   }
 
   private toggleFullscreen(): void {

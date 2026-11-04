@@ -72,7 +72,9 @@ export class WristPalette extends Group {
     super();
     this.name = 'wrist-palette';
     this.visible = false;
-    this.anchor = new HandDockAnchor(nonDominant, { lateral: nonDominant === 'left' ? 0.1 : -0.1, up: 0.03, toward: 0.03 });
+    // Beside the hand, never over it: the menu's near edge stays 3.5 cm past the knuckles so the pressing finger
+    // does not crowd the menu hand (Quest loses hands that overlap).
+    this.anchor = new HandDockAnchor(nonDominant, { lateral: nonDominant === 'left' ? 0.1 : -0.1, up: 0.03, toward: 0.03, clearance: 0.035 });
     this.add(this.content);
   }
 
