@@ -7,7 +7,7 @@ Pinch a device in your Quest 3 passthrough and ask what you want to do with it. 
 How it works in one line: Meta **SAM 3.1** outlines the objects around you; you select one and ask (by voice or a suggestion); the **Muse agent** (Muse Spark with a real terminal, files and device tools on the Mac) writes a connector, runs it, tests it on the device and designs the AR instrument; you watch its code stream in AR and then play. It is meant for any device your laptop can reach (USB, MIDI, serial, Bluetooth or the network); nothing is device-specific. Demonstrated with the built-in visual synth, a third-party app (Instagram Reels in Chrome), a Teenage Engineering OP-1 Field over USB-MIDI and a DJI Osmo Mobile 4 over Bluetooth, plus a virtual pet and a hand-pose recorder for physical-AI data.
 
 <!-- VIDEO_URL -->
-**▶ 3-minute demo video:** _link coming soon_
+**▶ Demo video (2:11, filmed on a real Quest 3):** linked from the hackathon submission page.
 
 <p align="center"><img src="docs/hero.png" alt="ControlAnything: Ask. Muse wires it. Any device your laptop can reach. Buddy the mascot waves." width="720"></p>
 
@@ -21,7 +21,9 @@ npm install
 npm run demo:sim     # Node 22.12+ and Chrome; serves http://localhost:8787 with sound on
 ```
 
-After `npm run demo:sim`, open `http://localhost:8787/sim/` (the simulated room; it stands in for your Mac), then `http://localhost:8787/quest/?emulate=1&camera=sim&mic=0` (the headset emulator) and choose **Enter AR**. Click the laptop's outline, press `M` for Control and choose **Give me knobs for this**. Without a key every model answer is a recorded or scripted replay, labelled **FIXTURE**. The full walk-through is the [judge path](#judge-path-no-hardware).
+After `npm run demo:sim`, open `http://localhost:8787/sim/` (the simulated room; it stands in for your Mac), then `http://localhost:8787/quest/?emulate=1&camera=sim&mic=0` (the headset emulator) and choose **Enter AR**. Click the laptop's outline to tag it, press `M` for Control, click the laptop again to open its card, and choose **Give me knobs for this**. Without a key every model answer is a recorded or scripted replay, labelled **FIXTURE**. The full walk-through is the [judge path](#judge-path-no-hardware).
+
+**Full reviewer guide:** [docs/QUICKSTART.md](docs/QUICKSTART.md) · **For AI coding agents:** [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md)
 
 **What to look for while it runs:**
 - The **LIVE / FIXTURE / TEMPLATE** badge on the AR code card says who wrote the code: a Meta model just now, a recorded replay, or a labelled template.
@@ -31,14 +33,14 @@ After `npm run demo:sim`, open `http://localhost:8787/sim/` (the simulated room;
 
 ## The demos, and where each is verified
 
-Dates in this README are Japan time (JST), where the work was done. The deadline, Nov 4 9:00 PM ET, is Nov 5 11:00 JST, so every "Nov 5" below is before the deadline.
+In the Nov 5 takes every request was made from the MacBook's card, naming the device by voice ("…this OP-1 connected to my Mac"); Muse wired the named device. Dates in this README are Japan time (JST), where the work was done. The deadline, Nov 4 9:00 PM ET, is Nov 5 11:00 JST, so every "Nov 5" below is before the deadline.
 
 | Demo | What happens | Verified |
 |---|---|---|
 | **1. Built-in visual synth** | Touch the water on the laptop's screen and ripples follow your fingertip; or ask for knobs. Muse writes the connector (MIDI CCs to the browser renderer) and the touch program; no setup step: your first touch on the glass finds the screen. | **Real Quest**, live Muse, recorded take (Nov 5): "Touch the water with your finger" written in 31.6 s as a hand program with no floating controls; the first touch found the screen and the ripples followed the fingertip. Also confirmed on Nov 4 (about 45 s). |
 | **2. A third-party app: Instagram Reels** | Swipe your right hand up or down to scroll Reels in Chrome. Muse writes a connector that opens Reels on the Mac and presses arrow keys in the front app. macOS needs Accessibility permission for the app running the server. | **Real Quest + real Mac**, live Muse, recorded take (Nov 5): "Reels hand scroll" in 54.5 s. Muse opened Reels in Chrome, tested the arrow keys (the reels changed), then hand flicks and its Next/Prev/Like buttons scrolled Reels. |
 | **3. OP-1 Field over USB-MIDI** | Ask for keys and knobs. Notes and CCs go from the AR controls through the Mac companion's Web MIDI to the synth. | **Real Quest + physical OP-1**, live Muse, recorded take (Nov 5): filter knobs plus an AR keyboard, and "Play the OP-1 Field with fingers" in 36.7 s; Muse's test notes were confirmed on the OP-1. Also Nov 4 with the earlier UI. |
-| **4. DJI Osmo Mobile 4 over Bluetooth** | Ask for pan and tilt. Muse writes a gimbal connector and a right-hand pan/tilt program; the bridge clamps speed and range. | **Real Quest + real OM 4**, live Muse, recorded take (Nov 5): "Gimbal finger steering" in 30.0 s; the gimbal acknowledged 889 Muse-driven moves while the hand steered it. Direct Bluetooth moves also verified on Nov 4. |
+| **4. DJI Osmo Mobile 4 over Bluetooth** | Ask for pan and tilt. Muse writes a gimbal connector and a right-hand pan/tilt program; the bridge clamps speed and range. | **Real Quest + real OM 4**, live Muse, recorded take (Nov 5): "Gimbal finger steering" in 30.0 s; the gimbal acknowledged 881 moves from Muse's code (2 tests, 879 while the hand steered). Direct Bluetooth moves also verified on Nov 4. |
 | **5. Buddy, a virtual pet** | Wave, pet or high-five it; show it a real object (photo preview, then **Show Buddy**) or a virtual one. Muse Spark writes its reaction and Muse Image paints a sticker. | **Real Quest**, live models, recorded take (Nov 5): Muse Spark reactions in 5.1–5.7 s, Muse Image stickers in 7–13 s. Buddy's voice now plays from the headset (macOS speech rendered on the Mac, since Quest Browser has no speech engine). |
 | **6. Physical-AI recording** | Record passthrough video plus head and 25-joint hand poses at up to 30 Hz, review video and 3D hands side by side in **Motion lab**, and export a dataset. | **Real Quest**, recorded take (Nov 5): 111.6 s, 3,247 head + 25-joint hand frames at 30 Hz, synced with the Quest's own video recording. Also checked in the browser and emulator (record → Motion lab → dataset export). |
 
@@ -165,7 +167,7 @@ After `npm run demo:sim`:
 npm run build                         # only while no live AR session is using dist
 node scripts/e2e-muse-agent.mjs        # Muse agent golden path: tag -> Control -> ask -> knobs -> MIDI -> Stop
 PORT=8796 node scripts/e2e-judge.mjs   # older setup-first water flow (CE_AGENT=0)
-node --import tsx apps/server/scripts/wire-e2e.ts  # fixture WIRE over WebSocket
+CE_AGENT=0 node --import tsx apps/server/scripts/wire-e2e.ts  # fixture WIRE over WebSocket (older setup-first flow)
 ```
 
 For unattended playback, use `npm run demo:sim -- --mute`; attended demos keep sound on after a browser gesture. These checks use server fixture detections. They do not measure detector accuracy, headset frame rate or the real Mac display.
@@ -175,7 +177,7 @@ For unattended playback, use `npm run demo:sim -- --mute`; attended demos keep s
 1. **Mac:** put `MODEL_API_KEY` in `.env` for live Meta models; the key stays on the server, which strips secret values from everything it sends to clients. Build before opening the app, then run `CE_DEMO=1 npm start` with `CE_MAC_SILENT` unset (add `CE_OSMO=web` for the gimbal, `CE_AGENT_ENGINE=muse-code` for the Muse Code engine). HTTP serves on :8787 and HTTPS on :8443. The first click/Enter AR unlocks browser audio; a shared visible volume/mute controls the demo.
 2. **Quest 3** (developer mode, USB-C): `sh scripts/quest-grant-camera.sh` grants camera access and sets up `adb reverse`. In Quest Browser, open `http://localhost:8787/quest/` and choose **Enter AR**. Over the LAN, use `https://<mac-ip>:8443/quest/` and accept the development certificate.
 3. **Companion:** open `http://localhost:8787/companion/` in its own Chrome window, full screen. Look at its QR code from the headset.
-4. **Tag, choose Control, then ask Muse.** Plug USB-MIDI devices into the Mac and click **Enable MIDI** on the companion once. Select the object in Control, choose a suggestion or hold-to-talk, and watch Muse write and test the connector; then use the AR knobs or your hands. For the water demo, ask the laptop for the visual synth (or choose **More → Demo: visual synth**). For Reels, allow Accessibility first (see [Demo details](#demo-details)).
+4. **Tag, choose Control, then ask Muse.** Plug USB-MIDI devices into the Mac and click **Allow USB MIDI** on the companion once. Select the object in Control, choose a suggestion or hold-to-talk, and watch Muse write and test the connector; then use the AR knobs or your hands. For the water demo, ask the laptop for the visual synth (or choose **More → Demo: visual synth**). For Reels, allow Accessibility first (see [Demo details](#demo-details)).
 
 While a live session is open, rebuild with `scripts/deploy-live.sh quest` (or `companion` / `sim`), which preserves old chunks. Reload the single Quest tab only after leaving AR; `scripts/quest-reload.mjs` avoids opening a duplicate camera-owning tab.
 

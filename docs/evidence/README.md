@@ -41,12 +41,12 @@ All observed by the user on the headset with live Muse. Details are in [DEMO-ACC
 
 ## Real Quest 3, recorded takes (Nov 5)
 
-Each demo was asked by voice on the headset and written live by the Muse agent (`muse-spark-1.3`); the Quest's own screen recorder captured the result. Times are from the server log (ask to ready).
+Each demo was asked on the headset (by voice, or a suggestion) from the MacBook's card, naming the device, and written live by the Muse agent (`muse-spark-1.3`); the Quest's own screen recorder captured the result. 10 asks, 9 reached ready (one was stopped by the wearer), median 32.5 s; every model call was `muse-spark-1.3`. Times are from the server log (ask to ready).
 
 - **Touch the water.** "Touch the water with your finger": a hand program with no floating controls, ready in 31.6 s. The first fingertip touch found the laptop screen; the ripples followed the finger.
 - **Instagram Reels (a third-party app).** "Reels hand scroll", ready in 54.5 s. Muse opened Reels in Chrome on the Mac and tested the arrow keys (the reels changed during its own test), then hand flicks and its Next/Prev/Like buttons scrolled Reels.
 - **OP-1 Field over USB-MIDI.** Filter knobs plus an AR keyboard, and "Play the OP-1 Field with fingers" (36.7 s). Muse's test notes were confirmed on the OP-1.
-- **DJI Osmo Mobile 4 over Bluetooth.** "Gimbal finger steering", ready in 30.0 s. The gimbal acknowledged 889 Muse-driven moves while the hand steered it.
+- **DJI Osmo Mobile 4 over Bluetooth.** "Gimbal finger steering", ready in 30.0 s. The gimbal acknowledged 881 moves from Muse's code: 2 tests, then 879 while the hand steered it (889 acknowledgements in all, including stop and release).
 - **Buddy.** Muse Spark reactions in 5.1–5.7 s and Muse Image stickers in 7–13 s for a real mug.
 - **Physical-AI recording.** A 111.6 s take: 3,247 head + 25-joint hand frames at 30 Hz, synced with the Quest's video recording.
 
