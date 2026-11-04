@@ -31,18 +31,18 @@ Seated 0.6–1.0 m from the MacBook, with the Mac screen and both hands in view.
 
 | # | Wearer does | Must see (pass) | Run 1 | Run 2 |
 |---|---|---|---|---|
-| G1 | Enter AR | Passthrough + calm HUD; no centre-of-view coach card; ≤ 5 HUD elements | | |
-| G2 | Look at the MacBook | A thin ring/label on the Mac: *MacBook · pinch to control* | | |
-| G3 | Pinch the MacBook | The Mac's status card turns into the full-screen visual synth **by itself** (no Mac click) | | |
-| G4 | Wait (no action) | Setup ring around the Mac, 5 ticks filling; verified ≤ 10 s ("seen" or "verified by renderer"); never "0/5 · Setup stopped" | | |
-| G5 | — | Two arc dials (Warp, Ripples) on the Mac screen's edges; Perform/Stop toggle | | |
-| G6 | Pinch-drag the Warp arc | The Mac colour/warp changes live; the Mac's Warp gauge follows | | |
-| G7 | Left fist + raise/lower right hand | Warp follows hand height; clutch ring on the fist | | |
-| G8 | Left fist + push/pull right hand ~20 cm | Blue water with expanding ripples on the Mac; Ripples gauge follows | | |
-| G9 | Open the left hand | Control pauses; the Mac keeps its last state | | |
+| G1 | Enter AR | Passthrough + calm HUD; no centre-of-view coach card; ≤ 5 HUD elements | In AR 10:54:45 (after a page reload at 10:54:39); camera on, both hands tracked. HUD count not checked by instruments | |
+| G2 | Look at the MacBook | A thin ring/label on the Mac: *MacBook · pinch to control* | YOLO **Laptop** box present (the pinch carried `label:"Laptop"`). Label wording not checked | |
+| G3 | Pinch the MacBook | The Mac's status card turns into the full-screen visual synth **by itself** (no Mac click) | **Pass** 10:54:56: `target.select` → "Opening the Mac visuals…" → automatic re-select → ok (`autoSetup`). The renderer was drawing (frames 159→273 in the verify receipts) | |
+| G4 | Wait (no action) | Setup ring around the Mac, 5 ticks filling; verified ≤ 10 s ("seen" or "verified by renderer"); never "0/5 · Setup stopped" | **Pass** 10:54:59: 6/6 *verified by renderer*. The camera saw no change on the first action (Δ −0.039) and was skipped after that. **Pinch → armed: 3 s** (`CE_DEMO=1` auto-arm) | |
+| G5 | — | Two arc dials (Warp, Ripples) on the Mac screen's edges; Perform/Stop toggle | ui.spec "Visual Synth", 6 controls; armed card drew 50–86 draw calls. Not checked by eye | |
+| G6 | Pinch-drag the Warp arc | The Mac colour/warp changes live; the Mac's Warp gauge follows | Controlling 10:55:46–10:56:06 (≈4.7 control events/s); every ack `applied.source: renderer, visible: true` | |
+| G7 | Left fist + raise/lower right hand | Warp follows hand height; clutch ring on the fist | **Pass (wire)** 10:56:15–10:56:46 Perform live: CC71 Warp ×45 in the last 100 commands, all applied by the renderer | |
+| G8 | Left fist + push/pull right hand ~20 cm | Blue water with expanding ripples on the Mac; Ripples gauge follows | **Pass (wire)**: CC21 Ripples ×38, values sweeping 104 → 83; renderer state `pattern 3` (Water) in the acks | |
+| G9 | Open the left hand | Control pauses; the Mac keeps its last state | **Pass**: Perform live → paused at 10:56:39 and 10:56:46, re-engaged at 10:56:40 and 10:57:04 | |
 | G10 | Stop (both palms out, or the Stop button) | Control stops; the Mac resets to its default look | | |
 | G11 | Exit AR | Back to the page; no stuck panels | | |
-| P1 | Head sweep left/right, 5 s, in Armed | `--sweep` shows no HUD element flipping; no visible blink | | |
+| P1 | Head sweep left/right, 5 s, in Armed | `--sweep` shows no HUD element flipping; no visible blink | **Pass**: 45 s sweep, 45 of 4,032 frames changed. Only the pinch reticles (22/19 flips) and the wrist palette/layer buttons showing and hiding (4 flips each); no card or dial flipped | |
 
 Record: date/time, build (`git log -1 --oneline`), server mode, the setup verify label (camera/renderer), and the times *pinch → ring complete* and *pinch → first ripple*. Keep the uncut clips.
 
@@ -53,9 +53,11 @@ Measure with `node scripts/quest-cdp.mjs --fps 450` (≈5 s at 90 Hz) in each st
 | When / build | State | fps (mean) | p95 ms (fps) | p99 ms | missed | draws | tris | sweep flips | Notes |
 |---|---|---|---|---|---|---|---|---|---|
 | Nov 4 04:00, `4a296f3` bundle (pre-WP1–3) | Control (visual synth tag locked, server down), on desk | 87.8 | 11.84 (84.5) | 24.1 | 1.8 % | 50 | 1,860 | 0 | 90 Hz session, 1 render/frame, 26 drawables (all transparent), heap 23 MB |
-| | Annotate | | | | | | | | |
-| | Armed | | | | | | | | |
-| | Perform | | | | | | | | |
+| Nov 4 10:29–10:30, HEAD b12469f, worn | Annotate, while a stale tab held the camera (38 samples) | 86.5 | 18.7 (53) | — | 10 % | 22 (88 max) | 13.5k | — | Camera failed ("Could not start video source"); fixed by closing the old tab |
+| Nov 4 10:31, b12469f, worn | Control, camera on (29 samples) | 90.0 | 12.1 (82) | — | 0 % | 24–84 | 13.9k | — | |
+| Nov 4 10:54, f3861cc+, worn | **Annotate**, camera on (7 samples) | 85 | 19.3 (52); worst 47 | — | 7 % | 24 (28 max) | 19.6k | — | **Below target.** CPU-side (camera + YOLO + upload), not draws. Lasts only the ~10 s before the pinch |
+| Nov 4 10:55, f3861cc+, worn | **Armed** (39 samples) | 89.9 | 12.35 (81); worst 15.0 | — | 0 % | 50 (86 max) | 24.9k | 45 frames / 45 s (reticles, wrist palette) | **Pass** |
+| Nov 4 10:56, f3861cc+, worn | **Perform** fist open / **live** (7 + 15 samples) | 90 | 12.34 / 12.39 (81); worst 14.7 | — | 0 % | 50–56 | 24.5k | — | **Pass**. Mac acks: 100/100 ok, renderer, visible; ack latency 1 ms p50, 46 ms p95 |
 
 ## 5. Mac renderer checks
 
@@ -64,6 +66,7 @@ Measure with `node scripts/quest-cdp.mjs --fps 450` (≈5 s at 90 Hz) in each st
 | Keeps animating while visible but unfocused | **Pass**: 121 fps (120 Hz panel), same as focused | Headed Chrome (Playwright, normal occlusion flags), another window in front |
 | Notification banner on screen | **Pass**: 121 fps, page stays visible | `display notification` (silent) during the measurement |
 | Brief hide (Space switch, reload) | Commands still apply for 15 s (`visualPresence.recent()`). The advertised port flips honestly; the server's 15 s grace keeps setup alive. | Code path. Re-check on the real run. |
+| Real run, live Muse, real Quest camera | **Pass**: 6/6 setup actions and 100/100 Perform commands acknowledged by the Mac renderer (`visible: true`, frames advancing). The headset camera missed the first change at this distance, so the renderer receipt carried verification | Nov 4 10:54–10:57, `/api/agent/exec` |
 | Renderer self-report in `exec.ack` | **Pass** (fixture): Warp CC 110 → receipt `warp 0.866, visible true, frame 103`, `applied.source: renderer` | :8794 fixture server, headless Chrome |
 | Server setup driven by renderer receipts | **Pass** (fixture, `CE_DEMO=1`, real companion, no headset camera): select → visuals auto-open → 5/5 *verified by renderer* → template forge → auto-armed, under 1 s | :8794 fixture server, fake Quest socket |
 | Silent | No AudioContext or audio element in the renderer; `CE_MAC_SILENT=1` on the server | — |
@@ -81,4 +84,4 @@ Measure with `node scripts/quest-cdp.mjs --fps 450` (≈5 s at 90 Hz) in each st
 
 | Run | Time | Build | Result | Notes / clip |
 |---|---|---|---|---|
-| | | | | |
+| 1 | Nov 4 10:54:45–10:57 | HEAD after f3861cc (tab reloaded 10:54:39) | Pinch → armed in 3 s; Perform drives Warp, Ripples and Hue on the Mac; armed/perform 81 fps at p95; Annotate 52 fps at p95 | Stop (G10) and Exit (G11) not yet observed by instruments. Earlier attempt 10:29 failed: a stale Quest tab held the camera |
