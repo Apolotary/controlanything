@@ -361,6 +361,8 @@ export class HandVisuals {
   videoMix = 0.55;
   /** 1 = the camera as it is (AR passthrough), 0 = dimmed and cool under the visuals */
   passthrough = 0;
+  /** particle brightness (low over a passthrough until something is wired) */
+  particleAlpha = 1;
   synthMix = 0;
   maskMix = 0;
   /** paused while the page is hidden */
@@ -629,7 +631,7 @@ export class HandVisuals {
     const pm = this.points.material.uniforms;
     pm.tPos!.value = this.gpu.getCurrentRenderTarget(this.posVar).texture;
     pm.tVel!.value = this.gpu.getCurrentRenderTarget(this.velVar).texture;
-    pm.uAspect!.value = this.aspect; pm.uHue!.value = L.hue; pm.uGlow!.value = 0.55 + L.glow * 0.6;
+    pm.uAspect!.value = this.aspect; pm.uHue!.value = L.hue; pm.uGlow!.value = (0.55 + L.glow * 0.6) * this.particleAlpha;
     this.updateRibbons();
     // the outline follows the camera mask; it fades out if the camera stops sending masks
     const o = this.outlineU;

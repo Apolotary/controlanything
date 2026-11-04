@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#05060b">
+  <title>ControlAnything · AR without a headset</title>
+  <link rel="icon" href="data:,">
+</head>
+<body class="start-open">
+  <div id="stage" aria-label="Camera passthrough with SAM outlines"></div>
+  <div id="overlay-host" aria-hidden="true"></div>
+  <div id="calib" hidden aria-live="polite"><div class="calib-box"><span id="calib-text">Hold your open palm here</span></div></div>
+
+  <section id="start" class="start" aria-labelledby="start-title">
+    <div class="start-card">
+      <p class="eyebrow">CONTROLANYTHING · NO HEADSET NEEDED</p>
+      <h1 id="start-title">See it. Tag it.<br><span>Ask Muse to wire it.</span></h1>
+      <p>The same flow as the Quest. SAM 3.1 outlines devices in your camera view. You tag one, switch to Control, and ask. Muse writes the glue.</p>
+      <button id="start-ar" class="primary big" type="button">Start AR</button>
+      <p id="start-note" class="hint" role="status">Checking what this browser supports…</p>
+      <p class="hint links"><a href="./reviewer.html?buddy=1">Meet Buddy instead</a> · <a href="./">Quest headset</a></p>
+    </div>
+  </section>
+
+  <header class="topbar">
+    <div class="now glass" id="now" aria-label="Now">
+      <button id="now-toggle" class="now-head" type="button" aria-expanded="true"><span>Now</span><span id="now-mode" class="now-mode"></span></button>
+      <div id="now-rows" class="now-rows"></div>
+      <p id="now-next" class="now-next"></p>
+    </div>
+    <div class="layer-col">
+      <div class="layer-switch glass" role="group" aria-label="Layer">
+        <button id="layer-annotate" type="button" class="selected" aria-pressed="true">Annotate</button>
+        <button id="layer-control" type="button" aria-pressed="false">Control</button>
+      </div>
+      <div id="filters" class="filters glass" role="group" aria-label="What SAM looks for"></div>
+    </div>
+    <div class="top-right">
+      <span class="badge" id="ar-badge"></span>
+      <div class="master glass"><input id="volume" type="range" min="0" max="100" value="35" aria-label="Master volume"><button id="mute" type="button" aria-pressed="false">Mute</button></div>
+      <button id="more" class="glass-btn" type="button" aria-expanded="false">More</button>
+    </div>
+  </header>
+
+  <nav id="more-menu" class="more glass" hidden aria-label="More">
+    <p class="eyebrow">OPTIONAL DEMOS</p>
+    <button id="demo-visual" type="button">Visual synth (on this page)</button>
+    <button id="demo-music" type="button">Musical synth (on this page)</button>
+    <button id="buddy" type="button">Buddy</button>
+    <p class="eyebrow">CAMERA &amp; HANDS</p>
+    <button id="calibrate" type="button">Calibrate hands</button>
+    <button id="mask" type="button" aria-pressed="false">Show what tracking sees</button>
+    <button id="flip" type="button">Switch camera</button>
+    <button id="hand-sound" type="button" aria-pressed="true">Hand sounds</button>
+    <button id="stop-all" type="button" class="danger">Stop all</button>
+  </nav>
+
+  <aside id="card" class="object-card glass" hidden aria-label="Selected device">
+    <div class="card-head"><div><p id="card-kind" class="eyebrow">SELECTED</p><h2 id="card-title"></h2></div><button id="card-close" type="button" aria-label="Deselect">✕</button></div>
+    <p id="card-hint" class="hint"></p>
+    <p id="card-prompt" class="card-prompt">What should your hands do?</p>
+    <div id="card-chips" class="chips"></div>
+    <form id="ask-form" class="ask-row">
+      <label for="request" class="sr-only">Ask Muse</label>
+      <input id="request" maxlength="350" placeholder="Or type what you want" autocomplete="off">
+      <button id="mic" type="button" title="Hold to talk (Muse Voice Transcribe)">🎙︎ Hold</button>
+      <button id="ask" class="primary" type="submit">Ask</button>
+    </form>
+    <p id="wire-status" class="wire-status" role="status"></p>
+    <div class="code-wrap" id="code-wrap" hidden><div class="code-head"><span>Muse's terminal</span><span id="code-source"></span></div><pre id="code" aria-label="Muse's code and progress"></pre></div>
+    <div class="card-actions"><button id="stop" type="button" hidden>Stop Muse</button></div>
+    <p id="receipt" class="hint receipt" role="status"></p>
+  </aside>
+
+  <section id="controls-card" class="controls-card glass" hidden aria-label="Controls Muse made"><p class="eyebrow">MUSE'S CONTROLS</p><div id="controls"></div></section>
+
+  <div id="bubble" class="bubble" hidden role="status"><b id="bubble-title"></b><span id="bubble-detail"></span></div>
+
+  <footer class="hud">
+    <div class="hud-hands"><span id="hand-left" class="hand-pill">L —</span><span id="hand-right" class="hand-pill">R —</span><span id="hud-stats" class="hud-stats"></span></div>
+    <p id="hud-note" class="hud-note"></p>
+  </footer>
+  <video id="camera" class="source-video" muted playsinline></video>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/src/hands/main.ts"></script>
+</body>
+</html>

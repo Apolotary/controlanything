@@ -109,6 +109,8 @@ const connection = new HandsConnection(synthCanvas, {
     ready = payload; wireSource = payload?.source; outputs.clear();
     renderControls($('controls'), payload, (action, value) => { unlock(); connection.control(action, value); });
     $('controls-card').hidden = !$('controls').childElementCount;
+    // like the Quest's code card turning into a pill once controls show: the phone card folds to a compact bar
+    document.body.classList.toggle('controls-on', !$('controls-card').hidden);
     if (payload?.code.trim()) tracker.resetSignals();
     if (payload?.explanation) audio.speak(payload.explanation.replace(/^(FIXTURE|Template)[^.]*\.\s*/i, '').slice(0, 180));
     document.body.classList.toggle('wired', !!payload);
@@ -205,7 +207,8 @@ function openCard(): void {
   $('card').hidden = false;
   $('card-kind').textContent = demo ? 'OPTIONAL DEMO · ON THIS PAGE' : 'SELECTED · TAGGED IN ANNOTATE';
   $('card-title').textContent = demo === 'visual-synth' ? 'Visual synth' : demo === 'musical-synth' ? 'Musical synth' : t?.name ?? t?.label ?? 'Device';
-  $('card-hint').textContent = demo ? 'Authored software instrument on this page. Muse writes the connector and the hand program.' : t?.hint ?? '';
+  // the server's connection hint only matters when the device cannot be reached (the Muse agent needs no Set up step)
+  $('card-hint').textContent = demo ? 'Authored software instrument on this page. Muse writes the connector and the hand program.' : t?.connection === 'offline' ? t.hint ?? '' : '';
   const box = $('card-chips'); box.replaceChildren();
   for (const text of chipsFor()) {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'chip'; b.textContent = text;
@@ -228,7 +231,7 @@ function select(cardId: string): void {
 function deselect(): void {
   if (selected || demo) connection.deselect();
   selected = undefined; demo = undefined; overlay.selected = undefined;
-  $('card').hidden = true; $('controls-card').hidden = true; document.body.classList.remove('card-open');
+  $('card').hidden = true; $('controls-card').hidden = true; document.body.classList.remove('card-open', 'controls-on');
 }
 
 async function openDemo(instrument: Instrument): Promise<void> {
@@ -399,14 +402,17 @@ function calibrate(): void {
 /** Webcam: the lead hand aims; holding it over an outline for 0.9 s (or closing it there) acts like a pinch. */
 function aimWithHand(now: number): void {
   const lead = input === 'hand' && camera.active ? tracker.cameraHands().find(h => h.side === 'right') ?? tracker.cameraHands()[0] : undefined;
-  if (!lead || connection.programRunning) { overlay.aim = undefined; dwell = undefined; lastFist = false; return; }
+  // while Muse works or a wiring runs, a drifting hand must not switch devices (a click or tap still can)
+  const busy = layer === 'control' && (!!selected || !!demo) && (phase === 'working' || phase === 'running' || phase === 'ready');
+  if (!lead || connection.programRunning || busy) { overlay.aim = undefined; dwell = undefined; lastFist = false; return; }
   const item = overlay.hit(lead.x, lead.y, layer === 'annotate' ? ['detection'] : ['tag']);
   const color = lead.side === 'left' ? '#40d8ff' : '#ff5ad8';
   if (!item || (layer === 'control' && item.key === selected)) { overlay.aim = { x: lead.x, y: lead.y, progress: 0, color }; dwell = undefined; lastFist = lead.fist; return; }
   if (!dwell || dwell.key !== item.key) dwell = { key: item.key, since: now, fired: false };
   const progress = (now - dwell.since) / 900;
   overlay.aim = { x: lead.x, y: lead.y, progress: dwell.fired ? 0 : progress, color };
-  if (!dwell.fired && (progress >= 1 || (lead.fist && !lastFist))) { dwell.fired = true; act(item); }
+  // closing the hand counts only after it has been over the outline a moment (no accidental tags in passing)
+  if (!dwell.fired && (progress >= 1 || (lead.fist && !lastFist && now - dwell.since > 300))) { dwell.fired = true; act(item); }
   lastFist = lead.fist;
 }
 
@@ -429,10 +435,12 @@ function placeCards(): void {
   if (!controls.hidden) {
     const w = controls.offsetWidth, h = controls.offsetHeight;
     const anchor = item ?? (ar === 'xr' && selected ? phoneAR.projected(selected) : undefined);
-    let x = 16, y = H - h - (phone ? innerHeight * 0.45 : 90);
+    // never under the (phone) bottom card
+    const floor = phone && !card.hidden ? card.getBoundingClientRect().top - 8 : H - 8;
+    let x = 16, y = floor - h;
     if (anchor) {
       x = Math.max(8, Math.min(W - w - 8, ((anchor.box.x0 + anchor.box.x1) / 2) * W - w / 2));
-      y = Math.max(84, Math.min(H - h - 8, anchor.box.y1 * H + 14));
+      y = Math.max(phone ? 60 : 84, Math.min(floor - h, anchor.box.y1 * H + 14));
     }
     controls.style.left = `${Math.round(x)}px`; controls.style.top = `${Math.round(y)}px`;
   }
@@ -442,9 +450,9 @@ function hud(now: number, hands: TrackedHand[]): void {
   if (now - lastHud < 125) return;
   lastHud = now;
   const mine = new Set([connection.selected]);
-  const macs = devices.filter(d => d.online && d.role === 'companion' && !d.app?.startsWith('hands-software@') && !d.app?.startsWith('reviewer-software@'));
+  const macs = devices.filter(d => d.online && (d.role === 'companion' || d.kind === 'sim') && !d.app?.startsWith('hands-software@') && !d.app?.startsWith('reviewer-software@'));
   const ports = macs.flatMap(d => (d.ports ?? []).filter(p => p.kind === 'midi-out' && p.state === 'connected' && !/^ce-/.test(p.id)).map(p => p.name));
-  const deviceText = [...(macs.length ? ['Mac'] : []), ...ports.slice(0, 2), ...(demo ? ['this page'] : [])].join(' · ');
+  const deviceText = [...(macs.length ? [macs.every(d => d.kind === 'sim') ? 'Mac (sim)' : 'Mac'] : []), ...ports.slice(0, 2), ...(demo ? ['this page'] : [])].join(' · ');
   void mine;
   const t = selected ? annotator.tags.get(selected) : undefined;
   const view = nowView({ server: connection.connected || ar === 'off', mode: layer, filter: filterLabel(), tagged: annotator.tags.size, detections: annotator.detections.length,
@@ -500,6 +508,7 @@ function frame(now: number): void {
   visuals.synthMix = synthMix;
   visuals.videoMix = ar === 'camera' ? (wiredVisual ? 0.5 : 1) : 0;
   visuals.passthrough = wiredVisual ? 0.3 : 1;
+  visuals.particleAlpha += ((wiredVisual ? 0.75 : ready ? 0.45 : 0.3) - visuals.particleAlpha) * 0.05;
   if (vs && wiredVisual) visuals.look = { hue: vs.hue - 0.54, flow: 0.2 + vs.speed * 0.8, swirl: 0.3 + vs.warp, glow: 0.6 + vs.brightness * 0.5 };
   else if (connection.instrument === 'musical-synth' && ready) {
     const m = connection.musical.getState();

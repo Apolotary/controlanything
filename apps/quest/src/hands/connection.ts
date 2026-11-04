@@ -218,7 +218,7 @@ export class HandsConnection {
         const refusal = this.runtime.start({ wiringId: p.wiringId, requestId: this.requestId, cardId: p.cardId, code: p.code, title: p.title, explanation: p.explanation, model: p.model, source: p.source, actions: p.actions });
         if (refusal) { this.view.wire(`${who} · ${p.title} · the hand program could not start: ${refusal}`, 'failed'); this.view.ready(p); return; }
         this.view.wire(`${who} · ${p.title} · your hands are wired`, 'running');
-      } else this.view.wire(`${who} · ${p.title} · controls only (no hand program): use the controls below`, 'ready');
+      } else this.view.wire(`${who} · ${p.title} · controls only (no hand program): use Muse's controls`, 'ready');
       this.view.ready(p);
     });
     this.controller.on('wire.stopped', m => {

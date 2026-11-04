@@ -7,7 +7,7 @@ import { defineConfig } from 'vite';
 // `npm run dev:hmr -w @ce/quest` runs Vite's own dev server on :5174 with the server routes proxied.
 // Shared by quest-io (index.html, src/{app,io,scan,pair,voice,replay}) and gen3d-lead (gallery.html, src/{gen3d,hud,fx}).
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
-const input: Record<string, string> = { main: here('./index.html'), reviewer: here('./reviewer.html') };
+const input: Record<string, string> = { main: here('./index.html'), reviewer: here('./reviewer.html'), hands: here('./hands.html') };
 if (existsSync(here('./gallery.html'))) input.gallery = here('./gallery.html');
 
 const server = 'http://127.0.0.1:8787';

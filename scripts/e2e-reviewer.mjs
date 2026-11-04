@@ -59,7 +59,7 @@ try {
   const page = await context.newPage(); page.on('pageerror', error => evidence.errors.push(error.message));
   const uploads = [];
   page.on('request', request => { if (request.url().endsWith('/api/buddy/react')) uploads.push(request.postDataJSON()); });
-  await page.goto(`${BASE}/quest/reviewer.html?mute=1`);
+  await page.goto(`${BASE}/quest/reviewer.html?buddy=1&mute=1`);
   await page.waitForFunction(() => window.__ceReviewer);
   assert.equal(await page.evaluate(() => window.__ceReviewer.state().camera), false);
   assert.equal(uploads.length, 0);
@@ -120,7 +120,7 @@ try {
   await page.close();
   const mobile = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
   const phone = await mobile.newPage(); phone.on('pageerror', error => evidence.errors.push(error.message));
-  await phone.goto(`${BASE}/quest/reviewer.html?mute=1`); await phone.waitForFunction(() => window.__ceReviewer);
+  await phone.goto(`${BASE}/quest/reviewer.html?buddy=1&mute=1`); await phone.waitForFunction(() => window.__ceReviewer);
   await phone.click('#virtual'); await phone.click('#wave');
   await phone.screenshot({ path: join(OUT, '04-mobile.png'), fullPage: true });
   assert.equal(await phone.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Mobile page overflows horizontally');
@@ -136,7 +136,7 @@ try {
     const response = await route.fetch(); blocked = true; await resumePair;
     await route.fulfill({ response }).catch(() => {});
   });
-  await lifecyclePage.goto(`${BASE}/quest/reviewer.html?mute=1`);
+  await lifecyclePage.goto(`${BASE}/quest/reviewer.html?buddy=1&mute=1`);
   await lifecyclePage.click('#connect'); await until('deferred pairing response', () => blocked);
   await lifecyclePage.evaluate(() => {
     Object.defineProperty(document, 'hidden', { configurable: true, value: true });

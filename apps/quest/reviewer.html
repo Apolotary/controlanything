@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="color-scheme" content="dark"><title>ControlAnything · Camera demo</title><link rel="icon" href="data:,"></head>
+<head><meta charset="utf-8"><script>/* AR first, like the Quest: this page's Buddy-first flow stays available with ?buddy=1 */ if (!/[?&]buddy=1(&|$)/.test(location.search)) location.replace('./hands.html' + location.search);</script><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="color-scheme" content="dark"><title>ControlAnything · Camera demo</title><link rel="icon" href="data:,"></head>
 <body>
 <header class="top"><a href="./" class="brand">✳ ControlAnything</a><span id="mode" class="badge">Camera + touch demo</span><div class="master"><label for="volume">Sound</label><input id="volume" type="range" min="0" max="100" value="35" aria-label="Master volume"><button id="mute" aria-pressed="false">Mute</button></div></header>
 <main>
@@ -26,6 +26,6 @@
       <p class="hint">This camera mode uses touch and mouse. It has no headset hand tracking or real-world anchoring. Native WebXR AR is offered only when your browser supports it.</p>
     </section>
   </div>
-  <footer><a href="./">Quest headset experience</a><span id="model-status">Checking server…</span><a href="./gallery.html">3D control gallery</a></footer>
+  <footer><a href="./">Quest headset experience</a><a href="./hands.html">AR-first webcam / phone demo</a><span id="model-status">Checking server…</span><a href="./gallery.html">3D control gallery</a></footer>
 </main><script type="module" src="/src/reviewer/main.ts"></script>
 </body></html>

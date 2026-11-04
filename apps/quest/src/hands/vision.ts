@@ -369,6 +369,8 @@ export class HandVision {
   private frameIndex = 0;
   /** a region the face search must not use (the calibration box, for a moment) */
   private avoid: { x0: number; y0: number; x1: number; y1: number; until: number } | null = null;
+  /** off: the per-pixel background replaced the "still blob is the face" fallback */
+  stillFallback = false;
   /** a hand-sized blob that has not moved: after ~2 s in the middle it is taken to be the face */
   private still: { x: number; y: number; frames: number } | null = null;
 
@@ -401,7 +403,9 @@ export class HandVision {
       if (this.faceWeak > 30) { this.face = null; this.faceWeak = 0; }
       return;
     }
-    if (this.frameIndex % 3) return;
+    // Search only in the first seconds after the camera starts (a person faces the camera, hands down). After that
+    // the learned background removes a still face anyway, and a hand held still must never become "the face".
+    if (this.frameIndex > 140 || this.frameIndex % 3) return;
     // Look for a face: a large, well-filled skin ellipse near the top middle with background around its upper half,
     // not moving much, that stays put for a few searches.
     const { history } = this;
@@ -443,7 +447,8 @@ export class HandVision {
 
   /** Fallback: a hand-sized blob in the middle that has not moved for ~2 s is the face (it heals if wrong). */
   private stillBlob(hands: Blob[]): void {
-    if (this.face || !this.faceSearch) { this.still = null; return; }
+    // retired: the per-pixel background now removes a still face, and a held hand must stay a hand
+    if (this.face || !this.faceSearch || !this.stillFallback) { this.still = null; return; }
     const avoid = this.avoid && this.frameIndex < this.avoid.until ? this.avoid : null;
     const b = hands.find((hand) => hand.motion < 0.15 && hand.x > 0.2 && hand.x < 0.8 && hand.y < 0.7
       && !(avoid && hand.x > avoid.x0 - 0.05 && hand.x < avoid.x1 + 0.05 && hand.y > avoid.y0 - 0.05 && hand.y < avoid.y1 + 0.05));
@@ -563,5 +568,5 @@ export class HandVision {
 
   resetModel(): void { this.model = DEFAULT_SKIN; this.calibrated = false; }
   /** Forget the learned background (the camera was moved or switched). */
-  resetBackground(): void { this.bgReady.fill(0); this.stable.fill(0); }
+  resetBackground(): void { this.bgReady.fill(0); this.stable.fill(0); this.frameIndex = 0; }
 }
