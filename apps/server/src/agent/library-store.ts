@@ -44,6 +44,9 @@ function atomicWrite(file: string, bytes: string | Uint8Array): void {
   }
 }
 
+/** Value-only changes reach disk at most this often. */
+export const LAZY_FLUSH_MS = 1000;
+
 /** One durable device record with immutable setups; hiding a chip never erases its saved work. */
 export class TagStore {
   private records = new Map<string, LibraryRecord>();
@@ -365,6 +368,36 @@ export class TagStore {
     return true;
   }
 
+  private lazyTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * Value-only changes (a dial at up to 20 Hz): the record's last known values change in memory at once and reach
+   * disk at most once per LAZY_FLUSH_MS, instead of a full validate + two fsync'd writes per dial move on the
+   * control path. Any other change flushes them along with itself.
+   */
+  syncValues(target: Target): void {
+    const record = this.records.get(target.cardId);
+    if (!record || !this.currentIdentity(record, target) || (record.candidate && !target.armed)) return;
+    const values = { stepIndex: target.stepIndex, paramValues: target.paramValues };
+    if (record.lastKnownState && canonical(values) === canonical({ stepIndex: record.lastKnownState.stepIndex, paramValues: record.lastKnownState.paramValues })) return;
+    record.lastKnownState = { at: Date.now(), ...structuredClone(values) };
+    if (record.draft) { record.draft.stepIndex = structuredClone(target.stepIndex); record.draft.paramValues = structuredClone(target.paramValues); }
+    record.updatedAt = Date.now();
+    if (this.lazyTimer) return;
+    this.lazyTimer = setTimeout(() => {
+      this.lazyTimer = undefined;
+      if (this.serialize() !== this.lastSerialized) this.flush();
+    }, LAZY_FLUSH_MS);
+    this.lazyTimer.unref?.();
+  }
+
+  /** Write pending value-only changes now (shutdown). */
+  flushPending(): void {
+    if (!this.lazyTimer) return;
+    clearTimeout(this.lazyTimer);
+    this.lazyTimer = undefined;
+    if (this.serialize() !== this.lastSerialized) this.flush();
+  }
+
   private transaction(update: () => void, protectIdentityBackup = false): void {
     const before = structuredClone(this.records);
     const previous = this.serialize();
@@ -382,6 +415,8 @@ export class TagStore {
   private serialize(): string { return JSON.stringify(LibraryFile.parse({ version: 2, records: [...this.records.values()] })); }
 
   private flush(protectIdentityBackup = false): void {
+    clearTimeout(this.lazyTimer);
+    this.lazyTimer = undefined;
     const serialized = this.serialize();
     if (this.file) {
       // A damaged primary must never resurrect a pre-correction identity/driver from its backup.

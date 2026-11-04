@@ -28,6 +28,8 @@ export interface Roster {
   unhealthy?: (deviceId: string) => boolean;
   /** the visual synth host lost its renderer or connection only moments ago (presence grace) */
   visualGrace?: (deviceId: string) => boolean;
+  /** the server asked this host to open its visuals and is waiting for them */
+  visualOpening?: (deviceId: string) => boolean;
 }
 
 export function macLocalInfo(): DeviceInfo {

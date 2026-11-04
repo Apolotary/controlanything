@@ -22,7 +22,7 @@ import { CanvasService, registerCanvasFixture } from '../canvas/service';
 import { createSam, type Sam } from '../scan/sam';
 import { VoiceRelay, type VoiceActions } from '../voice/relay';
 import { DeviceAssistant, registerAssistantFixtures } from '../voice/assistant';
-import { isLaptopLabel, VISUAL_PRESENCE_GRACE_MS, VISUAL_SYNTH_CARD_ID, visualSynthCard, visualSynthCompanions, visualSynthHosts, virtualScreenExecutor, VIRTUAL_SCREEN_GUIDANCE } from './visual-synth';
+import { isLaptopLabel, VISUAL_PAUSED_HINT, VISUAL_PRESENCE_GRACE_MS, VISUAL_REMIND_MS, VISUAL_WAIT_MS, VISUAL_SYNTH_CARD_ID, visualSynthCard, visualSynthCompanions, visualSynthHosts, virtualScreenExecutor, VIRTUAL_SCREEN_GUIDANCE } from './visual-synth';
 import { currentControlSpec, verifiedControlCount } from './control-readiness';
 import { IdentityCorrections } from './identity-correction';
 import { ConnectedPeripherals, GENERAL_ASSISTANT_CARD } from './connected-peripheral';
@@ -109,6 +109,8 @@ export interface AgentOptions {
 }
 
 const agents = new WeakMap<ServerContext, Agent>();
+/** Value-only library.state / tags.state updates go out at most this often. */
+const PUBLISH_VALUES_MS = 500;
 
 export function getAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent {
   let a = agents.get(ctx);
@@ -152,12 +154,28 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     const now = Date.now();
     const up = new Set(visualSynthCompanions(hub.devices()).map((device) => device.deviceId));
     let lost = false;
-    for (const id of visualUp) if (!up.has(id)) { visualLost.set(id, now); lost = true; }
-    for (const id of up) visualLost.delete(id);
+    const changed: string[] = [];
+    for (const id of visualUp) if (!up.has(id)) { visualLost.set(id, now); lost = true; changed.push(id); }
+    for (const id of up) { visualLost.delete(id); if (!visualUp.has(id)) changed.push(id); }
     visualUp = up;
+    // An armed (or forged) visual synth hears about its screen at once: paused when it closes, live again when it is back.
+    const t = targets.get(VISUAL_SYNTH_CARD_ID);
+    const host = t ? virtualScreenExecutor(t.card) : undefined;
+    if (t && host && changed.includes(host) && tags.has(t.cardId) && ['armed', 'controlling', 'forged'].includes(t.state)) {
+      log(`[visual] ${host}'s screen ${up.has(host) ? 'is back: controls resume' : 'closed: controls paused'}`);
+      hub.broadcast('target.status', targets.status(t));
+    }
     return lost;
   };
+  /** A selection waiting for the Mac's screen (see awaitVisuals). Declared before the roster reads it. */
+  let visualIntent: { from: { deviceId: string; name?: string }; at: number; hostId: string; timers: ReturnType<typeof setTimeout>[] } | undefined;
+  /** The visual synth's screen is not open (or not visible) on its Mac: its controls pause instead of failing. */
+  const visualPaused = (t: Target): boolean => {
+    const host = virtualScreenExecutor(t.card);
+    return !!host && !visualSynthCompanions(hub.devices()).some((device) => device.deviceId === host);
+  };
   const roster: Roster = { devices: () => hub.devices(), macLocal: macLocal.available, silentLocal: macLocal.silent,
+    visualOpening: (id) => visualIntent?.hostId === id,
     helperUrl: () => helperPairUrls(ctx.bound.http ?? ctx.config.http.port)[0], unhealthy: (id) => dispatcher.unhealthy(id),
     visualGrace: (id) => { const at = visualLost.get(id); return at !== undefined && Date.now() - at < VISUAL_PRESENCE_GRACE_MS; } };
   const steps = new StepLog(hub, log);
@@ -260,6 +278,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   };
   targets.setStatusProjection((target, status) => {
     if (!['armed', 'controlling', 'forged'].includes(target.state)) return status;
+    if (visualPaused(target)) return { ...status, sentence: 'Visuals closed on the Mac', hint: VISUAL_PAUSED_HINT, detail: 'paused: the Mac visuals are not open' };
     const connection = evaluateConnection(target, roster);
     if (connection.connection === 'offline') return { ...status, sentence: 'Controls unavailable', hint: connection.hint, detail: 'offline' };
     const count = verifiedControlCount(target.specId ? deviceSpec(target.specId) : undefined, target);
@@ -296,6 +315,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     return { ok: true, hackId: hack.id, fired: 0, ms: 0 };
   };
   const control = new ControlRouter({ targets, dispatcher, specs, steps, hub, log, onRoomHack, canControl,
+    paused: (t) => (visualPaused(t) ? 'Visuals closed on the Mac: controls paused' : undefined),
     onResult: (result, from) => { hub.sendToDevice(from, 'control.result', result); },
   });
   const daemons = new DaemonRunner({ hub, steps, log, drive: control });
@@ -506,8 +526,24 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     hub.broadcast('tags.state', tagsState());
     assistant?.refresh();
   };
-  const unsubscribeTags = targets.onChange((t) => {
+  // A dial at 20 Hz must not mean 20 library writes and 40 room-wide broadcasts per second (the Mac page re-renders
+  // on each): value-only changes are written lazily and published at most every PUBLISH_VALUES_MS.
+  let publishedAt = 0;
+  let publishTimer: ReturnType<typeof setTimeout> | undefined;
+  const publishTagsSoon = () => {
+    if (publishTimer) return;
+    const wait = PUBLISH_VALUES_MS - (Date.now() - publishedAt);
+    if (wait <= 0) { publishedAt = Date.now(); publishTags(); return; }
+    publishTimer = setTimeout(() => { publishTimer = undefined; publishedAt = Date.now(); publishTags(); }, wait);
+    publishTimer.unref?.();
+  };
+  const unsubscribeTags = targets.onChange((t, kind) => {
     if (!tags.has(t.cardId)) return;
+    if (kind === 'value') {
+      tags.syncValues(t);
+      publishTagsSoon();
+      return;
+    }
     const spec = t.specId ? specs.get(t.specId) : undefined;
     tags.sync(t, spec, spec ? setupContext(spec) : undefined);
     publishTags();
@@ -696,6 +732,11 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       if (visual) return visual;
     }
     const t = targets.get(cardId);
+    // The visual synth with its screen closed: ask the Mac to open it and continue from there (never a dead end).
+    if (t && tags.has(cardId) && mode === 'control' && virtualScreenExecutor(t.card) && !(t.abort && !t.abort.signal.aborted)) {
+      const where = visualHost(from);
+      if (!where.executor && where.host) return selectVisualSynth({ virtual: 'visual-synth' }, from);
+    }
     const connection = t && tags.has(cardId) ? evaluateConnection(t, roster) : undefined;
     if (!t || !tags.has(cardId) || mode !== 'control' || connection?.connection === 'offline') {
       const hint = !t || !tags.has(cardId) ? 'Tag this device in Annotate mode first' : mode !== 'control' ? 'Switch to Control mode to set up this device' : connection?.hint ?? 'Connect a companion for this device';
@@ -794,6 +835,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     const t = targets.get(p.cardId);
     if (!t || !tags.has(t.cardId) || (p.runId && p.runId !== t.runId)) return undefined;
     if (mode === 'annotate') { identifyTag(t); return t; }
+    if (virtualScreenExecutor(t.card) && !visualHost(from).executor) return selectVisualSynth({ virtual: 'visual-synth' }, from);
     return setup(t.cardId, from);
   };
   /** The pinched frame (or the sender's latest scan frame) as a detection for Muse to identify. Never a verify ROI. */
@@ -908,19 +950,60 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (o.replaces && o.replaces !== target.cardId) removeTag(o.replaces);
     identifyVisualHost(target, visualDetection(from, o));
     if (!executor) {
-      hub.sendToDevice(host.deviceId, 'visual.open', { requestId: newId('visual-') });
-      if (mode === 'control') visualIntent = { from, at: Date.now() };
+      if (mode === 'control') awaitVisuals(host, from);
+      else hub.sendToDevice(host.deviceId, 'visual.open', { requestId: newId('visual-') });
     }
     return target;
   };
-  /** CE_DEMO=1: a selection that waited for the Mac renderer continues by itself once the renderer is up. */
-  let visualIntent: { from: { deviceId: string; name?: string }; at: number } | undefined;
+  /**
+   * A selection waiting for the Mac renderer. It never hangs silently: the headset (and the Mac, every client gets
+   * target.status) hears "Opening the visuals on the Mac…", then "Open visuals on the Mac" with the request sent
+   * again after VISUAL_REMIND_MS, and "The Mac's visuals did not open" after VISUAL_WAIT_MS. CE_DEMO=1 continues
+   * into setup by itself once the renderer advertises.
+   */
+  const clearVisualIntent = () => { for (const timer of visualIntent?.timers ?? []) clearTimeout(timer); visualIntent = undefined; };
+  const visualWaitStatus = (state: 'needs-companion' | 'failed', sentence: string, hint: string, action?: 'retry' | 'cancel') => {
+    const t = targets.get(VISUAL_SYNTH_CARD_ID);
+    if (!t || setups.has(t.cardId)) return;
+    // Broadcast only: an armed card keeps its own state (and its controls) for when the screen comes back.
+    hub.broadcast('target.status', { ...targets.status(t), state: t.armed ? t.state : state, since: Date.now(), sentence, hint, detail: 'waiting for the Mac visuals', ...(action ? { action } : {}) });
+  };
+  const awaitVisuals = (host: DeviceInfo, from: { deviceId: string; name?: string }, requestId?: string) => {
+    const again = visualIntent?.hostId === host.deviceId;
+    clearVisualIntent();
+    const at = Date.now();
+    hub.sendToDevice(host.deviceId, 'visual.open', { requestId: requestId ?? newId('visual-') });
+    log(`[visual] asked ${host.deviceId} to open the visuals for ${from.deviceId}${again ? ' (again)' : ''}`);
+    visualWaitStatus('needs-companion', 'Opening the visuals on the Mac…', 'Keep the ControlAnything window in front on the Mac');
+    const timers = [
+      setTimeout(() => {
+        if (visualIntent?.at !== at) return;
+        hub.sendToDevice(host.deviceId, 'visual.open', { requestId: newId('visual-') });
+        // Only the companion tab that runs the local bridges opens the visuals; a second tab is a common reason for "nothing happens".
+        const tabs = hub.clients().devices.find((d) => d.deviceId === host.deviceId)?.connections.filter((c) => c.state !== 'superseded' && c.role === 'companion').length ?? 0;
+        log(`[visual] still waiting for ${host.deviceId}'s screen after ${VISUAL_REMIND_MS / 1000} s; asked again (${tabs} companion tab${tabs === 1 ? '' : 's'})`);
+        visualWaitStatus('needs-companion', 'Open visuals on the Mac', tabs > 1
+          ? `ControlAnything is open in ${tabs} tabs on the Mac: click Open visuals in the tab that says “Runs local bridges”, or close the others`
+          : 'Waiting for the Mac’s screen: click Open visuals in ControlAnything on the Mac and keep it in front', 'cancel');
+      }, VISUAL_REMIND_MS),
+      setTimeout(() => {
+        if (visualIntent?.at !== at) return;
+        clearVisualIntent();
+        log(`[visual] gave up waiting for ${host.deviceId}'s screen after ${VISUAL_WAIT_MS / 1000} s`);
+        visualWaitStatus('failed', 'The Mac’s visuals did not open', 'On the Mac, click Open visuals in ControlAnything, then pinch the Mac again', 'retry');
+      }, VISUAL_WAIT_MS),
+    ];
+    for (const timer of timers) timer.unref?.();
+    visualIntent = { from, at, hostId: host.deviceId, timers };
+  };
   const continueVisualIntent = () => {
     const intent = visualIntent;
-    if (!intent || !demoMode() || mode !== 'control' || Date.now() - intent.at > 60_000) return;
+    if (!intent || mode !== 'control') return;
     if (!visualHost(intent.from).executor) return;
-    visualIntent = undefined;
-    selectVisualSynth({ virtual: 'visual-synth' }, intent.from);
+    clearVisualIntent();
+    log(`[visual] ${intent.hostId}'s screen is up after ${((Date.now() - intent.at) / 1000).toFixed(1)} s${demoMode() ? '; continuing into setup' : ''}`);
+    if (demoMode()) selectVisualSynth({ virtual: 'visual-synth' }, intent.from);
+    else { const t = targets.get(VISUAL_SYNTH_CARD_ID); if (t) hub.broadcast('target.status', targets.status(t)); }
   };
   /** Explicit (or rerouted) selection of the Mac visual synth. In CE_DEMO=1 it also starts setup. */
   const selectVisualSynth = (p: TargetSelectPayload, from: { deviceId: string; name?: string }, replaces?: string): Target | undefined => {
@@ -939,8 +1022,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
           if (replaces && replaces !== pending.cardId) removeTag(replaces);
           identifyVisualHost(pending, detection);
         }
-        hub.sendToDevice(host.deviceId, 'visual.open', { requestId: p.requestId ?? newId('visual-') });
-        visualIntent = { from, at: Date.now() };
+        awaitVisuals(host, from, p.requestId);
         // The headset's presence recovery retries selection once the renderer advertises its port.
         reply(false, undefined, 'Opening the Mac visuals… selection continues automatically.');
         return;
@@ -948,7 +1030,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       reply(false, undefined, reason);
       return;
     }
-    visualIntent = undefined;
+    clearVisualIntent();
     const target = bindVisualSynth(executor, from, p.position);
     if (!target) { reply(false, undefined, 'Your device library is full. Forget an unused device, then try again.'); return; }
     if (replaces && replaces !== target.cardId) removeTag(replaces);
@@ -956,7 +1038,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (target.specId) showControls(target, from.deviceId);
     const running = setups.has(target.cardId) || !!(target.abort && !target.abort.signal.aborted);
     const auto = demoMode() && !canControl(target);
-    reply(true, target.cardId, auto ? 'Setting up the Mac visuals…' : VIRTUAL_SCREEN_GUIDANCE, auto || running);
+    reply(true, target.cardId, auto ? 'Setting up the Mac visuals…' : canControl(target) ? 'Mac visuals ready: your controls are on' : VIRTUAL_SCREEN_GUIDANCE, auto || running);
     if (auto && !running) setup(target.cardId, from);
     return target;
   };
@@ -1117,7 +1199,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         return;
       case 'control.event': {
         const r = control.onControlEvent(m.payload, from.deviceId);
-        if (!r.ok && r.reason && r.reason !== 'not armed' && r.reason !== 'rate limited') log(`[control] ${m.payload.widgetId}: ${r.reason}`);
+        if (!r.ok && r.reason && r.reason !== 'not armed' && r.reason !== 'rate limited' && r.reason !== 'paused') log(`[control] ${m.payload.widgetId}: ${r.reason}`);
         return;
       }
       case 'panic':
@@ -1210,6 +1292,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     panic,
     close: () => {
       clearTimeout(graceTimer);
+      clearTimeout(publishTimer);
+      clearVisualIntent();
+      tags.flushPending();
       canvas.invalidate();
       voice.invalidate();
       assistant?.invalidate();
