@@ -11,6 +11,23 @@ import type { StepLog } from './steps';
 import type { TargetStore } from './targets';
 import type { Target } from './types';
 import { gestureHack } from './gesture-route';
+import { isVisualSynthPort } from '../devices/visualSynth';
+
+/**
+ * A dial on the silent visual synth's smooth geometry (Warp CC71, Water ripples CC21, Zoom CC74, Speed CC1) follows
+ * the hand at this rate, latest value wins. Brightness, colour, pattern and symmetry keep the hack's own <= 3 Hz
+ * (photosensitivity), as does every physical device.
+ */
+export const VISUAL_CONTROL_HZ = 20;
+const SMOOTH_VISUAL_CCS = new Set([71, 21, 74, 1]);
+export function controlRateHz(driver: Driver, hack: Hack): number {
+  if (hack.kind !== 'control' || !isVisualSynthPort(driver.executor.port) || !hack.commands.length) return hack.max_rate_hz;
+  const smooth = hack.commands.every((c) => {
+    const e = driver.actions.find((a) => a.actionId === c.action)?.encode;
+    return e?.kind === 'midi' && e.msg === 'cc' && e.number !== undefined && SMOOTH_VISUAL_CCS.has(e.number);
+  });
+  return smooth ? Math.min(Math.max(hack.max_rate_hz, VISUAL_CONTROL_HZ), driver.maxRateHz ?? Infinity) : hack.max_rate_hz;
+}
 
 export interface SpecSource {
   get(specId: string): UiSpecPayload | undefined;
@@ -27,6 +44,8 @@ export interface ControlDeps {
   now?: () => number;
   /** Space mode, tag membership and connection policy, rechecked for scheduled operations. */
   canControl?: (target: Target) => boolean;
+  /** A reason while the target's output is temporarily away (the Mac visuals closed): events are dropped, not failed. */
+  paused?: (target: Target) => string | undefined;
   onResult?: (result: ControlResultPayload, from: string) => void;
   /** room hacks (combos, daemons) are not fired here: the owner of the hook runs them */
   onRoomHack?: (hack: Hack, spec: UiSpecPayload, value: number | boolean, from?: string) => RouteResult;
@@ -35,6 +54,8 @@ export interface ControlDeps {
 export interface RouteResult {
   ok: boolean;
   reason?: string;
+  /** human words for the reason (e.g. why controls are paused) */
+  detail?: string;
   cardId?: string;
   hackId?: string;
   /** ops handed to the dispatcher */
@@ -78,6 +99,7 @@ export class ControlRouter {
   private readonly commandTimers = new Map<ReturnType<typeof setTimeout>, { cardId: string; sourceCardId: string; cancel?: () => void }>();
   private readonly trailingControls = new Map<string, { cardId: string; timer: ReturnType<typeof setTimeout>; event: ControlEventPayload; from?: string }>();
   private readonly lastRun = new Map<string, LastRun>();
+  private readonly pausedReportAt = new Map<string, number>();
   private readonly latestCommand = new Map<string, number>();
   private commandSerial = 0;
   private readonly log: (line: string) => void;
@@ -111,7 +133,17 @@ export class ControlRouter {
 
   onControlEvent(ev: ControlEventPayload, from?: string): RouteResult {
     const result = this.routeControlEvent(ev, from);
-    if (!result.ok && ev.phase !== 'start') this.report(ev, from, false, result.reason);
+    if (!result.ok && ev.phase !== 'start') {
+      if (result.reason !== 'paused') this.report(ev, from, false, result.reason);
+      else {
+        // One "paused" answer per target every 2 s, never one error per dial move.
+        const now = (this.d.now ?? Date.now)();
+        if (now - (this.pausedReportAt.get(result.cardId ?? '') ?? -Infinity) >= 2000) {
+          this.pausedReportAt.set(result.cardId ?? '', now);
+          this.report(ev, from, false, result.detail);
+        }
+      }
+    }
     return result;
   }
 
@@ -124,6 +156,8 @@ export class ControlRouter {
     const r = this.resolve(ev);
     if ('reason' in r) return { ok: false, reason: r.reason, fired: 0, ms: performance.now() - t0 };
     const { target, spec, hack, driver } = r;
+    const paused = this.d.paused?.(target);
+    if (paused) return { ok: false, reason: 'paused', detail: paused, cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
     if (!this.allowed(target)) return { ok: false, reason: 'control is not authorized for this device', cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
     // combos and daemons: handed to their runner (they ask for their own tap)
     if (hack.kind === 'daemon' || hack.commands.some((c) => c.cardId && c.cardId !== target.cardId)) {
@@ -147,7 +181,7 @@ export class ControlRouter {
     if (hack.kind === 'action' && ev.phase !== undefined && ev.phase !== 'end') return { ok: true, cardId: target.cardId, hackId: hack.id, fired: 0, ms: performance.now() - t0 };
     const key = `${target.cardId}:${hack.id}`;
     const gesture = ev.widgetId.startsWith('gesture:');
-    const limiter = gesture ? undefined : this.limiter(target.cardId, hack);
+    const limiter = gesture ? undefined : this.limiter(target.cardId, hack, driver);
     const now = (this.d.now ?? Date.now)();
     const lastGesture = this.gestureSentAt.get(key) ?? -Infinity;
     if (gesture ? now - lastGesture < 1000 / hack.max_rate_hz : !limiter!.take()) {
@@ -207,11 +241,12 @@ export class ControlRouter {
     return { ok: true, cardId: target.cardId, hackId: hack.id, fired, ms: performance.now() - t0 };
   }
 
-  private limiter(cardId: string, hack: Hack): RateLimiter {
-    const key = `${cardId}:${hack.id}`;
+  private limiter(cardId: string, hack: Hack, driver: Driver): RateLimiter {
+    const rate = controlRateHz(driver, hack);
+    const key = `${cardId}:${hack.id}:${driver.driverId}:${rate}`;
     let l = this.hackLimiters.get(key);
     if (!l) {
-      l = new RateLimiter(hack.max_rate_hz, 1, this.d.now);
+      l = new RateLimiter(rate, 1, this.d.now);
       this.hackLimiters.set(key, l);
     }
     return l;
