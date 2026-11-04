@@ -350,7 +350,7 @@ export type ScanResultPayload = z.infer<typeof ScanResultPayload>;
 export const TargetSelectPayload = z.object({
   /** Correlates explicit virtual-device selection without guessing from generic device labels. */
   requestId: Id.optional(),
-  virtual: z.literal('visual-synth').optional(),
+  virtual: z.enum(['visual-synth', 'musical-synth']).optional(),
   /** User-chosen placement of a known virtual screen; not a vision detection. */
   position: Vec3.optional(),
   frameId: Id.optional(),
@@ -380,6 +380,10 @@ export type TargetSelectResultPayload = z.infer<typeof TargetSelectResultPayload
 /** S->paired companion. Opens only the built-in silent visual screen, never device controls. */
 export const VisualOpenPayload = z.object({ requestId: Id });
 export type VisualOpenPayload = z.infer<typeof VisualOpenPayload>;
+
+/** S->paired companion. Opens the software instrument panel; only a human Mac click unlocks sound. */
+export const MusicalOpenPayload = z.object({ requestId: Id });
+export type MusicalOpenPayload = z.infer<typeof MusicalOpenPayload>;
 
 /** C->S. Stop work on this target; runId ignores an action from an older run when supplied. */
 export const TargetCancelPayload = z.object({
@@ -822,12 +826,19 @@ export const ExecAckPayload = z.object({
    * renderer = a live renderer drew at least one frame with it; port = headless state only.
    */
   applied: z.object({
-    source: z.enum(['renderer', 'port']),
+    source: z.enum(['renderer', 'port', 'musical-synth']),
     /** at most 16 keys; the visual synth sends 0..1 units (symmetry 1..8, pattern 0..3) */
     params: z.record(z.string(), z.number()).optional(),
     visible: z.boolean().optional(),
     frame: z.number().int().min(0).optional(),
     at: z.number().optional(),
+    /** Software Web Audio analyser evidence, sampled before the master mute; never a physical audio acknowledgment. */
+    audio: z.object({
+      unlocked: z.boolean(), muted: z.boolean(),
+      rms: z.number().finite().min(0), peak: z.number().finite().min(0),
+      frequency: z.number().finite().min(0).max(24000),
+      activeNote: z.number().int().min(0).max(127).optional(),
+    }).optional(),
   }).optional(),
 });
 export type ExecAckPayload = z.infer<typeof ExecAckPayload>;

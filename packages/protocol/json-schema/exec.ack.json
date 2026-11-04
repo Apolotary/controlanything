@@ -81,7 +81,8 @@
               "type": "string",
               "enum": [
                 "renderer",
-                "port"
+                "port",
+                "musical-synth"
               ]
             },
             "params": {
@@ -100,6 +101,43 @@
             },
             "at": {
               "type": "number"
+            },
+            "audio": {
+              "type": "object",
+              "properties": {
+                "unlocked": {
+                  "type": "boolean"
+                },
+                "muted": {
+                  "type": "boolean"
+                },
+                "rms": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "peak": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "frequency": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 24000
+                },
+                "activeNote": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 127
+                }
+              },
+              "required": [
+                "unlocked",
+                "muted",
+                "rms",
+                "peak",
+                "frequency"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [

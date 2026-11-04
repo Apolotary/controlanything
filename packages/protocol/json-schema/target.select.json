@@ -38,7 +38,10 @@
         },
         "virtual": {
           "type": "string",
-          "const": "visual-synth"
+          "enum": [
+            "visual-synth",
+            "musical-synth"
+          ]
         },
         "position": {
           "type": "object",

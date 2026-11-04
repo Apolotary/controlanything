@@ -22,6 +22,7 @@
     "target.select": "target.select.json",
     "target.select.result": "target.select.result.json",
     "visual.open": "visual.open.json",
+    "musical.open": "musical.open.json",
     "target.cancel": "target.cancel.json",
     "target.retry": "target.retry.json",
     "mode.set": "mode.set.json",
