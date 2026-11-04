@@ -36,7 +36,9 @@ export const SIGNAL_RANGE = {
   /** Screen contact */
   touchEnter: 0.02, touchLeave: 0.03, hoverRange: 0.15, behind: 0.08,
   /** Both palms out for this long = stop */
-  stopMs: 120,
+  stopMs: 400,
+  /** No stop while either hand is this close to a calibrated screen (a flat hand touching the water faces away too). */
+  stopScreenClear: 0.25,
 } as const;
 
 const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -209,7 +211,15 @@ export class SignalTracker {
     const left = this.hands.left.update(frame.hands.left, head, this.bodyForward, this.bodyRight, timeMs, ctx.tapBlocked?.('left') ?? false);
     const right = this.hands.right.update(frame.hands.right, head, this.bodyForward, this.bodyRight, timeMs, ctx.tapBlocked?.('right') ?? false);
 
-    const out = !!left?.palmOut && !!right?.palmOut;
+    // Both palms out stops the wiring, but never while a hand is at the screen: touching it with a flat hand or two
+    // fingers also turns the palms away from the eyes.
+    const nearScreen = !!ctx.plane && (['left', 'right'] as const).some(side => {
+      const hand = frame.hands[side], p = hand?.joints['index-finger-tip']?.position ?? hand?.joints.wrist?.position;
+      if (!p) return false;
+      const o = ctx.plane!.origin, n = ctx.plane!.normal;
+      return Math.abs((p.x - o[0]) * n[0] + (p.y - o[1]) * n[1] + (p.z - o[2]) * n[2]) < SIGNAL_RANGE.stopScreenClear;
+    });
+    const out = !!left?.palmOut && !!right?.palmOut && !nearScreen;
     let stop = false;
     if (!out) { this.bothOutSince = -Infinity; this.stopLatched = false; }
     else {

@@ -20,9 +20,10 @@ export function virtualAgentRoute(target?: AgentTargetRoute): { owner: string; p
 
 export function agentCompanion(devices: DeviceInfo[], target?: AgentTargetRoute): DeviceInfo | undefined {
   const candidates = devices.filter(d => d.online && d.capabilities.includes('midi') && (d.role === 'companion' || d.kind === 'sim'));
-  // Only a companion (or the sim Mac) can be bound as the executor. A tag remembers the headset that selected it as its
-  // preferred device; treating that headset as the Mac made every connector send fail with "not connected".
-  const executor = (id?: string) => id && devices.some(d => d.deviceId === id && d.role !== 'companion' && d.kind !== 'sim') ? undefined : id;
+  // Only a known companion (or the sim Mac) can be bound as the MIDI executor. A tag may remember the headset that
+  // selected it, or the server's own `mac-local` helper; treating those as the Mac made every send fail with "not connected".
+  // A known Mac companion that went offline still blocks: never silently switch to another Mac.
+  const executor = (id?: string) => id && devices.some(d => d.deviceId === id && (d.role === 'companion' || d.kind === 'sim')) ? id : undefined;
   const bound = virtualAgentRoute(target)?.owner ?? executor(target?.selection?.preferDeviceId) ?? executor(target?.driver?.executor.deviceId);
   // A missing selected browser must never silently fall back to another person's hardware.
   if (bound) return candidates.find(d => d.deviceId === bound);

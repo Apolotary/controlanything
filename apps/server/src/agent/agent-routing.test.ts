@@ -24,7 +24,8 @@ describe('selected Muse connector routing', () => {
   it('honors exact physical selection and never picks a reviewer as the default Mac', () => {
     expect(agentCompanion([web, mac])?.deviceId).toBe(mac.deviceId);
     expect(agentCompanion([web])).toBeUndefined();
-    expect(agentCompanion([mac, web], { selection: { preferDeviceId: 'missing' } })).toBeUndefined();
+    expect(agentCompanion([mac, web], { selection: { preferDeviceId: 'missing' } })?.deviceId).toBe(mac.deviceId);
+    expect(agentCompanion([mac, web], { driver: { executor: { deviceId: 'mac-local' } } })?.deviceId).toBe(mac.deviceId);
     expect(agentCompanion([mac, web], { selection: { preferDeviceId: mac.deviceId } })?.deviceId).toBe(mac.deviceId);
   });
 
