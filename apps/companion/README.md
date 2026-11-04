@@ -16,8 +16,17 @@ Opening `/vsynth/` directly, without its companion owner, is a standalone previe
 
 The first localhost browser can become the room owner and approve a headset code. Once a headset owns the room, a new Mac helper needs headset approval. Incoming pairing requests use an Approve / Deny sheet.
 
+**Muse's wiring, on screen.** After the wearer asks what their hands should do ("let me touch the water"), the server streams `wire.progress` and then `wire.ready`: the JavaScript Muse wrote, its model, whether it is `live`, a recorded FIXTURE or a Template (no Meta model wrote it), and the notes of each phase (writing, validating, dry-run, verifying, ready). The Mac only *shows* it; the program never runs here.
+
+- The calm card gets one status line (*muse-spark-1.3 is wiring your hands to the Visual synth…* then *Wiring ready: Touch the water*), a source chip and a small **See code** toggle.
+- The full-screen visuals show the code streaming in a small monospace plate in the top-left corner while it is written, and let it go about 8 s after it is ready. It never takes pointer events.
+- Details has a **Wiring** tab next to Driver: the current code, model, source, the request, what it needs (for example screen calibration) and what it drives, and a note per phase.
+- Every redraw is keyed: a repeated message, an unrelated update or a stable state touches no DOM (the page stays flicker-free), and streaming code only appends.
+
 - `?stage=1` enlarges status text for recording.
 - `?replay=1` runs a display-only scripted demonstration without server connections, hardware permissions, or executor ownership.
+- `?replay=wire` plays a scripted, FIXTURE-labelled wiring run (the code streaming in, validated, dry-run, ready) the same way.
+- `?inject=1` exposes `window.__ceInject(message)` for tests and recording rigs: it feeds a server message to the page as if the server had sent it (schema-validated, nothing sent).
 - `?spike=midi` opens the standalone MIDI tool.
 - `?pair=1` starts pairing only when this browser has no saved identity.
 
@@ -29,6 +38,13 @@ npx vitest run --project @ce/companion
 npm test
 npm run build -w @ce/companion
 npm run build
+```
+
+Two Chrome checks (system Chrome through playwright-core, an own fixture server on `PORT`, default 8798; silent; run them through the shared e2e lock when other agents are working):
+
+```sh
+node apps/companion/e2e/touch-water.mjs   # CC22/23/24 tap, drag, hover into ?visuals=1: pixels, 4-15 ms to first ripple, frame times; screenshots in research/screens/touch-water/
+node apps/companion/e2e/wiring-view.mjs   # wire.progress / wire.ready into the overlay, the calm card and the Wiring tab; idempotent DOM; research/screens/wiring-view/
 ```
 
 Behavior tests cover neutral post-pairing guidance, explicit synth setup, pairing and QR refresh, reload recovery, permissions, standby tabs, navigation, selected-device checks, expanded measurement details, keyboard tabs, truthful connection chips, and Stop. Hardware paths use mocks; these tests do not establish physical synth verification.

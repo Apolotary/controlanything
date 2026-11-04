@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   identity: vi.fn(), localPage: true, bridgeOnline: false, serialReady: false,
   leader: true, midiEnabled: false,
   visualConnected: false, visualChanged: undefined as (() => void) | undefined,
-  visualOpen: vi.fn(() => true), visualUpdate: vi.fn(), visualClose: vi.fn(),
+  visualOpen: vi.fn(() => true), visualUpdate: vi.fn(), visualClose: vi.fn(), visualWiring: vi.fn(),
   midiPorts: [] as { id: string; kind: 'midi-out'; name: string; state: 'connected' }[],
 }));
 
@@ -67,6 +67,7 @@ vi.mock('./visualLauncher', () => ({ VisualSynthLauncher: class {
   open = mocks.visualOpen;
   update = mocks.visualUpdate;
   close = mocks.visualClose;
+  setWiring = mocks.visualWiring;
 } }));
 vi.mock('./midi', () => ({
   MidiBridge: class {
@@ -1388,16 +1389,26 @@ describe('Calm companion behavior', () => {
 
   it('supports keyboard navigation of the code tabs', async () => {
     await live();
+    // Driver | Wiring | Recording | Spec
     const event = await byId('tab-code').fire('keydown', { key: 'ArrowRight' });
     expect(event.preventDefault).toHaveBeenCalled();
+    expect(byId('tab-wiring').getAttribute('aria-selected')).toBe('true');
+    expect(byId('wiring').hidden).toBe(false);
+    expect(byId('code').hidden).toBe(true);
+    expect(document.activeElement).toBe(byId('tab-wiring'));
+    await byId('tab-wiring').fire('keydown', { key: 'ArrowRight' });
     expect(byId('tab-tape').getAttribute('aria-selected')).toBe('true');
     expect(byId('tape').hidden).toBe(false);
-    expect(byId('code').hidden).toBe(true);
+    expect(byId('wiring').hidden).toBe(true);
     expect(document.activeElement).toBe(byId('tab-tape'));
     await byId('tab-tape').fire('keydown', { key: 'End' });
     expect(byId('tab-spec').getAttribute('aria-selected')).toBe('true');
     expect(byId('spec').hidden).toBe(false);
     expect(document.activeElement).toBe(byId('tab-spec'));
+    await byId('tab-spec').fire('keydown', { key: 'ArrowRight' });
+    expect(byId('tab-code').getAttribute('aria-selected')).toBe('true');
+    await byId('tab-code').fire('keydown', { key: 'ArrowLeft' });
+    expect(byId('tab-spec').getAttribute('aria-selected')).toBe('true');
   });
 
   it('renders agent steps as a readable table with model latency and current wording', async () => {
@@ -1407,5 +1418,116 @@ describe('Calm companion behavior', () => {
     expect(byId('worklog').textContent).toContain('Making controls');
     expect(byId('worklog').textContent).toContain('Control set ready: 5 controls (2 sliders)');
     expect(byId('worklog').textContent).toContain('muse-spark-1.3 · low · 16 s');
+  });
+});
+
+describe('Muse wiring view (wire.progress / wire.ready)', () => {
+  const CARD = 'visual-synth-mac-1';
+  const card = { cardId: CARD, name: 'ControlAnything Visual Synth', protocols: ['midi'], category: 'visual synth' };
+  const base = { cardId: CARD, wiringId: 'w1', model: 'muse-spark-1.3', source: 'live' };
+  const CODE = "var f = s.screen;\nout.set('cc24', f.touching ? 100 : 0);\n";
+  const wired = async () => {
+    const app = await live();
+    await app.emit('device.card', card);
+    return app;
+  };
+  const lastOverlay = () => mocks.visualWiring.mock.calls.at(-1)?.[0];
+
+  it('streams the program into one calm line, a source chip, a See code toggle and the Wiring tab', async () => {
+    const app = await wired();
+    expect(byId('wiring-card').hidden).toBe(true);
+    await app.emit('wire.progress', { ...base, phase: 'writing', request: 'Let me touch the water', code: '' });
+    expect(byId('wiring-card').hidden).toBe(false);
+    expect(byId('wiring-line').textContent).toBe('muse-spark-1.3 is wiring your hands to the Visual synth…');
+    expect(byId('wiring-chip').textContent).toBe('live');
+    expect(byId('wiring-toggle').hidden).toBe(true); // nothing to show yet
+    expect(byId('tab-wiring').getAttribute('aria-selected')).toBe('true'); // the tab follows the new wiring
+    for (const part of [CODE.slice(0, 17), CODE.slice(17, 30), CODE.slice(30)]) await app.emit('wire.progress', { ...base, phase: 'writing', codeDelta: part });
+    expect(byId('wiring-toggle').hidden).toBe(false);
+    expect(byId('wiring-toggle').textContent).toBe('See code');
+    expect(byId('wiring-code').hidden).toBe(true); // calm until asked
+    await byId('wiring-toggle').click(); await flush();
+    expect(byId('wiring-code').hidden).toBe(false);
+    expect(byId('wiring-code').textContent).toBe(CODE);
+    expect(byId('wiring-toggle').textContent).toBe('Hide code');
+    expect(byId('wiring-toggle').getAttribute('aria-expanded')).toBe('true');
+    expect(byId('wiring-source').textContent).toBe(CODE); // the Details tab has the same program
+    expect(byId('wiring').textContent).toContain('You asked: “Let me touch the water”');
+    await app.emit('wire.progress', { ...base, phase: 'dry-run', note: 'dry-run ✓ 120 frames · 3 actions' });
+    expect(byId('wiring-line').textContent).toBe('Dry-running the wiring · dry-run ✓ 120 frames · 3 actions…');
+    await app.emit('wire.ready', { ...base, code: CODE + '// done\n', title: 'Touch the water', explanation: 'Your fingertip makes ripples.', needs: ['screen'],
+      actions: [{ actionId: 'cc22', label: 'Touch X', kind: 'set' }, { actionId: 'cc24', label: 'Touch pressure', kind: 'set' }] });
+    expect(byId('wiring-line').textContent).toBe('Wiring ready: Touch the water');
+    expect(byId('wiring-code').textContent).toBe(CODE + '// done\n');
+    const details = byId('wiring').textContent;
+    for (const text of ['Touch the water', 'Your fingertip makes ripples.', 'muse-spark-1.3', 'live', 'ready', 'screen calibration', 'Touch X, Touch pressure', 'dry-run ✓ 120 frames · 3 actions']) expect(details).toContain(text);
+    expect(mocks.send).not.toHaveBeenCalled(); // display only: the Mac never runs or answers a wiring
+  });
+
+  it('shows the code streaming on the Mac visuals too, then lets it go once ready', async () => {
+    const app = await wired();
+    await app.emit('wire.progress', { ...base, phase: 'writing', codeDelta: 'var f' });
+    expect(lastOverlay()).toMatchObject({ id: 'w1', phase: 'writing', code: 'var f', heading: 'muse-spark-1.3 is wiring your hands to the Visual synth' });
+    await app.emit('wire.progress', { ...base, phase: 'writing', codeDelta: ' = s;' });
+    expect(lastOverlay()).toMatchObject({ code: 'var f = s;' });
+    await app.emit('wire.ready', { ...base, code: 'var f = s;\n', title: 'Touch the water', explanation: 'x', needs: [], actions: [{ actionId: 'cc24', label: 'Touch pressure', kind: 'set' }] });
+    expect(lastOverlay()).toMatchObject({ phase: 'ready', heading: 'Wiring ready: Touch the water', endedAt: expect.any(Number) }); // the launcher hides it 8 s after endedAt
+  });
+
+  it('keeps the code off the Visual synth for a wiring of any other device', async () => {
+    const app = await live();
+    await app.emit('device.card', { cardId: 'card-op1f', name: 'OP-1 Field', protocols: ['midi'], category: 'synthesizer' });
+    await app.emit('wire.progress', { cardId: 'card-op1f', wiringId: 'w9', phase: 'writing', model: 'muse-spark-1.3', source: 'live', codeDelta: 'out.set("filter", 1)' });
+    expect(byId('wiring-line').textContent).toBe('muse-spark-1.3 is wiring your hands to the OP-1 Field…');
+    expect(lastOverlay()).toBeUndefined();
+  });
+
+  it('labels a template or recorded wiring honestly', async () => {
+    const app = await wired();
+    await app.emit('wire.progress', { ...base, wiringId: 't1', phase: 'writing', model: 'template', source: 'template', codeDelta: 'x' });
+    expect(byId('wiring-line').textContent).toBe('Template wiring for the Visual synth (no Meta model wrote this)…');
+    expect(byId('wiring-chip').textContent).toBe('Template');
+    expect(byId('wiring-chip').className).toContain('template');
+    await app.emit('wire.progress', { ...base, wiringId: 'f1', phase: 'ready', source: 'fixture', title: 'Recorded wiring', codeDelta: 'y' });
+    expect(byId('wiring-chip').textContent).toBe('FIXTURE');
+    expect(byId('wiring').textContent).toContain('FIXTURE');
+  });
+
+  it('says why a wiring failed, and ignores wiring messages that did not come from the server', async () => {
+    const app = await wired();
+    await app.emit('wire.progress', { ...base, phase: 'writing', codeDelta: 'x' }, 'quest');
+    expect(byId('wiring-card').hidden).toBe(true);
+    await app.emit('wire.progress', { ...base, phase: 'failed', codeDelta: 'while(true){}', issues: ['uses while(true)'] });
+    expect(byId('wiring-line').textContent).toBe('Wiring failed: uses while(true)');
+    expect(byId('wiring').textContent).toContain('uses while(true)');
+  });
+
+  it('redraws nothing when nothing changed: repeated messages and unrelated updates leave the DOM as it was', async () => {
+    const app = await wired();
+    await app.emit('wire.progress', { ...base, phase: 'writing', code: CODE });
+    await byId('wiring-toggle').click(); await flush();
+    const dom = () => ['wiring-line', 'wiring-chip', 'wiring-toggle', 'wiring-code', 'wiring-source'].map((id) => byId(id).children);
+    const notes = byId('wiring').querySelector('.wiring-notes')!.children;
+    const facts = byId('wiring').querySelector('.wiring-facts')!.children;
+    const before = dom();
+    const overlays = mocks.visualWiring.mock.calls.length;
+    await app.emit('wire.progress', { ...base, phase: 'writing', code: CODE }); // the same state again
+    await app.emit('agent.step', { stepId: 's-1', cardId: 'other-card', phase: 'identify', status: 'running', title: 'IDENTIFY' }); // re-renders every focus section
+    await app.emit('device.card', { ...card, name: 'ControlAnything Visual Synth', maker: 'ControlAnything' });
+    expect(dom().every((children, i) => children === before[i])).toBe(true);
+    expect(byId('wiring').querySelector('.wiring-notes')!.children).toBe(notes);
+    expect(byId('wiring').querySelector('.wiring-facts')!.children).toBe(facts);
+    expect(byId('wiring-code').textContent).toBe(CODE);
+    expect(mocks.visualWiring.mock.calls.length).toBeGreaterThanOrEqual(overlays); // the launcher is told, and it compares itself
+  });
+
+  it('plays the scripted wiring in ?replay=wire without executing anything', async () => {
+    const app = await boot('?replay=wire');
+    expect(mocks.replay).toHaveBeenCalledOnce();
+    expect(mocks.replay.mock.calls[0]![2]).toBe('wire');
+    expect(byId('wiring-card').hidden).toBe(true); // nothing before the script says something
+    await app.emit('wire.progress', { ...base, phase: 'writing', source: 'fixture', codeDelta: 'x' });
+    expect(byId('wiring-chip').textContent).toBe('FIXTURE');
+    expect(mocks.send).not.toHaveBeenCalled();
   });
 });

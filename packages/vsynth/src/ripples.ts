@@ -41,7 +41,7 @@ export const TOUCH_WAKE_INTERVAL = 0.05;
 /** The finger must have moved this far (screen-height units: the shader's p space is 2 across the canvas height). */
 const MOVE_EPSILON = 0.012;
 /** A fast finger adds a wake segment every this much path, and no segment is longer. */
-const WAKE_SPACING = 0.12;
+const WAKE_SPACING = 0.45;
 /** A hover/touch that stops getting updates (the wiring died, the headset dropped) fades after this long. */
 export const TOUCH_STALE_SECONDS = 8;
 /** Splash bigness for the shader: 0 = wake, 1 = full splash. */
@@ -71,7 +71,7 @@ export class TouchWater {
   private splashCursor = 0; private wakeCursor = 0;
   private pendingSplash = 0; private pendingRelease = false;
   /** the newest splash slot, and until when a late X/Y may still move it (touch-down before the position arrived) */
-  private lastSplashSlot = -1; private reseatUntil = -1;
+  private lastSplashSlot = -1; private reseatUntil = -1; private reseatsLeft = 0;
   private lastWakeAt = 0; private lastWakeX = .5; private lastWakeY = .5;
   private lastMessageAt = -Infinity;
   private now = 0;
@@ -103,7 +103,8 @@ export class TouchWater {
       this.pendingSplash = touchSplashStrength(sample.pressure);
       this.smoothX = this.lastWakeX = sample.x; this.smoothY = this.lastWakeY = sample.y; this.lastWakeAt = seconds;
     } else if (was === 'touching' && now !== 'touching') this.pendingRelease = true;
-    else if (moved && now === 'touching' && seconds < this.reseatUntil && this.lastSplashSlot >= 0) {
+    else if (moved && now === 'touching' && seconds < this.reseatUntil && this.reseatsLeft > 0 && this.lastSplashSlot >= 0) {
+      this.reseatsLeft--;
       // The pressure arrived a few ms before its X/Y: move the young splash under the finger instead of leaving it behind.
       this.place(this.lastSplashSlot, sample.x, sample.y, sample.x, sample.y);
       this.place((this.lastSplashSlot + 1) % SPLASH_SLOTS, sample.x, sample.y, sample.x, sample.y);
@@ -122,7 +123,7 @@ export class TouchWater {
       const slot = this.splashCursor; this.splashCursor = (this.splashCursor + 2) % SPLASH_SLOTS;
       this.write(slot, x, y, x, y, seconds, strength, BIG.splash);
       this.write((slot + 1) % SPLASH_SLOTS, x, y, x, y, seconds + .16, strength * .5, BIG.echo);
-      this.lastSplashSlot = slot; this.reseatUntil = seconds + .12;
+      this.lastSplashSlot = slot; this.reseatUntil = seconds + .12; this.reseatsLeft = 2;
       this.lastWakeX = x; this.lastWakeY = y; this.lastWakeAt = seconds;
     }
     if (this.pendingRelease) {

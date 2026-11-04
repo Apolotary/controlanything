@@ -11,45 +11,16 @@
  * Silent: the page's audio constructors throw; nothing here makes sound. Requires sockets and Chrome (system, no download).
  */
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { createConnection } from 'node:net';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { chromium } from 'playwright-core';
+import { openMacBrowser, pairMac, ROOT, startFixtureServer } from './harness.mjs';
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const OUT = join(ROOT, 'research/screens/touch-water');
 const PORT = Number(process.env.PORT || 8798);
-const BASE = `http://127.0.0.1:${PORT}`;
 const VIEWPORT = { width: Number(process.env.W || 1440), height: Number(process.env.H || 900) };
 const PATTERNS = ['flow', 'rings', 'prism', 'water'];
-let server, browser, dataDir, log = '';
-const errors = [];
-
-const until = async (label, probe, timeout = 30_000) => {
-  const end = Date.now() + timeout;
-  while (Date.now() < end) {
-    if (server && (server.exitCode !== null || server.signalCode !== null)) throw Error(`Fixture server exited: ${log.slice(-1500)}`);
-    const result = await probe(); if (result) return result;
-    await delay(100);
-  }
-  throw Error(`Timed out: ${label}`);
-};
-const freePort = (port) => new Promise((yes, no) => {
-  const socket = createConnection({ host: '127.0.0.1', port });
-  socket.once('connect', () => { socket.destroy(); no(Error(`Port ${port} is occupied; stop its owner first.`)); });
-  socket.once('error', (error) => error.code === 'ECONNREFUSED' ? yes() : no(error));
-  socket.setTimeout(1500, () => { socket.destroy(); no(Error(`Port ${port} probe timeout`)); });
-});
-async function json(path, body) {
-  const response = await fetch(`${BASE}${path}`, body
-    ? { method: 'POST', headers: { 'content-type': 'application/json', origin: BASE }, body: JSON.stringify(body), signal: AbortSignal.timeout(3000) }
-    : { signal: AbortSignal.timeout(3000) });
-  assert(response.ok, `${path}: ${response.status}`); return response.json();
-}
+let fixture, mac;
 
 /** The in-page driver: CC22/23/24 on the visual synth's channel, timed with the page's own clock. */
 function installDriver() {
@@ -159,33 +130,10 @@ const run = {
 
 try {
   await mkdir(OUT, { recursive: true });
-  await freePort(PORT);
-  dataDir = await mkdtemp(join(tmpdir(), 'ce-touch-water-'));
-  server = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], { cwd: join(ROOT, 'apps/server'), stdio: ['ignore', 'pipe', 'pipe'], env: {
-    ...process.env, HTTP_PORT: String(PORT), HTTPS_PORT: '0', HTTP_HOST: '127.0.0.1', PUBLIC_HOST: '127.0.0.1',
-    CE_DATA_DIR: dataDir, MODEL_MODE: 'fixture', MODEL_API_KEY: '', CE_MAC_SILENT: '1', CE_MAC_LOCAL: '0', CE_REMO: '0', REMO_HOST: '', REMO_SEND: '0',
-    CE_TRUST_FIRST_DEVICE: '1', CE_TRUST_LOOPBACK: '1', CE_CONSOLE_APPROVE: '0', MUSE_REPLAY: '1', MUSE_RECORD: '0', MUSE_RECORD_DIR: '', FIXTURE_DELAY_MS: '100', GEN3D_SKIN: '0', VITEST: '',
-  } });
-  for (const stream of [server.stdout, server.stderr]) stream.on('data', (data) => { log = (log + data).slice(-200_000); });
-  await until('server', () => log.includes('ControlAnything server '));
-  assert.equal((await json('/api/health')).mode, 'fixture');
-  const start = await json('/api/pair/start', { kind: 'mac', name: 'Touch-water fixture Mac' });
-  const status = start.deviceToken ? start : await json(`/api/pair/status?pairingId=${encodeURIComponent(start.pairingId)}&pollSecret=${encodeURIComponent(start.pollSecret)}`);
-  assert.equal(status.status, 'approved');
-  const identity = { deviceId: status.deviceId, deviceToken: status.deviceToken, kind: 'mac', name: 'Touch-water fixture Mac' };
-
-  browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--mute-audio', '--enable-gpu-rasterization', '--ignore-gpu-blocklist'] });
-  const context = await browser.newContext({ viewport: VIEWPORT });
-  context.setDefaultTimeout(30_000);
-  await context.addInitScript((id) => {
-    localStorage.setItem('ce.device', JSON.stringify(id));
-    window.__audioAttempts = 0;
-    for (const key of ['AudioContext', 'webkitAudioContext']) if (window[key]) window[key] = class { constructor() { window.__audioAttempts++; throw Error('Audio is forbidden here'); } };
-  }, identity);
-  const page = await context.newPage();
-  page.on('pageerror', (error) => errors.push(error.message));
-  page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
-  await page.goto(`${BASE}/companion/?visuals=1`);
+  fixture = await startFixtureServer(PORT, 'touch-water');
+  mac = await openMacBrowser(await pairMac(fixture, 'Touch-water fixture Mac'), VIEWPORT);
+  const page = await mac.newPage();
+  await page.goto(`${fixture.base}/companion/?visuals=1`);
   await page.locator('#visual-launcher canvas').waitFor({ state: 'visible' });
   await page.evaluate(installDriver);
   const gpu = await page.evaluate(() => { const gl = document.createElement('canvas').getContext('webgl2'); const e = gl.getExtension('WEBGL_debug_renderer_info'); return e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER); });
@@ -228,16 +176,18 @@ try {
     await page.screenshot({ path: join(OUT, `${pattern}-hover.png`) });
     await page.evaluate(() => window.__touch.cc(24, 0));
   }
+  // The spec: touch -> first visible ripple within ~80 ms, and no frame-time cliff with a full wake.
+  for (const ms of report.touchToFirstPixelMs) assert(ms <= 80, `touch -> first changed pixels took ${ms} ms (limit 80)`);
+  assert(report.dragFrames.p95 < 25, `frame p95 ${report.dragFrames.p95} ms while dragging`);
   report.audioAttempts = await page.evaluate(() => window.__audioAttempts);
   assert.equal(report.audioAttempts, 0);
-  assert.deepEqual(errors, []);
+  assert.deepEqual(mac.errors, []);
   await writeFile(join(OUT, 'report.json'), JSON.stringify(report, null, 2));
   console.log('PASS touch-water pixels captured:', OUT);
 } catch (error) {
   console.error('FAIL', error); process.exitCode = 1;
 } finally {
-  await browser?.close();
-  if (server && server.exitCode === null) { server.kill('SIGTERM'); await Promise.race([new Promise((done) => server.once('exit', done)), delay(3000)]); if (server.exitCode === null) server.kill('SIGKILL'); }
-  if (dataDir) await rm(dataDir, { recursive: true, force: true });
-  if (errors.length) console.error('browser errors:', errors.slice(0, 5));
+  await mac?.browser.close();
+  await fixture?.stop();
+  if (mac?.errors.length) console.error('browser errors:', mac.errors.slice(0, 5));
 }

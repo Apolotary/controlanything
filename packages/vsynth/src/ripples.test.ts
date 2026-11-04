@@ -71,8 +71,12 @@ describe('touch the water (fingertip splash, wake, lens)', () => {
     frames(fast, .22, .3); // the finger has arrived; the eased fingertip catches up
     expect(live(fast).length).toBeLessThanOrEqual(TOUCH_WAVE_CAPACITY);
     const wake = live(fast).filter((wave) => wave.big === 0);
-    expect(wake.length).toBeGreaterThanOrEqual(8); expect(wake.length).toBeLessThanOrEqual(TOUCH_WAVE_CAPACITY - 6);
-    expect(wake.every((wave) => length(wave) <= .1201)).toBe(true);
+    expect(wake.length).toBeGreaterThanOrEqual(3); expect(wake.length).toBeLessThanOrEqual(TOUCH_WAVE_CAPACITY - 6);
+    expect(wake.every((wave) => length(wave) <= .4501)).toBe(true); // no segment longer than ~a quarter of the screen width
+    // the segments chain end to start: the finger's whole path is covered, left to right
+    const ordered = [...wake].sort((a, b) => a.x - b.x);
+    for (let i = 1; i < ordered.length; i++) expect(ordered[i]!.x).toBeCloseTo(ordered[i - 1]!.x2, 4);
+    expect(ordered[0]!.x).toBeLessThan(.25); // the first two updates can still be the landing spot expect(ordered.at(-1)!.x2).toBeGreaterThan(.9);
   });
 
   it('does not spawn a wake while the finger hovers, holds still or is lifted', () => {
