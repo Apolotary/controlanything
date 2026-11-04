@@ -282,9 +282,13 @@ export class WiringController {
 
   // --- per frame ---------------------------------------------------------------------------------------------------
 
+  private lastControllable = false;
   frame(frame: ShellFrame, timeMs: number): void {
     const sel = this.host.selected();
     const w = this.w;
+    // The card's ask section appears and disappears with "selected and under control"; redraw when that flips.
+    const controllable = !!sel && this.host.canControl(sel.cardId);
+    if (controllable !== this.lastControllable) { this.lastControllable = controllable; this.dirty = true; this.lastRender = -Infinity; }
     if (!sel || !this.host.canControl(sel.cardId)) {
       if (w) { if (this.runtime.running) this.runtime.stop('the device is not under control any more', 'external', false); this.w = null; this.cancelCalibration(); this.changed(); }
       this.setBusy(false);
