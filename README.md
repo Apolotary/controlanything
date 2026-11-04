@@ -1,47 +1,48 @@
 # ControlAnything
 
-**Look at a device, pinch it, and play it with your hands.**
+**Pinch a device, ask Muse what your hands should do, and watch it write the connection.**
 
-ControlAnything connects a Meta Quest 3 to the hardware and software around you. What the headset sees goes to Meta's SAM 3.1, which outlines the devices in view. When you pinch one, a small server on your laptop asks Muse Spark to identify it, write a driver for it and build spatial controls on the spot, then checks that those controls really change the device before it hands them to you.
+ControlAnything connects a Meta Quest 3 to supported hardware and software through a server on your laptop. Meta's SAM 3.1 outlines objects in passthrough. You select a device and ask what your hands should do. Muse Spark writes the device driver and a small JavaScript wiring program; you watch the source appear in AR while the server checks it. The wiring runs in a restricted Web Worker on the headset, sending validated actions to the device through the Mac bridge.
 
 <!-- VIDEO_URL -->
 **▶ 3-minute demo video:** _link coming soon_
 
-<p align="center"><img src="docs/hero.jpg" alt="Desktop emulator, sim room: the laptop's visual synth armed, with two arc dials on the screen, the device card and the wrist palette" width="600"><br><sub>Desktop emulator, sim room: the Mac's visual synth armed. Two arc dials ride the screen; the card has Perform; the wrist palette has Visual synth · Buddy · Use an object · Stop · Exit.</sub></p>
+<p align="center"><img src="docs/hero.jpg" alt="Desktop emulator, sim room: the laptop's visual synth armed, with two arc dials on the screen, the device card and the wrist palette" width="600"><br><sub>Desktop emulator, earlier dial-based build. The current demo asks Muse for wiring before hand interaction; the wrist palette switches Annotate / Control. This image is not evidence of the current real-headset wiring flow.</sub></p>
 
 Built for the **Meta Global AI Developer Hackathon** (Indie Developer track, *Push the Frontier*). The name nods to Meta's *Segment Anything*; this is an independent project, not a Meta product.
 
 ## The golden path
 
-One MacBook and one Quest 3. The Mac is both the bridge and the device being played: it runs a silent, full-screen **visual synth**.
+One MacBook and one Quest 3. The Mac runs the server, a paired companion and a silent full-screen **visual synth**. Its capability manifest describes what the instrument accepts; the hand-to-device wiring is generated after your request.
 
-1. **Enter AR.** Passthrough plus a calm HUD. The headset pairs with the Mac by looking at the QR code on its companion page (or you type the code).
-2. **Look at the MacBook.** A thin outline and a pill appear: *MacBook · pinch to control*.
-3. **Pinch it.** A setup ring circles the screen while the agent runs: identify → driver → verify → controls. One pinch is enough. A generic SAM box (*electronic device*) is first identified by Muse as the Mac, and setup then continues on the same pinch.
-4. **Play.** Two arc dials (Warp, Ripples) appear on the screen's edges, with a device card beside them. Pinch-drag a dial and the Mac's visuals follow.
-5. **Perform.** Tap *Perform* on the card. Then a left fist is the clutch, and your right hand's height and depth drive the dials.
-6. **Stop.** Open both palms toward the scene, or tap *Stop* on the wrist palette.
+1. **Enter AR and find the Mac.** Pair with the companion's QR code or passcode. In Annotate, SAM 3.1 provides the outlines. Raise a flat left palm deliberately to open the wrist palette: **Annotate / Control**, **Electronics / Objects / All**, **Visual synth**, **Buddy**, **Stop** and **Exit**.
+2. **Pinch the MacBook.** The companion opens its visuals. A setup ring shows the link, Muse-written driver, effect verification and interface preparation. A saved driver may be reused with its source disclosed. Driver prefetch is **off by default**; `CE_PREFETCH=1` is an opt-in rehearsal mode.
+3. **Ask what your hands should do.** Choose **Touch the water**, **Hands as knobs** or **Surprise me**, or hold the card's microphone button and speak. The selected device has no hand interaction before this request. The optional dials are not a required step.
+4. **Watch Muse write.** JavaScript streams into a code card beside the Mac and into the companion's code view. The server validates it, dry-runs synthetic signal traces in `node:vm`, and checks the driver actions it uses. The source is visibly **Live**, **FIXTURE** or **Template**.
+5. **Calibrate for touch.** Follow the highlighted top-left then bottom-right screen corners, holding the fingertip still until each corner is captured. A hand-only program skips calibration. A saved screen plane is reused for that selected device when valid; **Recalibrate screen** is available.
+6. **Touch the water.** After the program is ready and calibration completes, its Web Worker maps fingertip position to the visual synth's touch inputs. Touch and drag: ripples splash at the contact point and leave a wake. Lift away to release. There is no separate Perform step on this route.
+7. **Stop.** Show both palms out, choose **Stop** from the wrist palette, or use `X` in the emulator. Ask again for a new interaction; Muse writes a new wiring program.
 
-That is three deliberate actions: Enter AR, pinch, Perform. To open the **wrist palette**, turn your left palm toward your face. It holds *Electronics · Objects · All* (what to track; in Annotate only), *Visual synth*, *Buddy*, *Use an object*, *Stop* and *Exit*.
+The deliberate palm menu closes after a selection and stays out of the way while the hands are controlling the device. Tutorial guidance and all control feedback live in AR. The [acceptance checklist](docs/DEMO-ACCEPTANCE.md) distinguishes emulator checks from the remaining real-Quest run.
 
 ## Meta model calls vs. OS and browser features
 
-**Every AI model this project calls at runtime is a Meta model**, called through Meta's Model API. No other AI model runs anywhere in the system: not on the headset, the Mac, the phone or the server.
+**Every AI model this project calls at runtime is a Meta model**, called through Meta's Model API. The application does not call or bundle a non-Meta model. Platform tracking and system voices are described separately below.
 
 | Meta model | What it does here |
 |---|---|
 | **SAM 3.1** (`sam-3.1`) | Finds and outlines the devices and objects in passthrough frames: every box you see comes from it. During verification it finds the same outline again on the before and after frames. |
-| **Muse Spark** (`muse-spark-1.3`) | Identifies the pinched device from a crop and the whole frame. Writes the driver from the device's capability manifest or MIDI chart. Forges the controls, with a repair round when checks fail. Also voices the Muse buddy: it reacts to each object you show it and judges whether the object meets the quest. |
-| **Muse Wonder** (`muse-wonder-1.0`) | Guarded fallback for driver writing when Muse Spark fails. |
+| **Muse Spark** (`muse-spark-1.3`) | Identifies the pinched device from a crop and the whole frame. Writes the driver from the device's capability manifest or MIDI chart. Writes the per-request JavaScript wiring and control descriptions, with repair when checks fail. Also writes the Muse buddy’s text: it reacts to each object you show it and judges whether the object meets the quest. |
+| **Muse Wonder** (`muse-wonder-1.0`) | Guarded fallback for driver or wiring generation when Muse Spark fails; only count it as used when a call actually occurred. |
 | **Muse Image** (`muse-image-1.0`) | Paints the buddy's stickers. Optionally paints a device-inspired panel texture, which never delays the controls. |
-| **Muse Voice Transcribe** (`muse-voice-transcribe-1.0`) | Transcribes *Ask Muse* push-to-talk (a lab feature) and spoken verification clips. |
+| **Muse Voice Transcribe** (`muse-voice-transcribe-1.0`) | Transcribes the device card’s hold-to-talk wiring request, plus the older lab assistant and spoken verification clips. |
 
 These parts are OS or browser features, or plain code. None of them is an AI model call:
 
 | Part | What it actually is |
 |---|---|
 | Hand and head tracking | Quest OS hand tracking, read through the WebXR Hand Input API. We read the joint poses and run no hand model of our own. |
-| Gestures (pinch, palm menu, hand control, pattern tap) | Deterministic geometry on those joint poses, smoothed with a One Euro filter. |
+| Hand/screen signals and UI gestures | Deterministic geometry on WebXR joints, with smoothing and a calibrated screen plane. Muse’s generated program decides how these signals drive the selected device. |
 | An object you hold as a controller | Follows the hand that holds it (WebXR joints). SAM 3.1 finds it first. |
 | Camera verification (*seen ✓*) | Deterministic before/after frame comparison inside the SAM 3.1 outline. |
 | Passthrough frames | Quest Browser camera access (`getUserMedia`). |
@@ -51,26 +52,21 @@ These parts are OS or browser features, or plain code. None of them is an AI mod
 | Device links | Web MIDI, Web Serial and Web Bluetooth (browser), bleak (Bluetooth LE), stored IR codes. |
 | QR pairing | jsQR decoding (not a model). |
 
-**Measured** (from the independent verification pass, `CE_DEMO=1`, desktop emulator):
+## What Muse writes, and where it runs
 
-| Mode | Pinch → controls armed |
-|---|---|
-| Live, cold | **29.0 s**: identify 8.2 s, driver 7.1 s, forge 7.8 s plus one forge repair 13.2 s. An earlier live probe took 41.9 s. |
-| Live, with the prefetch | With `CE_DEMO=1`, the server asks Muse for the driver and controls as soon as a Mac advertises the renderer; the prefetch takes about 40 s, and the pinch re-validates its result. The builder measured these times after the verification pass:<br>• **~1.2 s** for the MacBook's *laptop* box once the prefetch has finished;<br>• **~23 s** for a generic SAM *electronic device* box once the prefetch has finished (mostly the Muse identify);<br>• **~32 s** while the prefetch is still running (no duplicate calls). |
-| Fixture replay | **1.3 s**. |
+| Artifact | Generated from | Checked and executed where |
+|---|---|---|
+| **Driver** | The instrument’s capability manifest or reviewed device/MIDI data | Declarative operations validated on the server against supported transports, action IDs, CCs and ranges. Executors send those operations; driver JSON is not arbitrary executable code. |
+| **Wiring program** | The wearer’s current request, available hand/screen signals and verified driver actions | Up to 4KB of JavaScript, validated and dry-run in a restricted `node:vm` context on the server. The accepted program runs every frame in a restricted **Web Worker on the Quest**. It never runs in the Mac companion. |
+| **Labels/interface description** | Device actions and the request | Bound to validated actions and rendered in the app’s established AR layout. The current demo does not generate arbitrary 3D scene code. |
 
-After setup, moving a control makes **no model call**. A control event resolves to a validated driver action, then to a MIDI, IR or Bluetooth op, rate-limited, in under 1 ms on the server.
+The wiring API is `wire(s, out, mem)`: read hand/screen signals, call `out.set(actionId, value)` or `out.trigger(actionId)`, and retain small state in `mem`. The runtime restricts actions, clamps values, rate-limits outputs and stops on repeated errors or a watchdog timeout. The server independently checks active wiring, arming and verification before dispatch. These are prototype guardrails, not a general-purpose untrusted-code platform.
 
+Live generation is the normal keyed route. If generation fails, a **Template** fallback is visibly labelled *no Meta model wrote this*. No-key runs are **FIXTURE**, including chunked code playback. Driver-library reuse is labelled separately and does not mean the wiring was newly generated. Each new wiring request still asks for a new program; this path does not silently restore an old hand mapping.
 
-## What Muse writes, and what the server checks
+After setup, each hand frame needs **no model call**: worker output → `control.event` (`wire:<actionId>`) → validated driver → Mac executor/renderer. See [architecture](docs/ARCHITECTURE.md) for the protocol and limits.
 
-- **The driver.** The visual synth publishes a capability manifest: its CCs, programs, effects and the messages it rejects. Muse Spark writes the driver from that manifest. The server validates it against the manifest: allowlisted CCs, ranges, rate caps. Generated code is never executed.
-- **The controls.** Muse writes a semantic hack set bound to verified actions. The server checks it and compiles it deterministically to 3D controls.
-- **Fallbacks, always labelled.**
-  - If Muse doesn't answer in time, a curated template stands in, and the step says *curated template used (no Meta model wrote this driver)*.
-  - A forge failure says *template fallback*.
-  - A saved driver comes back labelled *from the library*.
-  - Recorded replies are labelled **FIXTURE**, together with the model they were recorded from.
+**Evidence boundary:** the earlier real-Quest dial/Perform build reached 81 fps at p95 and applied 100/100 commands in a November 4 run. A separate live Muse wiring probe streamed **Touch the water** in 14 deltas and reached ready in 8.1 seconds; **Hands as knobs** took about 11 seconds. These are separate measurements, not a measured end-to-end touch-water headset pass. The current ask → code → calibrate → touch route needs its own real-headset acceptance record.
 
 ## Honest verification
 
@@ -88,8 +84,8 @@ In emulator runs, the camera at about 1 m usually does **not** see the Mac's scr
 ## More than one synth
 
 - **Muse buddy.** *Wrist palette → Buddy.* A small desk mascot gives you quests (*"Show me something green!"*). Hold up a real object and Muse Spark reacts to it. Muse Image paints a sticker for its shelf.
-- **Physical objects as controllers.** Once a device is armed, choose *Use an object* and pick a mug or bottle. SAM 3.1 finds it; once you pick it up it follows the hand that holds it (WebXR joints, One Euro filter). Lifting it drives the first control and sliding it drives the second. This is the same deterministic control path, with no model in the loop.
-- **DJI Osmo gimbal.** A Bluetooth adapter for the Osmo Mobile: DUML framing, a safety envelope (≤ 90°/s, pan ±120°, tilt ±45°) and three links (`CE_OSMO=ble` via a small bleak helper, `web` via Chrome Web Bluetooth, `mock`). It is wired into identify, link, driver and controls. Status: verified against the mock. A physical move test is `npx tsx apps/server/scripts/osmo.ts test --move`.
+- **Physical objects as controllers.** Once a device is armed, choose *Use an object* and pick a mug or bottle. SAM 3.1 finds it; once you pick it up it follows the hand that holds it (WebXR joints, One Euro filter). Lifting it drives the first control and sliding it drives the second. This is an earlier deterministic controller mode, not proof that Muse generated its hand-to-object behavior; it is outside the new wiring demo.
+- **DJI Osmo gimbal.** A Bluetooth adapter for the Osmo Mobile: DUML framing, a safety envelope (≤ 90°/s, pan ±120°, tilt ±45°) and three links (`CE_OSMO=ble` via a small bleak helper, `web` via Chrome Web Bluetooth, `mock`). Server integration covers identify, link, driver and controls. Current evidence is mock/terminal testing, not a demonstrated headset-driven physical move. A physical move test is `npx tsx apps/server/scripts/osmo.ts test --move`.
 - **Hand and head pose recording.** Record a take from the headset: passthrough video plus head and 25-joint hand poses at up to 30 Hz. On the Quest it is under `?lab=1`; in the emulator it is in the side panel. Review it in **Motion lab** (`/companion/tracking/`): video and 3D hands on one timeline, tracking gaps, *Export dataset* for physical-AI training data. See [tracking review](docs/TRACKING-REVIEW.md).
 - **Other bridges.** These paths exist but are off the critical path, and physical acceptance is still pending:
   - an OP-1 Field over USB-MIDI (via the Mac companion);
@@ -107,18 +103,17 @@ npm run demo:sim            # builds what's missing; silent server with CE_DEMO=
 
 1. Open **[the sim room](http://localhost:8787/sim/?mute=1)** first. It stands in for your Mac: it pairs itself on localhost, and the laptop on its desk runs the visual synth.
 2. Open **[the desktop Quest emulator](http://localhost:8787/quest/?emulate=1&camera=sim&mute=1&mic=0)** and choose **Enter AR**. Click = pinch, right-drag = look, W/A/D/Q/E = move.
-3. **Click the laptop's box.** The setup ring runs, then the arc dials and the card appear. Drag a dial and watch the sim's laptop screen change.
-4. Click **Perform** on the card. **Stop** is on the wrist palette (lower right) or the `X` key. Keys: `G` Visual synth, `1/2/3` Electronics/Objects/All (Annotate only), `B` Buddy.
+3. **Click the laptop’s box.** Wait for setup, then choose **Touch the water** on the device card. The code view is labelled FIXTURE in a no-key run.
+4. Follow calibration, then use the emulated tracked hand to touch the screen. The automated wiring check below supplies fingertip poses; ordinary mouse clicks are UI pinches, not physical screen contact. **Stop** is on the wrist palette or the `X` key. Keys: `G` Visual synth, `1/2/3` Electronics/Objects/All (Annotate only), `B` Buddy.
 
 To see the real Mac app instead, open [the companion](http://localhost:8787/companion/) in a tab: it pairs, and pinching the screen opens its full-screen visuals. Model ids and latency are at [`/api/muse/calls`](http://localhost:8787/api/muse/calls). The agent's steps and evidence are at `/api/agent/steps` and `/api/agent/targets`.
 
 **Automated check** (installed Chrome; its own muted fixture server, own data dir):
 
 ```sh
-npm run build
-PORT=8796 npm run e2e:judge      # Enter AR → pinch the screen → setup ring → armed dials → dial drag
-                                 # changes the visuals → Perform with tracked hands → both palms = Stop
-PORT=8798 npm run e2e:vsynth     # the explicit path: Set up → Enable controls → pixel change → Stop resets
+npm run build                         # only while no live AR session is using dist
+PORT=8796 node scripts/e2e-judge.mjs   # current golden-path emulator check
+node --import tsx apps/server/scripts/wire-e2e.ts  # fixture WIRE over WebSocket
 ```
 
 These checks use server fixture detections. They do not measure detector accuracy, headset frame rate or the real Mac display.
@@ -126,9 +121,12 @@ These checks use server fixture detections. They do not measure detector accurac
 ## Run it with hardware
 
 1. **Mac:** put `MODEL_API_KEY` in `.env` for live Meta models. Then run `npm run build`, then `CE_DEMO=1 CE_MAC_SILENT=1 npm start`. HTTP serves on :8787 and HTTPS on :8443.
+
 2. **Quest 3** (developer mode, USB-C): `sh scripts/quest-grant-camera.sh` grants camera access and sets up `adb reverse`. In Quest Browser, open `http://localhost:8787/quest/` and choose **Enter AR**. Over the LAN, use `https://<mac-ip>:8443/quest/` and accept the development certificate.
 3. **Companion:** open `http://localhost:8787/companion/` in its own Chrome window, full screen. Look at its QR code from the headset.
-4. **Pinch the MacBook.** The companion becomes the visual synth by itself.
+4. **Pinch the MacBook, then ask.** The companion becomes the visual synth. Choose a suggestion chip or hold-to-talk; watch the wiring code, calibrate if requested, then touch. Leave `CE_PREFETCH` unset for the normal on-demand demonstration.
+
+While a live session is open, rebuild with `scripts/deploy-live.sh quest` (or `companion` / `sim`), which preserves old chunks. Reload the single Quest tab only after leaving AR; `scripts/quest-reload.mjs` avoids opening a duplicate camera-owning tab.
 
 Checklist and recording guide: [docs/DEMO-ACCEPTANCE.md](docs/DEMO-ACCEPTANCE.md). Per-app notes:
 - [server and pairing API](apps/server/README.md)

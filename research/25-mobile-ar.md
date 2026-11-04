@@ -1,9 +1,0 @@
-# 25 · Mobile AR for reviewers without a Quest
-
-The desktop Quest emulator and silent visual synth are the current hardware-free reviewer path. A future phone version should preserve the same sequence: Annotate, tap a device, switch to Control, request setup, observe camera verification, then enable its generated controls. The phone still pairs to the Mac bridge; it does not need a MIDI or IR connection itself.
-
-**Android:** Chrome supports WebXR `immersive-ar` on compatible ARCore phones, including hit-test and anchors. We could reuse the Quest web app's scene, protocol and generated controls with touch selection and dragging in place of hand input. This is a proposed adaptation, not a tested mobile release: feature-detect session support, adapt panel scale and placement, and validate camera-frame access separately before promising visual identification or verification. [Google's WebXR/ARCore comparison](https://developers.google.com/ar/develop/webxr/arcore-comparison), [Chrome AR sessions and hit testing](https://web.dev/articles/ar-hit-test).
-
-**iPhone:** iOS Safari does not support WebXR, so the immersive experience needs a native ARKit app or an App Clip. `apps/iphone/ControlEverything.xcodeproj` is a starting point for camera capture, tracking and a touch UI connected to the existing server. An App Clip could make a QR-launched trial smaller, but still requires native implementation and distribution work; it is not a Safari switch. [WebKit's iOS support statement](https://bugs.webkit.org/show_bug.cgi?id=309550#c2), [Apple's AR App Clip example](https://developer.apple.com/documentation/AppClip/interacting-with-app-clip-codes-in-ar).
-
-The first mobile milestone would control the same silent visual synth on a nearby screen. That keeps the demonstration measurable through camera pixels while input and positioning are validated on phones. Gesture performance and sound remain later work.
