@@ -1019,7 +1019,11 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     if (demoMode() && process.env.CE_PREFETCH !== '0') for (const host of visualSynthHosts(hub.devices())) {
       // Controls are prefetched only for a first setup: a saved, verified card keeps its own forge entry untouched.
       const saved = targets.get(VISUAL_SYNTH_CARD_ID);
-      prefetchVisualDriver(loopDeps, host, visualSynthCard(host), { forge: !saved?.specId && !setups.has(VISUAL_SYNTH_CARD_ID) });
+      const running = setups.has(VISUAL_SYNTH_CARD_ID);
+      // A repeat selection reuses the saved verified driver (~1 s): no Muse call for it, however much later it is.
+      const reusable = !!saved?.driver && saved.driver.executor.deviceId === host.deviceId && !visualSynthNeedsUpgrade(saved.driver)
+        && midiPermissionsCurrent(saved) && !!saved.specId && verifiedControlCount(specs.get(saved.specId), saved) > 0;
+      prefetchVisualDriver(loopDeps, host, visualSynthCard(host), { forge: !saved?.specId && !running, skip: reusable || running, why: `presence ${presence.reason ?? 'update'}` });
     }
     if (presence.reason === 'join' && presence.deviceId) {
       for (const state of canvas.snapshots()) if (tags.has(state.cardId)) hub.sendToDevice(presence.deviceId, 'canvas.state', state);

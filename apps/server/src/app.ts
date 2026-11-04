@@ -3,6 +3,7 @@
  * so a self-signed certificate accepted once covers the page and its WebSocket.
  *
  *   GET    /api/health                    mode, models, uptime, connected clients (public)
+ *   GET    /api/clients                   sockets per paired device: role, age, owner/superseded (public, no tokens)
  *   GET    /api/helper                    short pairing URLs and companion presence (public)
  *   GET    /api/muse/calls                every model call: model id, latency, tokens (public)
  *   POST   /api/pair/start                {name, kind, capabilities} -> {pairingId, code, display, qr, expiresAt, pollSecret, status}
@@ -95,6 +96,11 @@ export function createApp(ctx: ServerContext): express.Express {
       urls: ctx.urls(),
       warnings: m.warnings,
     });
+  });
+
+  // read-only: every socket per paired device with role, age and owner/superseded state (spot duplicate tabs)
+  api.get('/clients', (_req, res) => {
+    res.json(ctx.hub.clients());
   });
 
   api.get('/helper', (_req, res) => {

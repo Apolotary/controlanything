@@ -119,6 +119,9 @@
         "app": {
           "type": "string",
           "maxLength": 120
+        },
+        "foreground": {
+          "type": "boolean"
         }
       },
       "required": [

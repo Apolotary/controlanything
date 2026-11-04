@@ -77,13 +77,23 @@ const LEARN_WINDOW_RETRY_MS = 15_000;
 
 /** CE_DEMO prefetch: the visual synth driver Muse writes as soon as a Mac advertises the renderer, used once. */
 type VisualDraft = { at: number; result: NonNullable<Awaited<ReturnType<typeof drive>>>; forged?: Promise<Awaited<ReturnType<Forge['generate']>> | undefined> };
-const visualDrafts = new Map<string, { at: number; done: boolean; result: Promise<VisualDraft | undefined> }>();
-const PREFETCH_TTL_MS = 30 * 60_000;
+type DraftEntry = { at: number; done: boolean; ok?: boolean; used?: boolean; result: Promise<VisualDraft | undefined> };
+const visualDrafts = new Map<string, DraftEntry>();
+/** A failed (or spent and not saved) prefetch is tried again no sooner than this. */
+const PREFETCH_RETRY_MS = 2 * 60_000;
+/**
+ * One prefetch per Mac: while one is in flight every caller gets its promise; a valid unused draft is kept until a
+ * setup takes it; nothing starts while `skip` (a saved verified driver will be reused, or a setup is running).
+ */
 export function prefetchVisualDriver(d: Pick<LoopDeps, 'spark' | 'wonder' | 'profiles' | 'web' | 'midiCharts' | 'log' | 'forge'>, executor: { deviceId: string; kind: string },
-  card: Parameters<typeof drive>[1], opts: { forge: boolean }): void {
+  card: Parameters<typeof drive>[1], opts: { forge: boolean; skip?: boolean; why?: string }): Promise<VisualDraft | undefined> | undefined {
   const cached = visualDrafts.get(executor.deviceId);
-  if (cached && Date.now() - cached.at < PREFETCH_TTL_MS) return;
+  if (cached && !cached.done) return cached.result;
+  if (opts.skip) return undefined;
+  if (cached && !cached.used && cached.ok) return cached.result;
+  if (cached && Date.now() - cached.at < PREFETCH_RETRY_MS) return undefined;
   const at = Date.now();
+  d.log?.(`[drive] prefetch: Muse writes the visual synth driver for ${executor.deviceId}${opts.forge ? ' and its controls' : ''} (${opts.why ?? 'Mac advertised the visuals'})`);
   const result = (async () => {
     const research = await doResearch({ profiles: d.profiles, web: d.web, midiCharts: d.midiCharts }, card, 'midi', { allowWeb: false });
     if (!research.allowedCcs?.size) return undefined;
@@ -91,7 +101,7 @@ export function prefetchVisualDriver(d: Pick<LoopDeps, 'spark' | 'wonder' | 'pro
     const r = await drive({ spark: d.spark, wonder: d.wonder, log: d.log }, card, research, 'midi', ids,
       { expectedTransport: 'midi', allowedCcs: research.allowedCcs, executorKind: executor.kind, emitsLight: false },
       { maxAttempts: 2, firstEffort: VISUAL_EFFORT, signal: AbortSignal.timeout(45_000) });
-    d.log?.(`[drive] prefetched the visual synth driver for ${executor.deviceId}: ${r?.validation.ok ? `${r.model} ${(r.latencyMs / 1000).toFixed(1)} s` : 'not valid'}`);
+    d.log?.(`[drive] prefetched the visual synth driver for ${executor.deviceId}: ${r?.validation.ok ? `${r.model} ${(r.latencyMs / 1000).toFixed(1)} s` : 'not valid'} (${((Date.now() - at) / 1000).toFixed(1)} s)`);
     if (!r?.validation.ok) return undefined;
     // Its controls too, while nobody is waiting: unverified until the pinch's verification rearms them.
     const forge = opts.forge ? d.forge() : undefined;
@@ -102,15 +112,16 @@ export function prefetchVisualDriver(d: Pick<LoopDeps, 'spark' | 'wonder' | 'pro
         (e) => { d.log?.(`[gen3d] visual controls prefetch failed: ${(e as Error).message}`); return undefined; });
     return { at: Date.now(), result: r, forged };
   })().catch((e) => { d.log?.(`[drive] visual driver prefetch failed: ${(e as Error).message}`); return undefined; });
-  const entry = { at, done: false, result };
-  void result.finally(() => { entry.done = true; });
+  const entry: DraftEntry = { at, done: false, result };
+  void result.then((r) => { entry.done = true; entry.ok = !!r; });
   visualDrafts.set(executor.deviceId, entry);
+  return result;
 }
 function takeVisualDraft(executorId: string) {
   const cached = visualDrafts.get(executorId);
-  if (!cached || Date.now() - cached.at > PREFETCH_TTL_MS) return undefined;
-  // Used once; the spent entry keeps its time so presence updates do not start another prefetch within the TTL.
-  visualDrafts.set(executorId, { at: cached.at, done: true, result: Promise.resolve(undefined) });
+  if (!cached || cached.used) return undefined;
+  // Used once; the spent entry keeps its time so presence updates do not start another prefetch right away.
+  visualDrafts.set(executorId, { at: cached.at, done: true, used: true, result: Promise.resolve(undefined) });
   return cached;
 }
 
