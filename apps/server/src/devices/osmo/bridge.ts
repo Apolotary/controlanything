@@ -58,7 +58,7 @@ export class OsmoController {
   private lastSendAt = 0;
   /** the move in flight, for estimating where the gimbal is when it does not report */
   private move = { from: { yaw: 0, pitch: 0, roll: 0 } as Attitude, to: { yaw: 0, pitch: 0, roll: 0 } as Attitude, t0: 0, t1: 0 };
-  private pending?: { timer: ReturnType<typeof setTimeout>; wishMs?: number; waiters: ((r: SentMove) => void)[] };
+  private pending?: { timer: ReturnType<typeof setTimeout>; wishMs?: number; waiters: { resolve: (r: SentMove) => void; reject: (e: Error) => void }[] };
   private readonly replies = new Map<number, { code: number; at: number }>();
   private readonly log: (l: string) => void;
   /** every packet written (the CLI prints them) */
@@ -166,17 +166,18 @@ export class OsmoController {
       if (this.pending) {
         // latest wins: earlier waiters learn they were folded into this newer aim
         const old = this.pending.waiters;
-        this.pending.waiters = [resolve];
+        this.pending.waiters = [{ resolve, reject }];
         this.pending.wishMs = wishMs;
-        for (const w of old) w({ sentAt: Date.now(), durationMs: 0, superseded: true });
+        for (const w of old) w.resolve({ sentAt: Date.now(), durationMs: 0, superseded: true });
         return;
       }
       const go = () => {
         const p = this.pending;
         this.pending = undefined;
-        this.sendNow(p?.wishMs).then((r) => p?.waiters.forEach((w) => w({ ...r, superseded: false })), reject);
+        this.sendNow(p?.wishMs).then((r) => p?.waiters.forEach((w) => w.resolve({ ...r, superseded: false })),
+          (e: Error) => p?.waiters.forEach((w) => w.reject(e)));
       };
-      this.pending = { timer: setTimeout(go, Math.max(0, wait)), wishMs, waiters: [resolve] };
+      this.pending = { timer: setTimeout(go, Math.max(0, wait)), wishMs, waiters: [{ resolve, reject }] };
     });
   }
 
@@ -201,7 +202,7 @@ export class OsmoController {
   async hold(): Promise<SentMove | undefined> {
     if (this.pending) {
       clearTimeout(this.pending.timer);
-      for (const w of this.pending.waiters) w({ sentAt: Date.now(), durationMs: 0, superseded: true });
+      for (const w of this.pending.waiters) w.resolve({ sentAt: Date.now(), durationMs: 0, superseded: true });
       this.pending = undefined;
     }
     if (!this.state.connected) return;
@@ -213,7 +214,11 @@ export class OsmoController {
   }
 
   async close(): Promise<void> {
-    if (this.pending) clearTimeout(this.pending.timer);
+    if (this.pending) {
+      clearTimeout(this.pending.timer);
+      for (const w of this.pending.waiters) w.reject(new Error('gimbal link closed before the command was sent'));
+      this.pending = undefined;
+    }
     await this.link.close();
   }
 }

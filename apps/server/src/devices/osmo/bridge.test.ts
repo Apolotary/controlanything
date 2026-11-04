@@ -32,6 +32,17 @@ async function execute(controller: OsmoController) {
 }
 
 describe('truthful Osmo command evidence', () => {
+  it('rejects the current coalesced command when its link write fails', async () => {
+    const fake = hardware();
+    fake.link.write = async () => { throw Error('link failed'); };
+    const c = new OsmoController(fake.link); await c.open();
+    const first = c.aim({ yaw: 5, pitch: 0, roll: 0 });
+    const latest = c.aim({ yaw: 10, pitch: 0, roll: 0 });
+    const rejected = expect(latest).rejects.toThrow('link failed');
+    expect(await first).toMatchObject({ superseded: true });
+    await rejected; await c.close();
+  });
+
   it('does not treat unconfirmed hardware bytes as angles, including for Stop estimates', async () => {
     const c = new OsmoController(hardware(0).link);
     await c.open();
