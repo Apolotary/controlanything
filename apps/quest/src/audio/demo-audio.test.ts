@@ -20,3 +20,14 @@ it('queues Mac OS speech when the headset lacks browser speech, respecting maste
     demoAudioMaster.receive({ volume: .4, muted: true }); audio.speak('Master muted'); expect(fallback).toHaveBeenCalledTimes(1);
   } finally { audio.dispose(); quiet.dispose(); }
 });
+
+it('does not enqueue new OS speech from a hidden page', () => {
+  vi.stubGlobal('speechSynthesis', undefined); vi.stubGlobal('AudioContext', undefined);
+  const page = { hidden: false }; vi.stubGlobal('document', page);
+  const fallback = vi.fn(() => true), audio = new QuestDemoAudio(new URLSearchParams(), fallback);
+  try {
+    demoAudioMaster.receive({ volume: .4, muted: false }); demoAudioMaster.unlock();
+    audio.speak('Visible reaction'); expect(fallback).toHaveBeenCalledTimes(1);
+    page.hidden = true; audio.speak('Late reaction'); expect(fallback).toHaveBeenCalledTimes(1);
+  } finally { audio.dispose(); }
+});

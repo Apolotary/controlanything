@@ -123,7 +123,7 @@ export class QuestDemoAudio {
     }
   }
 
-  private maySpeak(): boolean { return !this.quiet && !(globalThis as { __ceMute?: boolean }).__ceMute && this.volume > 0 && demoAudioMaster.unlocked; }
+  private maySpeak(): boolean { return (typeof document === 'undefined' || !document.hidden) && !this.quiet && !(globalThis as { __ceMute?: boolean }).__ceMute && this.volume > 0 && demoAudioMaster.unlocked; }
   private macSpeech(text: string): void {
     if (!this.maySpeak() || !this.speechFallback) return;
     try {

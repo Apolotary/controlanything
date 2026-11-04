@@ -739,6 +739,7 @@ export class QuestApp {
     this.ws.onState = (s, info) => {
       this.page.badge('b-ws', s, s === 'open' ? 'ok' : s === 'connecting' ? 'warn' : 'bad');
       if (s === 'closed') {
+        this.suspendBuddy();
         this.demoAudio?.suspend();
         this.cancelManualRegion();
         this.projects?.disconnect();
@@ -2088,8 +2089,14 @@ export class QuestApp {
     this.hud.showConfirm(null); this.release(); this.refreshTags();
   }
 
+  /** Late camera/model responses must not outlive the visible session or speak during teardown. */
+  private suspendBuddy(): void {
+    (this as unknown as { buddy?: { close(silent?: boolean): void } }).buddy?.close(true);
+  }
+
   /** A suspended Worker cannot send a reliable final gate-off. Full Stop also releases the Mac engine and server authority. */
   private suspendWiring(reason: string, invalidatePlane = false): void {
+    this.suspendBuddy();
     const wiring = this.wiring;
     const active = wiring && wiring.phase !== 'idle' || this.armedCards?.has('musical-synth-mac') || this.activeSetup === 'musical-synth-mac';
     if (active) {
@@ -2345,7 +2352,7 @@ export class QuestApp {
         this.hud.toast(next.muted || next.volume === 0 ? 'Sound muted on Quest and Mac' : `Quest + Mac volume ${Math.round(next.volume * 100)}%`, 'info');
       },
     });
-    addEventListener('pagehide', () => { document.removeEventListener('pointerdown', unlock, { capture: true }); this.demoAudio?.dispose(); }, { once: true });
+    addEventListener('pagehide', () => { this.suspendBuddy(); document.removeEventListener('pointerdown', unlock, { capture: true }); this.demoAudio?.dispose(); }, { once: true });
   }
 
   private setupTutorial(): void {

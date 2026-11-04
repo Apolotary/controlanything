@@ -50,6 +50,12 @@ async function setup() {
 afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
 describe('device controls across XR visibility changes', () => {
+  it.each(['hidden', 'end'])('silently closes Buddy when XR becomes %s, including without active wiring', async event => {
+    const f = await setup(); const close = vi.fn(); f.app.buddy = { close };
+    if (event === 'hidden') f.visibility('hidden'); else f.session.dispatchEvent(new Event('end'));
+    expect(close).toHaveBeenCalledWith(true);
+  });
+
   it('Stop all still disarms and sends panic in Annotate, without changing the layer', async () => {
     const f = await setup(); f.app.modes.mode = 'annotate';
     f.app.wiring = { snapshot: () => ({ requestId: 'current-request' }), stop: vi.fn() };
