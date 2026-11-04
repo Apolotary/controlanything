@@ -22,6 +22,14 @@ const FOLLOW_TAU = 0.08, REACH_TAU = 0.6;
 const REACH_MARGIN = 0.08;
 /** The menu hand often drops out for a moment when the other hand comes close; keep the menu meanwhile. */
 const LOST_GRACE_MS = 800;
+/**
+ * Opening is deliberate: a flat, open hand raised in front of the face with the palm squarely toward the eyes, held
+ * ~0.45 s. A relaxed hand resting while the other one works a dial must never open it.
+ */
+const OPEN_DWELL_MS = 450, OPEN_FACING_COS = Math.cos(40 * Math.PI / 180), OPEN_MAX_DISTANCE = 0.65, OPEN_BELOW_HEAD = 0.45;
+/** Tip-to-knuckle distance over bone length: ~1 for a straight finger, ~0.8 relaxed, ~0.4 in a fist. */
+const OPEN_FINGER_STRAIGHTNESS = 0.88;
+const STRAIGHT_FINGERS = ['index-finger', 'middle-finger'] as const;
 
 export interface FingerTouchState {
   finger: FingerMenuFinger | null;
@@ -175,6 +183,11 @@ export class HandDockAnchor {
   private readonly offset: { lateral: number; up: number; toward: number };
   /** The other hand's index is near the open menu (the menu holds still and stays open). */
   reaching = false;
+  /** Set by the HUD while a control is in use (or was just used): a closed menu must not open then. */
+  blockOpen = false;
+  private readonly palmNormal = new Vector3();
+  private readonly boneA = new Vector3();
+  private readonly boneB = new Vector3();
   private lostSince: number | null = null;
 
   /** `offset` (metres, head frame) moves the dock beside the hand so the other index can poke it. */
@@ -240,7 +253,8 @@ export class HandDockAnchor {
     this.place(frame, hand, dock, wrist, firstPose);
 
     const held = this.open && (this.reaching || this.fingerNear(other, hand));
-    const palmReady = hand.palmUp && (hand.palmUpMs ?? 0) >= DWELL_MS && this.inReach(frame, hand);
+    const palmReady = !this.blockOpen && hand.palmUp && (hand.palmUpMs ?? 0) >= OPEN_DWELL_MS
+      && this.inReach(frame, hand) && this.deliberate(frame, hand);
     let nextOpen = this.open;
     if (palmReady || (this.open && (hand.palmUp || held))) {
       nextOpen = true;
@@ -311,6 +325,30 @@ export class HandDockAnchor {
     this.lostSince = null;
     this.reaching = false;
     this.controllerPinned = this.controllerRaised = false;
+  }
+
+  /** A deliberate "show me the menu" pose (see OPEN_*). Without articulated joints, palm-up alone decides. */
+  private deliberate(frame: HudFrame, hand: HandState): boolean {
+    const joints = hand.joints, wrist = joints.wrist, index = joints['index-finger-phalanx-proximal'], pinky = joints['pinky-finger-phalanx-proximal'];
+    if (!wrist || !index || !pinky) return true;
+    if (hand.pinching) return false;
+    const head = frame.head.position;
+    if (wrist.position.y < head.y - OPEN_BELOW_HEAD || wrist.position.distanceTo(head) > OPEN_MAX_DISTANCE) return false;
+    // Palm normal from joint positions (same construction as app/input.ts): left = pinky × index, right = index × pinky.
+    this.boneA.subVectors(index.position, wrist.position);
+    this.boneB.subVectors(pinky.position, wrist.position);
+    if (this.nonDominant === 'left') this.palmNormal.crossVectors(this.boneB, this.boneA);
+    else this.palmNormal.crossVectors(this.boneA, this.boneB);
+    this.direction.subVectors(head, wrist.position).normalize();
+    if (this.palmNormal.normalize().dot(this.direction) < OPEN_FACING_COS) return false;
+    for (const finger of STRAIGHT_FINGERS) {
+      const base = joints[`${finger}-phalanx-proximal`], mid = joints[`${finger}-phalanx-intermediate`];
+      const end = joints[`${finger}-phalanx-distal`], tip = joints[`${finger}-tip`];
+      if (!base || !mid || !end || !tip) continue;
+      const bones = base.position.distanceTo(mid.position) + mid.position.distanceTo(end.position) + end.position.distanceTo(tip.position);
+      if (bones > 0 && base.position.distanceTo(tip.position) / bones < OPEN_FINGER_STRAIGHTNESS) return false;
+    }
+    return true;
   }
 
   /** The other hand's index tip is in front of (or just through) the open menu, within a margin around it. */

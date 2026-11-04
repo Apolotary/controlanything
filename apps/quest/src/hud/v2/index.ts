@@ -103,6 +103,8 @@ export class LeanHud implements Hud {
   private readonly history: EvidenceState[] = [];
   private readonly widgets: Widget[] = [];
   private readonly captures = new Map<string, Capture>();
+  /** HUD time (s) of the last control interaction; the wrist menu does not open for 1 s after it. */
+  private lastControlAt = -Infinity;
   private readonly pressUntil = new Map<string, number>();
   private readonly cursors = [newCursor('left', 'left'), newCursor('right', 'right')];
   private devCursors: Cursor[] = [];
@@ -872,6 +874,7 @@ export class LeanHud implements Hud {
     this.refreshCommandUi(m); this.events.emit('hack', { ...hack, ts });
   }
   private emitControl(m: Mounted, c: Control, phase: ControlEvent['phase']): void {
+    this.lastControlAt = this.time;
     if (!this.isArmed(m, c)) return;
     const value = m.values.get(c.id) ?? c.default ?? 0, ts = Date.now();
     m.command = { controlId: c.id, value, ts, phase: 'sending', at: phase === 'start' ? Infinity : this.time * 1000 };
@@ -1844,6 +1847,11 @@ export class LeanHud implements Hud {
     const performing = !!this.deviceState?.handControl || !!this.projectView?.running;
     const movingPanel = [...this.holds.values()].some((hold) => hold.widget.drag);
     this.palette.setSuppressed(performing || movingPanel || this.modal.visible);
+    // Working a control (or just finished, or the other hand is pinching): a closed menu stays closed.
+    const menuHand = this.palette.anchor.nonDominant, otherHand = frame.hands[menuHand === 'left' ? 'right' : 'left'];
+    const usingControl = [...this.captures.values()].some((c) => !!c.widget && !this.isPaletteWidget(c.widget));
+    if (usingControl) this.lastControlAt = this.time;
+    this.palette.anchor.blockOpen = usingControl || this.time - this.lastControlAt < 1 || (!!otherHand?.pinching && !otherHand.controller);
     if (this.palette.needsRebuild()) this.rebuildPalette();
     this.palette.update(frame);
     const held = this.palette.updateHold(frame.time);

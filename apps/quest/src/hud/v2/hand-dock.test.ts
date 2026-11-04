@@ -3,7 +3,7 @@ import { Group, Quaternion, Vector3 } from 'three';
 import type { HandState, HudFrame } from '../contract';
 import { DockHold, FingerTouchDetector, HandDockAnchor, type FingerMenuFinger } from './hand-dock';
 
-function hand(x = -0.2, palmUp = true, palmUpMs = 300): HandState {
+function hand(x = -0.2, palmUp = true, palmUpMs = 450): HandState {
   return {
     joints: {
       wrist: { position: new Vector3(x, 1.1, -0.4), quaternion: new Quaternion(), radius: 0.01 },
@@ -37,15 +37,15 @@ function controller(position = new Vector3(-0.18, 1.4, -0.4)): HandState {
 describe('HandDockAnchor', () => {
   it.each(['left', 'right'] as const)('attaches to the %s non-dominant hand after its palm dwell', (side) => {
     const { anchor, dock, wrist, frame, update } = setup(side);
-    const menuHand = hand(side === 'left' ? -0.2 : 0.2, true, 299);
+    const menuHand = hand(side === 'left' ? -0.2 : 0.2, true, 449);
     frame.hands = { left: hand(-0.2), right: hand(0.2), [side]: menuHand };
-    update(299);
+    update(449);
     expect(anchor.tracked).toBe(true);
     expect(anchor.open).toBe(false);
     expect(wrist.visible).toBe(true);
     expect(anchor.wristOpacity).toBe(0.6);
-    menuHand.palmUpMs = 300;
-    update(300);
+    menuHand.palmUpMs = 450;
+    update(450);
     expect(anchor.open).toBe(true);
     expect(anchor.justOpened).toBe(true);
     expect(anchor.opacity).toBe(0);
@@ -54,7 +54,7 @@ describe('HandDockAnchor', () => {
     expect(Math.sign(dock.position.x)).toBe(side === 'left' ? -1 : 1);
     const facing = new Vector3(0, 0, 1).applyQuaternion(dock.quaternion);
     expect(facing.dot(frame.head.position.clone().sub(dock.position).normalize())).toBeCloseTo(1);
-    update(480);
+    update(630);
     expect(anchor.opacity).toBe(1);
     expect(anchor.justOpened).toBe(false);
     expect(wrist.visible).toBe(true);
