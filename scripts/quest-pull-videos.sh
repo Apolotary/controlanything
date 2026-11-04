@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Pull the Quest's own recordings (Meta button → Camera → Record video) to the Mac and check each one.
 # Usage: scripts/quest-pull-videos.sh [dest]   (default: research/video/footage/quest)
+# Only today's clips are pulled; ALL=1 pulls every clip on the headset.
 # Prints, per clip: resolution, length, and whether it has an audio track. Already-pulled clips are skipped.
 set -euo pipefail
 DEST="${1:-research/video/footage/quest}"
@@ -17,6 +18,7 @@ found=0
 for dir in /sdcard/Oculus/VideoShots /sdcard/Movies; do
   while IFS= read -r f; do
     [[ -z "$f" ]] && continue
+    [[ "${ALL:-0}" == "1" || "$(basename "$f")" == *"-$(date +%Y%m%d)-"* ]] || continue
     found=1
     name="$(basename "$f")"
     if [[ ! -f "$DEST/$name" ]]; then adb pull "$f" "$DEST/$name" >/dev/null; fi
