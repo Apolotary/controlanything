@@ -53,7 +53,7 @@ export class Recorder {
   /** bytes of JPEG kept so far (base64 length × 3/4) */
   frameBytes = 0;
 
-  start(meta: Omit<TakeMeta, 'kind' | 'v' | 'startedAt' | 'take'> & { take?: string }): string {
+  start(meta: Omit<TakeMeta, 'kind' | 'v' | 'startedAt' | 'take'> & { take?: string }, limitMs = TAKE_DURATION_LIMIT_MS): string {
     if (this.recording) throw new Error('Stop the current take before starting another.');
     const now = new Date();
     const take = meta.take ?? `take-${now.toISOString().replace(/[:.]/g, '-').slice(0, 23)}`;
@@ -62,7 +62,7 @@ export class Recorder {
     this.frameBytes = 0; this.jsonBytes = 0; this.spaceId = 0;
     this.t0 = performance.now(); this.nextPoseAt = 0;
     this.recording = true;
-    this.durationTimer = setTimeout(() => this.limit('Take reached the 90 second recording limit.'), TAKE_DURATION_LIMIT_MS);
+    this.durationTimer = setTimeout(() => this.limit(`Take reached the ${Math.round(limitMs / 1000)} second recording limit.`), limitMs);
     return take;
   }
 

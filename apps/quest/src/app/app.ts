@@ -49,7 +49,7 @@ import { PairingFlow } from '../pair/self';
 import { candidateScore } from '../hud/v2/anchor-stability';
 import { pairingCode } from '../hud/v2/pair-code';
 import { type ReplayMode, ReplayCamera, TakePlayer } from '../replay/player';
-import { Recorder } from '../replay/recorder';
+import { Recorder, TAKE_DURATION_LIMIT_MS } from '../replay/recorder';
 import { TakeVideoRecorder } from '../replay/video';
 import { loadTake, type Take } from '../replay/take';
 import { type AimHit, type AimTarget, aimAt, touching } from '../scan/aim';
@@ -2798,22 +2798,26 @@ export class QuestApp {
     if (this.recordingFinalizing) return;
     if (this.recorder.recording) { void this.finishRecording(); return; }
     const k = this.capture.last?.intrinsics;
+    // ?rec=1 (filming): poses only, up to 5 minutes. The Quest's own recorder films the video; the take's startedAt syncs them.
+    const poseOnly = this.params.get('rec') === '1' && !labEnabled();
+    const limitMs = poseOnly ? 300_000 : TAKE_DURATION_LIMIT_MS;
     const take = this.recorder.start({
       app: APP_VERSION,
       device: { kind: this.emulator ? 'emulator' : 'quest', name: this.identity?.name ?? (this.emulator ? 'Desktop emulator' : 'Quest') },
       camera: k ? { width: k.width, height: k.height, fx: k.fx, fy: k.fy, cx: k.cx, cy: k.cy } : { width: 1280, height: 960, fx: 868.31, fy: 868.31, cx: 640.18, cy: 482.07 },
       space: 'local-floor',
       tracking: { source: this.emulator ? 'emulator' : 'webxr', sampleRateHz: 30, jointConvention: 'webxr-hand-25', units: 'meters', axes: 'right-handed-y-up-negative-z-forward' },
-      notes: `${this.emulator ? 'desktop emulator' : 'headset'} · camera ${this.camera.kind} · server ${this.serverMode || 'unknown'} · camera intrinsics are approximate, not calibrated`,
-    });
+      notes: `${this.emulator ? 'desktop emulator' : 'headset'} · camera ${this.camera.kind} · server ${this.serverMode || 'unknown'} · camera intrinsics are approximate, not calibrated${poseOnly ? ' · poses only: the video is the Quest system recording' : ''}`,
+    }, limitMs);
     this.recorder.onLimit = (reason) => { void this.finishRecording(reason); };
     this.recordingVideo = new TakeVideoRecorder();
     const warning = (message: string) => { this.recorder.warning(message); this.page.log(message, 'warn'); };
-    const videoIssue = this.recordingVideo.start(this.camera.kind === 'passthrough' ? this.camera.element : undefined, this.recorder.elapsedMs, warning, () => { void this.finishRecording('Camera recording stopped.'); });
-    this.recordingHasVideo = !videoIssue;
+    const videoIssue = poseOnly ? undefined : this.recordingVideo.start(this.camera.kind === 'passthrough' ? this.camera.element : undefined, this.recorder.elapsedMs, warning, () => { void this.finishRecording('Camera recording stopped.'); });
+    if (poseOnly) this.recordingVideo = undefined;
+    this.recordingHasVideo = !poseOnly && !videoIssue;
     if (videoIssue) warning(videoIssue);
-    this.page.log(`recording ${take}: ${this.recordingHasVideo ? 'camera video + hand/head tracking' : 'tracking only'} · maximum 90 seconds · no microphone audio`, 'ok');
-    this.page.recordStatus(this.recordingHasVideo ? 'Recording camera + hand/head tracking. Enter AR; exit AR to finish. No audio. Maximum 90 seconds.' : 'Recording tracking only — camera video is unavailable. Enter AR to capture hand/head poses.');
+    this.page.log(`recording ${take}: ${poseOnly ? 'hand/head poses only (film with the Quest recorder)' : this.recordingHasVideo ? 'camera video + hand/head tracking' : 'tracking only'} · maximum ${Math.round(limitMs / 1000)} seconds · no microphone audio`, 'ok');
+    this.page.recordStatus(poseOnly ? 'Recording hand + head poses. Start the Quest recorder too, enter AR and do the demo; exit AR to finish. Maximum 5 minutes.' : this.recordingHasVideo ? 'Recording camera + hand/head tracking. Enter AR; exit AR to finish. No audio. Maximum 90 seconds.' : 'Recording tracking only — camera video is unavailable. Enter AR to capture hand/head poses.');
     this.page.setButton(this.page.record, 'Stop recording', true);
     this.page.save.disabled = true;
     this.hud.toast(this.recordingHasVideo ? 'Recording video + tracking · exit AR to finish' : 'Recording tracking only · camera unavailable', this.recordingHasVideo ? 'ok' : 'warn');

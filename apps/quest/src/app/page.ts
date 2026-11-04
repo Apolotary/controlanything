@@ -26,6 +26,8 @@ export class Page {
   presentation(emulator: boolean): void {
     document.body.dataset.layout = emulator ? 'emulator' : 'launcher';
     if (new URLSearchParams(location.search).get('lab') === '1') document.body.dataset.lab = '1';
+    // ?rec=1: the take recorder for filming (poses beside the Quest's own video), without lab mode's extras.
+    if (new URLSearchParams(location.search).get('rec') === '1') document.body.dataset.rec = '1';
     const diagnostics = $<HTMLDetailsElement>('developer-tools');
     if (diagnostics) diagnostics.open = emulator;
     window.dispatchEvent(new Event('resize'));
