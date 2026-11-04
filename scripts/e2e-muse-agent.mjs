@@ -51,6 +51,21 @@ try {
   const chips = await quest.evaluate(() => window.__ce.hud.root.userData.wire.chips);
   console.log('PASS control card offers Ask Muse:', chips.join(' | '));
   await shot('02-control-ask');
+  // Stop Muse mid-generation from the card's Stop Muse button, then ask again.
+  await quest.evaluate(() => window.__ce.wiring.ask('Give me knobs for the visual synth', 'chip'));
+  await quest.waitForFunction(() => window.__ce.hud.root.userData.wire?.phase === 'writing', null, { timeout: 15_000 });
+  await delay(700);
+  const busyActions = await quest.evaluate(() => window.__ce.hud.lookView().actions.map((a) => a.label));
+  assert.ok(busyActions.includes('Stop Muse'), `card while writing offers: ${busyActions.join(', ')}`);
+  console.log('PASS card shows Stop Muse while Muse writes');
+  await quest.evaluate(() => window.__ce.hud.lookAction('wire-cancel'));
+  await quest.waitForFunction(() => window.__ce.hud.root.userData.wire?.phase === 'stopped', null, { timeout: 10_000 });
+  await until('agent run stopped on the server', () => /stopped by the wearer/.test(log), 10_000);
+  await delay(1500);
+  const left = (await (await fetch(`${BASE}/api/agent/connectors`)).json()).connectors.length;
+  assert.equal(left, 0, 'a connector kept running after Stop Muse');
+  assert.ok(!/ready wire-/.test(log), 'a stopped run still published controls');
+  console.log('PASS Stop Muse cancels generation; nothing keeps running');
   // Ask.
   await quest.evaluate((text) => window.__ce.wiring.ask(text, 'chip'), ASK);
   await quest.waitForFunction(() => window.__ce.hud.root.userData.wire?.phase === 'writing', null, { timeout: 15_000 });

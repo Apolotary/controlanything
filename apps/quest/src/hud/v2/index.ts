@@ -109,6 +109,9 @@ export class LeanHud implements Hud {
   private readonly captures = new Map<string, Capture>();
   /** HUD time (s) of the last control interaction; the wrist menu does not open for 1 s after it. */
   private lastControlAt = -Infinity;
+  /** When the non-menu hand started its current pinch (seconds, HUD clock). */
+  private otherPinchSince: number | null = null;
+  private menuHintAt = -Infinity;
   private readonly pressUntil = new Map<string, number>();
   private readonly cursors = [newCursor('left', 'left'), newCursor('right', 'right')];
   private devCursors: Cursor[] = [];
@@ -675,6 +678,11 @@ export class LeanHud implements Hud {
       this.refreshLook(); this.refreshWireCode(); this.place();
       return;
     }
+    if (id === 'wire-cancel') {
+      // Stop Muse while it is still writing/testing (or during calibration): the server aborts the agent run.
+      if (this.wireView?.targetId === target.id) this.events.emit('wireCancel', { targetId: target.id });
+      return;
+    }
     if (id === 'wire-see-code') {
       if (!this.canOfferInvitation() || this.requestPanel !== 'details' || !this.wireView?.code?.code) return;
       this.inspectWireCode = !this.inspectWireCode;
@@ -865,7 +873,9 @@ export class LeanHud implements Hud {
               : wire.phase === 'stopped' ? 'Stopped. Ask Muse for something new.' : wire.mic === 'off' ? 'Try an example, or choose Ideas.' : 'Ask Muse how you want to control it.';
           return { title: name, subtitle, presentation: ideas ? 'ideas' : 'invitation', toggle: null, actions, ask, agent: null };
         }
-        return { title: name, subtitle: wire.prompt, toggle: null, actions: [], ask: null, agent: null };
+        // Muse is writing, testing or the screen is being calibrated: one clear way out.
+        const busy = ['asked', 'writing', 'validating', 'dry-run', 'verifying', 'ready', 'calibrating'].includes(wire.phase);
+        return { title: name, subtitle: wire.prompt, toggle: null, actions: busy ? [{ id: 'wire-cancel', label: wire.phase === 'calibrating' ? 'Cancel' : 'Stop Muse', icon: 'cancel', primary: true }] : [], ask: null, agent: null };
       }
       subtitle = wire.prompt;
       ask = { chips: wire.chips.map(label => ({ id: label, label })), mic: wire.mic };
@@ -2163,8 +2173,22 @@ export class LeanHud implements Hud {
     const menuHand = this.palette.anchor.nonDominant, otherHand = frame.hands[menuHand === 'left' ? 'right' : 'left'];
     const usingControl = [...this.captures.values()].some((c) => !!c.widget && !this.isPaletteWidget(c.widget));
     if (usingControl) this.lastControlAt = this.time;
-    this.palette.anchor.blockOpen = usingControl || this.time - this.lastControlAt < 1 || (!!otherHand?.pinching && !otherHand.controller)
-      || this.handsBusy;
+    // Only a fresh pinch of the other hand (about to select something) keeps the menu closed. A pinch held for
+    // longer is a hand holding an object or resting with curled fingers; it must not lock the menu away.
+    const otherPinching = !!otherHand?.pinching && !otherHand.controller;
+    if (!otherPinching) this.otherPinchSince = null;
+    else this.otherPinchSince ??= this.time;
+    const freshPinch = otherPinching && this.time - (this.otherPinchSince ?? this.time) < 1.2;
+    const blockedBy = usingControl || this.time - this.lastControlAt < 1 ? 'control' : freshPinch ? 'pinch' : this.handsBusy ? 'hands' : null;
+    this.palette.anchor.blockOpen = blockedBy !== null;
+    // Say why when a raised palm is refused for a while, instead of silently ignoring it.
+    const menuHandState = frame.hands[menuHand];
+    const menuWrist = menuHandState?.joints?.wrist?.position;
+    const raisedPalm = !!menuHandState?.palmUp && (menuHandState.palmUpMs ?? 0) > 900 && !!menuWrist && menuWrist.y >= this.head.y - 0.45;
+    if (blockedBy && raisedPalm && this.time - this.menuHintAt > 8) {
+      this.menuHintAt = this.time;
+      this.toast(blockedBy === 'pinch' ? 'Relax your other hand to open the menu.' : blockedBy === 'hands' ? 'Your hands are controlling the device. Both palms out to stop, then open the menu.' : 'Let go of the control, then raise your palm again.', 'info');
+    }
     this.frameHands = frame.hands;
     if (this.palette.needsRebuild()) this.rebuildPalette();
     this.palette.update(frame);

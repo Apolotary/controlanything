@@ -248,6 +248,8 @@ export interface HudEvents {
   /** Hold-to-talk for a wiring request: down = start listening, up = send. */
   wireTalk: { targetId: string; down: boolean };
   wireRecalibrate: { targetId: string };
+  /** Stop Muse mid-generation (or cancel calibration) for the selected device. */
+  wireCancel: { targetId: string };
   /** A Muse-generated AR control (knob/button/toggle) moved. */
   wireControl: { targetId: string; actionId: string; value: number | boolean; phase: 'start' | 'move' | 'end' };
   assistantConfirm: { targetId: string; proposalId: string; accept: boolean };

@@ -586,6 +586,7 @@ export class QuestApp {
     hud.on('wireTalk', (e) => { if (e.targetId === this.lockedId) { if (e.down) this.wiring?.micPress(); else this.wiring?.micLetGo(); } });
     hud.on('wireRecalibrate', (e) => { if (e.targetId === this.lockedId) this.wiring?.recalibrate(); });
     hud.on('wireControl', (e) => { if (e.targetId === this.lockedId) this.wiring?.control(e.actionId, e.value, e.phase); });
+    hud.on('wireCancel', (e) => { if (e.targetId === this.lockedId) { this.wiring?.stop('Stopped by you', 'user'); this.hud.toast('Muse stopped', 'info'); } });
     hud.on('assistantTalk', (e) => { this.clearHandControl(); void this.assistant?.toggle(e.targetId); });
     hud.on('assistantConfirm', (e) => this.assistant?.confirm(e.targetId, e.proposalId, e.accept));
     hud.on('assistantDismiss', () => this.assistant?.cancel());
