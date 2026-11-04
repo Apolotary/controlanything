@@ -169,6 +169,8 @@ export class LeanHud implements Hud {
   private deviceState: DeviceState | null = null;
   /** "Muse writes the glue": the selected device's wiring (ask chips on the card, code card beside the device). */
   private wireView: WireView | null = null;
+  private requestPanel: 'invitation' | 'ideas' | 'details' = 'invitation';
+  private inspectWireCode = false;
   private readonly codeCard = new CodeCard();
   private readonly requestReader = new WireRequestReader(this.surfaces);
   private readonly wireMarkers = new CalibrationMarkers();
@@ -267,6 +269,17 @@ export class LeanHud implements Hud {
     this.palette.register({ key: 'track', label: 'Track', order: -10, onSelect: () => {}, visible: () => this.home.mode === 'annotate',
       segments: [{ key: 'electronics', label: 'Electronics', width: 0.086 }, { key: 'objects', label: 'Objects', width: 0.064 }, { key: 'everything', label: 'All', width: 0.04 }],
       selected: () => this.home.filter, onSegment: (key) => this.events.emit('filter', { filter: key as HomeState['filter'] }) });
+    this.palette.register({ key: 'find-objects', label: 'Find objects', order: -40, section: 'primary', onSelect: () => {
+      this.events.emit('mode', { mode: 'annotate' });
+      this.toast('Look at an object, point at its outline and pinch to select it.', 'info');
+    } });
+    this.palette.register({ key: 'ask-muse', label: 'Ask Muse', order: -50, section: 'primary',
+      visible: () => this.canOfferInvitation(), onSelect: () => {
+        this.requestPanel = 'invitation'; this.inspectWireCode = false;
+        // Focus is presentation only: no microphone, request, stop or execution is started.
+        this.workspaceAnchor.reset(); this.workspaceAnchor.update(this.headPose, this.time * 1000);
+        this.refreshLook(); this.refreshWireCode(); this.place();
+      } });
     this.card.name = 'device-card';
     this.edge.name = 'device-edge-pill';
     const arrow = new Shape();
@@ -650,6 +663,19 @@ export class LeanHud implements Hud {
   private lookAction(id: string): void {
     const target = this.selected(), m = this.mounted();
     if (!target) return;
+    if (id === 'wire-more-ideas' || id === 'wire-details' || id === 'wire-back') {
+      if (!this.canOfferInvitation()) return;
+      this.requestPanel = id === 'wire-more-ideas' ? 'ideas' : id === 'wire-details' ? 'details' : 'invitation';
+      this.inspectWireCode = false;
+      this.refreshLook(); this.refreshWireCode(); this.place();
+      return;
+    }
+    if (id === 'wire-see-code') {
+      if (!this.canOfferInvitation() || this.requestPanel !== 'details' || !this.wireView?.code?.code) return;
+      this.inspectWireCode = !this.inspectWireCode;
+      this.refreshLook(); this.refreshWireCode(); this.place();
+      return;
+    }
     if (id === 'wire-read-request') {
       if (this.wireView?.targetId !== target.id || !this.requestReader.available) return;
       if (!this.requestReader.open()) this.toast(this.wireView.phase === 'running'
@@ -734,6 +760,11 @@ export class LeanHud implements Hud {
     if (working && this.setupProgressView) return { state: 'reply', text: this.setupProgressView.title, model };
     return null;
   }
+  private canOfferInvitation(): boolean {
+    return !!this.locked && this.wireView?.targetId === this.locked && this.selectedConnection() === 'ready'
+      && !!this.mounted()?.armed && !this.setupWorking() && !this.deviceState?.busy
+      && ['idle', 'stopped', 'failed'].includes(this.wireView.phase);
+  }
   private lookView(): CardView {
     const target = this.selected(), m = this.mounted();
     const state = this.deviceState?.targetId === this.locked ? this.deviceState : null;
@@ -789,15 +820,38 @@ export class LeanHud implements Hud {
     let ask: CardAsk | null = null;
     const wire = this.wireView;
     if (wire && wire.targetId === this.locked && !working && connection === 'ready' && m?.armed) {
+      if (!state?.legacyPerform) {
+        actions.length = 0;
+        if (wire.phase === 'running') {
+          const source = wire.code?.source === 'fixture' ? 'FIXTURE' : wire.code?.source === 'template' ? 'Template' : 'Live';
+          return { title: wire.code?.title || name, subtitle: wire.code?.explanation || wire.prompt,
+            footer: `${name} · ${source} · Running\nBoth palms out to stop`, presentation: 'cue', toggle: null, actions: [], ask: null, agent: null };
+        }
+        if (this.canOfferInvitation()) {
+          if (this.requestPanel === 'details') {
+            if (this.requestReader.canOpen) actions.push({ id: 'wire-read-request', label: 'Read request' });
+            if (wire.code?.code) actions.push({ id: 'wire-see-code', label: this.inspectWireCode ? 'Hide code' : 'See code', selected: this.inspectWireCode });
+            actions.push({ id: 'wire-back', label: 'Back to Ask Muse' });
+            ask = { chips: wire.canRecalibrate ? [{ id: 'recalibrate', label: 'Recalibrate screen', icon: 'retry' }] : [], mic: 'off' };
+            return { title: name, subtitle: 'Interaction details', presentation: 'details', toggle: null, actions, ask, agent: null };
+          }
+          const all = wire.chips.map(label => ({ id: label, label }));
+          const ideas = this.requestPanel === 'ideas';
+          ask = { chips: ideas ? all : all.slice(0, 1), mic: ideas ? 'off' : wire.mic };
+          if (ideas) actions.push({ id: 'wire-back', label: 'Back to Ask Muse' });
+          else {
+            actions.push({ id: 'wire-more-ideas', label: 'Ideas' });
+            if (wire.code || wire.canRecalibrate) actions.push({ id: 'wire-details', label: 'Details' });
+          }
+          subtitle = wire.phase === 'failed' ? wire.code?.phaseLine || wire.prompt
+            : ideas ? 'Choose an idea for Muse to write'
+              : wire.phase === 'stopped' ? 'Stopped. Ask for your next interaction.' : wire.mic === 'off' ? 'Try an example, or choose Ideas.' : 'What should your hands do?';
+          return { title: name, subtitle, presentation: ideas ? 'ideas' : 'invitation', toggle: null, actions, ask, agent: null };
+        }
+        return { title: name, subtitle: wire.prompt, toggle: null, actions: [], ask: null, agent: null };
+      }
       subtitle = wire.prompt;
-      const choosing = !['running', 'calibrating'].includes(wire.phase);
-      const chips: CardAsk['chips'] = choosing ? wire.chips.map((label) => ({ id: label, label, ...(label === wire.activeChip ? { active: true } : {}) })) : [];
-      if (wire.canRecalibrate && choosing) chips.push({ id: 'recalibrate', label: 'Recalibrate screen', icon: 'retry' });
-      ask = { chips, mic: wire.mic };
-      if (!state?.legacyPerform) actions.length = 0;
-    }
-    if (wire?.targetId === this.locked && this.requestReader.canOpen) {
-      actions.unshift({ id: 'wire-read-request', label: 'Read request' });
+      ask = { chips: wire.chips.map(label => ({ id: label, label })), mic: wire.mic };
     }
     return { title: name, subtitle, toggle, actions: actions.slice(0, 3), agent: this.lookAgent(working), ask };
   }
@@ -847,19 +901,30 @@ export class LeanHud implements Hud {
     const mine = view && view.targetId === this.locked ? view : null;
     const previous = this.wireView;
     this.wireView = mine;
+    if (previous?.code?.requestId !== mine?.code?.requestId || previous?.phase !== mine?.phase) {
+      this.requestPanel = 'invitation'; this.inspectWireCode = false;
+    }
     this.requestReader.set(mine);
     const askChanged = JSON.stringify([previous?.prompt, previous?.chips, previous?.activeChip, previous?.mic, previous?.canRecalibrate, previous?.phase, previous?.code?.requestId, previous?.code?.request])
       !== JSON.stringify([mine?.prompt, mine?.chips, mine?.activeChip, mine?.mic, mine?.canRecalibrate, mine?.phase, mine?.code?.requestId, mine?.code?.request]);
     if (askChanged) this.refreshLook();
-    this.codeCard.set(mine?.code ?? null, mine?.calibration ?? null);
+    this.refreshWireCode();
     this.root.userData.wire = mine ? { phase: mine.phase, prompt: mine.prompt, chips: mine.chips, mic: mine.mic, card: this.codeCard.state } : undefined;
   }
   setHandsBusy(busy: boolean): void { this.handsBusy = busy; }
+  private refreshWireCode(): void {
+    const wire = this.wireView;
+    this.codeCard.set(wire?.code ? { ...wire.code, ...(this.inspectWireCode ? { mode: 'full' as const } : {}) } : null, wire?.calibration ?? null);
+  }
   isReadingRequest(): boolean { return this.requestReader.visible; }
   /** Place the code card beside the selected device (opposite the device card), the calibration markers in world space. */
   private updateWire(frame: HudFrame, dt: number, box: { center: Vector3; w: number; h: number } | undefined): void {
     const wire = this.wireView;
-    const show = !!wire?.code && !!box;
+    const inspect = this.inspectWireCode && this.requestPanel === 'details';
+    // Live writing/checks and the initial generated instructions remain visible.
+    // Later code history is deliberate inspection; play has one passive cue.
+    const show = !!wire?.code && !!box && (inspect || !['idle', 'stopped', 'failed'].includes(wire.phase)
+      && (wire.phase !== 'running' || wire.code.mode === 'full'));
     if (box && show) {
       const W = Math.max(LOOK.dial.minW, Math.min(LOOK.dial.maxW, box.w)), H = Math.max(LOOK.dial.minH, Math.min(LOOK.dial.maxH, box.h));
       const f = this.codeRight.set(box.center.x - this.head.x, 0, box.center.z - this.head.z);
@@ -1139,7 +1204,7 @@ export class LeanHud implements Hud {
     if (id && this.targets.has(id)) this.refreshTargetLabel(this.targets.get(id)!);
   }
   setLocked(id: string | null): void {
-    if (id !== this.locked) { this.requestReader.close(); this.setAssistant(null); this.setSetupProgress(null); this.setCanvas(null); }
+    if (id !== this.locked) { this.requestPanel = 'invitation'; this.inspectWireCode = false; this.requestReader.close(); this.setAssistant(null); this.setSetupProgress(null); this.setCanvas(null); }
     if (id !== this.locked && this.codeEntry && this.codeTarget !== HELPER_PAIRING_TARGET) this.closePairCode();
     const old = this.locked; this.locked = id;
     if (id && old !== id) this.palette.anchor.dismiss(this.time * 1000);
@@ -1530,7 +1595,10 @@ export class LeanHud implements Hud {
     const reading = this.requestReader.visible;
     this.assistant.visible = !reading && available && (generalConversation || workspace && !this.onboarding && this.assistantView?.targetId === target?.id
       && (!this.setupWorking() || this.assistantView.state !== 'setup'));
-    this.card.visible = !reading && workspace && available && !this.assistant.visible;
+    const wire = this.wireView?.targetId === this.locked ? this.wireView : null;
+    const automaticCode = !!wire?.code && !this.deviceState?.legacyPerform && !['idle', 'stopped', 'failed'].includes(wire.phase)
+      && (wire.phase !== 'running' || wire.code.mode === 'full');
+    this.card.visible = !reading && !automaticCode && workspace && available && !this.assistant.visible;
     // Tag/use coaching is nonblocking: the wearer may keep finding devices before switching modes.
     // Only an actual foreground workspace/menu/dialog suppresses annotation targets.
     this.annotationLayer.visible = !reading && !this.deck.panel.visible && !this.modal.visible && !this.helperPairingView && !workspace && !selection && !this.projectView && !this.assistant.visible;
@@ -1621,7 +1689,7 @@ export class LeanHud implements Hud {
     this.deck.setWorkspace(presentation.stage);
     const inputSurface = this.deck.panel.visible ? `menu:${this.deck.panel.userData.toolsOpen ? 'tools' : 'demo'}` : this.modal.visible ? `modal:${this.confirm?.id ?? 'pair-code'}`
       : this.helperPairing.visible ? 'helper-pairing' : this.projectPanel.visible ? 'project' : this.visualSelection.visible ? 'visual-selection'
-      : this.assistant.visible ? `assistant:${this.assistantView?.targetId}` : this.card.visible ? `device:${this.locked}` : 'choose';
+      : this.assistant.visible ? `assistant:${this.assistantView?.targetId}` : this.card.visible ? `device:${this.locked}:${this.requestPanel}` : 'choose';
     if (this.inputSurface !== inputSurface) {
       this.inputSurface = inputSurface;
       // A held pinch belongs to the surface it began on. A second hand may not
@@ -1661,7 +1729,7 @@ export class LeanHud implements Hud {
       this.widgets.push({ group, w: group.userData.width, h: group.userData.height, kind: 'deck', button: true, lastMove: 0,
         // A button does its job and the menu gets out of the way (it reopens after the palm turns away and back);
         // segment rows (Annotate | Control, what to track) keep it open for a second choice.
-        start: () => { if (segment) item.onSegment?.(segment); else if (item.hold) this.palette.beginHold(item.key, this.time * 1000); else { item.onSelect(); this.palette.anchor.dismiss(this.time * 1000); } },
+        start: () => { if (segment) item.onSegment?.(segment); else if (item.hold) this.palette.beginHold(item.key, this.time * 1000); else { item.onSelect(); if (!item.keepOpen) { this.palette.resetPage(); this.palette.anchor.dismiss(this.time * 1000); } } },
         end: item.hold ? () => this.palette.cancelExitHold() : undefined });
     }
   }
@@ -2027,7 +2095,7 @@ export class LeanHud implements Hud {
     const tip = state && !state.controller ? state.joints['index-finger-tip']?.position : undefined;
     const look = this.look;
     if (!tip || !look) return false;
-    if (visible(look.card) && this.card.visible) {
+    if (visible(look.card) && this.card.visible && look.card.interactive) {
       const local = look.card.worldToLocal(this.nearLocal.copy(tip));
       if (Math.abs(local.x) < look.card.widthM / 2 + 0.06 && Math.abs(local.y) < look.card.heightM / 2 + 0.06 && Math.abs(local.z) < 0.1) return true;
     }

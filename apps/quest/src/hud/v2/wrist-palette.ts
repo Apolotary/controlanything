@@ -15,6 +15,10 @@ export interface PaletteItem {
   /** Lower sorts first. Built-ins: Visual synth 0, Stop 80, Exit 90, lab More 95. */
   order?: number;
   primary?: boolean;
+  /** Main purpose actions are explicit; instruments and utilities live one deliberate More press away. */
+  section?: 'primary' | 'more';
+  /** Local navigation (More/Back) changes this palette without closing the hand menu. */
+  keepOpen?: boolean;
   /** Hold for 600 ms instead of a tap (Exit). */
   hold?: boolean;
   /** Hidden while false (re-evaluated every frame). */
@@ -24,11 +28,12 @@ export interface PaletteItem {
   segments?: { key: string; label: string; width: number }[];
   selected?: () => string;
   onSegment?: (key: string) => void;
-  /** A companion footer action (Tutorial beside Stop); main actions keep their own full-width row. */
+  /** Legacy layout hint; the More utility grid now pairs plain feature actions automatically. */
   compactWithPrevious?: boolean;
 }
 
-export const PALETTE_MAX_ITEMS = 7;
+/** Main purpose choices, including More. Stop all and Exit have their own persistent footer. */
+export const PALETTE_MAX_ITEMS = 3;
 const BUTTON_W = 0.24, BUTTON_H = 0.045, GAP = 0.004, SEGMENT_H = 0.036, PADDING = 0.01;
 /**
  * Horizon look (look.ts, same as the device card and the Buddy): grayGlass plate, white = on, glass = off.
@@ -44,8 +49,8 @@ interface Face { group: Group; box: Container; label: Text; state: number }
 
 /**
  * The wrist palette: deliberately raise a flat left palm and clear action rows appear beside the hand.
- * Full-width instrument choices do not require grabbing or dragging. Poke or pinch selects. On a controller,
- * the menu button pins it. In the desktop emulator (mouse) it docks low and to the left of the view.
+ * A few purpose actions lead; instruments and utilities are one More press away. Poke or pinch selects. On a
+ * controller the menu button pins it; the desktop mouse fallback docks low and to the right of the view.
  * It replaces the world launcher pill, the 74 cm menu panel and the dwell recall.
  */
 export class WristPalette extends Group {
@@ -55,6 +60,11 @@ export class WristPalette extends Group {
   buttons: Group[] = [];
   private items: PaletteItem[] = [];
   private shownKeys = '';
+  private page: 'primary' | 'more' = 'primary';
+  private readonly moreItem: PaletteItem = { key: 'palette-more', label: 'More', keepOpen: true,
+    onSelect: () => this.setPage('more') };
+  private readonly backItem: PaletteItem = { key: 'palette-back', label: 'Back', keepOpen: true,
+    onSelect: () => this.resetPage() };
   /** One uikit root (one panel batch + one glyph batch) for the plate and every button face. */
   private ui?: Panel;
   private faces: Face[] = [];
@@ -74,6 +84,7 @@ export class WristPalette extends Group {
     super();
     this.name = 'wrist-palette';
     this.visible = false;
+    this.userData.page = this.page;
     // Beside the hand, never over it: the menu's near edge stays 3.5 cm past the knuckles so the pressing finger
     // does not crowd the menu hand (Quest loses hands that overlap).
     this.anchor = new HandDockAnchor(nonDominant, { lateral: nonDominant === 'left' ? 0.1 : -0.1, up: 0.03, toward: 0.03, clearance: 0.035 });
@@ -88,29 +99,46 @@ export class WristPalette extends Group {
     return () => { this.items = this.items.filter((i) => i !== item); this.shownKeys = ''; };
   }
 
-  item(key: string): PaletteItem | undefined { return this.items.find((i) => i.key === key); }
+  item(key: string): PaletteItem | undefined {
+    return key === this.moreItem.key ? this.moreItem : key === this.backItem.key ? this.backItem : this.items.find((i) => i.key === key);
+  }
+
+  private setPage(page: 'primary' | 'more'): void {
+    if (this.page === page) return;
+    this.page = page; this.userData.page = page; this.shownKeys = '';
+    this.cancelExitHold();
+  }
+  /** A newly opened palette starts with purpose actions, not the previous utility grid. */
+  resetPage(): void { this.setPage('primary'); }
 
   /** True when the visible item list changed and LeanHud must re-wire the buttons. */
-  needsRebuild(): boolean { return this.visibleItems().map((i) => i.key).join('|') !== this.shownKeys; }
+  needsRebuild(): boolean { return this.visibleSignature() !== this.shownKeys; }
 
-  /** Stop and Exit (order ≥ 80) always stay; registered items fill the remaining slots in order. */
+  private visibleSignature(): string { return `${this.page}:${this.visibleItems().map(i => i.key).join('|')}`; }
+
+  private persistent(item: PaletteItem): boolean { return item.key === 'deck:panic' || item.key === 'exit-ar'; }
+
+  /** Never discard a registered action: secondary and excess purpose actions remain on the single More page. */
   private visibleItems(): PaletteItem[] {
     const shown = this.items.filter((i) => i.visible?.() ?? true);
-    const core = shown.filter((i) => (i.order ?? 50) >= 80);
-    const rest: PaletteItem[] = [];
-    const availableRows = Math.max(0, PALETTE_MAX_ITEMS - this.rows(core).length);
-    for (const item of shown.filter(i => (i.order ?? 50) < 80)) {
-      if (this.rows([...rest, item]).length <= availableRows) rest.push(item);
-    }
-    return [...rest, ...core];
+    const core = shown.filter(i => this.persistent(i));
+    const purpose = shown.filter(i => !this.persistent(i) && i.section === 'primary');
+    const hasMore = shown.some(i => !this.persistent(i) && i.section !== 'primary') || purpose.length > PALETTE_MAX_ITEMS;
+    const primary = purpose.slice(0, hasMore ? PALETTE_MAX_ITEMS - 1 : PALETTE_MAX_ITEMS);
+    const secondary = shown.filter(i => !this.persistent(i) && !primary.includes(i));
+    if (this.page === 'more') return [this.backItem, ...secondary, ...core];
+    return [...primary, ...(secondary.length ? [this.moreItem] : []), ...core];
   }
 
   private rows(items: PaletteItem[]): PaletteItem[][] {
     const rows: PaletteItem[][] = [];
     for (const item of items) {
       const previous = rows.at(-1);
-      const footer = (item.order ?? 50) >= 80 && (previous?.[0]?.order ?? 50) >= 80;
-      if (footer && item.compactWithPrevious && !item.hold && !item.segments && previous?.length === 1 && !previous[0]!.hold && !previous[0]!.segments) previous.push(item);
+      const footer = this.persistent(item) && !!previous?.[0] && this.persistent(previous[0]);
+      const utilities = this.page === 'more' && !this.persistent(item) && !item.keepOpen
+        && !!previous?.[0] && !this.persistent(previous[0]) && !previous[0].keepOpen;
+      if ((footer || utilities) && !item.segments && previous?.length === 1 && !previous[0]!.segments
+        && (footer || !item.hold && !previous[0]!.hold)) previous.push(item);
       else rows.push([item]);
     }
     return rows;
@@ -119,7 +147,7 @@ export class WristPalette extends Group {
   /** Rebuild the button column. The caller disposes the old groups' widgets first (LeanHud.clear). */
   rebuild(): Group[] {
     const shown = this.visibleItems();
-    this.shownKeys = shown.map((i) => i.key).join('|');
+    this.shownKeys = this.visibleSignature();
     this.cancelExitHold();
     const layout = this.rows(shown);
     const rows = layout.map((items) => items[0]!.segments ? SEGMENT_H : BUTTON_H);
@@ -142,7 +170,7 @@ export class WristPalette extends Group {
           group.userData.width = width; group.userData.height = BUTTON_H; group.userData.menuButton = true;
           group.userData.primary = !!compact.primary; group.userData.paletteKey = compact.key;
           this.content.add(group); buttons.push(group);
-          faces?.add(this.face(group, compact.label, width, BUTTON_H, 18));
+          faces?.add(this.face(group, this.actionLabel(compact), width, BUTTON_H, 18));
         });
         if (faces) ui!.add(faces);
         y -= rowH + GAP; return;
@@ -175,10 +203,17 @@ export class WristPalette extends Group {
       group.userData.width = rowWidth; group.userData.height = BUTTON_H; group.userData.menuButton = true;
       group.userData.primary = !!item.primary; group.userData.paletteKey = item.key;
       this.content.add(group); buttons.push(group);
-      if (ui) ui.add(this.face(group, item.hold ? `${item.label} · hold` : item.label, rowWidth, BUTTON_H, UI.buttonFont));
+      if (ui) ui.add(this.face(group, this.actionLabel(item), rowWidth, BUTTON_H, UI.buttonFont));
     });
     this.buttons = buttons;
     return this.buttons;
+  }
+
+  private actionLabel(item: PaletteItem): string {
+    const concise: Record<string, string> = { 'visual-synth': 'Visuals', 'musical-synth': 'Music',
+      'tangible:pick': 'Use object', 'tangible:release': 'Release', 'lab-menu': 'Lab tools' };
+    const label = this.page === 'more' ? concise[item.key] ?? item.label : item.label;
+    return item.hold ? `${label} · hold` : label;
   }
 
   /** The plate: a fresh uikit root per rebuild (rare: the visible item list changed), laid out exactly like the hit groups. */
@@ -232,7 +267,7 @@ export class WristPalette extends Group {
 
   get contentGroup(): Group { return this.content; }
 
-  /** Hidden while the hands perform (the left fist is the clutch) or a panel is being moved. */
+  /** Hidden while hand control or another foreground interaction owns the hands. */
   setSuppressed(suppressed: boolean): void { this.suppressed = suppressed; }
 
   update(frame: HudFrame): void {
@@ -242,6 +277,7 @@ export class WristPalette extends Group {
       if (key) group.userData.selected = this.item(group.userData.paletteKey)?.selected?.() === key;
     }
     this.anchor.update(frame, this, this.wrist, this.width);
+    if (!this.anchor.open) this.resetPage();
     if (this.anchor.source === 'mouse') this.followDock(frame);
     else this.dockPlaced = false;
     const show = !this.suppressed && this.anchor.open && this.anchor.opacity > 0.05 && this.buttons.length > 0;

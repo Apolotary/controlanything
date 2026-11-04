@@ -2,32 +2,56 @@ import { describe, expect, it } from 'vitest';
 import { Group, Quaternion, Vector3 } from 'three';
 import type { HandState, HudFrame } from '../contract';
 import { DockHold, FingerTouchDetector, HandDockAnchor, type FingerMenuFinger } from './hand-dock';
-import { WristPalette } from './wrist-palette';
+import { WristPalette, type PaletteItem } from './wrist-palette';
 
-it('keeps full-width instruments and every wrist action reachable with a compact Stop/Tutorial footer', () => {
+it('keeps purpose actions small and every utility one More press away with persistent Stop and held Exit', () => {
   const palette = new WristPalette({} as never);
-  const add = (key: string, order: number, extra = {}) => palette.register({ key, label: key, order, onSelect() {}, ...extra });
+  let annotate = true, actions = 0;
+  const add = (key: string, order: number, extra: Partial<PaletteItem> = {}) => palette.register({ key, label: key, order, onSelect() { actions++; }, ...extra });
+  add('ask-muse', -40, { section: 'primary' }); add('find-objects', -30, { section: 'primary' });
   add('layer', -20, { segments: [{ key: 'annotate', label: 'Annotate', width: .094 }, { key: 'control', label: 'Control', width: .094 }] });
-  add('track', -10, { segments: [{ key: 'electronics', label: 'Electronics', width: .086 }, { key: 'objects', label: 'Objects', width: .064 }, { key: 'everything', label: 'All', width: .04 }] });
-  add('visual-synth', 0); add('buddy', 10);
-  add('deck:panic', 80); add('exit-ar', 90, { hold: true });
-  palette.rebuild(); const before = palette.userData.height;
-  add('tutorial', 85, { compactWithPrevious: true }); palette.contentGroup.clear(); palette.rebuild();
-  const selectors = ['layer:annotate', 'layer:control', 'track:electronics', 'track:objects', 'track:everything'];
-  expect(palette.buttons.map(button => button.name)).toEqual([...selectors, 'visual-synth', 'buddy', 'deck:panic', 'tutorial', 'exit-ar']);
-  expect(palette.userData.height).toBe(before);
-  const stop = palette.getObjectByName('deck:panic')!, tutorial = palette.getObjectByName('tutorial')!;
-  expect(stop.position.y).toBe(tutorial.position.y);
-  expect(stop.position.x + stop.userData.width / 2).toBeLessThan(tutorial.position.x - tutorial.userData.width / 2);
-  add('musical-synth', 1, { compactWithPrevious: true }); palette.contentGroup.clear(); palette.rebuild();
-  expect(palette.buttons.map(button => button.name)).toEqual([...selectors, 'visual-synth', 'musical-synth', 'buddy', 'deck:panic', 'tutorial', 'exit-ar']);
-  expect(palette.userData.height).toBeLessThan(.36);
-  const visual = palette.getObjectByName('visual-synth')!, music = palette.getObjectByName('musical-synth')!;
-  expect(visual.position.y - music.position.y).toBeGreaterThanOrEqual(.049 - 1e-8);
-  expect(visual.position.x).toBe(0); expect(music.position.x).toBe(0);
-  expect(visual.userData.width).toBeGreaterThanOrEqual(.24);
-  expect(music.userData.height).toBeGreaterThanOrEqual(.045);
+  add('track', -10, { visible: () => annotate, segments: [{ key: 'electronics', label: 'Electronics', width: .086 }, { key: 'objects', label: 'Objects', width: .064 }, { key: 'everything', label: 'All', width: .04 }] });
+  add('visual-synth', 0); add('musical-synth', 1); add('buddy', 10);
+  add('tangible:pick', 60, { visible: () => !annotate });
+  add('deck:panic', 80); add('tutorial', 85); add('exit-ar', 90, { hold: true });
+  const rebuild = () => { palette.contentGroup.clear(); palette.rebuild(); };
+  rebuild();
+  const main = ['ask-muse', 'find-objects', 'palette-more', 'deck:panic', 'exit-ar'];
+  expect(palette.buttons.map(button => button.name)).toEqual(main);
+  expect(palette.userData.height).toBeLessThan(.25);
+  expect(palette.item('palette-more')?.keepOpen).toBe(true);
+  expect(palette.item('exit-ar')?.hold).toBe(true);
+  const stop = palette.getObjectByName('deck:panic')!, exit = palette.getObjectByName('exit-ar')!;
+  expect(stop.position.y).toBe(exit.position.y);
+  expect(stop.position.x + stop.userData.width / 2).toBeLessThan(exit.position.x - exit.userData.width / 2);
+
+  palette.item('palette-more')!.onSelect(); expect(palette.needsRebuild()).toBe(true); rebuild();
+  expect(palette.userData.page).toBe('more');
+  expect(palette.buttons.map(button => button.name)).toEqual(['palette-back', 'layer:annotate', 'layer:control',
+    'track:electronics', 'track:objects', 'track:everything', 'visual-synth', 'musical-synth', 'buddy', 'tutorial', 'deck:panic', 'exit-ar']);
+  expect(palette.userData.height).toBeLessThan(.31);
+  expect(palette.item('palette-back')?.keepOpen).toBe(true);
   expect(palette.getObjectByName('track:electronics')!.userData.width).toBeGreaterThan(.10);
+  expect(actions).toBe(0); // Browsing never selects a feature or starts a command.
+  annotate = false; expect(palette.needsRebuild()).toBe(true); rebuild();
+  expect(palette.buttons.some(button => button.name === 'tangible:pick')).toBe(true);
+  expect(palette.buttons.some(button => button.name.startsWith('track:'))).toBe(false);
+  expect(palette.userData.height).toBeLessThan(.31);
+
+  palette.item('palette-back')!.onSelect(); rebuild(); expect(palette.buttons.map(button => button.name)).toEqual(main);
+  palette.item('palette-more')!.onSelect(); rebuild();
+  palette.update({ time: 0, dt: .016, head: { position: new Vector3(0, 1.6, 0), quaternion: new Quaternion() },
+    hands: { left: hand(-.2, false) } });
+  expect(palette.userData.page).toBe('primary');
+  expect(actions).toBe(0);
+});
+
+it('keeps excess explicit purpose actions reachable instead of dropping them', () => {
+  const palette = new WristPalette({} as never);
+  for (let i = 0; i < 5; i++) palette.register({ key: `purpose-${i}`, label: `Purpose ${i}`, section: 'primary', order: i, onSelect() {} });
+  palette.rebuild(); expect(palette.buttons.map(button => button.name)).toEqual(['purpose-0', 'purpose-1', 'palette-more']);
+  palette.item('palette-more')!.onSelect(); palette.contentGroup.clear(); palette.rebuild();
+  expect(palette.buttons.map(button => button.name)).toEqual(['palette-back', 'purpose-2', 'purpose-3', 'purpose-4']);
 });
 
 function hand(x = -0.2, palmUp = true, palmUpMs = 450): HandState {

@@ -1123,7 +1123,7 @@ describe('gesture-first device workspace', () => {
       expect(rig.visible).toBe(false);
       const card = f.hud.root.getObjectByName('device-card-v3')!.userData.view;
       expect(card.actions.some((action: { id: string }) => action.id.startsWith('control:'))).toBe(false);
-      if (phase === 'running' || phase === 'calibrating') expect(card.ask.chips).toHaveLength(0);
+      if (phase === 'running' || phase === 'calibrating') expect(card.ask).toBe(null);
     }
     f.hud.setWire?.(null); f.hud.setDeviceState?.({ targetId: target.id, connection: 'ready', legacyPerform: true, performAvailable: true });
     f.hud.update(f.frame(undefined, 200));
@@ -1148,6 +1148,52 @@ describe('gesture-first device workspace', () => {
     internal.widgets.find(w => w.group.name === 'wire-request-return')!.start(); f.hud.update(f.frame(undefined, 200));
     expect(reader.visible).toBe(false); expect(f.hud.root.getObjectByName('device-card')!.visible).toBe(true);
     expect(f.hud.root.userData.wire.phase).toBe('stopped');
+    f.hud.dispose();
+  });
+
+  it('offers one example, keeps Ideas/Details local and restores the compact invitation after Stop', () => {
+    const f = setup(); f.hud.upsertTarget(target); f.hud.setLocked(target.id); f.hud.renderSpec(spec(), { targetId: target.id });
+    f.hud.setDeviceState?.({ targetId: target.id, connection: 'ready', silentVisual: true });
+    const sent: string[] = [];
+    for (const type of ['wireAsk', 'wireTalk', 'wireRecalibrate', 'control', 'mode'] as const) f.hud.on(type, () => sent.push(type));
+    const actions = f.hud as unknown as { lookAction(id: string): void };
+    const card = () => f.hud.root.getObjectByName('device-card-v3')!.userData.view;
+    f.hud.setWire?.(wire('stopped')); f.hud.update(f.frame(undefined, 200));
+    expect(card().presentation).toBe('invitation');
+    expect(card().ask.chips.map((c: {id: string}) => c.id)).toEqual(['Touch the water']);
+    expect(card().ask.mic).toBe('idle');
+    expect(card().actions.map((a: {id: string}) => a.id)).toEqual(['wire-more-ideas', 'wire-details']);
+    actions.lookAction('wire-more-ideas');
+    expect(card().ask.chips.map((c: {id: string}) => c.id)).toEqual(['Touch the water', 'Hands as knobs', 'Surprise me']);
+    actions.lookAction('wire-back'); actions.lookAction('wire-details');
+    expect(card().ask.chips.map((c: {id: string}) => c.id)).toEqual(['recalibrate']);
+    expect(card().actions.map((a: {id: string}) => a.id)).toEqual(['wire-read-request', 'wire-see-code', 'wire-back']);
+    actions.lookAction('wire-see-code'); f.hud.update(f.frame(undefined, 200));
+    expect(f.hud.root.getObjectByName('wire-code-card')!.visible).toBe(true);
+    actions.lookAction('wire-back'); f.hud.update(f.frame(undefined, 200));
+    expect(card().presentation).toBe('invitation');
+    expect(sent).toEqual([]);
+    expect(f.hud.root.userData.wire.phase).toBe('stopped');
+    f.hud.dispose();
+  });
+
+  it('keeps generated instructions and provenance in a passive play cue after the explanation window', () => {
+    const f = setup(); f.hud.upsertTarget(target); f.hud.setLocked(target.id); f.hud.renderSpec(spec(), { targetId: target.id });
+    f.hud.setDeviceState?.({ targetId: target.id, connection: 'ready', silentVisual: true });
+    const running = wire('running'); running.code = { ...running.code!, title: 'Water touch', explanation: 'Move your fingertip to the water; lift to release.', mode: 'full' };
+    f.hud.setWire?.(running); f.hud.update(f.frame(undefined, 200));
+    expect(f.hud.root.getObjectByName('device-card')!.visible).toBe(false);
+    expect(f.hud.root.getObjectByName('wire-code-card')!.visible).toBe(true);
+    f.hud.setWire?.({ ...running, code: { ...running.code!, mode: 'pill' } }); f.hud.update(f.frame(undefined, 200));
+    const cue = f.hud.root.getObjectByName('device-card-v3')! as Object3D & { interactive: boolean };
+    expect(f.hud.root.getObjectByName('device-card')!.visible).toBe(true);
+    expect(f.hud.root.getObjectByName('wire-code-card')!.visible).toBe(false);
+    expect(cue.userData.view.presentation).toBe('cue'); expect(cue.interactive).toBe(false);
+    expect(cue.userData.view.ask).toBe(null); expect(cue.userData.view.actions).toEqual([]);
+    expect(cue.userData.view.subtitle).toBe(running.code.explanation);
+    expect(cue.userData.view.footer).toMatch(/FIXTURE.*Running/);
+    expect(cue.userData.view.footer).toMatch(/Both palms/);
+    expect((f.hud.root.getObjectByName('wrist-palette') as Object3D & { item(key: string): { visible(): boolean } }).item('ask-muse').visible()).toBe(false);
     f.hud.dispose();
   });
 });

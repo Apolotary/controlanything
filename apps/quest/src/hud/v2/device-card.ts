@@ -27,6 +27,9 @@ export interface CardView {
   actions: CardAction[];
   agent: CardAgent | null;
   ask?: CardAsk | null;
+  /** The ordinary invitation is small; choices/details are opened deliberately. A cue is passive. */
+  presentation?: 'invitation' | 'ideas' | 'details' | 'cue';
+  footer?: string;
 }
 export interface CardHandlers { toggle(): void; action(id: string): void; chip?(id: string): void; mic?(down: boolean): void }
 const browser = isBrowser;
@@ -48,10 +51,11 @@ function clip(text: string, max = 44): string {
 interface ActionSlot { button: Button; icon: ButtonIcon; label: Text; iconKind?: CardIcon; id?: string }
 
 export class DeviceCard extends Group {
-  readonly widthM = .36;
+  get widthM(): number { return this.view.presentation === 'invitation' || this.view.presentation === 'cue' ? .32 : .36; }
   private readonly root?: Panel;
   private readonly title?: Text;
   private readonly subtitle?: Text;
+  private readonly footer?: Text;
   private readonly toggle?: Button;
   private readonly toggleIcon?: ButtonIcon;
   private readonly toggleLabel?: Text;
@@ -75,6 +79,7 @@ export class DeviceCard extends Group {
   private agentKey = '';
   private now = 0;
   private shownVisibility?: boolean;
+  private shownInteractive?: boolean;
   private shownAgent: string | null = null;
   private disposed = false;
 
@@ -140,7 +145,10 @@ export class DeviceCard extends Group {
       this.chipsRow.add(button);
       this.chipSlots.push({ button, icon: chipIcon, label: chipLabel });
     }
-    this.root.add(header, this.chipsRow, this.micColumn, this.agentRow, this.actionsRow);
+    this.footer = new Text({ text: '', fontSize: 13, lineHeight: '125%', fontWeight: 'medium', color: LOOK.text.secondary,
+      whiteSpace: 'normal', wordBreak: 'break-word', display: 'none' } as never);
+    // Voice is the primary invitation. The example is a fallback, not the first step of a form.
+    this.root.add(header, this.micColumn, this.chipsRow, this.agentRow, this.actionsRow, this.footer);
     this.add(this.root);
   }
 
@@ -158,8 +166,13 @@ export class DeviceCard extends Group {
     const agentKey = view.agent ? view.agent.state : '';
     if (agentKey !== this.agentKey) { this.agentKey = agentKey; this.agentSince = this.now; }
     if (!this.root) return;
+    const compact = view.presentation === 'invitation' || view.presentation === 'cue';
+    const cue = view.presentation === 'cue';
+    this.root.setProperties({ sizeX: this.widthM, padding: compact ? 16 : LOOK.card.padding,
+      gap: compact ? 8 : LOOK.card.gap, borderWidth: cue ? 0 : 1.5 } as never);
     this.title!.setProperties({ text: view.title });
-    this.subtitle!.setProperties({ text: view.subtitle });
+    this.subtitle!.setProperties({ text: view.subtitle, fontSize: cue ? 17 : 18 });
+    this.footer!.setProperties({ text: view.footer ?? '', display: view.footer ? 'flex' : 'none' });
     const toggle = view.toggle;
     this.toggleColumn!.setProperties({ display: toggle ? 'flex' : 'none' });
     if (toggle) {
@@ -174,7 +187,8 @@ export class DeviceCard extends Group {
     }
     this.setAsk(view.ask ?? null);
     const actions = view.actions.slice(0, 3);
-    this.actionsRow!.setProperties({ display: actions.length ? 'flex' : 'none' });
+    const secondary = view.presentation === 'invitation';
+    this.actionsRow!.setProperties({ display: actions.length ? 'flex' : 'none', flexDirection: secondary ? 'row' : 'column', justifyContent: 'flex-start' });
     this.slots.forEach((slot, index) => {
       const action = actions[index];
       slot.id = action?.id;
@@ -182,6 +196,9 @@ export class DeviceCard extends Group {
       slot.button.setProperties((on
         ? { display: action ? 'flex' : 'none', variant: 'primary', color: '#272727', backgroundColor: withOpacity('#ffffff', 0.92), hover: { backgroundColor: '#d9d9d9', color: '#272727' }, active: { backgroundColor: '#c0c0c0', color: '#272727' } }
         : { display: action ? 'flex' : 'none', variant: 'secondary', color: withOpacity('#ffffff', 0.92), backgroundColor: withOpacity('#ffffff', 0.08), hover: { backgroundColor: withOpacity('#ffffff', 0.16), color: '#ffffff' }, active: { backgroundColor: withOpacity('#ffffff', 0.24), color: '#ffffff' } }) as never);
+      slot.button.setProperties({ width: secondary ? 112 : '100%', flexGrow: 0,
+        flexBasis: undefined, height: secondary ? 36 : 48, paddingX: secondary ? 10 : 16 } as never);
+      slot.label.setProperties({ fontSize: secondary ? 14 : 18 });
       if (!action) return;
       slot.button.name = action.id;
       slot.label.setProperties({ text: action.label });
@@ -195,7 +212,7 @@ export class DeviceCard extends Group {
     const mic = ask?.mic ?? 'off';
     this.micColumn!.setProperties({ display: mic === 'off' ? 'none' : 'flex' });
     if (mic !== 'off') {
-      const on = mic === 'listening';
+      const on = mic === 'listening' || this.view.presentation === 'invitation';
       this.mic!.setProperties(on
         ? { variant: 'primary', color: '#272727', backgroundColor: withOpacity('#ffffff', 0.92), hover: { backgroundColor: '#d9d9d9', color: '#272727' }, active: { backgroundColor: '#c0c0c0', color: '#272727' } }
         : { variant: 'secondary', color: withOpacity('#ffffff', 0.92), backgroundColor: withOpacity('#ffffff', 0.14), hover: { backgroundColor: withOpacity('#ffffff', 0.22), color: '#ffffff' }, active: { backgroundColor: withOpacity('#ffffff', 0.3), color: '#ffffff' } } as never);
@@ -207,7 +224,8 @@ export class DeviceCard extends Group {
     this.chipSlots.forEach((slot, index) => {
       const chip = chips[index];
       slot.id = chip?.id;
-      const on = !!chip?.active || !!chip && index === 0 && !chips.some(item => item.active) && chip.id !== 'recalibrate';
+      const on = this.view.presentation !== 'invitation' || mic === 'off'
+        ? !!chip?.active || !!chip && index === 0 && !chips.some(item => item.active) && chip.id !== 'recalibrate' : false;
       slot.button.setProperties((on
         ? { display: chip ? 'flex' : 'none', variant: 'primary', color: '#272727', backgroundColor: withOpacity('#ffffff', 0.92), hover: { backgroundColor: '#d9d9d9', color: '#272727' }, active: { backgroundColor: '#c0c0c0', color: '#272727' } }
         : { display: chip ? 'flex' : 'none', variant: 'secondary', color: withOpacity('#ffffff', 0.92), backgroundColor: withOpacity('#ffffff', 0.08), hover: { backgroundColor: withOpacity('#ffffff', 0.16), color: '#ffffff' }, active: { backgroundColor: withOpacity('#ffffff', 0.24), color: '#ffffff' } }) as never);
@@ -246,12 +264,16 @@ export class DeviceCard extends Group {
     this.now += Number.isFinite(dtMs) ? Math.max(0, dtMs) : 0;
     this.refreshAgent();
     if (!this.root) return;
-    if (this.shownVisibility !== visible) {
+    const interactive = visible && this.interactive;
+    if (this.shownVisibility !== visible || this.shownInteractive !== interactive) {
       this.shownVisibility = visible;
-      this.root.setProperties({ visibility: visible ? 'visible' : 'hidden', pointerEvents: visible ? 'auto' : 'none' });
+      this.shownInteractive = interactive;
+      (this as unknown as { pointerEvents: string }).pointerEvents = interactive ? 'auto' : 'none';
+      this.root.setProperties({ visibility: visible ? 'visible' : 'hidden', pointerEvents: interactive ? 'auto' : 'none' });
     }
     if (updateRoot) this.root.update(Math.min(100, Math.max(0, dtMs)));
   }
+  get interactive(): boolean { return this.view.presentation !== 'cue'; }
 
   override dispose(): void {
     if (this.disposed) return;
