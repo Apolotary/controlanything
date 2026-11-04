@@ -31,6 +31,8 @@ After `npm run demo:sim`, open `http://localhost:8787/sim/` (the simulated room;
 
 ## The demos, and where each is verified
 
+Dates in this README are Japan time (JST), where the work was done. The deadline, Nov 4 9:00 PM ET, is Nov 5 11:00 JST, so every "Nov 5" below is before the deadline.
+
 | Demo | What happens | Verified |
 |---|---|---|
 | **1. Built-in visual synth** | Touch the water on the laptop's screen and ripples follow your fingertip; or ask for knobs. Muse writes the connector (MIDI CCs to the browser renderer) and the touch program; no setup step: your first touch on the glass finds the screen. | **Real Quest**, live Muse, recorded take (Nov 5): "Touch the water with your finger" written in 31.6 s as a hand program with no floating controls; the first touch found the screen and the ripples followed the fingertip. Also confirmed on Nov 4 (about 45 s). |
@@ -195,7 +197,7 @@ Quest (WebXR, three.js) ⇄ WebSocket hub ⇄ one Node server on the Mac (Meta m
 
 ## Built during the hackathon
 
-The application code, clients, firmware, prompts, device data and simulated room were built during the Meta Global AI Developer Hackathon, **Oct 26 – Nov 5, 2026**, for submission by Nov 5, 11:00 JST. The hardware, the pretrained models and the third-party libraries and assets below were not built by us. The DJI Osmo gimbal adapter (`apps/server/src/devices/osmo/`) is new code written during the hackathon; it draws on public protocol research (below) and on the author's own earlier, private notes on the gimbal's Bluetooth protocol (March 2026, documentation only), from which no code is included.
+The application code, clients, firmware, prompts, device data and simulated room were built during the Meta Global AI Developer Hackathon, **Oct 26 – Nov 4, 2026 (ET)**, for submission by Nov 5, 11:00 JST. The hardware, the pretrained models and the third-party libraries and assets below were not built by us. The DJI Osmo gimbal adapter (`apps/server/src/devices/osmo/`) is new code written during the hackathon; it draws on public protocol research (below) and on the author's own earlier, private notes on the gimbal's Bluetooth protocol (March 2026, documentation only), from which no code is included.
 
 ## Credits and licences
 
