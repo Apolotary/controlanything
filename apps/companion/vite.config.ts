@@ -6,7 +6,7 @@ export default defineConfig({
   base: '/companion/',
   build: {
     outDir: 'dist', emptyOutDir: true, target: 'es2022', sourcemap: true,
-    rollupOptions: { input: { companion: 'index.html', vsynth: 'vsynth/index.html', tracking: 'tracking/index.html', canvas: 'canvas/index.html' } },
+    rollupOptions: { input: { companion: 'index.html', vsynth: 'vsynth/index.html', tracking: 'tracking/index.html', canvas: 'canvas/index.html', coding: 'coding/index.html' } },
   },
   server: {
     port: 5173,

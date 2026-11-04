@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Connector Workshop · ControlAnything</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <div class="workshop">
+      <header class="page-head">
+        <a class="back" href="/companion/">← Mac companion</a>
+        <span class="wordmark">ControlAnything</span>
+      </header>
+      <main>
+        <section class="intro" aria-labelledby="page-title">
+          <span class="eyebrow">Connector Workshop</span>
+          <h1 id="page-title">Build a connector with Muse.</h1>
+          <p>Muse Code can read project files, edit a task branch and run terminal checks on this Mac. Review its patch and check results before bringing changes into the demo.</p>
+          <p class="quiet">This is code development. Connecting an instrument and verifying its physical response are separate steps.</p>
+        </section>
+
+        <section class="host-status card" aria-label="Coding agent availability">
+          <div><span id="host-badge" class="badge">Checking agent</span><p id="host-message" role="status">Reading the Mac bridge status…</p></div>
+          <dl class="host-facts"><div><dt>Requested model</dt><dd id="requested-model">Not reported</dd></div><div><dt>Agent version</dt><dd id="agent-version">Not reported</dd></div></dl>
+          <button id="refresh" class="secondary" type="button">Refresh</button>
+        </section>
+
+        <div class="workspace-grid">
+          <section class="card composer" aria-labelledby="task-title">
+            <h2 id="task-title">What should Muse develop?</h2>
+            <form id="task-form">
+              <label for="task">Coding task</label>
+              <textarea id="task" rows="9" maxlength="4000" placeholder="Debug the OP-1 Field USB-MIDI bridge. Inspect port routing, fix ambiguous output selection, and check it without sending real MIDI or playing sound." required></textarea>
+              <p class="field-help">Describe the behavior you want and how Muse can check it. The agent works in a separate project task branch; it does not automatically apply the patch.</p>
+              <div class="actions"><button id="start" class="primary" type="submit" disabled>Start coding</button><button id="example" class="secondary" type="button">Use OP-1 example</button></div>
+            </form>
+            <p id="action-message" class="action-message" role="status" aria-live="polite"></p>
+          </section>
+
+          <section class="card jobs-panel" aria-labelledby="jobs-title">
+            <div class="section-head"><h2 id="jobs-title">Coding tasks</h2><span id="job-count" class="quiet"></span></div>
+            <p id="jobs-empty" class="empty">No coding tasks yet. Nothing starts until you choose Start coding.</p>
+            <div id="jobs" class="jobs" aria-label="Coding tasks"></div>
+            <section id="job-detail" class="job-detail" aria-labelledby="job-title" hidden>
+              <div class="section-head"><h3 id="job-title">Task</h3><span id="job-badge" class="badge"></span></div>
+              <p id="job-state" class="job-state" role="status" aria-live="polite"></p>
+              <p id="job-reason" class="job-reason" hidden></p>
+              <dl class="job-facts">
+                <div><dt>Requested model</dt><dd id="job-requested-model"></dd></div>
+                <div><dt>Reported model</dt><dd id="job-observed-model"></dd></div>
+                <div><dt>Started</dt><dd id="job-started"></dd></div>
+                <div><dt>Agent exit</dt><dd id="job-exit"></dd></div>
+              </dl>
+              <p id="job-progress" class="quiet"></p>
+              <div class="actions"><button id="cancel" class="secondary" type="button" hidden>Cancel task</button><a id="view-patch" class="button-link secondary" href="#" hidden>View patch</a></div>
+              <details class="execution-details"><summary>Files and execution details</summary><dl class="job-facts"><div><dt>Task branch</dt><dd id="job-branch"></dd></div><div><dt>Workspace</dt><dd id="job-workspace"></dd></div><div><dt>Last native event</dt><dd id="job-last-event"></dd></div></dl><h4>Changed files</h4><ul id="changed-files" class="file-list"></ul><p id="no-changed-files" class="quiet">No changed files reported.</p><p id="operations" class="quiet" hidden></p><p id="logs-truncated" class="quiet" hidden>Some agent log output was truncated. Review the retained execution artifacts on the Mac.</p></details>
+              <details id="summary-details" class="execution-details" hidden><summary>Model summary · not execution proof</summary><pre id="model-summary" class="summary-text"></pre></details>
+            </section>
+          </section>
+        </div>
+
+        <section id="patch-panel" class="card patch-panel" aria-labelledby="patch-title" hidden>
+          <div class="section-head"><div><h2 id="patch-title">Task patch</h2><p class="quiet">Read-only preview. Viewing this patch does not apply it.</p></div><button id="close-patch" class="secondary" type="button">Close patch</button></div>
+          <pre id="patch" tabindex="0" aria-label="Task patch"></pre>
+        </section>
+      </main>
+      <footer class="page-footer">Muse Code on the Mac · Gesture wiring stays in the Quest app</footer>
+    </div>
+    <script type="module" src="../src/coding/main.ts"></script>
+  </body>
+</html>

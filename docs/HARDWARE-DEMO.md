@@ -23,3 +23,9 @@ Exclude patch randomize/reset, tape record/play, program changes and generated n
 - Newly tagged, unarmed-device selection is implemented and software verified: Annotate → Control can select the intended device for setup instead of requiring an already-armed Mac. The focused selection checks passed (41 tests); physical Quest acceptance remains pending.
 - If SAM calls the instrument a typing keyboard, prepare microphone access before AR, select that tagged object in Control and choose **Correct device** on its unarmed, nonvisual card. Say “This is actually an OP-1 Field,” send, review the proposal and choose **Confirm identity**. The default entry is implemented and its HUD regression passed; no lab URL is required. Confirmation changes identity and clears old controls without starting hardware control. WIRE requires a controllable device and cannot substitute for this pre-setup review. Do not silently proceed with the wrong identity.
 - Firmware/settings, actual MIDI endpoint selection, physical effect, Stop behavior and the continuous hardware take remain pending the wearer pass.
+
+## Developing the connector on the Mac
+
+Mac **Details → Connector Workshop** runs native Muse Code with real project-file and terminal tools. A request such as “Debug the OP-1 Field USB-MIDI bridge; inspect routing and check it without sending MIDI” creates a retained task branch and patch. Ordinary hand-mapping requests still use the smaller gesture harness. Review actual file changes and terminal results before applying a patch; coding completion does not prove that the connected instrument responded.
+
+Muse Code authored the ambiguous-output fix in `midiExec.ts`: duplicate exact names and ambiguous partial names are refused instead of picking the first endpoint. Native and independent focused checks each passed sixteen tests with fake MIDI I/O. This is a verified software correction; the attended OP-1 Field check above is still required.
