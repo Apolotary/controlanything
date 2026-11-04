@@ -36,11 +36,17 @@ import { fixtureDriverDraft, WONDER_MODEL } from './drive';
 import { macLocalInfo, type Roster } from './executors';
 import { cropJpeg, fixtureDeviceCard, identify, type IdentifyResult } from './identify';
 import { decodeJpeg } from '../oracle/image';
-import { demoMode, prefetchVisualDriver, runLoop } from './loop';
+import { demoMode, prefetchEnabled, prefetchVisualDriver, runLoop } from './loop';
+import { StreamClient } from '../gen3d/stream';
+import { VISUAL_SYNTH_MANIFEST } from '@ce/vsynth/manifest';
+import { validateDriver } from '../devices/validate';
+import { verifyDriver } from './verify';
+import { WireService } from './wire';
+import { fixtureWireDraft } from './wire-fixture';
 import { CANCELLED_GUIDANCE, type TimedPhase } from './guidance';
 import { subscribeForge } from './forgeBridge';
 import { restoreSavedForge } from './restoreForge';
-import { visualSynthNeedsUpgrade } from '../devices/visualSynth';
+import { extendWithTouch, isVisualSynthPort, visualSynthNeedsUpgrade } from '../devices/visualSynth';
 import { detachRouteBridge } from '../gen3d/routes';
 import { MacLocalExecutor } from './maclocal';
 import { loadRecordedSpeech } from './recordedSpeech';
@@ -128,6 +134,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   if (muse.mode === 'fixture' && 'register' in muse) {
     (muse as FixtureMuse).register('device_card', fixtureDeviceCard as never);
     (muse as FixtureMuse).register('driver_draft', fixtureDriverDraft as never);
+    // recorded wirings for "Touch the water" and "Hands as knobs", labelled FIXTURE (wire-fixture.ts)
+    (muse as FixtureMuse).register('wire_program', fixtureWireDraft as never);
     registerAssistantFixtures(muse as FixtureMuse);
     registerCanvasFixture(muse as FixtureMuse);
   }
@@ -196,6 +204,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     send: (sender, state) => hub.sendToDevice(sender, 'canvas.state', state),
   });
   const setups = new Set<string>();
+  /** Drivers reused from the device library on a repeat selection (labelled "from your library" when a wiring is written). */
+  const libraryDrivers = new Map<string, { driverId: string; modelId?: string }>();
   const identityCorrections = new IdentityCorrections();
   const connectedPeripherals = new ConnectedPeripherals();
   const needsReviewedMidiChart = (t: Target) => (t.identityCorrection?.firmware === 'unknown' || t.cardId.startsWith('connected-op1-field-')) && !!t.card && !midiCharts.profile(t.card);
@@ -220,8 +230,14 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
   for (const tag of tags.list()) restoreTarget({ ...tag, state: tag.armed ? 'armed' : tag.card ? 'identified' : 'scanned' });
   const connected = (t: Target) => tags.has(t.cardId) && evaluateConnection(t, roster).connection !== 'offline';
   const canControl = (t: Target) => midiPermissionsCurrent(t) && mode === 'control' && tags.has(t.cardId) && Boolean(t.specId && verifiedControlCount(deviceSpec(t.specId), t)) && evaluateConnection(t, roster).connection === 'ready';
+  // Actions being verified for a wiring program while the card is armed (the setup-time gate below would refuse them).
+  const wireVerifying = new Map<string, Set<string>>();
   const dispatcher = new Dispatcher({ hub, macLocal, log, canExec: (request) => {
     const t = request.cardId ? targets.get(request.cardId) : undefined;
+    const verifying = request.cardId ? wireVerifying.get(request.cardId) : undefined;
+    if (t && verifying && request.actionId && (verifying.has(request.actionId) || verifying.has(request.actionId.split(':')[0]!) || request.actionId === 'restore-visual-defaults')) {
+      return mode === 'control' && connected(t) && t.driver?.executor.deviceId === request.executorDeviceId && (!request.port || t.driver.executor.port === request.port);
+    }
     if (request.op.kind === 'midi' && request.op.msg === 'panic') return t?.driver?.executor.deviceId === request.executorDeviceId;
     if (!t || !midiPermissionsCurrent(t) || mode !== 'control' || !connected(t) || !t.driver) return false;
     if (t.driver.executor.deviceId !== request.executorDeviceId || (request.port && t.driver.executor.port !== request.port)) return false;
@@ -315,6 +331,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     return { ok: true, hackId: hack.id, fired: 0, ms: 0 };
   };
   const control = new ControlRouter({ targets, dispatcher, specs, steps, hub, log, onRoomHack, canControl,
+    wire: (ev) => wireService.resolve(ev),
     paused: (t) => (visualPaused(t) ? 'Visuals closed on the Mac: controls paused' : undefined),
     onResult: (result, from) => { hub.sendToDevice(from, 'control.result', result); },
   });
@@ -549,6 +566,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     publishTags();
   });
   const stop = (t: Target, reason = 'cancelled') => {
+    wireService.clear(t.cardId);
     canvas.invalidate(t.cardId);
     voice.invalidate(t.cardId);
     assistant?.invalidate(t.cardId);
@@ -561,6 +579,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     targets.setState(t, 'failed', reason, CANCELLED_GUIDANCE);
   };
   const panic = (reason = 'panic', cardId?: string) => {
+    wireService.clear(cardId);
     canvas.invalidate(cardId);
     voice.invalidate(cardId);
     assistant?.invalidate(cardId);
@@ -580,6 +599,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     canvas.invalidate();
     mode = next;
     if (mode === 'annotate') {
+      wireService.clear();
       combos.cancel();
       daemons.stopAll('annotation mode');
       for (const t of targets.list()) {
@@ -648,6 +668,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     return t;
   };
   const removeTag = (cardId: string): boolean => {
+    wireService.clear(cardId);
     canvas.invalidate(cardId);
     voice.invalidate(cardId);
     assistant?.invalidate(cardId);
@@ -774,6 +795,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       if (demoMode() && virtualScreenExecutor(t.card) && !t.driver.actions.some((a) => a.confirm === 'hold')) {
         // A device verified before: its saved driver and controls come straight back from the library, labelled so.
         const passed = t.driver.actions.filter((a) => t.verification[a.actionId] === 'pass').length;
+        libraryDrivers.set(t.cardId, { driverId: t.driver.driverId, modelId: t.driver.modelId });
         steps.note('drive', `saved driver from the device library: ${passed}/${t.driver.actions.length} actions verified earlier · written by ${t.driver.modelId ?? 'unknown'}`,
           { cardId: t.cardId, runId: t.runId, kind: 'proof', model: t.driver.modelId, evidence: 'saved driver', sentence: 'Saved driver', hint: 'Restored from the device library' });
         showControls(t, from.deviceId);
@@ -1097,8 +1119,9 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
     enforcePresence();
     publishTags();
     continueVisualIntent();
-    // CE_DEMO: Muse writes the Mac visual synth's driver as soon as a Mac advertises it, so a pinch goes straight to verify.
-    if (demoMode() && process.env.CE_PREFETCH !== '0') for (const host of visualSynthHosts(hub.devices())) {
+    // Opt-in rehearsal only (CE_PREFETCH=1): Muse writes the Mac visual synth's driver as soon as a Mac advertises it. By default
+    // nothing is asked of Muse before the wearer pinches the Mac, and the hand-to-device wiring only after they ask (wire.request).
+    if (prefetchEnabled()) for (const host of visualSynthHosts(hub.devices())) {
       // Controls are prefetched only for a first setup: a saved, verified card keeps its own forge entry untouched.
       const saved = targets.get(VISUAL_SYNTH_CARD_ID);
       const running = setups.has(VISUAL_SYNTH_CARD_ID);
@@ -1108,6 +1131,8 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       prefetchVisualDriver(loopDeps, host, visualSynthCard(host), { forge: !saved?.specId && !running, skip: reusable || running, why: `presence ${presence.reason ?? 'update'}` });
     }
     if (presence.reason === 'join' && presence.deviceId) {
+      // a companion that opens late shows the code of the wiring that is running (the headset asks for its own)
+      if (hub.devices().find((d) => d.deviceId === presence.deviceId)?.role !== 'hmd') wireService.replayTo(presence.deviceId);
       for (const state of canvas.snapshots()) if (tags.has(state.cardId)) hub.sendToDevice(presence.deviceId, 'canvas.state', state);
       for (const t of targets.list()) {
         if (!tags.has(t.cardId)) continue;
@@ -1119,6 +1144,86 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       if (mode === 'control') for (const request of arm.pendingRequests()) hub.sendToDevice(presence.deviceId, 'arm.request', request);
     }
   });
+
+  // --- WIRE: Muse writes the hand-to-device wiring after the wearer asks (agent/wire.ts) ---------------------------
+  const wireReady = (cardId: string): boolean => {
+    const x = targets.get(cardId);
+    return !!x && !!x.driver && x.armed && tags.has(cardId) && canControl(x);
+  };
+  const setupRunning = (cardId: string): boolean => setups.has(cardId) || !!(targets.get(cardId)?.abort && !targets.get(cardId)!.abort!.signal.aborted);
+  /** A wire.request on a card without a driver runs setup first, as a pinch would, and waits for it. */
+  const ensureWireDriver = async (cardId: string, from: { deviceId: string; name?: string }, signal: AbortSignal): Promise<{ ok: true; note?: string } | { ok: false; reason: string }> => {
+    const t = targets.get(cardId);
+    if (!t || !tags.has(cardId)) return { ok: false, reason: 'This device is not selected. Pinch it first.' };
+    if (mode !== 'control') return { ok: false, reason: 'Switch to Control, pinch the device, then ask again.' };
+    const started = Date.now();
+    if (!wireReady(cardId) && !setupRunning(cardId) && !visualIntent && !setup(cardId, from)) {
+      return { ok: false, reason: t.hint ?? t.sentence ?? 'The device could not be set up. Pinch it again.' };
+    }
+    while (!wireReady(cardId)) {
+      if (signal.aborted) return { ok: false, reason: 'cancelled' };
+      const cur = targets.get(cardId);
+      if (!cur || !tags.has(cardId)) return { ok: false, reason: 'The device was removed while it was being set up.' };
+      if (mode !== 'control') return { ok: false, reason: 'Control mode was left while the device was being set up.' };
+      if (cur.state === 'failed' && cur.since >= started) return { ok: false, reason: cur.sentence ?? cur.hint ?? 'Setting the device up failed. Pinch it to try again.' };
+      if (Date.now() - started > 150_000) return { ok: false, reason: 'The device is still not ready. Check the Mac and pinch it again.' };
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    const lib = libraryDrivers.get(cardId);
+    const driver = targets.get(cardId)!.driver!;
+    return { ok: true, ...(lib && lib.driverId === driver.driverId ? { note: `driver from your library, written by ${lib.modelId ?? 'unknown'} · the wiring is written live now` } : {}) };
+  };
+  /** The visual synth's driver plus the manifest's touch inputs (Touch X / Y / pressure), unverified until a wiring uses them. */
+  const prepareWireDriver = (t: Target): Driver => {
+    const d = t.driver!;
+    const ext = extendWithTouch(d);
+    if (!ext.added.length) return d;
+    const ccs = new Set<number>(VISUAL_SYNTH_MANIFEST.controls.map((c) => c.cc));
+    const v = validateDriver(ext.driver, { driverId: d.driverId, executor: d.executor }, { expectedTransport: 'midi', allowedCcs: ccs, emitsLight: false, visualMaxSets: 12 });
+    if (!v.ok) {
+      log(`[wire] could not add the manifest's touch controls (${ext.added.join(', ')}) to ${t.cardId}'s driver: ${v.issues.filter((i) => i.severity === 'error').map((i) => i.message).join('; ').slice(0, 300)}`);
+      return d;
+    }
+    t.driver = { ...d, actions: v.driver.actions };
+    log(`[wire] ${t.cardId}: the driver gains ${ext.added.join(', ')} from the device's capability manifest (verified when a wiring uses them)`);
+    hub.broadcast('driver.spec', t.driver);
+    targets.changed(t);
+    return t.driver;
+  };
+  /** Verify actions a wiring uses that have not passed yet (renderer receipt, no camera), then put the visuals back. */
+  const verifyWireActions = async (t: Target, ids: string[], signal: AbortSignal): Promise<string[]> => {
+    const driver = t.driver;
+    if (!driver) return ids;
+    wireVerifying.set(t.cardId, new Set(ids));
+    try {
+      const summary = await verifyDriver({ dispatcher, sam, silentSpeech, log, settleMs: () => 350 }, t, driver, {
+        actionIds: ids, signal, onEvidence: (e) => { t.evidence.push(e); hub.broadcast('verify.result', e); },
+      });
+      for (const id of ids) t.verification[id] = summary.verification[id] ?? 'untested';
+      const cur = t.driver!;
+      t.driver = { ...cur, actions: cur.actions.map((a) => (ids.includes(a.actionId) ? { ...a, verified: t.verification[a.actionId] } : a)) };
+      hub.broadcast('driver.spec', t.driver);
+      hub.broadcast('driver.status', { driverId: cur.driverId, cardId: t.cardId, phase: t.armed ? 'armed' : 'verified', actions: t.driver.actions.map((a) => ({ actionId: a.actionId, label: a.label.slice(0, 40), verified: t.verification[a.actionId] ?? 'untested' })), modelId: cur.modelId });
+      targets.changed(t);
+      if (isVisualSynthPort(driver.executor.port)) {
+        // verification freezes the animation and moves parameters: restore the defaults
+        await dispatcher.exec(driver.executor.deviceId, { kind: 'midi', msg: 'panic', channel: 1 }, { port: driver.executor.port, cardId: t.cardId, driverId: driver.driverId, actionId: 'restore-visual-defaults', timeoutMs: 1500, signal })
+          .catch((err) => log(`[wire] could not restore visual defaults: ${(err as Error).message}`));
+      }
+    } finally {
+      wireVerifying.delete(t.cardId);
+    }
+    return ids.filter((id) => t.verification[id] !== 'pass');
+  };
+  const streamClient = muse.mode === 'live' ? new StreamClient({ apiKey: ctx.config.muse.apiKey, baseUrl: ctx.config.muse.baseUrl }) : undefined;
+  const wireService = new WireService({
+    hub, targets, spark: muse, wonder, log, callLog: ctx.calls,
+    ...(streamClient ? { stream: { model: muse.model, stream: streamClient.stream.bind(streamClient) } } : {}),
+    chunkDelayMs: Number.isFinite(Number(process.env.CE_WIRE_CHUNK_MS)) && process.env.CE_WIRE_CHUNK_MS !== undefined ? Number(process.env.CE_WIRE_CHUNK_MS) : 70,
+    ensureDriver: ensureWireDriver, prepareDriver: prepareWireDriver, verifyActions: verifyWireActions,
+    cardOfSpec: (specId) => specs.get(specId)?.cardId,
+  });
+  let lastWireLog = 0;
 
   const onMessage = (e: HubMessageEvent): void => {
     if (EXPERIMENTAL_TYPE.test(e.message.type)) return;
@@ -1199,9 +1304,17 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
         return;
       case 'control.event': {
         const r = control.onControlEvent(m.payload, from.deviceId);
-        if (!r.ok && r.reason && r.reason !== 'not armed' && r.reason !== 'rate limited' && r.reason !== 'paused') log(`[control] ${m.payload.widgetId}: ${r.reason}`);
+        if (!r.ok && r.reason && r.reason !== 'not armed' && r.reason !== 'rate limited' && r.reason !== 'paused') {
+          // a wiring program can send 60 events a second: one line per 2 s is enough
+          if (!m.payload.widgetId.startsWith('wire:') || Date.now() - lastWireLog > 2000) { lastWireLog = Date.now(); log(`[control] ${m.payload.widgetId}: ${r.reason}`); }
+        }
         return;
       }
+      case 'wire.request':
+        // the wearer asks (chip, voice or text); only an owner or local device may have Muse write anything
+        if (!from.canApprove && !from.local) { hub.sendToDevice(from.deviceId, 'log', { level: 'error', code: 'forbidden', message: 'Only an owner may ask Muse to wire a device.' }); return; }
+        wireService.request(m.payload, from);
+        return;
       case 'panic':
         panic(m.payload.reason ?? `panic from ${from.name}`, m.payload.cardId);
         return;
@@ -1294,6 +1407,7 @@ export function createAgent(ctx: ServerContext, opts: AgentOptions = {}): Agent 
       clearTimeout(graceTimer);
       clearTimeout(publishTimer);
       clearVisualIntent();
+      wireService.close();
       tags.flushPending();
       canvas.invalidate();
       voice.invalidate();
