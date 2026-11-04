@@ -141,7 +141,7 @@ async function refresh(): Promise<void> {
     const signal = AbortSignal.any([refreshController.signal, AbortSignal.timeout(10000)]);
     const [coding, connectors] = await Promise.allSettled([
       request(API, undefined, signal).then(response => response.json() as Promise<CodingOverview>),
-      request('/api/agent/connectors', undefined, signal).then(response => response.json() as Promise<ConnectorOverview>),
+      request('/api/agent/connectors/legacy', undefined, signal).then(response => response.json() as Promise<ConnectorOverview>),
     ]);
     if (connectors.status === 'fulfilled') { connectorOverview = connectors.value; drawConnectors(); }
     else if (!document.hidden && !refreshController.signal.aborted) {

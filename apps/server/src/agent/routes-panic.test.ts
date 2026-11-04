@@ -7,6 +7,30 @@ import { agentRouter } from './routes';
 vi.mock('./index', () => ({ getAgent: vi.fn() }));
 
 describe('HTTP Stop', () => {
+  it('does not let unauthenticated LAN callers read private room diagnostics', () => {
+    vi.mocked(getAgent).mockReturnValue({} as ReturnType<typeof getAgent>);
+    let paired = false;
+    const ctx = { registry: { authenticate: () => paired ? { deviceId: 'paired' } : undefined }, isLocal: () => false } as unknown as ServerContext;
+    const router = agentRouter(ctx);
+    const guard = router.stack.find((layer: { route?: unknown; name?: string }) => !layer.route && layer.name !== 'jsonParser')!;
+    const req = { method: 'GET', get: () => undefined, socket: { remoteAddress: '192.0.2.1' } } as unknown as Request;
+    const json = vi.fn(), status = vi.fn(), next = vi.fn();
+    const res = { json, status } as unknown as Response; status.mockReturnValue(res);
+    guard.handle(req, res, next);
+    expect(status).toHaveBeenCalledWith(401); expect(next).not.toHaveBeenCalled();
+    paired = true;
+    guard.handle(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('keeps current process and legacy encoder status on distinct routes', () => {
+    vi.mocked(getAgent).mockReturnValue({} as ReturnType<typeof getAgent>);
+    const router = agentRouter({} as ServerContext);
+    const paths = router.stack.flatMap((layer: { route?: { path: string } }) => layer.route ? [layer.route.path] : []);
+    expect(paths.filter(path => path === '/connectors')).toHaveLength(1);
+    expect(paths).toContain('/connectors/legacy');
+  });
+
   it('keeps harness receipts owner-only and distinguishes checked code from current authorization', () => {
     const receipt = { runId: 'wire-one', cardId: 'visual-synth-mac', status: 'checked' };
     const get = vi.fn(() => receipt);

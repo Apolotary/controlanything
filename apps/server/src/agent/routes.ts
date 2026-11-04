@@ -44,6 +44,13 @@ export function agentRouter(ctx: ServerContext): express.Router {
     res.status(403).json({ error: 'forbidden', message: 'Agent receipts need an owner token or localhost.' });
     return false;
   };
+  // Camera observations, command receipts and local workspace details are private to this room.
+  r.use((req, res, next) => {
+    if (req.method !== 'GET') { next(); return; }
+    const c = caller(req);
+    if (c.device || c.local) { next(); return; }
+    res.status(401).json({ error: 'unauthorized', message: 'Pair this browser before viewing room diagnostics.' });
+  });
   r.get('/harness', (req, res) => {
     if (!harnessAccess(req, res)) return;
     res.json({ backend: 'muse-bridge', framework: 'ControlAnything native Meta tool harness',
@@ -69,7 +76,13 @@ export function agentRouter(ctx: ServerContext): express.Router {
     if (!harnessAccess(req, res)) return;
     const op = String(req.body?.op ?? ''), arg = req.body?.arg;
     if (!['pan', 'tilt', 'nudge', 'recenter', 'stop'].includes(op)) { res.status(400).json({ error: 'op must be pan|tilt|nudge|recenter|stop' }); return; }
-    if ((op === 'pan' || op === 'tilt') && (typeof arg !== 'number' || Math.abs(arg) > 30)) { res.status(400).json({ error: 'test moves are limited to ±30 degrees' }); return; }
+    const smallAngle = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 30;
+    if ((op === 'pan' || op === 'tilt') && !smallAngle(arg)) { res.status(400).json({ error: 'test moves are limited to ±30 degrees' }); return; }
+    if (op === 'nudge' && (!arg || typeof arg !== 'object' || Array.isArray(arg)
+      || !smallAngle(arg.yaw ?? 0) || !smallAngle(arg.pitch ?? 0)
+      || (arg.durationMs !== undefined && (typeof arg.durationMs !== 'number' || !Number.isFinite(arg.durationMs) || arg.durationMs < 200 || arg.durationMs > 5000)))) {
+      res.status(400).json({ error: 'nudge needs yaw/pitch within ±30 degrees and optional durationMs 200–5000' }); return;
+    }
     const g = ctx.hub.devices().find((d) => d.online && d.capabilities.includes('ble') && d.ports?.some((p) => p.id === 'dji-osmo'));
     if (!g) { res.status(409).json({ error: 'no Osmo bridge online (start the server with CE_OSMO=web)' }); return; }
     try {
@@ -88,7 +101,7 @@ export function agentRouter(ctx: ServerContext): express.Router {
     if (!harnessAccess(req, res)) return;
     res.json({ status: agent.coding.status(), jobs: agent.coding.list() });
   });
-  r.get('/connectors', (req, res) => {
+  r.get('/connectors/legacy', (req, res) => {
     if (!harnessAccess(req, res)) return;
     res.json({ generator: agent.freshConnectors.status(), connectors: agent.connectors.list().map(receipt => ({ ...receipt,
       currentlyAuthorized: agent.wireReady(receipt.cardId)?.wiringId === receipt.wiringId,

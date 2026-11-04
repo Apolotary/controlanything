@@ -60,6 +60,7 @@ import { MidiChartPanel, chartRequest } from './ui/midi-chart';
 import { replayArmResult, runReplay } from './replay';
 import { deviceLabel, overlayHeading, WiringState, wiringActive, wiringLine } from './ui/wiring';
 import { WiringCard, WiringPanel } from './ui/wiring-view';
+import { AgentConnectorsPanel } from './ui/agent-connectors';
 
 const APP = 'companion@0.2.0+generated-midi-v1+audio-master-v1';
 const params = new URLSearchParams(location.search);
@@ -126,6 +127,7 @@ const retiredSetupIds = new Set<string>();
 let currentSetup: SetupActivity | undefined;
 let midiSetupCardId: string | undefined;
 let currentView: 'home' | 'devices' | 'activity' | 'details' = 'home';
+let agentConnectors: AgentConnectorsPanel | undefined;
 let stopTarget: TargetStatusPayload | undefined;
 let serverDown = false;
 const presenter = createStatusPresenter();
@@ -432,6 +434,7 @@ function closeDialog(id: string): void {
 function showView(view: typeof currentView, focus = true): void {
   if (view !== 'details') detailsFromSimple = false;
   currentView = view;
+  agentConnectors?.setActive(view === 'details');
   $('workbench').dataset.view = view;
   $('home-view').hidden = view === 'details' || view === 'activity';
   $('drawer').hidden = view !== 'details';
@@ -2049,6 +2052,8 @@ function connect(): void {
 // --- boot -------------------------------------------------------------------------------------
 
 function setupForms(): void {
+  agentConnectors = new AgentConnectorsPanel($('muse-connectors'), { token: () => identity?.deviceToken, replay: replaying });
+  agentConnectors.setActive(currentView === 'details');
   $('self-retry').addEventListener('click', () => void pairThisBrowser());
   $('log-clear').addEventListener('click', () => $('log').replaceChildren());
   $('code-form').addEventListener('submit', async (ev) => {
