@@ -39,18 +39,26 @@ All observed by the user on the headset with live Muse. Details are in [DEMO-ACC
 - **OP-1 Field.** It played notes and CCs from the headset once MIDI receive was turned on on the OP-1.
 - **DJI OM 4.** The gimbal made small pan/tilt/recenter moves from direct Bluetooth commands (the direct test route, not Muse-generated code).
 
+## Real Quest 3, recorded takes (Nov 5)
+
+Each demo was asked by voice on the headset and written live by the Muse agent (`muse-spark-1.3`); the Quest's own screen recorder captured the result. Times are from the server log (ask to ready).
+
+- **Touch the water.** "Touch the water with your finger": a hand program with no floating controls, ready in 31.6 s. The first fingertip touch found the laptop screen; the ripples followed the finger.
+- **Instagram Reels (a third-party app).** "Reels hand scroll", ready in 54.5 s. Muse opened Reels in Chrome on the Mac and tested the arrow keys (the reels changed during its own test), then hand flicks and its Next/Prev/Like buttons scrolled Reels.
+- **OP-1 Field over USB-MIDI.** Filter knobs plus an AR keyboard, and "Play the OP-1 Field with fingers" (36.7 s). Muse's test notes were confirmed on the OP-1.
+- **DJI Osmo Mobile 4 over Bluetooth.** "Gimbal finger steering", ready in 30.0 s. The gimbal acknowledged 889 Muse-driven moves while the hand steered it.
+- **Buddy.** Muse Spark reactions in 5.1–5.7 s and Muse Image stickers in 7–13 s for a real mug.
+- **Physical-AI recording.** A 111.6 s take: 3,247 head + 25-joint hand frames at 30 Hz, synced with the Quest's video recording.
+
 ## Live Muse runs outside the headset (Nov 5)
 
-<!-- lead: update after readiness report -->
-- **Instagram Reels connector.** Muse wrote it, plus a swipe hand program, in about 53 s. The Mac side was stubbed, so no keys were pressed on a real Mac. <!-- lead: update after readiness report -->
-- **Gimbal connector.** Muse wrote it, plus a right-hand pan/tilt program, in 34 s, against a test double (no physical gimbal). <!-- lead: update after readiness report -->
-- **Muse Code engine.** The opt-in engine (`CE_AGENT_ENGINE=muse-code`) passed the live emulator end-to-end run in about 30 s. <!-- lead: update after readiness report -->
+- **Muse Code engine.** The opt-in engine (`CE_AGENT_ENGINE=muse-code`) passed the live emulator end-to-end run in about 30 s.
+- **Readiness runs.** Live Muse wrote the Reels (39 s), OP-1 (52 s) and gimbal (42 s) connectors in the emulator with the Mac and gimbal stubbed, before the headset takes above.
 
-## Not yet verified on the headset
+## Not yet verified
 
-- Muse-driven gimbal moves. The OM 4 has moved only through the direct Bluetooth route.
-- Reels key presses on the real Mac.
-- The new generated-instrument UI. It is checked in the emulator and browser only.
+- The phone and webcam page (`/quest/hands.html`) on real phones and webcams: it is checked in headless Chrome with a synthetic camera only.
+- Muse-written 3D scenes (`finish.scene`) on the headset: checked in the emulator only.
 
 ## See the model calls yourself
 
