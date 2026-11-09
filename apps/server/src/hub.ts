@@ -549,7 +549,9 @@ export class Hub {
     });
     if (r.status === 'approved' && r.deviceId && r.deviceToken) {
       const d = this.o.registry.get(r.deviceId);
-      if (d) this.send(c, 'pair.approved', this.approvedPayload(r.pairingId, d, 'localhost', r.deviceToken));
+      if (d && !this.send(c, 'pair.approved', this.approvedPayload(r.pairingId, d, 'localhost', r.deviceToken))) {
+        this.o.pairing.restoreToken(r.pairingId, r.deviceToken);
+      }
     }
   }
 
@@ -563,7 +565,9 @@ export class Hub {
     this.send(c, 'pair.status', { pairingId: s.pairingId, status: s.status, expiresAt: s.expiresAt });
     if (s.deviceToken && s.deviceId) {
       const d = this.o.registry.get(s.deviceId);
-      if (d) this.send(c, 'pair.approved', this.approvedPayload(s.pairingId, d, undefined, s.deviceToken));
+      if (d && !this.send(c, 'pair.approved', this.approvedPayload(s.pairingId, d, undefined, s.deviceToken))) {
+        this.o.pairing.restoreToken(s.pairingId, s.deviceToken);
+      }
     }
   }
 
@@ -571,7 +575,10 @@ export class Hub {
     for (const c of this.conns.values()) {
       if (!c.watching.has(pairingId)) continue;
       const token = this.o.pairing.takeToken(pairingId);
-      if (token) this.send(c, 'pair.approved', this.approvedPayload(pairingId, device, approvedBy, token));
+      if (token && !this.send(c, 'pair.approved', this.approvedPayload(pairingId, device, approvedBy, token))) {
+        // The socket cannot receive the one-time token; put it back so a status poll can still hand it out.
+        this.o.pairing.restoreToken(pairingId, token);
+      }
     }
     this.toApprovers('pair.approved', this.approvedPayload(pairingId, device, approvedBy));
     this.broadcastPresence('paired', device.deviceId);
@@ -640,8 +647,9 @@ export class Hub {
     for (const fn of this.presenceListeners) fn(payload);
   }
 
-  private send<T extends MessageType>(c: Connection, type: T, payload: PayloadOf<T>): void {
-    this.sendRaw(c, encodeMessage(type, payload, { from: SERVER_ID }), type);
+  /** False when the message could not be handed to the socket. */
+  private send<T extends MessageType>(c: Connection, type: T, payload: PayloadOf<T>): boolean {
+    return this.sendRaw(c, encodeMessage(type, payload, { from: SERVER_ID }), type);
   }
 
   private sendLog(c: Connection, payload: LogPayload): void {

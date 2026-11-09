@@ -184,6 +184,13 @@ export class PairingManager {
     return token;
   }
 
+  /** Put back a token whose delivery failed so a later status poll can still hand it out. */
+  restoreToken(pairingId: string, token: string): void {
+    const p = this.pairings.get(pairingId);
+    if (!p || p.status !== 'approved' || p.deviceToken !== undefined) return;
+    p.deviceToken = token;
+  }
+
   canApprove(approver: Approver): boolean {
     if (approver.type !== 'device') return true;
     return Boolean(this.registry.get(approver.deviceId)?.canApprove);
