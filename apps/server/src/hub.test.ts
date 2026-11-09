@@ -225,6 +225,32 @@ describe('pairing over WebSocket and relay', () => {
     expect(macWs.has('control.event')).toBe(false);
   });
 
+  it('keeps the pairing token recoverable when the requesting WebSocket is closing', async () => {
+    const h = await start();
+    const mac = await pairLocally(h, 'MacBook companion');
+    h.setLocal(false);
+    const { c: macWs } = await connect(h, mac.deviceToken);
+
+    const card = await Client.open(h.wsUrl);
+    card.send('pair.start', { name: 'Cardputer', kind: 'cardputer', capabilities: ['ir'] });
+    const status = await card.next('pair.status');
+    expect(status.payload).toMatchObject({ status: 'pending' });
+
+    // Keep the connection in the hub, but force the sendRaw readyState check to reject it.
+    const hub = h.ctx.hub as unknown as { conns: Map<unknown, { watching: Set<string>; ws: WebSocket }> };
+    const conn = [...hub.conns.values()].find((c) => c.watching.has(status.payload.pairingId));
+    expect(conn).toBeTruthy();
+    (conn!.ws as unknown as { _readyState: number })._readyState = WebSocket.CLOSING;
+
+    macWs.send('pair.approve', { code: status.payload.display! });
+    await macWs.next('pair.approved');
+
+    const poll = await json(await fetch(`${h.base}/api/pair/status?pairingId=${status.payload.pairingId}&pollSecret=${status.payload.pollSecret}`));
+    expect(poll).toMatchObject({ status: 'approved' });
+    expect(poll.deviceToken).toBeTruthy();
+    expect((await fetch(`${h.base}/api/me`, { headers: { Authorization: `Bearer ${poll.deviceToken}` } })).status).toBe(200);
+  });
+
   it('runs one headset session per deviceId: the newest claim wins, the old tab is told, ignored and closed with 4409', async () => {
     const h = await start();
     const mac = await pairLocally(h, 'Mac');
